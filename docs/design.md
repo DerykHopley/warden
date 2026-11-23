@@ -8,7 +8,7 @@ Keep this file short enough to read before each UI ticket: a component gets a ro
 
 ## Source and approval
 
-- **Identity from:** the owner's own idea (started blank; the walking skeleton fills in identity and tokens)
+- **Identity from:** the owner's own idea (blank for now: the design step, `/prototype` of the main screen in 2 or 3 directions, fills in identity and tokens before `/rig:spec-open`; the walking skeleton puts the chosen tokens into the stylesheet)
 - **Visual changes approved by:** the owner. A ticket that needs a visual choice this file doesn't settle goes to them: a static choice with a screenshot of each option, side by side; an interactive one (a handle, drag, resize, focus, hover, motion, keyboard) as a "try this" step in the owner preview or the live app.
 
 ## Identity
