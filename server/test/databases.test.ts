@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
-import { dropStaleTestDatabases } from "./databases.ts";
+import { dropStaleTestDatabases, dropStaleTestRoles } from "./databases.ts";
 
 const superuser = createPool(
   createLogger(() => {}),
@@ -34,7 +34,7 @@ async function roleExists(name: string) {
 // Fixture names are new on each run, so two runs on one Postgres don't make the same database.
 const suffix = () => randomBytes(6).toString("hex");
 
-describe("dropStaleTestDatabases", () => {
+describe("dropStaleTestDatabases and dropStaleTestRoles", () => {
   it("drops test databases over an hour old, and ones named before names carried a time", async () => {
     const twoHoursAgo = Math.floor(Date.now() / 1000) - 2 * 3600;
     const stale = `warden_test_${twoHoursAgo}_${suffix()}`;
@@ -61,7 +61,7 @@ describe("dropStaleTestDatabases", () => {
     ];
     for (const name of [...stale, ...kept]) await superuser.query(`create role ${name}`);
     try {
-      await dropStaleTestDatabases();
+      await dropStaleTestRoles();
 
       for (const name of stale) expect(await roleExists(name), name).toBe(false);
       for (const name of kept) expect(await roleExists(name), name).toBe(true);

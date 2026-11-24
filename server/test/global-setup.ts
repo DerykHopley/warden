@@ -1,7 +1,11 @@
 // One throwaway database for the server's tests: the roles, every migration as warden_migrate, then the tests; dropped
 // at the end. Tests reach it with `inject("testDatabase")`. First, it clears out what killed runs left behind.
 import type { TestProject } from "vitest/node";
-import { createMigratedTestDatabase, dropStaleTestDatabases } from "./databases.ts";
+import {
+  createMigratedTestDatabase,
+  dropStaleTestDatabases,
+  dropStaleTestRoles,
+} from "./databases.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -19,6 +23,7 @@ export default async function setup(project: TestProject) {
     database: env.PGDATABASE,
   };
   await dropStaleTestDatabases(connection);
+  await dropStaleTestRoles(connection);
   const database = await createMigratedTestDatabase(connection);
 
   project.provide("testDatabase", database.name);

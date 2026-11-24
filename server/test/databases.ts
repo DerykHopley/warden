@@ -4,14 +4,14 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import type pg from "pg";
-import { createPool } from "../src/database.ts";
+import pg from "pg";
+import { createPool, DATABASE_ROLE_NAMES } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { migrate } from "../src/migrate.ts";
 import { createRoles } from "../src/roles.ts";
 
 /** A database role (not a person's Role in a Team). */
-export type DatabaseRole = "warden_migrate" | "warden_app" | "warden_admin";
+export type DatabaseRole = (typeof DATABASE_ROLE_NAMES)[keyof typeof DATABASE_ROLE_NAMES];
 
 const logger = createLogger(() => {});
 
@@ -72,12 +72,9 @@ const TIMED_ROLE = /^warden_test_(\d+)_[0-9a-f]{12}(_[a-z]+)?$/;
 /** The names it made before names carried a time. */
 const UNTIMED_NAME = /^warden_test_[0-9a-f]{12}$/;
 
-/** Drops test databases made over an hour ago, or named before names carried a time, then test roles made over an
- * hour ago: what a killed run left. A run in progress (the suite takes seconds, CI stops at 10 minutes) keeps its
- * own, and a database or role with the prefix that testName didn't name is someone's own and stays. */
-export async function dropStaleTestDatabases(connection: pg.PoolConfig = {}): Promise<void> {
-  await dropStale(connection);
-  // Roles after databases: a stale role's objects were in a stale database.
+/** Drops test roles made over an hour ago: what a killed run left. Run it after dropStaleTestDatabases, as a stale
+ * role's objects were in a stale database. A role with the prefix that testName didn't name is someone's own. */
+export async function dropStaleTestRoles(connection: pg.PoolConfig = {}): Promise<void> {
   const { rows } = await withPool(connection, (pool) =>
     pool.query<{ rolname: string }>("select rolname from pg_roles where starts_with(rolname, $1)", [
       PREFIX,
@@ -87,12 +84,17 @@ export async function dropStaleTestDatabases(connection: pg.PoolConfig = {}): Pr
   for (const { rolname } of rows) {
     const made = TIMED_ROLE.exec(rolname)?.[1];
     if (made !== undefined && now - Number(made) > STALE_AFTER_SECONDS) {
-      await withPool(connection, (pool) => pool.query(`drop role if exists "${rolname}"`));
+      await withPool(connection, (pool) =>
+        pool.query(`drop role if exists ${pg.escapeIdentifier(rolname)}`),
+      );
     }
   }
 }
 
-async function dropStale(connection: pg.PoolConfig) {
+/** Drops test databases made over an hour ago, or named before names carried a time: what a killed run left. A run
+ * in progress (the suite takes seconds, CI stops at 10 minutes) keeps its own, and a database with the prefix that
+ * testName didn't name is someone's own and stays. */
+export async function dropStaleTestDatabases(connection: pg.PoolConfig = {}): Promise<void> {
   const { rows } = await withPool(connection, (pool) =>
     pool.query<{ datname: string }>(
       "select datname from pg_database where starts_with(datname, $1)",

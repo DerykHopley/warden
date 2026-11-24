@@ -11,25 +11,18 @@
 // Passwords: WARDEN_APP_PASSWORD and WARDEN_MIGRATE_PASSWORD, when set, become warden_app's and warden_migrate's.
 // Unset, no password is set: compose and CI use trust auth. No password reaches a log line or an error.
 import pg from "pg";
-import { createPool } from "./database.ts";
+import { createPool, DATABASE_ROLE_NAMES, type DatabaseRoleNames } from "./database.ts";
 import { createLogger, type Logger } from "./log.ts";
 
-export type RoleNames = { migrate: string; app: string; admin: string };
-
-export const ROLE_NAMES: RoleNames = {
-  migrate: "warden_migrate",
-  app: "warden_app",
-  admin: "warden_admin",
-};
-
-export type RoleOptions = {
+export type CreateRolesOptions = {
   /** The roles' names; tests use their own, as roles belong to the whole Postgres server. */
-  names?: RoleNames;
+  names?: DatabaseRoleNames;
   passwords?: { app?: string; migrate?: string };
   logger?: Logger;
 };
 
-type Queryable = Pick<pg.Pool, "query">;
+/** What createRoles runs its statements through: a pool, or one connection. */
+type RolesConnection = Pick<pg.Pool, "query">;
 
 /** The attributes Warden's roles have, as pg_roles names them, with the keywords that set them. */
 const ATTRIBUTES = {
@@ -44,8 +37,8 @@ type Attribute = keyof typeof ATTRIBUTES;
 type Attributes = Partial<Record<Attribute, boolean>>;
 
 export async function createRoles(
-  pool: Queryable,
-  { names = ROLE_NAMES, passwords = {}, logger = createLogger() }: RoleOptions = {},
+  pool: RolesConnection,
+  { names = DATABASE_ROLE_NAMES, passwords = {}, logger = createLogger() }: CreateRolesOptions = {},
 ): Promise<void> {
   const {
     rows: [runner],
@@ -103,7 +96,7 @@ export async function createRoles(
 // belong to the whole server, and two runs altering the same role at once (the test databases are made in parallel)
 // fail with "tuple concurrently updated". Restating an attribute isn't free either: Postgres refuses even
 // `nosuperuser` from a user that isn't a superuser.
-async function ensureRole(pool: Queryable, name: string, wanted: Attributes) {
+async function ensureRole(pool: RolesConnection, name: string, wanted: Attributes) {
   const { rows } = await pool.query<Record<Attribute, boolean>>(
     `select rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolbypassrls from pg_roles where rolname = $1`,
     [name],
@@ -136,7 +129,7 @@ function isPgError(error: unknown, ...codes: string[]): boolean {
 /** Sets `name`'s password when one is given. A failure is rethrown as a new error naming the role, with Postgres's
  * message masked and no cause: Postgres can quote the statement's text back (a syntax error names the token), and
  * the statement holds the password. */
-async function setPassword(pool: Queryable, name: string, password: string | undefined) {
+async function setPassword(pool: RolesConnection, name: string, password: string | undefined) {
   if (!password) return;
   try {
     await pool.query(
@@ -161,7 +154,7 @@ if (import.meta.main) {
         migrate: process.env.WARDEN_MIGRATE_PASSWORD || undefined,
       },
     });
-    logger.info("roles ready", { roles: Object.values(ROLE_NAMES) });
+    logger.info("roles ready", { roles: Object.values(DATABASE_ROLE_NAMES) });
   } catch (error) {
     logger.error("creating the roles failed", { error });
     process.exitCode = 1;

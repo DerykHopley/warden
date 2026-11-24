@@ -2,9 +2,9 @@
 // run as Cloud SQL runs it, by a user that isn't a superuser, with and without passwords.
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import { createPool } from "../src/database.ts";
+import { createPool, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
-import { createRoles, type RoleNames } from "../src/roles.ts";
+import { createRoles } from "../src/roles.ts";
 import { poolAs, runInServer, testName } from "./databases.ts";
 
 const database = inject("testDatabase");
@@ -54,7 +54,7 @@ describe("the roles script run by a user with CREATEROLE that isn't a superuser 
   const superuser = createPool(silent, { max: 1 });
   const base = testName();
   const runner = `${base}_owner`;
-  const names: RoleNames = {
+  const names: DatabaseRoleNames = {
     migrate: `${base}_migrate`,
     app: `${base}_app`,
     admin: `${base}_admin`,

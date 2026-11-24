@@ -5,7 +5,7 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app.ts";
 import { createClerkVerifier } from "./auth.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
-import { createHealthCheck, createPool, guardRole } from "./database.ts";
+import { createHealthCheck, createPool, guardDatabaseRole } from "./database.ts";
 import { createLogger } from "./log.ts";
 import { createShutdown } from "./shutdown.ts";
 
@@ -24,7 +24,7 @@ const dashboardDir = fileURLToPath(new URL("../../dashboard/dist", import.meta.u
 // Every new connection checks the role first; one that can get around row-level security stops the server before
 // anything is answered from it.
 const pool = createPool(logger, {
-  onConnect: guardRole(({ role, reason }) => {
+  onConnect: guardDatabaseRole(({ role, reason }) => {
     logger.error(
       `Warden can't start: its database role can bypass row-level security. ${reason}.`,
       {
