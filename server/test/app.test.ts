@@ -210,4 +210,41 @@ describe("request logs", () => {
       expect(logged).not.toContain(secret);
     }
   });
+
+  // Row A5: on a refused sign-in only, the line names the address the limit counted, so the first live deploy can
+  // compare it with Cloud Run's httpRequest.remoteIp. Behind Cloud Run (as testApp is), that's the last entry.
+  const forwarded = (init: { headers?: Record<string, string> } = {}) => ({
+    ...init,
+    headers: { ...init.headers, "X-Forwarded-For": "203.0.113.7, 198.51.100.9" },
+  });
+  const requestLines = (lines: string[]) =>
+    lines
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((line) => line.message === "request");
+
+  it("name the counted address on a 401 and a 429 from the sign-in check", async () => {
+    const { app, lines } = testApp({ publicPem });
+    const bad = forwarded(bearer("not-a-token"));
+    for (let failure = 1; failure <= 21; failure++) await app.request("/api/me", bad);
+
+    const logged = requestLines(lines);
+    expect(logged.map((line) => line.status)).toEqual([...Array<number>(20).fill(401), 429]);
+    for (const line of logged) expect(line.clientAddress).toBe("198.51.100.9");
+  });
+
+  it.each([
+    ["a 200 from /api/me", "/api/me", 200],
+    ["a 404 from an unknown /api path", "/api/nothing-here", 404],
+    ["a 403 after a good sign-in", "/api/team/members", 403],
+  ])("hold no address on %s", async (_name, path, status) => {
+    const { app, lines } = testApp({ publicPem });
+    const res = await app.request(path, forwarded(bearer(await sessionToken(key, "user_abc"))));
+    expect(res.status).toBe(status);
+
+    const [line, ...rest] = requestLines(lines);
+    expect(rest).toEqual([]);
+    expect(line).toMatchObject({ status });
+    expect(line).not.toHaveProperty("clientAddress");
+    expect(lines.join("")).not.toContain("198.51.100.9");
+  });
 });

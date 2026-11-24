@@ -58,7 +58,13 @@ export type AppDeps = {
 /** What a handler behind requireRole reads from the context: the session, its Team and the person's Role there. */
 export type AppEnv = {
   Bindings: Partial<HttpBindings>;
-  Variables: { session: Session; team: string; role: Role };
+  Variables: {
+    session: Session;
+    team: string;
+    role: Role;
+    /** Set only when the sign-in check refused the request (401 or 429): the address the limit counted it under. */
+    refusedSignInAddress?: string;
+  };
 };
 
 /** Refuses a request unless the signed-in person's Role in their Team is at least `role`. */
@@ -90,16 +96,20 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   app.use(securityHeaders(deps.frontendApiHost));
 
   // One line per request: method, path with the query string's values masked by the logger, status, duration.
-  // Headers are never logged.
+  // Headers are never logged. A request the sign-in check refused (401 or 429) also carries clientAddress, the address
+  // the limit counted, so a live deploy can compare it with Cloud Run's own httpRequest.remoteIp (threat A5); no other
+  // line holds an address.
   app.use(async (c, next) => {
     const started = performance.now();
     await next();
     const url = new URL(c.req.url);
+    const refusedFrom = c.get("refusedSignInAddress");
     logger.info("request", {
       method: c.req.method,
       path: url.pathname + url.search,
       status: c.res.status,
       durationMs: Math.round(performance.now() - started),
+      ...(refusedFrom === undefined ? {} : { clientAddress: refusedFrom }),
     });
   });
 
@@ -118,6 +128,7 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     );
     const retryAfter = signInLimit.attempt(address);
     if (retryAfter !== undefined) {
+      c.set("refusedSignInAddress", address);
       c.header("Retry-After", String(retryAfter));
       return c.json({ error: "Too many sign-in attempts" }, 429);
     }
@@ -131,7 +142,10 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
       signInLimit.takeBack(address);
       throw error;
     }
-    if (session === null) return c.json({ error: "Not signed in" }, 401);
+    if (session === null) {
+      c.set("refusedSignInAddress", address);
+      return c.json({ error: "Not signed in" }, 401);
+    }
     signInLimit.takeBack(address);
     return session;
   }
