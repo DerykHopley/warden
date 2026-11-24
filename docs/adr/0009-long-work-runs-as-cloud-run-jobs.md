@@ -43,7 +43,10 @@ Cloud Scheduler. Nothing long runs in the service after it answers, and nothing 
   Run's advice), with `roles/secretmanager.secretAccessor` on each secret it needs. Who may start each job:
   - Warden's service account, with `roles/run.jobsExecutorWithOverrides` on the Scan job only. `roles/run.invoker`
     can't pass overrides.
-  - Cloud Scheduler's service account, with the same role on the daily job only.
+  - Cloud Scheduler, as its own service account `warden-scheduler`, with `roles/run.invoker` on the daily job
+    (`warden-daily-expiry`) only. Scheduler starts it without overrides, and `run.invoker` holds `run.jobs.run`
+    (the limits table below), so it needs nothing wider than that: narrower than `run.jobsExecutorWithOverrides`.
+    `scripts/gcp-setup.sh` makes the account, the job, the binding and the Scheduler job (#52).
   - No one else. People start Scans through Warden's API, which checks their Role.
 - **No callback endpoint.** Nothing calls into Warden's public service from a queue, so no endpoint has to refuse a
   caller without a Google OIDC token. Option B would have needed one (below).
@@ -87,6 +90,7 @@ cost is a 15 to 29 s start, which a Scan of minutes doesn't notice.
 | Job task timeout | 10 min default, 168 h max | https://docs.cloud.google.com/run/docs/configuring/task-timeout |
 | Job retries | `--max-retries` 3 default, 0 to 10, per task | https://docs.cloud.google.com/run/docs/configuring/max-retries |
 | Starting a job with overrides | `run.jobs.runWithOverrides`, in `roles/run.jobsExecutorWithOverrides`, not in `roles/run.invoker` | https://docs.cloud.google.com/run/docs/reference/iam/roles |
+| Starting a job without overrides | `run.jobs.run`, in `roles/run.invoker` (docs checked 2026-11-24) | https://docs.cloud.google.com/run/docs/reference/iam/roles |
 | Cloud Scheduler starting a job | POST `run.googleapis.com/v2/…/jobs/JOB:run` with an OAuth token | https://docs.cloud.google.com/run/docs/execute/jobs-on-schedule |
 | Cloud Tasks dispatch deadline (B) | 10 min default, 15 s to 30 min; past it the attempt fails and is retried, and the handler isn't stopped | https://docs.cloud.google.com/tasks/docs/reference/rest/v2/projects.locations.queues.tasks |
 

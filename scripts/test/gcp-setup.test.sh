@@ -205,6 +205,29 @@ assert_line "the preview service runs as warden-preview-run, public, at most 1 i
 assert_line "the preview migration job runs as warden-preview-migrate, with Google's placeholder job image" \
   "gcloud run jobs create warden-migrate-preview --image=us-docker.pkg.dev/cloudrun/container/job:latest --region=europe-west1 --service-account=warden-preview-migrate@$project.iam.gserviceaccount.com --project=$project"
 
+# The daily Job and its Cloud Scheduler trigger (ADR 0009): Scheduler runs as warden-scheduler, which may start that
+# one Job and nothing else.
+assert_equal "the APIs turned on include Cloud Scheduler's" \
+  "gcloud services enable run.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com artifactregistry.googleapis.com iam.googleapis.com sts.googleapis.com iamcredentials.googleapis.com cloudscheduler.googleapis.com --project=$project" \
+  "$(grep -F 'gcloud services enable' <<<"$output")"
+assert_line "it makes the warden-scheduler service account" \
+  "gcloud iam service-accounts create warden-scheduler '--display-name=Warden: warden-scheduler' --project=$project"
+assert_equal "warden-scheduler may start warden-daily-expiry, nothing else" \
+  "run warden-daily-expiry roles/run.invoker" \
+  "$(bindings_to warden-scheduler)"
+daily_job="gcloud run jobs create warden-daily-expiry --image=us-docker.pkg.dev/cloudrun/container/job:latest --region=europe-west1 --service-account=warden-daily@$project.iam.gserviceaccount.com --project=$project"
+assert_line "the daily Job runs as warden-daily, with Google's placeholder job image, in europe-west1" "$daily_job"
+daily_binding="gcloud run jobs add-iam-policy-binding warden-daily-expiry --region=europe-west1 --member=serviceAccount:warden-scheduler@$project.iam.gserviceaccount.com --role=roles/run.invoker --project=$project"
+assert_equal "the daily Job's one binding is warden-scheduler's run.invoker" "$daily_binding" \
+  "$(grep -F 'add-iam-policy-binding warden-daily-expiry' <<<"$output")"
+daily_trigger="gcloud scheduler jobs create http warden-daily-expiry --location=europe-west1 '--schedule=0 4 * * *' --time-zone=Etc/UTC --uri=https://run.googleapis.com/v2/projects/$project/locations/europe-west1/jobs/warden-daily-expiry:run --http-method=POST --oauth-service-account-email=warden-scheduler@$project.iam.gserviceaccount.com --project=$project"
+assert_line "the Scheduler job POSTs to the daily Job's :run daily at 04:00 UTC, with an OAuth token as warden-scheduler" \
+  "$daily_trigger"
+line_of() { grep -nxF -- "$1" <<<"$output" | head -1 | cut -d: -f1; }
+[[ $(line_of "$daily_job") -lt $(line_of "$daily_binding") && $(line_of "$daily_binding") -lt $(line_of "$daily_trigger") ]] ||
+  fail "the Scheduler job isn't printed after the daily Job and its binding"
+pass "the Scheduler job is printed after the daily Job and its binding"
+
 variables=$(grep -E '^gh variable set' <<<"$output" | awk '{ print $4 }' | sort)
 assert_equal "a gh variable line for each of the six variables" \
   "CLOUD_SQL_CONNECTION
@@ -464,6 +487,8 @@ assert_line "warden-deploy's pool binding names the project's number" \
 assert_line "a first run makes the service" "run deploy warden " "$calls"
 assert_line "a first run makes the preview service" "run deploy warden-preview " "$calls"
 assert_line "a first run makes the preview migration job" "run jobs create warden-migrate-preview " "$calls"
+assert_line "a first run makes the daily Job" "run jobs create warden-daily-expiry " "$calls"
+assert_line "a first run makes the daily Job's Scheduler job" "scheduler jobs create http warden-daily-expiry " "$calls"
 
 # An empty DRY_RUN is a real run too.
 real_run empty-dry-run fresh DRY_RUN=
@@ -513,7 +538,8 @@ real_run rerun rerun
 [[ $code == 0 ]] || fail "a rerun against the fake gcloud failed: $out"
 pass "a rerun against the fake gcloud ends"
 for made in "secrets create" "sql databases create" "service-accounts create" "workload-identity-pools create" \
-  "providers create-oidc" "run deploy" "run jobs create" "repositories create" "--enable-point-in-time-recovery"; do
+  "providers create-oidc" "run deploy" "run jobs create" "scheduler jobs create" "repositories create" \
+  "--enable-point-in-time-recovery"; do
   assert_no_line "a rerun doesn't run $made" "$made" "$calls"
 done
 assert_line "a rerun with point-in-time recovery on still sets the backups, without the recovery flag" \
@@ -535,6 +561,16 @@ assert_line "a rerun keeps the preview service public" \
   "$calls"
 assert_line "a rerun puts the preview job's account back" \
   "run jobs update warden-migrate-preview --region=europe-west1 --service-account=warden-preview-migrate@$project.iam.gserviceaccount.com --project=$project" \
+  "$calls"
+assert_line "a rerun puts the daily Job's account back" \
+  "run jobs update warden-daily-expiry --region=europe-west1 --service-account=warden-daily@$project.iam.gserviceaccount.com --project=$project" \
+  "$calls"
+assert_no_line "a rerun keeps each job's image" "--image=" "$(grep -F 'run jobs update' <<<"$calls")"
+assert_line "a rerun puts the daily Job's Scheduler job back" \
+  "scheduler jobs update http warden-daily-expiry --location=europe-west1 --schedule=0 4 * * * --time-zone=Etc/UTC --uri=https://run.googleapis.com/v2/projects/$project/locations/europe-west1/jobs/warden-daily-expiry:run --http-method=POST --oauth-service-account-email=warden-scheduler@$project.iam.gserviceaccount.com --project=$project" \
+  "$calls"
+assert_line "a rerun keeps warden-scheduler's run.invoker on the daily Job" \
+  "run jobs add-iam-policy-binding warden-daily-expiry --region=europe-west1 --member=serviceAccount:warden-scheduler@$project.iam.gserviceaccount.com --role=roles/run.invoker --project=$project" \
   "$calls"
 assert_equal "a rerun runs the roles script for both sets again" \
   "live warden
