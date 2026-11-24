@@ -13,8 +13,10 @@ export type WithTeam<DB extends Database = Database> = <T>(
 export function createWithTeam<DB extends Database = Database>(pool: PostgresPool): WithTeam<DB> {
   const db = new Kysely<DB>({ dialect: new PostgresDialect({ pool }) });
   return async (team, work) => {
-    // An empty Team would read as "no Team set": no rows, which looks like "nothing there" (ADR 0006).
+    // An empty Team would read as "no Team set": no rows, which looks like "nothing there" (ADR 0006). A padded one
+    // matches no Team's row either, so it's a bug upstream, refused the same way.
     if (team.trim() === "") throw new Error("withTeam needs a Team: got an empty Team id");
+    if (team.trim() !== team) throw new Error("withTeam got a Team id with spaces around it");
     return db.transaction().execute(async (tx) => {
       await sql`select set_config('warden.team_id', ${team}, true)`.execute(tx);
       return work(tx);

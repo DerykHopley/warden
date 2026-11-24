@@ -1,6 +1,9 @@
 // The migration runner: plain SQL files in server/migrations, applied in file-name order by Kysely's Migrator, as
 // warden_migrate (PGUSER=warden_migrate; any other user is refused). Forwards only: no down migrations.
 //
+// Row-level security on Team-owned tables is forced, so it binds warden_migrate too (ADR 0006): a data migration
+// over Team-owned rows sees and writes none unless it sets `warden.team_id`, once per Team (see 0002_teams.sql).
+//
 // `pnpm migrate [folder]` exits non-zero, naming the file, when one fails, and with the driver's error when the
 // database can't be reached.
 import { readdir, readFile } from "node:fs/promises";

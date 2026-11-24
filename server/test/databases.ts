@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type pg from "pg";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
+import { migrate } from "../src/migrate.ts";
 import { createRoles } from "../src/roles.ts";
 
 /** A database role (not a person's Role in a Team). */
@@ -34,6 +35,28 @@ export async function createTestDatabase(connection: pg.PoolConfig = {}) {
     throw error;
   }
   return { name, drop };
+}
+
+/** createTestDatabase, then every shipped migration as warden_migrate. A failed migration drops it and throws. */
+export async function createMigratedTestDatabase(connection: pg.PoolConfig = {}) {
+  const database = await createTestDatabase(connection);
+  const pool = createPool(logger, {
+    ...connection,
+    user: "warden_migrate",
+    database: database.name,
+    max: 1,
+  });
+  try {
+    const result = await migrate(pool);
+    if (result.error)
+      throw new Error("migrating the test database failed", { cause: result.error });
+  } catch (error) {
+    await database.drop();
+    throw error;
+  } finally {
+    await pool.end();
+  }
+  return database;
 }
 
 /** The names createTestDatabase makes: when, in seconds, then 12 hex digits. */

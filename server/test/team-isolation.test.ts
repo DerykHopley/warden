@@ -1,16 +1,15 @@
 // Story 5: a query that forgets its Team still can't reach another Team's rows. The team-scoping spike's attack cases
 // (ADR 0006), run as warden_app unless a case says otherwise, in a fresh migrated database of this file's own with a
 // test-only `test_notes` table built the way later Team-owned tables are: `team_id` in its keys and forced policies.
-import { sql, type Generated, type PostgresPool } from "kysely";
+import { sql, type Generated, type PostgresPool, type Transaction } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
-import { migrate } from "../src/migrate.ts";
 import type { Database } from "../src/schema.ts";
 import { createWithAdmin } from "../src/with-admin.ts";
 import { createWithTeam } from "../src/with-team.ts";
-import { createTestDatabase, poolAs } from "./databases.ts";
+import { createMigratedTestDatabase, poolAs } from "./databases.ts";
 import { closedPort } from "./ports.ts";
 
 /** `Database` plus the test-only table; it never goes in `Database`. */
@@ -69,13 +68,21 @@ async function seed(team: string, kinds: [name: string, kind: string, parent?: s
   });
 }
 
+/** An empty answer can mean "no Team set" as well as "nothing there" (ADR 0006): this proves the Team is set. */
+async function expectTeamSet(tx: Transaction<TestDatabase>, team: string) {
+  const { rows } = await sql<{
+    team: string;
+  }>`select current_setting('warden.team_id', true) as team`.execute(tx);
+  expect(rows).toEqual([{ team }]);
+  const own = await tx.selectFrom("teams").select("id").execute();
+  expect(own).toEqual([{ id: team }]);
+}
+
 beforeAll(async () => {
-  const database = await createTestDatabase();
+  const database = await createMigratedTestDatabase();
   ends.push(database.drop);
   databaseName = database.name;
   const owner = track(poolAs("warden_migrate", database.name));
-  const result = await migrate(owner);
-  if (result.error) throw new Error("migrating failed", { cause: result.error });
   await owner.query(TEST_NOTES);
 
   app = track(poolAs("warden_app", database.name));
@@ -112,19 +119,23 @@ describe("the attack cases", () => {
   });
 
   it("2: asking for another Team's rows by team_id returns nothing", async () => {
-    const rows = await withTeam(A, async (tx) => ({
-      teams: await tx.selectFrom("teams").selectAll().where("id", "=", B).execute(),
-      testNotes: await tx.selectFrom("test_notes").selectAll().where("team_id", "=", B).execute(),
-    }));
+    const rows = await withTeam(A, async (tx) => {
+      await expectTeamSet(tx, A);
+      return {
+        teams: await tx.selectFrom("teams").selectAll().where("id", "=", B).execute(),
+        testNotes: await tx.selectFrom("test_notes").selectAll().where("team_id", "=", B).execute(),
+      };
+    });
 
     expect(rows).toEqual({ teams: [], testNotes: [] });
   });
 
   it("3: another Team's row by its id is not found, exactly as an id that exists nowhere", async () => {
     const byId = (id: string) =>
-      withTeam(A, (tx) =>
-        tx.selectFrom("test_notes").selectAll().where("id", "=", id).executeTakeFirst(),
-      );
+      withTeam(A, async (tx) => {
+        await expectTeamSet(tx, A);
+        return tx.selectFrom("test_notes").selectAll().where("id", "=", id).executeTakeFirst();
+      });
 
     expect(await byId(notes.b1!)).toBeUndefined();
     expect(await byId("999999")).toBeUndefined();
@@ -203,14 +214,17 @@ describe("the attack cases", () => {
       tx.selectFrom("test_notes").selectAll().orderBy("id").execute(),
     );
 
-    const { updated, deleted } = await withTeam(A, async (tx) => ({
-      updated: await tx
-        .updateTable("test_notes")
-        .set({ kind: "changed" })
-        .where("id", "=", notes.b3!)
-        .executeTakeFirst(),
-      deleted: await tx.deleteFrom("test_notes").where("id", "=", notes.b4!).executeTakeFirst(),
-    }));
+    const { updated, deleted } = await withTeam(A, async (tx) => {
+      await expectTeamSet(tx, A);
+      return {
+        updated: await tx
+          .updateTable("test_notes")
+          .set({ kind: "changed" })
+          .where("id", "=", notes.b3!)
+          .executeTakeFirst(),
+        deleted: await tx.deleteFrom("test_notes").where("id", "=", notes.b4!).executeTakeFirst(),
+      };
+    });
 
     expect(updated.numUpdatedRows).toBe(0n);
     expect(deleted.numDeletedRows).toBe(0n);
@@ -225,15 +239,17 @@ describe("the attack cases", () => {
     const single = track(
       createPool(logger, { user: "warden_app", database: databaseName, max: 1 }),
     );
-    const singleWithTeam = createWithTeam(single);
+    const singleWithTeam = createWithTeam<TestDatabase>(single);
     const plainTeams = async () => (await single.query("select id from teams")).rows;
 
     await singleWithTeam(A, (tx) => tx.selectFrom("teams").selectAll().execute());
     expect(await plainTeams()).toEqual([]);
 
-    const boom = new Error("callback failed");
+    // The throwing callback writes first: the rethrow is the same error, and the write is rolled back.
+    const boom = new Error("callback failed after writing");
     await expect(
-      singleWithTeam(A, async () => {
+      singleWithTeam(A, async (tx) => {
+        await tx.insertInto("test_notes").values({ team_id: A, kind: "rolled back" }).execute();
         throw boom;
       }),
     ).rejects.toBe(boom);
@@ -241,6 +257,10 @@ describe("the attack cases", () => {
 
     const seenByB = await singleWithTeam(B, (tx) => tx.selectFrom("teams").selectAll().execute());
     expect(seenByB.map((team) => team.id)).toEqual([B]);
+    const rolledBack = await singleWithTeam(A, (tx) =>
+      tx.selectFrom("test_notes").select("id").where("kind", "=", "rolled back").execute(),
+    );
+    expect(rolledBack).toEqual([]);
   });
 
   it("12: a parent from another Team is refused as if it existed nowhere", async () => {
@@ -288,56 +308,32 @@ describe("the attack cases", () => {
     }
   });
 
-  it.each(["", "  "])("15: withTeam(%j) refuses before touching the database", async (team) => {
-    const touched: string[] = [];
-    const pool: PostgresPool = {
-      options: {},
-      connect: async () => {
-        touched.push("connect");
-        throw new Error("no database here");
-      },
-      end: async () => {},
-    };
-    let ran = false;
+  it.each(["", "  ", ` ${A}`, `${A} `])(
+    "15: withTeam(%j) refuses before touching the database",
+    async (team) => {
+      const touched: string[] = [];
+      const pool: PostgresPool = {
+        options: {},
+        connect: async () => {
+          touched.push("connect");
+          throw new Error("no database here");
+        },
+        end: async () => {},
+      };
+      let ran = false;
 
-    await expect(
-      createWithTeam(pool)(team, async () => {
-        ran = true;
-      }),
-    ).rejects.toThrow(/Team/);
-    expect(touched).toEqual([]);
-    expect(ran).toBe(false);
-  });
+      await expect(
+        createWithTeam(pool)(team, async () => {
+          ran = true;
+        }),
+      ).rejects.toThrow(/Team/);
+      expect(touched).toEqual([]);
+      expect(ran).toBe(false);
+    },
+  );
 });
 
 describe("withTeam", () => {
-  it("returns its callback's result and commits it", async () => {
-    const team = "org_team_committed";
-
-    const created = await withTeam(team, (tx) =>
-      tx.insertInto("teams").values({ id: team }).returning("id").executeTakeFirstOrThrow(),
-    );
-
-    expect(created).toEqual({ id: team });
-    const read = await withTeam(team, (tx) => tx.selectFrom("teams").select("id").execute());
-    expect(read).toEqual([{ id: team }]);
-  });
-
-  it("rolls back a throwing callback and rethrows the same error", async () => {
-    const team = "org_team_rolled_back";
-    const boom = new Error("callback failed after inserting");
-
-    await expect(
-      withTeam(team, async (tx) => {
-        await tx.insertInto("teams").values({ id: team }).execute();
-        throw boom;
-      }),
-    ).rejects.toBe(boom);
-
-    const read = await withTeam(team, (tx) => tx.selectFrom("teams").select("id").execute());
-    expect(read).toEqual([]);
-  });
-
   it("rejects with the driver's error when the database can't be reached", async () => {
     const unreachable = track(
       createPool(logger, { host: "127.0.0.1", port: await closedPort(), max: 1 }),
@@ -357,6 +353,14 @@ describe("withAdmin", () => {
       (await tx.selectFrom("teams").select("id").execute()).map((team) => team.id),
     );
 
-    expect(ids).toEqual(expect.arrayContaining([A, B]));
+    expect(ids.sort()).toEqual([A, B]);
+  });
+
+  it("runs read-only, so a write inside it fails", async () => {
+    const withAdmin = createWithAdmin(track(poolAs("warden_admin", databaseName)));
+
+    await expect(
+      withAdmin((tx) => tx.insertInto("teams").values({ id: "org_team_admin_made" }).execute()),
+    ).rejects.toThrow(/read-only transaction/);
   });
 });
