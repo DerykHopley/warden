@@ -1,8 +1,30 @@
 // A Lead's named decisions on a Finding (ADR 0005), and a Finding's history, as the API takes and answers them. The
 // Team and the Actor come from the session, never the body: each body is strict, so naming either is refused.
 import { z } from "zod";
-import { DateTime, Id, Severity, Status, Text } from "./finding.ts";
-import { Actor } from "./reconcile-case.ts";
+import { Actor, DateTime, Id, Severity, Status, Text } from "./finding.ts";
+
+/** A person's named decisions on a Finding: the dashboard's buttons and the reconcile cases' decision steps. */
+export const Decision = z.enum([
+  "accept",
+  "mark_false_positive",
+  "confirm_fix",
+  "mark_moved",
+  "reopen",
+]);
+export type Decision = z.infer<typeof Decision>;
+
+/**
+ * Which Statuses each decision takes: the server refuses any other (409), and the dashboard offers only these. Every
+ * decision also refuses a Finding merged into another (`moved_to` set), and confirm_fix and mark_moved one without an
+ * Unconfirmed fix.
+ */
+export const DECISION_TAKES: Readonly<Record<Decision, readonly Status[]>> = {
+  accept: ["open", "accepted"],
+  mark_false_positive: ["open", "accepted"],
+  confirm_fix: ["fixed"],
+  mark_moved: ["fixed"],
+  reopen: ["false_positive", "accepted"],
+};
 
 /** Why a person decided: 1 to 2,000 characters, not only whitespace. */
 export const DecisionReason = Text(2000);

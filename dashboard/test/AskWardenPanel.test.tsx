@@ -362,6 +362,73 @@ describe("the detail card's Proposals, from GET /api/proposals", () => {
   });
 });
 
+// Each decision's call, words and refusals are DetailCard.test.tsx's; here, that the shell hands the card the Role and
+// that a decision reaches the Findings page.
+describe("a Lead's decision in the detail card", () => {
+  it("after an accept, the page's table and the card read Accepted without a reload", async () => {
+    const lodash = demoFindings.find((f) => f.id === ID.lodash)!;
+    const accepted = { ...lodash, status: "accepted", accepted_reason: "Only a dev dependency" };
+    const answers = [
+      demoFindings,
+      demoFindings.map((f) =>
+        f.id === ID.lodash ? { ...accepted, accepted_until: "2027-01-15T23:59:59.999Z" } : f,
+      ),
+    ];
+    open("/findings?status=all", {
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      findings: () =>
+        json(200, { team: TEAM, findings: answers.length > 1 ? answers.shift() : answers[0] }),
+      findingAction: () =>
+        json(
+          200,
+          answers[0]!.find((f) => f.id === ID.lodash),
+        ),
+    });
+    const row = within(await screen.findByRole("table")).getByRole("button", {
+      name: /^lodash 4\.17\.20/,
+    });
+    await userEvent.click(row);
+
+    await userEvent.click(within(card()).getByRole("button", { name: "Accept" }));
+    const form = within(within(card()).getByRole("form", { name: "Accept" }));
+    await userEvent.type(form.getByRole("textbox", { name: "Reason" }), "Only a dev dependency");
+    fireEvent.change(form.getByLabelText("Until"), { target: { value: "2099-01-15" } });
+    await userEvent.click(form.getByRole("button", { name: "Accept" }));
+
+    expect(await within(card()).findByRole("status")).toHaveTextContent(/^Accepted until/);
+    await vi.waitFor(() => expect(callsTo("/api/findings")).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(
+        within(card()).getByText("Accepted", { selector: ".detail-status span" }),
+      ).toBeInTheDocument(),
+    );
+    expect(row.closest("tr")).toHaveTextContent(/Accepted$/);
+  });
+});
+
+describe("a decision on a Finding the Team no longer has", () => {
+  it("says so on the page, where it outlives the card", async () => {
+    const answers = [demoFindings, demoFindings.filter((f) => f.id !== ID.lodash)];
+    open("/findings?status=all", {
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      findings: () =>
+        json(200, { team: TEAM, findings: answers.length > 1 ? answers.shift() : answers[0] }),
+      findingAction: () => json(404, { error: "No such Finding" }),
+    });
+    await userEvent.click(
+      within(await screen.findByRole("table")).getByRole("button", { name: /^lodash 4\.17\.20/ }),
+    );
+    await userEvent.click(within(card()).getByRole("button", { name: "Mark False positive" }));
+    const form = within(within(card()).getByRole("form", { name: "Mark False positive" }));
+    await userEvent.type(form.getByRole("textbox", { name: "Reason" }), "A test fixture");
+    await userEvent.click(form.getByRole("button", { name: "Mark False positive" }));
+
+    await vi.waitFor(() => expect(queryCard()).not.toBeInTheDocument());
+    const notice = within(screen.getByRole("main")).getByRole("alert");
+    expect(notice).toHaveTextContent("This Finding is no longer in your Team.");
+  });
+});
+
 describe("the card's ✕", () => {
   it("removes finding= from the URL, the selection's aria-current and the card, and leaves the panel open", async () => {
     open(`/findings?severity=high`);

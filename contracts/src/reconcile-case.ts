@@ -1,7 +1,9 @@
 // A reconcile case as data (ADR 0005: contracts stay language-neutral): what exists, what happens, what should
 // exist after. Slice 7's runner applies them to `reconcile`; the README states the format.
 import { z } from "zod";
+import { Decision } from "./decisions.ts";
 import {
+  Actor,
   checkFindingFields,
   contractsRegistry,
   DateTime,
@@ -14,12 +16,9 @@ import {
   Text,
 } from "./finding.ts";
 
-/** Who made a change: a person or an agent. */
-export const Actor = z.strictObject({
-  kind: z.enum(["person", "agent"]),
-  id: Id,
-});
-export type Actor = z.infer<typeof Actor>;
+// Who made a change, re-exported where reconcile cases have always named it. It lives in finding.ts, so decisions.ts
+// can use it without importing this module, which imports decisions.ts.
+export { Actor };
 
 /** Names a Finding a step created, since the implementation chooses new ids. */
 const Label = z
@@ -45,7 +44,7 @@ const SpotRunStep = z.strictObject({
 const DecisionStep = z
   .strictObject({
     step: z.literal("decision"),
-    decision: z.enum(["accept", "mark_false_positive", "confirm_fix", "mark_moved", "reopen"]),
+    decision: Decision,
     finding: FindingRef,
     actor: Actor,
     reason: Text(2000),

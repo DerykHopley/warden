@@ -28,9 +28,24 @@ export const LINUS: Person = {
   email: "linus@bluebird.test",
 };
 
-/** Two Teams, each opened by its Admin and seeded with the demo Findings. Acme also has Grace, a Member. */
+export const MARGARET: Person = {
+  userId: "user_e2e_margaret",
+  firstName: "Margaret",
+  lastName: "Hamilton",
+  email: "margaret@bluebird.test",
+};
+
+/**
+ * Two Teams, each opened by its Admin and seeded with the demo Findings. Acme also has Grace, a Member; Bluebird has
+ * Margaret, a Member (only e2e/decisions.spec.ts reads Bluebird, so its decisions can't touch Acme's tests).
+ */
 export const ACME = { id: "org_e2e_acme", name: "Acme", admin: ADA, people: [ADA, GRACE] };
-export const BLUEBIRD = { id: "org_e2e_bluebird", name: "Bluebird", admin: LINUS, people: [LINUS] };
+export const BLUEBIRD = {
+  id: "org_e2e_bluebird",
+  name: "Bluebird",
+  admin: LINUS,
+  people: [LINUS, MARGARET],
+};
 
 export type Team = typeof ACME;
 

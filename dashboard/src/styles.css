@@ -175,7 +175,20 @@ button:focus-visible,
 .page-links a:focus-visible,
 .level-line a:focus-visible,
 .panel-divider:focus-visible,
-.chat-input:focus-visible {
+.chat-input:focus-visible,
+.field textarea:focus-visible,
+.field input:focus-visible,
+.candidate input:focus-visible,
+.card-line:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A date input's ring, on the input itself. In WebKit (Safari) the keyboard focuses the date's inner month, day and
+   year fields, in the input's own shadow tree: the input is the document's active element, but it never matches
+   :focus-visible, so the rule above draws nothing there. :focus-within does match it while an inner field has focus,
+   in every browser. Its own rule, so a browser that refused the selector would drop only this one. */
+.field input[type="date"]:focus-within {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
@@ -1027,6 +1040,116 @@ button[aria-busy="true"],
 .proposal .proposal-stale {
   margin-top: 4px;
   font-weight: 600;
+}
+
+/* The card's decisions (story 4): a Lead's row of decision buttons, or a Member's Propose buttons, under the fields;
+   a Proposal's Approve and Reject; each wraps on a narrow panel. */
+.card-actions,
+.proposal-actions,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.card-actions {
+  margin: 12px 8px 0 0;
+}
+
+.proposal-actions {
+  margin-top: 8px;
+}
+
+/* A decision's form, in the card in place of the row (a Reject's, in place of its Proposal's buttons). */
+.decision-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 8px 0 0;
+}
+
+.proposal .decision-form {
+  margin: 8px 0 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  font-size: 0.875rem;
+  border: 0;
+}
+
+.field-label {
+  padding: 0;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.field textarea,
+.field input[type="date"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.field textarea {
+  resize: vertical;
+}
+
+/* A Mark moved candidate: the whole 44px-high row is its radio's target. */
+.candidate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.candidate:hover {
+  background: var(--chip);
+}
+
+.candidate input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.form-note {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* The card's one line: what was done (it takes focus), or why a call was refused, in words. A refusal is set apart by
+   weight, not colour. */
+.card-line {
+  margin: 12px 8px 0 0;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
+}
+
+.card-line.refused {
+  font-weight: 600;
+}
+
+.decision-form .card-line {
+  margin: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
