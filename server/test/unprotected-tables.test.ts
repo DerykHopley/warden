@@ -5,8 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { findUnprotectedTables } from "../src/unprotected-tables.ts";
-import { createMigratedTestDatabase, poolAs } from "./databases.ts";
+import { createMigratedTestDatabase, poolAs, testName } from "./databases.ts";
 
+const silent = createLogger(() => {});
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -117,6 +118,46 @@ describe("findUnprotectedTables", () => {
     `);
 
     expect(await findUnprotectedTables(pool)).toEqual(["app_reads_any", "everyone_any"]);
+  });
+
+  // A policy for a role the app role is a member of applies to the app role. Shown on a test-named app role given to
+  // the check, as giving warden_app a membership would change it for every other test file running at once.
+  it("counts a policy for a role an app role is a member of, directly or indirectly", async () => {
+    const superuser = createPool(silent, { max: 1 });
+    const base = testName();
+    const [app, middle, readers] = [`${base}_app`, `${base}_middle`, `${base}_readers`];
+    // Pushed before the database's cleanups, so it runs after them (cleanups run in reverse): no policy still names
+    // the roles when they're dropped.
+    cleanups.push(async () => {
+      await superuser.query(`drop role if exists ${app}; drop role if exists ${middle}`);
+      await superuser.query(`drop role if exists ${readers}`);
+      await superuser.end();
+    });
+    await superuser.query(`create role ${app} login; create role ${middle} nologin`);
+    await superuser.query(`create role ${readers} nologin`);
+    await superuser.query(`grant ${readers} to ${middle}; grant ${middle} to ${app}`);
+    const { pool } = await migratedDatabase();
+    const teamTable = (table: string) => `
+      create table ${table} (team_id text);
+      alter table ${table} enable row level security;
+      alter table ${table} force row level security;
+      create policy ${table}_team on ${table} for all
+        using (team_id = current_setting('warden.team_id', true))
+        with check (team_id = current_setting('warden.team_id', true));
+    `;
+    await pool.query(`
+      ${teamTable("direct_group_reads_any")}
+      create policy direct_group_reads_any_all on direct_group_reads_any for select to ${middle} using (true);
+
+      ${teamTable("indirect_group_reads_any")}
+      create policy indirect_group_reads_any_all on indirect_group_reads_any for select to ${readers}
+        using (true);
+    `);
+
+    expect(await findUnprotectedTables(pool, [app])).toEqual([
+      "direct_group_reads_any",
+      "indirect_group_reads_any",
+    ]);
   });
 
   it("names a table in a schema other than public, schema-qualified", async () => {

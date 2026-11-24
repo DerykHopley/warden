@@ -29,6 +29,23 @@ export const DATABASE_ROLE_NAMES = {
   admin: "warden_admin",
 } as const satisfies DatabaseRoleNames;
 
+/** The owner previews' own three roles, for the `warden_preview` database: the same jobs as the live set, with their
+ * own passwords, so preview code can't act as anything live. Roles belong to the whole Cloud SQL instance. */
+export const PREVIEW_DATABASE_ROLE_NAMES = {
+  migrate: "warden_preview_migrate",
+  app: "warden_preview_app",
+  admin: "warden_preview_admin",
+} as const satisfies DatabaseRoleNames;
+
+/** The role set WARDEN_DATABASE_ROLES picks: unset, empty or `live` the live set, `preview` the preview set. Any
+ * other value throws, naming the variable and the two allowed values. */
+export function databaseRoleNames(env: Record<string, string | undefined>): DatabaseRoleNames {
+  const value = env.WARDEN_DATABASE_ROLES ?? "";
+  if (value === "" || value === "live") return DATABASE_ROLE_NAMES;
+  if (value === "preview") return PREVIEW_DATABASE_ROLE_NAMES;
+  throw new Error(`WARDEN_DATABASE_ROLES must be live or preview, not ${JSON.stringify(value)}`);
+}
+
 /** Why a database role may not serve requests: it can get around row-level security. */
 export type DatabaseRoleRefusal = { role: string; reason: string };
 
@@ -38,7 +55,8 @@ const ROLE_CHECK_TIMEOUT_MS = 5000;
 /** What makes a role able to get around row-level security, as the check's query names it, with how it reads. A
  * table's owner isn't bound by its policies unless they're forced; the schema's or the database's owner, and the
  * migration role, can make or take over tables, so they own them as soon as there are any. The admin role is
- * refused by name too: on Cloud SQL it's made without BYPASSRLS, but it's still for cross-Team work only. */
+ * refused by name too: on Cloud SQL it's made without BYPASSRLS, but it's still for cross-Team work only. Any
+ * membership is refused last: a policy for a role the app role is a member of applies to it. */
 const BYPASS_REASONS = {
   superuser: "is a superuser",
   bypassrls: "has BYPASSRLS",
@@ -47,11 +65,14 @@ const BYPASS_REASONS = {
   "database owner": "owns the database",
   "migration role": "is the migration role",
   "admin role": "is the admin role",
+  membership: "is a member of",
 } as const;
 
 // The connected role and every role it can become through membership (any grant counts: one with only the admin
 // option can grant itself the rest), with the first that can get around row-level security, and why. The role itself
-// comes first. $1 is the migration role's name, $2 the admin role's.
+// comes first. Failing those, the first role it's a member of at all: an app role is a member of none (createRoles
+// revokes them), and a policy for a role it's a member of would apply to it. $1 is the migration roles' names, $2 the
+// admin roles'.
 const BYPASSING_ROLE_SQL = `
 with recursive reachable (oid) as (
   select oid from pg_roles where rolname = current_user
@@ -71,26 +92,34 @@ select * from (
              then 'schema owner'
            when exists (select from pg_database d where d.datname = current_database() and d.datdba = r.oid)
              then 'database owner'
-           when r.rolname = $1 then 'migration role'
-           when r.rolname = $2 then 'admin role'
+           when r.rolname = any($1) then 'migration role'
+           when r.rolname = any($2) then 'admin role'
          end as why
     from reachable join pg_roles r on r.oid = reachable.oid
+  union all
+  select current_user, r.rolname, 'membership'
+    from pg_auth_members m join pg_roles r on r.oid = m.roleid
+   where m.member = (select oid from pg_roles where rolname = current_user)
 ) found
  where why is not null
- order by via = role desc, via
+ order by why = 'membership', via = role desc, via
  limit 1`;
 
 export type CheckDatabaseRoleOptions = {
   /** How long the check waits for its answer. */
   timeoutMs?: number;
-  /** The migration and admin roles, refused by name; tests pass their own. */
-  names?: Pick<DatabaseRoleNames, "migrate" | "admin">;
+  /** The role sets whose migration and admin roles are refused by name: the live set's and the preview set's unless
+   * given; tests pass their own. */
+  names?: readonly Pick<DatabaseRoleNames, "migrate" | "admin">[];
 };
 
 /** Whether the role `client` connected as can get around row-level security, and why; undefined when it can't. */
 export async function checkDatabaseRole(
   client: Pick<pg.ClientBase, "query">,
-  { timeoutMs = ROLE_CHECK_TIMEOUT_MS, names = DATABASE_ROLE_NAMES }: CheckDatabaseRoleOptions = {},
+  {
+    timeoutMs = ROLE_CHECK_TIMEOUT_MS,
+    names: sets = [DATABASE_ROLE_NAMES, PREVIEW_DATABASE_ROLE_NAMES],
+  }: CheckDatabaseRoleOptions = {},
 ): Promise<DatabaseRoleRefusal | undefined> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -104,7 +133,7 @@ export async function checkDatabaseRole(
     const { rows } = await Promise.race([
       client.query<{ role: string; via: string; why: keyof typeof BYPASS_REASONS }>(
         BYPASSING_ROLE_SQL,
-        [names.migrate, names.admin],
+        [sets.map((set) => set.migrate), sets.map((set) => set.admin)],
       ),
       timeout,
     ]);
@@ -112,9 +141,11 @@ export async function checkDatabaseRole(
     if (!found) return undefined;
     const what = BYPASS_REASONS[found.why];
     const reason =
-      found.via === found.role
-        ? `${found.role} ${what}`
-        : `${found.role} can become ${found.via}, which ${what}`;
+      found.why === "membership"
+        ? `${found.role} ${what} ${found.via}`
+        : found.via === found.role
+          ? `${found.role} ${what}`
+          : `${found.role} can become ${found.via}, which ${what}`;
     return { role: found.role, reason };
   } finally {
     clearTimeout(timer);

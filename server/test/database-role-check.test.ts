@@ -1,7 +1,8 @@
 // The server's database role. checkDatabaseRole, with a pool per role, refuses a role that can get around row-level
-// security: a superuser, a role with BYPASSRLS, the owner of a table, of the schema or of the database, the migration
-// role, or one that can become any of them. Then the real process: refusing warden_admin, serving as warden_app, a
-// database that answers only after the server started, and a login the database refuses.
+// security: a superuser, a role with BYPASSRLS, the owner of a table, of the schema or of the database, the
+// migration or admin role of either set, a member of any role, or one that can become any of them. Then the real
+// process: refusing warden_admin, serving as warden_app, a database that answers only after the server started, and
+// a login the database refuses.
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type pg from "pg";
 import { checkDatabaseRole, createPool, guardDatabaseRole } from "../src/database.ts";
@@ -92,7 +93,8 @@ describe("checkDatabaseRole", () => {
 });
 
 // As on Cloud SQL, where the admin role is made without BYPASSRLS: refused by its name. Under test names, as the
-// suite's warden_admin has BYPASSRLS and roles belong to the whole Postgres server.
+// suite's warden_admin has BYPASSRLS and roles belong to the whole Postgres server. On the plain database: the suite's
+// own refuses a login by any role outside the live set.
 describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
   const names = { migrate: "warden_migrate", admin: `${base}_admin` };
   const admin = names.admin;
@@ -106,9 +108,9 @@ describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
   });
 
   async function checkNamed(role: string) {
-    const pool = createPool(silent, { user: role, database, max: 1 });
+    const pool = createPool(silent, { user: role, database: plainDatabase, max: 1 });
     try {
-      return await checkDatabaseRole(pool, { names });
+      return await checkDatabaseRole(pool, { names: [names] });
     } finally {
       await pool.end();
     }
@@ -123,6 +125,62 @@ describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
       role: member,
       reason: `${member} can become ${admin}, which is the admin role`,
     });
+  });
+});
+
+// Two sets given, as the default gives the live and the preview set (database.test.ts): the second set's migration
+// and admin roles are refused by name too, each owning nothing and without BYPASSRLS, as on Cloud SQL. Under test
+// names, so a developer's own warden_preview_* roles on the same server are never touched. On the plain database:
+// the suite's own refuses a login by any role outside the live set.
+describe("checkDatabaseRole, given a second set's migration and admin roles", () => {
+  const second = { migrate: `${base}_secondmigrate`, admin: `${base}_secondadmin` };
+  beforeAll(async () => {
+    for (const role of Object.values(second)) {
+      await superuser.query(`create role ${role} login nobypassrls`);
+    }
+  });
+  afterAll(async () => {
+    for (const role of Object.values(second)) await superuser.query(`drop role if exists ${role}`);
+  });
+
+  it.each([
+    [second.migrate, `${second.migrate} is the migration role`],
+    [second.admin, `${second.admin} is the admin role`],
+  ])("refuses %s by name", async (role, reason) => {
+    const pool = createPool(silent, { user: role, database: plainDatabase, max: 1 });
+    try {
+      const names = [{ migrate: "warden_migrate", admin: "warden_admin" }, second];
+      expect(await checkDatabaseRole(pool, { names })).toEqual({ role, reason });
+    } finally {
+      await pool.end();
+    }
+  });
+});
+
+// An app role is a member of no role (createRoles revokes them all): a policy for a role it's a member of would apply
+// to it, so any membership at all is refused, even of a role that owns nothing and can't get around row-level
+// security.
+describe("checkDatabaseRole, with a role that is a member of another", () => {
+  const group = `${base}_plaingroup`;
+  const grouped = `${base}_grouped`;
+  const noInherit = `${base}_noinherit`;
+  beforeAll(async () => {
+    await superuser.query(`create role ${group} nologin`);
+    await superuser.query(`create role ${grouped} login in role ${group}`);
+    await superuser.query(`create role ${noInherit} login`);
+    await superuser.query(`grant ${group} to ${noInherit} with inherit false, set false`);
+  });
+  afterAll(async () => {
+    for (const role of [grouped, noInherit, group]) {
+      await superuser.query(`drop role if exists ${role}`);
+    }
+  });
+
+  it.each([
+    [grouped, `${grouped} is a member of ${group}`],
+    [noInherit, `${noInherit} is a member of ${group}`],
+  ])("refuses %s", async (role, reason) => {
+    expect(await check(role, plainDatabase)).toEqual({ role, reason });
   });
 });
 

@@ -80,25 +80,51 @@ Warden runs on Cloud Run in `europe-west1`, with Cloud SQL for Postgres 17. `scr
 project once. It's safe to run again: it creates only what's missing, and puts each setting back to the value it
 sets.
 
-**Before you run it** you need a Google Cloud project with billing, the
-[Google Cloud CLI](https://cloud.google.com/sdk/docs/install), Node 24, and these, made by hand:
+**Before you run it** you need a Google Cloud project with billing, and on your machine:
+
+- the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install), signed in, with application-default
+  credentials for the Cloud SQL Auth Proxy (`gcloud auth application-default login`);
+- the [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/sql-proxy#install), `cloud-sql-proxy`, on
+  your `PATH` (`gcloud components install cloud-sql-proxy` installs it);
+- Node 24, and the server's dependencies installed (`pnpm install` in this repository): the script runs
+  `server/src/roles.ts` itself.
+
+And these, made by hand:
 
 - a Cloud SQL for PostgreSQL 17 instance in `europe-west1`;
 - the secrets `warden-db-password` (the instance's `postgres` user's password), `warden-clerk-secret`,
   `warden-clerk-publishable` and `warden-clerk-jwt-key`.
+
+**Two sets of identities.** Live (`main`) and owner previews (`preview/*` branches) each get their own service
+accounts and their own database roles, with their own passwords. A preview runs on the `warden-preview` service and
+the `warden_preview` database, and nothing in it can act as a live account or role, or read a live password.
 
 **What it makes or sets:**
 
 | Step | What |
 |---|---|
 | APIs | Cloud Run, Cloud SQL Admin, Secret Manager, Artifact Registry, IAM, STS and IAM Credentials, turned on |
-| Artifact Registry | the Docker repository `warden` in `europe-west1` |
+| Artifact Registry | the Docker repositories `warden` (releases) and `warden-preview` (owner previews), in `europe-west1` |
 | Cloud SQL | the databases `warden` and `warden_preview`; daily backups, 7 kept; point-in-time recovery with 6 days of logs (Cloud SQL's docs ask for fewer log days than backups); no authorized networks, and connectors required |
 | Logging | the `_Default` log bucket keeps 30 days; Data Access audit logs (`DATA_READ`) for Secret Manager only, so each read of a secret is recorded |
-| Secrets | `warden-db-app-password` and `warden-db-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all six secrets' replication |
-| Service accounts | `warden-run` (the service): Cloud SQL client, and the Clerk secret, the Clerk JWT key and the app password. `warden-migrate` (the migration jobs): Cloud SQL client, and the three database passwords. `warden-deploy` (GitHub Actions): Cloud Run developer, writer on the `warden` repository, and may act as `warden-run` and `warden-migrate`; it reads no secret. None has a key |
-| Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches; that pool may act as `warden-deploy` |
-| The service | Cloud Run service `warden`, with Google's placeholder image, running as `warden-run`, public, at most 2 instances. The script makes it because `warden-deploy` can't make a service public. Run again, it puts the service account, the instance limit and public access back, keeping the image the service runs. Sign-in is Clerk's job |
+| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all eight secrets' replication |
+| Database roles | run from your machine, as `postgres`, through the Cloud SQL Auth Proxy on a free local port: `server/src/roles.ts` makes the live roles (`warden_migrate`, `warden_app`, `warden_admin`) on `warden`, then the preview roles (`warden_preview_migrate`, `warden_preview_app`, `warden_preview_admin`) on `warden_preview`, each with its set's two passwords. Each database lets only its own set connect. The passwords go from Secret Manager into that one process's environment only; the proxy is stopped when the script ends, also on failure. No service account reads the `postgres` password, so **rerun the script after a change to `createRoles`** |
+| Service accounts | none has a key. See the table below |
+| Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches. The provider maps each token to its repository id and branch kind (`attribute.deploy`, such as `<repo-id>:main`): only this repository's `main` tokens may act as `warden-deploy`, and only its `preview/*` tokens as `warden-preview-deploy`, so a token from another repository can never match, even through another provider in the pool |
+| The services and the job | Cloud Run services `warden` (as `warden-run`, at most 2 instances) and `warden-preview` (as `warden-preview-run`, at most 1 instance), each public with Google's placeholder image, and the Cloud Run job `warden-migrate-preview` (as `warden-preview-migrate`, with Google's placeholder job image). The script makes them because the deploy accounts can't make a service public, and `warden-preview-deploy`'s roles are on the preview service and job themselves. Run again, it puts each one's service account, instance limit and public access back, keeping the image it runs. Sign-in is Clerk's job |
+
+**The service accounts and what each may do:**
+
+| Account | Used by | May |
+|---|---|---|
+| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key` |
+| `warden-migrate` | the live migration job | Cloud SQL client; read `warden-db-app-password` and `warden-db-migrate-password`. Not the `postgres` password |
+| `warden-deploy` | GitHub Actions on `main` | Cloud Run developer on the project; writer on the `warden` repository; act as `warden-run` and `warden-migrate`. Reads no secret |
+| `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key` |
+| `warden-preview-migrate` | the `warden-migrate-preview` job | Cloud SQL client; read `warden-db-preview-migrate-password` only |
+| `warden-preview-deploy` | GitHub Actions on `preview/*` | Cloud Run developer on the `warden-preview` service and the `warden-migrate-preview` job only, never the project; writer on the `warden-preview` repository only; act as `warden-preview-run` and `warden-preview-migrate` only. Reads no secret |
+
+Previews still share the one Clerk secret key with live for now.
 
 **Run it.** Below, `<project-id>` is your project, `<instance>` your Cloud SQL instance, and `<owner>/<repo>` the
 GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-db` and `DerykHopley/warden`).
@@ -108,14 +134,18 @@ GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-
 
    ```sh
    gcloud auth login
+   gcloud auth application-default login
    gcloud config set project <project-id>
+   gcloud components install cloud-sql-proxy
+   pnpm install
    export WARDEN_GITHUB_REPO=<owner>/<repo>
    export WARDEN_GITHUB_REPO_ID=$(gh api repos/<owner>/<repo> --jq .id)
    ```
 
-2. Dry run first: it prints every `gcloud` command instead of running it, and needs no credentials. A dry run
-   assumes nothing exists yet, so it shows everything a first run would do. `DRY_RUN=1` is the only value that
-   makes a dry run.
+2. Dry run first: it prints every command instead of running it, and needs no credentials. A dry run assumes
+   nothing exists yet, so it shows everything a first run would do; the roles step shows `<from warden-db-…>` in
+   place of each password. `DRY_RUN=1` is a dry run; unset, empty or `DRY_RUN=0` is a real run; any other value
+   (`true`, `yes`) stops the script before it does anything.
 
    ```sh
    DRY_RUN=1 scripts/gcp-setup.sh <project-id> <instance>
@@ -127,15 +157,17 @@ GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-
    scripts/gcp-setup.sh <project-id> <instance>
    ```
 
-   Before changing anything it checks the instance and the four secrets above exist, and stops naming any that
-   don't. A `gcloud` error other than "not found" also stops it, printing the error. Turning on point-in-time
-   recovery restarts the instance once (Cloud SQL's docs say so), closing open connections; the script warns
-   first, and skips that flag when it's already on.
+   Before changing anything it checks `cloud-sql-proxy`, the server's dependencies, the application-default
+   credentials, the instance and the four secrets above, and stops naming any that's missing. A `gcloud` error
+   other than "not found" also stops it, printing the error, and so does a failed roles run, with the roles
+   script's own error (which holds no password). Turning on point-in-time recovery restarts the instance once
+   (Cloud SQL's docs say so), closing open connections; the script warns first, and skips that flag when it's
+   already on.
 
 4. Paste the `gh variable set` lines it prints last. They hold names and ids only, never a secret:
-   `GCP_PROJECT_ID`, `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`, `CLOUD_SQL_CONNECTION` and
-   `VITE_CLERK_PUBLISHABLE_KEY`. The publishable key is public by design; its line reads it from your keyring
-   when you paste it:
+   `GCP_PROJECT_ID`, `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`, `GCP_PREVIEW_DEPLOY_SA` (the preview workflow's
+   account), `CLOUD_SQL_CONNECTION` and `VITE_CLERK_PUBLISHABLE_KEY`. The publishable key is public by design; its
+   line reads it from your keyring when you paste it:
 
    ```sh
    gh variable set VITE_CLERK_PUBLISHABLE_KEY --body "$(secret-tool lookup service warden-clerk-publishable)" --repo <owner>/<repo>

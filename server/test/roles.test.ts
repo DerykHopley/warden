@@ -1,5 +1,6 @@
 // The roles script against the test Postgres: the three roles, what warden_app can't do, and running it again; then
-// run as Cloud SQL runs it, by a user that isn't a superuser, with and without passwords; then stray memberships.
+// run as Cloud SQL runs it, by a user that isn't a superuser, with and without passwords; then who may connect, with
+// a set per database; then stray memberships.
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
@@ -7,6 +8,7 @@ import { createPool, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { createRoles } from "../src/roles.ts";
 import { poolAs, runInServer, testName } from "./databases.ts";
+import { closedPort } from "./ports.ts";
 import { scramAuthenticates } from "./scram.ts";
 
 const database = inject("testDatabase");
@@ -48,6 +50,18 @@ describe("the roles script", () => {
 
   it.each(["warden_admin", "warden_migrate"])("refuses warden_app a set role %s", async (role) => {
     await expect(app.query(`set role ${role}`)).rejects.toThrow(/permission denied/);
+  });
+
+  it("exits 1 for a WARDEN_DATABASE_ROLES it doesn't know, before connecting", async () => {
+    const { code, output } = await runInServer(["pnpm", "--silent", "roles"], {
+      WARDEN_DATABASE_ROLES: "staging",
+      PGHOST: "127.0.0.1",
+      PGPORT: String(await closedPort()),
+    });
+
+    expect(code).toBe(1);
+    expect(output).toContain("WARDEN_DATABASE_ROLES");
+    expect(output).not.toMatch(/ECONNREFUSED/);
   });
 });
 
@@ -311,6 +325,142 @@ describe("the roles script failing to set a password", () => {
     } finally {
       await fixture.drop();
     }
+  });
+});
+
+/**
+ * Two databases, one per role set, as Cloud SQL makes them: owned by a group role (Cloud SQL's
+ * `cloudsqlsuperuser`) that the user running the roles script (its `postgres`: CREATEROLE and CREATEDB, no
+ * SUPERUSER) is a member of. Each set is made on its own database, twice, keeping each database's ACL after each run.
+ */
+async function twoSets() {
+  const base = testName();
+  const group = `${base}_group`;
+  const runner = `${base}_runner`;
+  const setOf = (kind: string): DatabaseRoleNames => ({
+    migrate: `${base}_${kind}migrate`,
+    app: `${base}_${kind}app`,
+    admin: `${base}_${kind}admin`,
+  });
+  const sets = [
+    { database: testName(), names: setOf("live") },
+    { database: testName(), names: setOf("preview") },
+  ];
+  await superuser.query(`create role ${group} nologin`);
+  await superuser.query(`create role ${runner} login createrole createdb in role ${group}`);
+  const acls: string[][] = [];
+  for (const { database } of sets) {
+    await superuser.query(`create database ${database} owner ${group}`);
+  }
+  for (const { database, names } of sets) {
+    const asRunner = createPool(silent, { user: runner, database, max: 1 });
+    const runs: string[] = [];
+    try {
+      for (let run = 0; run < 2; run++) {
+        await createRoles(asRunner, { names, logger: silent });
+        const { rows } = await superuser.query<{ acl: string }>(
+          "select datacl::text as acl from pg_database where datname = $1",
+          [database],
+        );
+        runs.push(rows[0]?.acl ?? "");
+      }
+    } finally {
+      await asRunner.end();
+    }
+    acls.push(runs);
+  }
+  return {
+    sets,
+    acls,
+    drop: async () => {
+      for (const { database } of sets) {
+        await superuser.query(`drop database if exists ${database} with (force)`);
+      }
+      for (const { names } of sets) {
+        for (const role of [names.app, names.admin, names.migrate]) {
+          await superuser.query(`drop role if exists ${role}`);
+        }
+      }
+      for (const role of [runner, group]) await superuser.query(`drop role if exists ${role}`);
+    },
+  };
+}
+
+describe("the roles script and who may connect", () => {
+  let fixture: Awaited<ReturnType<typeof twoSets>>;
+  beforeAll(async () => {
+    fixture = await twoSets();
+  });
+  afterAll(() => fixture?.drop());
+
+  const canConnect = async (role: string, database: string) => {
+    const { rows } = await superuser.query<{ can: boolean }>(
+      "select has_database_privilege($1, $2, 'CONNECT') as can",
+      [role, database],
+    );
+    return rows[0]?.can;
+  };
+
+  it("takes CONNECT away from PUBLIC and gives it to the set's three roles only", async () => {
+    const [live, preview] = fixture.sets;
+    for (const [own, other] of [
+      [live, preview],
+      [preview, live],
+    ] as const) {
+      expect(await canConnect("public", own!.database)).toBe(false);
+      for (const role of Object.values(own!.names)) {
+        expect(await canConnect(role, own!.database), role).toBe(true);
+      }
+      for (const role of Object.values(other!.names)) {
+        expect(await canConnect(role, own!.database), role).toBe(false);
+      }
+    }
+  });
+
+  it("refuses a login by the other set's app role", async () => {
+    const [live, preview] = fixture.sets;
+    for (const [own, other] of [
+      [live, preview],
+      [preview, live],
+    ] as const) {
+      const pool = createPool(silent, { user: other!.names.app, database: own!.database, max: 1 });
+      try {
+        await expect(pool.query("select 1")).rejects.toThrow(/permission denied for database/);
+      } finally {
+        await pool.end();
+      }
+    }
+  });
+
+  it("changes nothing the second time it runs", () => {
+    for (const [first, second] of fixture.acls) {
+      expect(first).toMatch(/=c/);
+      expect(second).toBe(first);
+    }
+  });
+
+  // Run again on the live database, the set's roles never lose CONNECT, even for a moment: they get it before PUBLIC
+  // loses it.
+  it("grants CONNECT to the set's roles before it takes it away from PUBLIC", async () => {
+    const [live] = fixture.sets;
+    const statements: string[] = [];
+    const onDatabase = createPool(silent, { database: live!.database, max: 1 });
+    try {
+      const recording = {
+        query: (text: string, values?: unknown[]) => {
+          statements.push(text);
+          return onDatabase.query(text, values);
+        },
+      } as unknown as pg.Pool;
+      await createRoles(recording, { names: live!.names, logger: silent });
+    } finally {
+      await onDatabase.end();
+    }
+
+    const grant = statements.findIndex((text) => /^grant connect/.test(text));
+    const revoke = statements.findIndex((text) => /^revoke connect/.test(text));
+    expect(grant).toBeGreaterThanOrEqual(0);
+    expect(revoke).toBeGreaterThan(grant);
   });
 });
 
