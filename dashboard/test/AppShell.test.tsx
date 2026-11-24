@@ -97,4 +97,31 @@ describe("AppShell", () => {
     expect(header().getByText("Bluebird")).toBeInTheDocument();
     expect(header().queryByText("Admin")).not.toBeInTheDocument();
   });
+
+  it("asks again when the server answers about another Team, and shows the answer about this one", async () => {
+    clerk.auth.orgId = "org_b";
+    const answers = [me("org_a", "admin"), me("org_b", "lead")];
+    serve({
+      me: () => answers.shift() ?? me("org_b", "lead"),
+      members: () => json(200, { members: [] }),
+    });
+    render(<App />);
+
+    expect(await header().findByText("Lead", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(header().getByText("Bluebird")).toBeInTheDocument();
+    expect(callsTo("/api/me")).toHaveLength(2);
+  });
+
+  it("stops asking after three tries about another Team, and offers Retry", async () => {
+    clerk.auth.orgId = "org_b";
+    serve({ me: () => me("org_a", "admin") });
+    render(<App />);
+
+    expect(
+      await screen.findByText("Warden's server isn't answering", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(callsTo("/api/me")).toHaveLength(4);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(header().queryByText("Admin")).not.toBeInTheDocument();
+  });
 });

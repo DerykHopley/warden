@@ -47,6 +47,7 @@ describe("App", () => {
 
     expect(await header().findByText("Admin")).toBeInTheDocument();
     expect(callsTo("/api/me")[0]?.[1]).toEqual({
+      method: "GET",
       headers: { Authorization: "Bearer session-token" },
     });
 

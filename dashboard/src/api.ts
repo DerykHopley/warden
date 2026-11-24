@@ -12,7 +12,7 @@ export type GetToken = () => Promise<string | null>;
 export async function callWarden(
   getToken: GetToken,
   path: string,
-  init: { method?: string; body?: unknown } = {},
+  { method = "GET", body }: { method?: string; body?: unknown } = {},
 ): Promise<Response | Refused> {
   let res: Response;
   try {
@@ -22,12 +22,12 @@ export async function callWarden(
     const authorization = { Authorization: `Bearer ${token}` };
     res = await fetch(
       path,
-      init.body === undefined
-        ? { headers: authorization }
+      body === undefined
+        ? { method, headers: authorization }
         : {
-            method: init.method,
+            method,
             headers: { ...authorization, "Content-Type": "application/json" },
-            body: JSON.stringify(init.body),
+            body: JSON.stringify(body),
           },
     );
   } catch {
@@ -53,6 +53,10 @@ export async function parsed<T>(
   const body = schema.safeParse(await res.json().catch(() => null));
   return body.success ? body.data : undefined;
 }
+
+/** A 409 from any route: the person's Team has no Warden Team yet, and only its Clerk Admin's first visit creates it. */
+export const TEAM_NOT_OPENED =
+  "Your Team's Admin must open Warden first. Try again once they have.";
 
 export const tryAgainIn = (retryAfter: number | null) =>
   `Too many sign-in attempts. Try again in ${retryAfter === null ? "a minute" : `${retryAfter} seconds`}.`;
