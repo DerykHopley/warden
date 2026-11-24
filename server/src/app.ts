@@ -2,7 +2,7 @@
 import type { HttpBindings } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
-import type { HealthBody, MeBody, Role } from "@warden/contracts";
+import { atLeast, type HealthBody, type MeBody, type Role } from "@warden/contracts";
 import type { Session, VerifySessionToken } from "./auth.ts";
 import type { Logger } from "./log.ts";
 import type { Members } from "./members.ts";
@@ -14,7 +14,7 @@ export type AppDeps = {
   verifySessionToken: VerifySessionToken;
   /** Each person's Role in their Team, through withTeam on the server's pool. */
   members: Members;
-  /** On Cloud Run (K_SERVICE set), the client's address is the last X-Forwarded-For entry; elsewhere the socket's. */
+  /** Config's `behindCloudRun`: there the client's address is the last X-Forwarded-For entry; elsewhere the socket's. */
   behindCloudRun: boolean;
   checkHealth: () => Promise<HealthBody>;
   /** Clerk's Frontend API host, which the CSP allows. */
@@ -34,9 +34,6 @@ export type RequireRole = (role: Role) => MiddlewareHandler<AppEnv>;
 
 /** Adds routes behind the app's middleware, before the API's 404: tests mount throwaway routes here. */
 export type MountRoutes = (app: Hono<AppEnv>, requireRole: RequireRole) => void;
-
-/** Member < Lead < Admin: each Role includes the one below. */
-const RANK: Record<Role, number> = { member: 0, lead: 1, admin: 2 };
 
 const TEAM_NOT_CREATED = "Your Team's Admin must open Warden first";
 
@@ -64,7 +61,8 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
   /**
    * The session a request's bearer token gives, or the answer that refuses it: 429 while its address is held back
-   * for failed sign-ins (before the token is checked), 401 for a missing or bad token, which counts as a failure.
+   * for failed sign-ins (before the token is checked), 401 for a missing or bad token. The attempt is counted before
+   * the check, so tokens sent at once count too, and taken back unless the token was bad.
    */
   async function signIn(c: Context<AppEnv>): Promise<Session | Response> {
     const address = clientAddress(
@@ -74,45 +72,56 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
       },
       deps.behindCloudRun,
     );
-    const retryAfter = signInLimit.retryAfter(address);
+    const retryAfter = signInLimit.attempt(address);
     if (retryAfter !== undefined) {
       c.header("Retry-After", String(retryAfter));
       return c.json({ error: "Too many sign-in attempts" }, 429);
     }
     const token = /^Bearer (\S+)$/.exec(c.req.header("Authorization") ?? "")?.[1];
-    const session = token === undefined ? null : await deps.verifySessionToken(token);
-    if (session === null) {
-      signInLimit.failed(address);
-      return c.json({ error: "Not signed in" }, 401);
+    let session: Session | null;
+    try {
+      session = token === undefined ? null : await deps.verifySessionToken(token);
+    } catch (error) {
+      // Clerk couldn't be asked: the token wasn't found bad, so it doesn't count.
+      signInLimit.takeBack(address);
+      throw error;
     }
+    if (session === null) return c.json({ error: "Not signed in" }, 401);
+    signInLimit.takeBack(address);
     return session;
   }
 
-  /** The person's Role in the session's Team, after the first-use steps; or the 409 that nothing was written. */
-  async function roleIn(
+  /**
+   * Opening Warden, for GET /api/me and requireRole alike: the signed-in person, and with an active Organization their
+   * Team and their Role in it after the first-use steps (creating or joining the Team). Or the answer that refuses
+   * them: signIn's 429 or 401, or the 409 when their Team's Admin hasn't opened Warden yet (nothing was written). The
+   * Role always comes from Warden's table, never from the token's Clerk role.
+   */
+  async function openSession(
     c: Context<AppEnv>,
-    session: Session & { team: NonNullable<Session["team"]> },
-  ): Promise<Role | Response> {
+  ): Promise<
+    Response | { session: Session; team: null } | { session: Session; team: string; role: Role }
+  > {
+    const session = await signIn(c);
+    if (session instanceof Response) return session;
+    if (session.team === null) return { session, team: null };
     const opened = await deps.members.open({
       team: session.team.id,
       userId: session.userId,
       clerkRole: session.team.clerkRole,
     });
-    if (opened.kind === "team not created") return c.json({ error: TEAM_NOT_CREATED }, 409);
-    return opened.role;
+    if (opened.kind === "team_not_created") return c.json({ error: TEAM_NOT_CREATED }, 409);
+    return { session, team: session.team.id, role: opened.role };
   }
 
-  // The Role always comes from Warden's table (members), never from the token's Clerk role.
   const requireRole: RequireRole = (needed) => async (c, next) => {
-    const session = await signIn(c);
-    if (session instanceof Response) return session;
-    if (session.team === null) return c.json({ error: "Choose a Team first" }, 403);
-    const role = await roleIn(c, { ...session, team: session.team });
-    if (role instanceof Response) return role;
-    if (RANK[role] < RANK[needed]) return c.json({ error: "Your Role can't do this" }, 403);
-    c.set("session", session);
-    c.set("team", session.team.id);
-    c.set("role", role);
+    const opened = await openSession(c);
+    if (opened instanceof Response) return opened;
+    if (opened.team === null) return c.json({ error: "Choose a Team first" }, 403);
+    if (!atLeast(opened.role, needed)) return c.json({ error: "Your Role can't do this" }, 403);
+    c.set("session", opened.session);
+    c.set("team", opened.team);
+    c.set("role", opened.role);
     await next();
   };
 
@@ -121,16 +130,13 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     return c.json(body, body.status === "ok" ? 200 : 503);
   });
 
-  // Opening Warden: creates the Team or joins it (the first-use steps), and answers the person's Team and Role.
+  // Opening Warden creates or joins the Team, and answers the person's Team and Role (both null with no Team).
   app.get("/api/me", async (c) => {
-    const session = await signIn(c);
-    if (session instanceof Response) return session;
-    if (session.team === null) {
-      return c.json({ userId: session.userId, team: null, role: null } satisfies MeBody);
-    }
-    const role = await roleIn(c, { ...session, team: session.team });
-    if (role instanceof Response) return role;
-    return c.json({ userId: session.userId, team: session.team.id, role } satisfies MeBody);
+    const opened = await openSession(c);
+    if (opened instanceof Response) return opened;
+    const { session, team } = opened;
+    const role = team === null ? null : opened.role;
+    return c.json({ userId: session.userId, team, role } satisfies MeBody);
   });
 
   mount?.(app, requireRole);

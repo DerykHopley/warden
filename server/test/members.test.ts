@@ -6,11 +6,10 @@ import type pg from "pg";
 import type { CryptoKey } from "jose";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { Hono } from "hono";
-import type { Role } from "@warden/contracts";
 import type { AppEnv } from "../src/app.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { activeOrganization, sessionToken, testApp, testKey } from "./helpers.ts";
+import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
 
 let key: CryptoKey;
 let publicPem: string;
@@ -53,16 +52,6 @@ function stored(team: string) {
       .orderBy("id")
       .execute(),
   }));
-}
-
-/** A Team that already exists, with these people in it. */
-async function seedTeam(team: string, people: [userId: string, role: Role][]) {
-  await withTeam(team, async (tx) => {
-    await tx.insertInto("teams").values({ id: team }).execute();
-    for (const [user_id, role] of people) {
-      await tx.insertInto("team_members").values({ team_id: team, user_id, role }).execute();
-    }
-  });
 }
 
 describe("a Team's first visit", () => {
@@ -153,7 +142,7 @@ describe("an invited person's first visit", () => {
 
   it("answers the Role Warden stored, not the token's", async () => {
     const team = newTeam();
-    await seedTeam(team, [["user_lead", "lead"]]);
+    await seedTeam(withTeam, team, [["user_lead", "lead"]]);
 
     expect((await me("user_lead", team, "member")).body).toEqual({
       userId: "user_lead",
@@ -199,8 +188,8 @@ describe("Team B and Team A", () => {
   it("a Team B person's GET /api/me never answers their Team A Role", async () => {
     const a = newTeam();
     const b = newTeam();
-    await seedTeam(a, [["user_both", "admin"]]);
-    await seedTeam(b, [["user_b_admin", "admin"]]);
+    await seedTeam(withTeam, a, [["user_both", "admin"]]);
+    await seedTeam(withTeam, b, [["user_b_admin", "admin"]]);
 
     expect((await me("user_both", b, "admin")).body).toEqual({
       userId: "user_both",

@@ -67,8 +67,7 @@ const app = createApp({
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
   members: createMembers({ withTeam: createWithTeam(pool) }),
-  // Cloud Run sets K_SERVICE in every container it runs; there, Google's front end is the socket's peer.
-  behindCloudRun: process.env.K_SERVICE !== undefined,
+  behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,
   dashboardDir: existsSync(`${dashboardDir}/index.html`) ? dashboardDir : undefined,

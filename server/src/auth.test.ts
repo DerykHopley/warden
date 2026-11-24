@@ -10,8 +10,35 @@ beforeAll(async () => {
   ({ privateKey: key, publicPem } = await testKey());
 });
 
+describe("the token's authorized party", () => {
+  const verify = () =>
+    createClerkVerifier({
+      secretKey: "unused",
+      jwtKey: publicPem,
+      authorizedParties: ["http://localhost:5173"],
+    });
+
+  it("is accepted when it's one of Warden's dashboard origins", async () => {
+    const token = await sessionToken(key, "user_abc");
+    expect(await verify()(token)).toEqual({ userId: "user_abc", team: null });
+  });
+
+  it.each([
+    ["another app's origin on the same Clerk instance", { azp: "https://other-app.example" }],
+    ["no authorized party", { azp: undefined }],
+  ])("refuses a token made for %s, as not signed in", async (_name, claims) => {
+    const token = await sessionToken(key, "user_abc", 60, claims);
+    expect(await verify()(token)).toBeNull();
+  });
+});
+
 describe("the Session a valid token gives", () => {
-  const verify = () => createClerkVerifier({ secretKey: "unused", jwtKey: publicPem });
+  const verify = () =>
+    createClerkVerifier({
+      secretKey: "unused",
+      jwtKey: publicPem,
+      authorizedParties: ["http://localhost:5173"],
+    });
 
   it("carries the active Organization of a v2 token as the Team, with Clerk's role prefixed", async () => {
     const token = await sessionToken(key, "user_abc", 60, activeOrganization("org_1", "admin"));
@@ -54,11 +81,14 @@ describe("the Session a valid token gives", () => {
 // Built at run time, so no secret-shaped literal sits in the repo.
 const secretKey = ["sk", "test", "notARealKey"].join("_");
 
+const authorizedParties = ["http://localhost:5173"];
+
 describe("createClerkVerifier without a JWT public key", () => {
   it("throws, rather than calling the person signed out, when Clerk's keys can't be fetched", async () => {
     const verify = createClerkVerifier({
       secretKey,
       jwtKey: undefined,
+      authorizedParties,
       apiUrl: `http://127.0.0.1:${await closedPort()}`,
     });
     await expect(verify(await sessionToken(key, "user_abc"))).rejects.toThrow();
@@ -68,6 +98,7 @@ describe("createClerkVerifier without a JWT public key", () => {
     const verify = createClerkVerifier({
       secretKey,
       jwtKey: undefined,
+      authorizedParties,
       apiUrl: `http://127.0.0.1:${await closedPort()}`,
     });
     await expect(verify("not-a-jwt")).resolves.toBeNull();

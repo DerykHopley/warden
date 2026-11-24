@@ -133,6 +133,8 @@ describe("0004_team_members", () => {
     ["a role_after outside the three", { role_after: "owner" }],
     ["a role_before outside the three", { role_before: "owner" }],
     ["a change outside the three", { change: "promoted" }],
+    ["a blank user id", { user_id: " " }],
+    ["a blank actor id", { actor_id: "" }],
   ])("refuses a role_history row with %s", async (_name, values) => {
     await expect(
       withTeamAs.warden_app(team, (tx) =>

@@ -39,6 +39,14 @@ describe("redact", () => {
     expect(redact("postgres://u:a@b@c@host:5432/db?x")).toBe("postgres://u:***@host:5432/db?x");
   });
 
+  it.each([
+    ["/", "postgres://u:p@ss/x@host/db"],
+    ["?", "postgres://u:p@ss?1@host/db"],
+    ["#", "postgres://u:p@ss#1@host/db"],
+  ])("masks a whole password whose @ is followed by %s", (_char, url) => {
+    expect(redact(url)).toBe("postgres://u:***@host/db");
+  });
+
   it("masks both passwords in a string with two Postgres URLs, keeping each user and host", () => {
     expect(
       redact("from postgres://alice:p@ss@db1/a to postgresql://bob:x@y@db2:5432/b failed"),

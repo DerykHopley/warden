@@ -25,11 +25,11 @@ create policy team_members_own_team on team_members for all
 create table role_history (
   team_id text not null references teams (id),
   id bigint generated always as identity,
-  user_id text not null,
+  user_id text not null check (user_id !~ '^\s*$'),
   role_before text check (role_before in ('member', 'lead', 'admin')),
   role_after text not null check (role_after in ('member', 'lead', 'admin')),
   change text not null check (change in ('created_team', 'joined', 'changed')),
-  actor_id text not null,
+  actor_id text not null check (actor_id !~ '^\s*$'),
   at timestamptz not null default now(),
   primary key (team_id, id)
 );

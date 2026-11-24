@@ -2,6 +2,7 @@
 // without it, Clerk's SDK fetches the instance's keys with the secret key.
 import { verifyToken } from "@clerk/backend";
 import { TokenVerificationError } from "@clerk/backend/errors";
+import { z } from "zod";
 
 /**
  * Who a valid session token belongs to: the Clerk user id, and the Team (the active Clerk Organization) with the
@@ -20,19 +21,26 @@ export type Session = {
  */
 export type VerifySessionToken = (token: string) => Promise<Session | null>;
 
-/**
- * The active Organization in a verified token's claims. A v2 token (Clerk's current one) has `o: { id, rol }`, its
- * role without the `org:` prefix; a v1 token has `org_id` and `org_role`, prefix included. An id that isn't clean
- * text counts as no Team: it couldn't name a Team row.
- */
+/** An Organization id that can name a Team row: not blank, no spaces around it (withTeam refuses either). */
+const TeamId = z.string().refine((id) => id.trim() !== "" && id.trim() === id);
+/** A Clerk role, or none when it's missing or not text: it decides only who may create a Team. */
+const ClerkRole = z.string().min(1).optional().catch(undefined);
+
+/** A v2 token (Clerk's current one): `o: { id, rol }`, the role without the `org:` prefix. */
+const V2Organization = z.object({ v: z.literal(2), o: z.object({ id: TeamId, rol: ClerkRole }) });
+/** A v1 token: `org_id` and `org_role`, the prefix included. */
+const V1Organization = z.object({ org_id: TeamId, org_role: ClerkRole });
+
+/** The active Organization in a verified token's claims, or no Team when there's none it could name. */
 function teamOf(payload: Record<string, unknown>): Session["team"] {
-  const v2 = payload.v === 2;
-  const o = v2 && typeof payload.o === "object" && payload.o !== null ? payload.o : undefined;
-  const id = v2 ? (o as { id?: unknown } | undefined)?.id : payload.org_id;
-  if (typeof id !== "string" || id.trim() === "" || id.trim() !== id) return null;
-  const role = v2 ? (o as { rol?: unknown }).rol : payload.org_role;
-  const clerkRole = typeof role !== "string" || role === "" ? null : v2 ? `org:${role}` : role;
-  return { id, clerkRole };
+  if (payload.v === 2) {
+    const v2 = V2Organization.safeParse(payload);
+    if (!v2.success) return null;
+    const { id, rol } = v2.data.o;
+    return { id, clerkRole: rol === undefined ? null : `org:${rol}` };
+  }
+  const v1 = V1Organization.safeParse(payload);
+  return v1.success ? { id: v1.data.org_id, clerkRole: v1.data.org_role ?? null } : null;
 }
 
 /** The reasons that are about the token itself; any other failure is the server's. */
@@ -53,12 +61,15 @@ const TOKEN_FAILURES = new Set<string>([
 export function createClerkVerifier(options: {
   secretKey: string;
   jwtKey: string | undefined;
+  /** The dashboard origins a token may be made for (its `azp`); a token for any other, or none, is refused. */
+  authorizedParties: string[];
   /** Clerk's Backend API; only tests point it elsewhere. */
   apiUrl?: string;
 }): VerifySessionToken {
+  const { secretKey, jwtKey, authorizedParties, apiUrl } = options;
   return async (token) => {
     try {
-      const payload = await verifyToken(token, options);
+      const payload = await verifyToken(token, { secretKey, jwtKey, authorizedParties, apiUrl });
       if (typeof payload.sub !== "string" || payload.sub === "") return null;
       return { userId: payload.sub, team: teamOf(payload) };
     } catch (error) {

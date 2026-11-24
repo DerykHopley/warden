@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
-import type { HealthBody } from "@warden/contracts";
+import type { HealthBody, Role } from "@warden/contracts";
 import { createApp, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import { createLogger } from "../src/log.ts";
@@ -11,6 +11,9 @@ import { createMembers, type Members } from "../src/members.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
+
+/** The dashboard origin test tokens are made for (their `azp`), and the one the test app accepts. */
+export const DASHBOARD_ORIGIN = "http://localhost:5173";
 
 /** A publishable key naming FRONTEND_API_HOST, as Clerk encodes it: base64 of `<host>$`. */
 export const testPublishableKey = `pk_test_${Buffer.from(`${FRONTEND_API_HOST}$`).toString("base64")}`;
@@ -38,7 +41,7 @@ export function sessionToken(
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   return (
-    new SignJWT({ sid: "sess_test", azp: "http://localhost:5173", ...claims })
+    new SignJWT({ sid: "sess_test", azp: DASHBOARD_ORIGIN, ...claims })
       // `cat` is the category Clerk's SDK puts on a session token's header, and checks.
       .setProtectedHeader({ alg: "RS256", kid: "ins_test", typ: "JWT", cat: "cl_B7d4PD111AAA" })
       .setSubject(userId)
@@ -60,6 +63,20 @@ export function dashboardDir(): string {
 }
 
 const healthy: HealthBody = { status: "ok", database: "ok", vector: "available" };
+
+/** A Team that already exists, with these people in it at these Roles, written through `withTeam`. */
+export async function seedTeam(
+  withTeam: WithTeam,
+  team: string,
+  people: [userId: string, role: Role][],
+) {
+  await withTeam(team, async (tx) => {
+    await tx.insertInto("teams").values({ id: team }).execute();
+    for (const [user_id, role] of people) {
+      await tx.insertInto("team_members").values({ team_id: team, user_id, role }).execute();
+    }
+  });
+}
 
 /** Members for a test that never reaches the database: any call fails it. */
 const noMembers: Members = {
@@ -84,6 +101,7 @@ export function testApp(options: {
       verifySessionToken: createClerkVerifier({
         secretKey: "unused-in-tests",
         jwtKey: options.publicPem,
+        authorizedParties: [DASHBOARD_ORIGIN],
       }),
       members: options.withTeam ? createMembers({ withTeam: options.withTeam }) : noMembers,
       behindCloudRun: true,

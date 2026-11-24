@@ -63,14 +63,16 @@ describe("the sign-in limit", () => {
     expect((await app.request("/api/me", from("198.51.100.2", good))).status).toBe(200);
   });
 
-  it("counts a forged leading X-Forwarded-For entry against the address Google appended", async () => {
+  it("lets only 20 of many bad tokens sent at once be checked", async () => {
     const { app } = testApp({ publicPem });
     const bad = bearer(await sessionToken(otherKey, "user_abc"));
-    for (let failure = 1; failure <= 20; failure++) {
-      await app.request("/api/me", from(`10.9.9.${failure}, 203.0.113.7`, bad));
-    }
 
-    expect((await app.request("/api/me", from("203.0.113.7", bad))).status).toBe(429);
+    const statuses = await Promise.all(
+      Array.from({ length: 30 }, () => app.request("/api/me", from("203.0.113.7", bad))),
+    );
+
+    expect(statuses.filter((res) => res.status === 401)).toHaveLength(20);
+    expect(statuses.filter((res) => res.status === 429)).toHaveLength(10);
   });
 
   it("doesn't count successful sign-ins, or hold back the health check", async () => {

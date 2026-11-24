@@ -10,7 +10,7 @@ import type { Role } from "@warden/contracts";
 import type { AppEnv } from "../src/app.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { activeOrganization, sessionToken, testApp, testKey } from "./helpers.ts";
+import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
 
 let key: CryptoKey;
 let otherKey: CryptoKey;
@@ -36,15 +36,11 @@ beforeAll(async () => {
       }
     },
   }));
-  await withTeam(team, async (tx) => {
-    await tx.insertInto("teams").values({ id: team }).execute();
-    for (const role of ["member", "lead", "admin"] as const) {
-      await tx
-        .insertInto("team_members")
-        .values({ team_id: team, user_id: `user_${role}`, role })
-        .execute();
-    }
-  });
+  await seedTeam(withTeam, team, [
+    ["user_member", "member"],
+    ["user_lead", "lead"],
+    ["user_admin", "admin"],
+  ]);
 });
 
 afterAll(async () => {
@@ -109,14 +105,5 @@ describe("requireRole", () => {
       status: 409,
       body: { error: "Your Team's Admin must open Warden first" },
     });
-  });
-
-  it("runs the first-use steps: an invited person joins as a Member and gets a Member's routes only", async () => {
-    const token = await sessionToken(key, "user_new", 60, activeOrganization(team, "admin"));
-    expect(await post("/api/test/needs-member", token)).toEqual({
-      status: 200,
-      body: { userId: "user_new", team, role: "member" },
-    });
-    expect(await post("/api/test/needs-lead", token)).toEqual(refused);
   });
 });

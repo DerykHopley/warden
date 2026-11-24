@@ -32,11 +32,43 @@ const Env = z.object({
   PGUSER: required,
   PGDATABASE: required,
   PORT: z.coerce.number().int().min(1).max(65535).default(8080),
+  /** The dashboard origins a Clerk session token may be made for (its `azp`), comma-separated. */
+  CLERK_AUTHORIZED_PARTIES: optional.transform((value, ctx) => {
+    if (value === undefined) return undefined;
+    const origins = value.split(",").map((origin) => origin.trim());
+    if (!origins.every(isOrigin)) {
+      ctx.addIssue({ code: "custom", message: "holds something that isn't an origin" });
+      return z.NEVER;
+    }
+    return origins;
+  }),
+  /** Cloud Run sets it in every container it runs (its container contract). */
+  K_SERVICE: optional,
 });
+
+/** `https://host[:port]` and nothing more: what a token's `azp` holds. */
+function isOrigin(value: string): boolean {
+  try {
+    return new URL(value).origin === value;
+  } catch {
+    return false;
+  }
+}
+
+/** The dashboard's origin under `pnpm dev` (Vite's port), allowed when no origins are set off Cloud Run. */
+const LOCAL_DASHBOARD_ORIGIN = "http://localhost:5173";
 
 export type Config = {
   port: number;
-  clerk: { secretKey: string; jwtKey: string | undefined; frontendApiHost: string };
+  /** On Cloud Run, the client's address comes from X-Forwarded-For (see `clientAddress`). */
+  behindCloudRun: boolean;
+  clerk: {
+    secretKey: string;
+    jwtKey: string | undefined;
+    frontendApiHost: string;
+    /** Only a token made for one of these origins signs anyone in; another app's on the same instance doesn't. */
+    authorizedParties: string[];
+  };
 };
 
 /** A variable is missing or malformed. Its message names the variables, never their values. */
@@ -57,12 +89,19 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     throw new ConfigError([...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))]);
   }
   const { data } = parsed;
+  const behindCloudRun = data.K_SERVICE !== undefined;
+  // On Cloud Run the origins must be named: a default there would be the local one, and refuse every real token.
+  if (behindCloudRun && data.CLERK_AUTHORIZED_PARTIES === undefined) {
+    throw new ConfigError(["CLERK_AUTHORIZED_PARTIES"]);
+  }
   return {
     port: data.PORT,
+    behindCloudRun,
     clerk: {
       secretKey: data.CLERK_SECRET_KEY,
       jwtKey: data.CLERK_JWT_KEY,
       frontendApiHost: data.VITE_CLERK_PUBLISHABLE_KEY,
+      authorizedParties: data.CLERK_AUTHORIZED_PARTIES ?? [LOCAL_DASHBOARD_ORIGIN],
     },
   };
 }

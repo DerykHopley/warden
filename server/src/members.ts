@@ -4,7 +4,7 @@
 // database through withTeam, one transaction each (ADR 0006), and every change appends a Role history row.
 import { sql, type Transaction } from "kysely";
 import type { Role } from "@warden/contracts";
-import type { Database } from "./schema.ts";
+import type { Database, RoleChange } from "./schema.ts";
 import type { WithTeam } from "./with-team.ts";
 
 /** A person opening Warden in a Team, as their verified session token says. */
@@ -16,9 +16,9 @@ export type Visitor = {
 };
 
 export type Opened =
-  | { kind: "member"; role: Role }
+  | { kind: "in_team"; role: Role }
   /** The Team has no row yet, and this person isn't the one who may create it. Nothing was written. */
-  | { kind: "team not created" };
+  | { kind: "team_not_created" };
 
 export type Members = {
   /** The visitor's Role in their Team, after the first-use steps: create the Team, or join it. */
@@ -33,7 +33,7 @@ export function createMembers({ withTeam }: { withTeam: WithTeam }): Members {
     open: (visitor) =>
       withTeam(visitor.team, async (tx) => {
         const known = await roleOf(tx, visitor.userId);
-        if (known !== undefined) return { kind: "member", role: known };
+        if (known !== undefined) return { kind: "in_team", role: known };
 
         // First use, by this person or of this Team: one at a time per Team, so two first visits at once give one
         // Team and one history row. Read again under the lock, as the other visit may have just written it.
@@ -41,18 +41,18 @@ export function createMembers({ withTeam }: { withTeam: WithTeam }): Members {
           tx,
         );
         const role = await roleOf(tx, visitor.userId);
-        if (role !== undefined) return { kind: "member", role };
+        if (role !== undefined) return { kind: "in_team", role };
 
         const team = await tx.selectFrom("teams").select("id").executeTakeFirst();
         if (team === undefined) {
-          if (visitor.clerkRole !== CLERK_ADMIN) return { kind: "team not created" };
+          if (visitor.clerkRole !== CLERK_ADMIN) return { kind: "team_not_created" };
           await tx.insertInto("teams").values({ id: visitor.team }).execute();
           await join(tx, visitor, "admin", "created_team");
-          return { kind: "member", role: "admin" };
+          return { kind: "in_team", role: "admin" };
         }
         // Their Clerk role doesn't raise this: a Warden Role above Member is given in Warden (#30).
         await join(tx, visitor, "member", "joined");
-        return { kind: "member", role: "member" };
+        return { kind: "in_team", role: "member" };
       }),
   };
 }
@@ -70,7 +70,7 @@ async function join(
   tx: Transaction<Database>,
   visitor: Visitor,
   role: Role,
-  change: "created_team" | "joined",
+  change: Exclude<RoleChange, "changed">,
 ) {
   await tx
     .insertInto("team_members")
