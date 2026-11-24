@@ -5,8 +5,8 @@
 # Run from anywhere: scripts/test/gcp-setup.test.sh
 set -euo pipefail
 
-# Only what each case sets reaches the script.
-unset DRY_RUN WARDEN_GITHUB_REPO WARDEN_GITHUB_REPO_ID
+# Only what each case sets reaches the script, and never this machine's application-default credentials.
+unset DRY_RUN WARDEN_GITHUB_REPO WARDEN_GITHUB_REPO_ID GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_CONFIG
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 setup="$root/scripts/gcp-setup.sh"
@@ -411,7 +411,8 @@ env PATH=/usr/bin:/bin bash -c 'command -v cloud-sql-proxy' >/dev/null &&
 
 # real_run <name> <state> [VAR=value...]: a real run against the fakes in that state, in its own folder, with only
 # the fakes and /usr/bin and /bin on PATH; its gcloud calls are in $calls. WITHOUT names a fake to leave out, and
-# SETUP_SCRIPT another copy of the script.
+# SETUP_SCRIPT another copy of the script. The folder is gcloud's config folder (CLOUDSDK_CONFIG), holding an
+# application-default credentials file with no quota project, or with ADC_QUOTA as its quota project.
 real_run() {
   local name=$1 state=$2
   shift 2
@@ -421,8 +422,16 @@ real_run() {
   [[ ${WITHOUT-} == proxy ]] || cp "$scratch/fake-proxy" "$dir/cloud-sql-proxy"
   cp "$scratch/fake-node" "$dir/node"
   touch "$dir/calls"
-  capture setup_with FAKE_STATE="$state" PATH="$dir:/usr/bin:/bin" "$@" "${SETUP_SCRIPT:-$setup}" "$project" "$instance"
+  adc_file "$dir/application_default_credentials.json" "${ADC_QUOTA-}"
+  capture setup_with FAKE_STATE="$state" PATH="$dir:/usr/bin:/bin" CLOUDSDK_CONFIG="$dir" "$@" \
+    "${SETUP_SCRIPT:-$setup}" "$project" "$instance"
   calls=$(cat "$dir/calls")
+}
+# adc_file <path> [quota project]: an application-default credentials file as gcloud auth application-default login
+# writes it, with that quota project, or none.
+adc_file() {
+  printf '{"client_id":"fake","client_secret":"fake","refresh_token":"fake",%s"type":"authorized_user"}\n' \
+    "${2:+\"quota_project_id\":\"$2\",}" >"$1"
 }
 # A call that changes something: anything but signing in and reading.
 changes() { grep -vE '^auth |describe|get-iam-policy|versions access' <<<"$calls" || true; }
@@ -449,6 +458,27 @@ real_run no-adc no-adc
 assert_equal "without application-default credentials: exit 1" 1 "$code"
 assert_line "without application-default credentials: says so" "gcloud auth application-default login" "$out"
 assert_equal "without application-default credentials: it changes nothing" "" "$(changes)"
+
+# Application-default credentials whose quota project is another project: the proxy's calls would be refused there
+# (#61), so it stops first, naming both projects and the fix.
+fix="gcloud auth application-default set-quota-project $project"
+ADC_QUOTA=other-project real_run adc-other-quota fresh
+assert_equal "ADC with another quota project: exit 1" 1 "$code"
+assert_line "ADC with another quota project: names it" "other-project" "$out"
+assert_line "ADC with another quota project: names the target project" "not $project" "$out"
+assert_line "ADC with another quota project: names the fix" "$fix" "$out"
+assert_equal "ADC with another quota project: it changes nothing" "" "$(changes)"
+
+# GOOGLE_APPLICATION_CREDENTIALS comes before gcloud's file, as it does for the proxy.
+adc_file "$scratch/adc-elsewhere.json" other-project
+real_run adc-env-other-quota fresh GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-elsewhere.json"
+assert_equal "GOOGLE_APPLICATION_CREDENTIALS with another quota project: exit 1" 1 "$code"
+assert_line "GOOGLE_APPLICATION_CREDENTIALS with another quota project: names the fix" "$fix" "$out"
+assert_equal "GOOGLE_APPLICATION_CREDENTIALS with another quota project: it changes nothing" "" "$(changes)"
+
+ADC_QUOTA=$project real_run adc-same-quota fresh
+[[ $code == 0 ]] || fail "ADC whose quota project is the target: the run failed: $out"
+pass "ADC whose quota project is the target: a run ends"
 
 # A copy of the script in a tree with no server dependencies installed.
 mkdir -p "$scratch/tree/scripts"

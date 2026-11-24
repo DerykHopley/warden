@@ -11,9 +11,9 @@
 #        Unset, empty or 0 is a real run. Any other value stops it before anything runs.
 # Env:   WARDEN_GITHUB_REPO (<owner>/<repo>) and WARDEN_GITHUB_REPO_ID (its numeric id:
 #        `gh api repos/<owner>/<repo> --jq .id`), both required: the one GitHub repository that may deploy.
-# Needs: for a real run, gcloud signed in, application-default credentials (gcloud auth application-default login),
-#        node, cloud-sql-proxy, and the server's dependencies (pnpm install): the roles step runs
-#        server/src/roles.ts from this machine.
+# Needs: for a real run, gcloud signed in, application-default credentials (gcloud auth application-default login)
+#        whose quota project is <project-id> or unset, node, cloud-sql-proxy, and the server's dependencies
+#        (pnpm install): the roles step runs server/src/roles.ts from this machine.
 #
 # No secret value is printed, logged or written to a file: each password is generated in a pipe straight into
 # `gcloud secrets create --data-file=-`, and read back only into the one roles process's environment.
@@ -177,6 +177,20 @@ github_repository() {
   GITHUB_REPO_ID=$WARDEN_GITHUB_REPO_ID
 }
 
+# The quota project in the application-default credentials, or nothing when they set none. No gcloud command prints
+# it: it's the credentials file's quota_project_id, which gcloud and Google's client libraries (the proxy's) read
+# from GOOGLE_APPLICATION_CREDENTIALS when set, otherwise from gcloud's config folder (CLOUDSDK_CONFIG, or
+# ~/.config/gcloud). No file (credentials from a metadata server): nothing.
+adc_quota_project() {
+  local config=${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}
+  local file=${GOOGLE_APPLICATION_CREDENTIALS:-$config/application_default_credentials.json}
+  if [[ ! -f $file ]]; then return 0; fi
+  node -e '
+    const quota = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).quota_project_id;
+    if (typeof quota === "string") process.stdout.write(quota);
+  ' "$file"
+}
+
 preflight() {
   if dry_run; then
     note "DRY_RUN: printing the commands only, as if nothing existed yet; a real run skips what's already there"
@@ -211,8 +225,20 @@ preflight() {
       "run gcloud auth application-default login first" >&2
     exit 1
   fi
+  local project=$1 instance=$2 missing=() secret quota
+  # The proxy bills its Cloud SQL Admin API calls to the credentials' quota project: another project, where that API
+  # may be off, refuses them, and the roles step fails with a bare ECONNRESET.
+  if ! quota=$(adc_quota_project); then
+    echo "gcp-setup: couldn't read the application-default credentials' quota project; the error is above" >&2
+    exit 1
+  fi
+  if [[ -n $quota && $quota != "$project" ]]; then
+    echo "gcp-setup: the application-default credentials' quota project is $quota, not $project," \
+      "so the Cloud SQL Auth Proxy's calls would be refused; run" \
+      "gcloud auth application-default set-quota-project $project first. Nothing was changed." >&2
+    exit 1
+  fi
   # What the owner makes by hand, checked before any change.
-  local project=$1 instance=$2 missing=() secret
   exists gcloud sql instances describe "$instance" --project="$project" ||
     missing+=("Cloud SQL instance $instance")
   for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key; do
