@@ -118,7 +118,8 @@ export type PageProps = {
   panel: PagePanel;
 };
 
-const noFocusToClear = () => {};
+/** The default context's callbacks: with no focus there is nothing to clear, and no Finding to ask for again. */
+const nothingToDo = () => {};
 
 /**
  * Warden's pages, in the header's order. The main area shows the one whose path is the address bar's; `/` shows the
@@ -202,7 +203,9 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
   const panelContext = pageContext ?? {
     view: page === undefined ? [] : [page.label],
     focus: null,
-    clearFocus: noFocusToClear,
+    clearFocus: nothingToDo,
+    onFindingChanged: nothingToDo,
+    candidates: [],
   };
 
   return (
@@ -274,6 +277,9 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
           context={panelContext}
           getToken={getToken}
           team={signedIn?.team ?? null}
+          role={signedIn?.role ?? null}
+          userId={signedIn?.userId ?? null}
+          refreshMe={me.refresh}
           onSessionEnded={onSessionEnded}
         />
       )}

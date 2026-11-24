@@ -10,7 +10,7 @@ import {
   type Finding,
   type Level,
 } from "@warden/contracts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { askAboutTeam } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import {
@@ -103,18 +103,30 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     setView(next);
   }
 
-  // The Ask Warden panel talks about this view and the focused Finding; its detail card's ✕ clears the focus.
+  // The Ask Warden panel talks about this view and the focused Finding; its detail card's ✕ clears the focus. A
+  // decision in the card asks for the list again, so the card and the table show the new Status.
   const focusedFinding = findings?.find((f) => f.id === focused) ?? null;
+  // Its Unconfirmed fix's candidates, in its order; one the list doesn't hold is left out.
+  const candidates = useMemo(
+    () =>
+      (focusedFinding?.unconfirmed_fix?.candidates ?? []).flatMap((id) =>
+        (findings ?? []).filter((f) => f.id === id),
+      ),
+    [findings, focusedFinding],
+  );
   const clearFocus = useCallback(() => setView((old) => ({ ...old, finding: undefined })), []);
   const { setContext, open: openPanel } = panel;
   const { status, severity, module } = shown;
+  const { refresh } = list;
   useEffect(() => {
     setContext({
       view: findingsViewWords({ status, severity, module }),
       focus: focusedFinding,
       clearFocus,
+      onFindingChanged: refresh,
+      candidates,
     });
-  }, [setContext, status, severity, module, focusedFinding, clearFocus]);
+  }, [setContext, status, severity, module, focusedFinding, clearFocus, refresh, candidates]);
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);
 

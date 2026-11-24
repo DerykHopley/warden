@@ -17,7 +17,17 @@ export type Routes = {
   overview?: () => Answer;
   /** PUT /api/team/members/:userId/role, with the user id and the parsed body. */
   changeRole?: (userId: string, body: unknown) => Answer;
+  /**
+   * POST /api/findings/:id/<action> (accept, false-positive, confirm-fix, mark-moved, reopen, proposals), with the
+   * Finding id, the action and the parsed body.
+   */
+  findingAction?: (id: string, action: string, body: unknown) => Answer;
+  /** POST /api/proposals/:id/<approve or reject>, with the Proposal id, the action and the parsed body (none: undefined). */
+  proposalAction?: (id: string, action: string, body: unknown) => Answer;
 };
+
+const sentBody = (init: RequestInit | undefined): unknown =>
+  init?.body === undefined ? undefined : JSON.parse(String(init.body));
 
 export const fetchMock = vi.fn<typeof fetch>();
 
@@ -34,6 +44,16 @@ export function serve(routes: Routes) {
     const change = /^\/api\/team\/members\/([^/]+)\/role$/.exec(url);
     if (change && method === "PUT" && routes.changeRole) {
       return routes.changeRole(decodeURIComponent(change[1] ?? ""), JSON.parse(String(init?.body)));
+    }
+    const onFinding = /^\/api\/findings\/([^/]+)\/([a-z-]+)$/.exec(url);
+    if (onFinding && method === "POST" && routes.findingAction) {
+      const [, id = "", action = ""] = onFinding;
+      return routes.findingAction(decodeURIComponent(id), action, sentBody(init));
+    }
+    const onProposal = /^\/api\/proposals\/([^/]+)\/(approve|reject)$/.exec(url);
+    if (onProposal && method === "POST" && routes.proposalAction) {
+      const [, id = "", action = ""] = onProposal;
+      return routes.proposalAction(decodeURIComponent(id), action, sentBody(init));
     }
     throw new Error(`The test gave no answer for ${method} ${url}`);
   });

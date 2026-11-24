@@ -77,10 +77,13 @@ test("Tab reaches the open panel's controls after the page's, in order, and then
   await expect(panel).toHaveAttribute("data-shown", "floating");
 
   await lastRow.focus();
-  expect(await tabThrough(page, 6)).toEqual([
+  // Grace is a Member: an Open Finding's card offers her its Propose buttons (#59).
+  expect(await tabThrough(page, 8)).toEqual([
     "button:Pin",
     "button:Close Ask Warden",
     "button:Clear the focus",
+    "button:Propose accepting",
+    "button:Propose False positive",
     "input:Message",
     "button:Send",
     "body",
@@ -89,11 +92,13 @@ test("Tab reaches the open panel's controls after the page's, in order, and then
   await panel.getByRole("button", { name: "Pin" }).click();
   await expect(panel).toHaveAttribute("data-shown", "pinned");
   await lastRow.focus();
-  expect(await tabThrough(page, 7)).toEqual([
+  expect(await tabThrough(page, 9)).toEqual([
     "div:Resize Ask Warden",
     "button:Unpin",
     "button:Close Ask Warden",
     "button:Clear the focus",
+    "button:Propose accepting",
+    "button:Propose False positive",
     "input:Message",
     "button:Send",
     "body",

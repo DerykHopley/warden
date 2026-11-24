@@ -1,12 +1,30 @@
-// The detail card (story 9, story 3): the focused Finding's fields in the dashboard's words, then its pending
-// Proposals, read-only. It renders DetailCard alone; how the panel asks for the Proposals is in AskWardenPanel.test.tsx.
-import { render, screen, within } from "@testing-library/react";
+// The detail card (story 9, story 3, story 4): the focused Finding's fields in the dashboard's words, then its pending
+// Proposals; a Lead's decisions and a Member's Proposals on it, and a Lead's approval or rejection of a Proposal. It
+// renders DetailCard alone, Warden's server faked; how the panel asks for the Proposals, and how a decision reaches
+// the Findings table, is in AskWardenPanel.test.tsx. The Until's time-zone rule is decisions.test.ts's.
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Finding, Location, PendingProposal } from "@warden/contracts";
-import { describe, expect, it, vi } from "vitest";
+import {
+  AcceptBody,
+  ProposeBody,
+  type Finding,
+  type Location,
+  type PendingProposal,
+  type Proposal,
+  type Role,
+} from "@warden/contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DetailCard } from "../src/DetailCard.tsx";
+import { earliestUntil } from "../src/decisions.ts";
 import type { ProposalsResult } from "../src/proposals.ts";
+import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { finding, TEAM } from "./findings-fixture.ts";
+
+beforeEach(() => {
+  fetchMock.mockReset();
+  vi.stubGlobal("fetch", fetchMock);
+});
+afterEach(() => vi.unstubAllGlobals());
 
 const ID = "3f9a1c2e-0000-4000-8000-000000000001";
 const OTHER = "a1c4e7f0-0000-4000-8000-000000000002";
@@ -38,22 +56,49 @@ const clerkUsers = new Map([
   ["user_ada", { firstName: null, lastName: null, identifier: "ada@acme.test" }],
 ]);
 
+/** The signed-in person's user id. */
+const ME = "user_me";
+
+type Shown = { role?: Role | null; candidates?: Finding[] };
+
+/** Renders the card for `focused`, as a person with `role` (null: not loaded yet). */
 function show(
   focused: Finding,
   proposals: ProposalsResult | "loading" = listed([]),
-  onClear = vi.fn(),
+  { role = null, candidates = [] }: Shown = {},
 ) {
-  const onRetry = vi.fn();
-  render(
+  const calls = {
+    onClear: vi.fn(),
+    onRetry: vi.fn(),
+    onFindingChanged: vi.fn(),
+    onProposalsChanged: vi.fn(),
+    refreshMe: vi.fn(),
+    onSessionEnded: vi.fn(),
+  };
+  const element = (shown: Finding, listedNow: ProposalsResult | "loading") => (
     <DetailCard
-      finding={focused}
-      proposals={proposals}
+      finding={shown}
+      proposals={listedNow}
       clerkUsers={clerkUsers}
-      onClear={onClear}
-      onRetryProposals={onRetry}
-    />,
+      role={role}
+      userId={ME}
+      getToken={() => Promise.resolve("session-token")}
+      candidates={candidates}
+      onClear={calls.onClear}
+      onRetryProposals={calls.onRetry}
+      onFindingChanged={calls.onFindingChanged}
+      onProposalsChanged={calls.onProposalsChanged}
+      refreshMe={calls.refreshMe}
+      onSessionEnded={calls.onSessionEnded}
+    />
   );
-  return { card: within(screen.getByRole("region", { name: focused.title })), onClear, onRetry };
+  const { rerender } = render(element(focused, proposals));
+  return {
+    card: within(screen.getByRole("region", { name: focused.title })),
+    ...calls,
+    /** The card again, as the page hands it a changed Finding or Proposals list. */
+    update: (shown: Finding, listedNow = proposals) => rerender(element(shown, listedNow)),
+  };
 }
 
 /** Each field's label and value, as the card's definition list holds them. */
@@ -179,9 +224,26 @@ describe("the detail card's Finding", () => {
   });
 });
 
+type Card = ReturnType<typeof show>["card"];
+
+const proposalItems = (card: Card) =>
+  within(card.getByRole("list", { name: "Pending Proposals" })).getAllByRole("listitem");
+
 describe("the detail card's pending Proposals", () => {
-  const proposalItems = (card: ReturnType<typeof show>["card"]) =>
-    within(card.getByRole("list", { name: "Pending Proposals" })).getAllByRole("listitem");
+  it("reads Asked by you on the signed-in person's own, their name on another person's, and an agent on an agent's", () => {
+    const { card } = show(
+      finding(ID),
+      listed([
+        proposal({ id: "p-mine", requested_by: { kind: "person", id: ME } }),
+        proposal({ id: "p-grace" }),
+        proposal({ id: "p-agent", requested_by: { kind: "agent", id: "guard-bot" } }),
+      ]),
+    );
+    const [mine, grace, agent] = proposalItems(card);
+    expect(mine).toHaveTextContent(/Asked by you, Nov 24, 2026/);
+    expect(grace).toHaveTextContent(/Asked by Grace Hopper, Nov 24, 2026/);
+    expect(agent).toHaveTextContent(/Asked by an agent, Nov 24, 2026/);
+  });
 
   it("lists the focused Finding's, and no other Finding's, each with decision, reason, until, who asked and when", () => {
     const { card } = show(
@@ -254,5 +316,572 @@ describe("the detail card's pending Proposals", () => {
     const { card } = show(finding(ID), "loading");
     expect(card.queryByRole("list", { name: "Pending Proposals" })).not.toBeInTheDocument();
     expect(card.queryByText("Couldn't load Proposals")).not.toBeInTheDocument();
+  });
+});
+
+const SECOND = "b2b2b2b2-0000-4000-8000-000000000003";
+const OPEN = finding(ID);
+const ACCEPTED = finding(ID, {
+  status: "accepted",
+  accepted_reason: "Fixed next sprint",
+  accepted_until: "2027-02-22T12:00:00Z",
+});
+const FALSE_POSITIVE = finding(ID, { status: "false_positive" });
+const UNCONFIRMED = finding(ID, { status: "fixed", unconfirmed_fix: { candidates: [OTHER] } });
+const FIXED = finding(ID, { status: "fixed" });
+const MERGED = finding(ID, { status: "fixed", moved_to: OTHER });
+/** The new Finding an Unconfirmed fix names, as the page's list holds it. */
+const CANDIDATE = finding(OTHER, {
+  title: "The agent can read .env.local",
+  location: { kind: "file", path: ".env.local", line: 2 },
+});
+
+/** A day ten days ahead, as a date input holds it. */
+const DAY = earliestUntil(new Date(Date.now() + 9 * 86_400_000));
+
+/** The names of the buttons in the card's row of decisions (or Proposals), in order; none without a row. */
+const rowButtons = (card: Card) => {
+  const row = card.queryByRole("group", { name: "Decisions" });
+  return row === null
+    ? []
+    : within(row)
+        .getAllByRole("button")
+        .map((b) => b.textContent);
+};
+
+const formNamed = (card: Card, name: string) => within(card.getByRole("form", { name }));
+type Form = ReturnType<typeof formNamed>;
+
+/** Presses the button `name` and returns the form it opens, named for it. */
+async function openForm(card: Card, name: string): Promise<Form> {
+  await userEvent.click(card.getByRole("button", { name }));
+  return formNamed(card, name);
+}
+
+const reasonField = (form: Form) => form.getByRole("textbox", { name: "Reason" });
+const pickUntil = (form: Form, day: string) =>
+  fireEvent.change(form.getByLabelText("Until"), { target: { value: day } });
+
+/** Fills each field the form has: the reason, Until (DAY), and the first candidate. */
+async function fill(form: Form, reason = "Checked by hand") {
+  await userEvent.type(reasonField(form), reason);
+  if (form.queryByLabelText("Until") !== null) pickUntil(form, DAY);
+  const [candidate] = form.queryAllByRole("radio");
+  if (candidate !== undefined) await userEvent.click(candidate);
+}
+
+/** The bodies sent to `path`, parsed; undefined for a request with none. */
+const sent = (path: string) =>
+  callsTo(path).map(([, init]) =>
+    init?.body === undefined ? undefined : (JSON.parse(String(init.body)) as unknown),
+  );
+
+/** A Proposal as its routes answer it: no `stale`, which only the pending list adds. */
+const answeredProposal = (fields: Partial<Proposal> = {}): Proposal => {
+  const answer: Partial<PendingProposal> = { ...proposal(), ...fields };
+  delete answer.stale;
+  return answer as Proposal;
+};
+
+/** A date-time's day in the person's own time zone, as a date input holds it. */
+const localDay = (iso: string) => {
+  const d = new Date(iso);
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+};
+
+describe("a Lead's decision buttons", () => {
+  it.each<[string, Finding, string[]]>([
+    ["Open", OPEN, ["Accept", "Mark False positive"]],
+    ["Accepted", ACCEPTED, ["Renew acceptance", "Mark False positive", "Reopen"]],
+    ["False positive", FALSE_POSITIVE, ["Reopen"]],
+    ["Fixed with an Unconfirmed fix", UNCONFIRMED, ["Confirm fix", "Mark moved"]],
+    ["Fixed without one", FIXED, []],
+    ["merged into another Finding", MERGED, []],
+  ])("on a Finding that is %s", (_status, focused, buttons) => {
+    const { card } = show(focused, listed([]), { role: "lead" });
+    expect(rowButtons(card)).toEqual(buttons);
+  });
+});
+
+describe("who sees which buttons", () => {
+  const fresh = proposal({ id: "p-fresh" });
+  const stale = proposal({ id: "p-stale", stale: true });
+
+  it("a Member sees no decision button, and no Approve or Reject on a fresh or a stale Proposal", () => {
+    const { card } = show(OPEN, listed([fresh, stale]), { role: "member" });
+    expect(proposalItems(card)).toHaveLength(2);
+    for (const name of ["Accept", "Mark False positive", "Approve", "Reject"]) {
+      expect(card.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+  });
+
+  it("a person whose Role hasn't loaded sees no decision button and no Propose button", () => {
+    const { card } = show(OPEN, listed([fresh]), { role: null });
+    expect(rowButtons(card)).toEqual([]);
+    expect(card.queryByRole("button", { name: /^(Approve|Reject)$/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("a Member's Propose buttons", () => {
+  it.each<[string, Finding, string[]]>([
+    ["Open", OPEN, ["Propose accepting", "Propose False positive"]],
+    ["Accepted", ACCEPTED, ["Propose accepting", "Propose False positive"]],
+    ["False positive", FALSE_POSITIVE, []],
+    ["Fixed with an Unconfirmed fix", UNCONFIRMED, []],
+    ["merged into another Finding", MERGED, []],
+  ])("on a Finding that is %s", (_status, focused, buttons) => {
+    const { card } = show(focused, listed([]), { role: "member" });
+    expect(rowButtons(card)).toEqual(buttons);
+  });
+
+  it.each<Role>(["lead", "admin"])("aren't shown to a %s", (role) => {
+    const { card } = show(OPEN, listed([]), { role });
+    expect(card.queryByRole("button", { name: /^Propose/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("a Member's Proposal", () => {
+  const answer = () => json(201, answeredProposal({ requested_by: { kind: "person", id: ME } }));
+
+  it("Propose accepting sends the reason and the Until as a ProposeBody accept, and needs both", async () => {
+    serve({ findingAction: answer });
+    const { card } = show(OPEN, listed([]), { role: "member" });
+    const form = await openForm(card, "Propose accepting");
+    const submit = form.getByRole("button", { name: "Propose" });
+
+    expect(submit).toBeDisabled();
+    await userEvent.type(reasonField(form), "Fixed next sprint");
+    expect(submit).toBeDisabled();
+    pickUntil(form, DAY);
+    await userEvent.click(submit);
+
+    await card.findByRole("status");
+    const [body] = sent(`/api/findings/${ID}/proposals`);
+    const proposed = ProposeBody.parse(body);
+    expect(proposed).toEqual({
+      decision: "accept",
+      reason: "Fixed next sprint",
+      until: expect.any(String),
+    });
+    expect(localDay((proposed as { until: string }).until)).toBe(DAY);
+  });
+
+  it("Propose False positive sends the reason as a ProposeBody mark_false_positive, with no until, and needs a reason", async () => {
+    serve({ findingAction: answer });
+    const { card } = show(OPEN, listed([]), { role: "member" });
+    const form = await openForm(card, "Propose False positive");
+    const submit = form.getByRole("button", { name: "Propose" });
+
+    expect(form.queryByLabelText("Until")).not.toBeInTheDocument();
+    expect(submit).toBeDisabled();
+    await userEvent.type(reasonField(form), "A test fixture");
+    await userEvent.click(submit);
+
+    await card.findByRole("status");
+    const [body] = sent(`/api/findings/${ID}/proposals`);
+    expect(ProposeBody.parse(body)).toEqual({
+      decision: "mark_false_positive",
+      reason: "A test fixture",
+    });
+    expect(body).not.toHaveProperty("until");
+  });
+
+  it("after a 201, says it was sent, with focus, and asks the Proposals again but not the Finding", async () => {
+    serve({ findingAction: answer });
+    const shown = show(OPEN, listed([]), { role: "member" });
+    const form = await openForm(shown.card, "Propose False positive");
+    await fill(form);
+    await userEvent.click(form.getByRole("button", { name: "Propose" }));
+
+    const line = await shown.card.findByRole("status");
+    expect(line).toHaveTextContent("Proposal sent. A Lead or an Admin decides.");
+    expect(line).toHaveFocus();
+    expect(shown.card.queryByRole("form")).not.toBeInTheDocument();
+    expect(shown.onProposalsChanged).toHaveBeenCalledOnce();
+    expect(shown.onFindingChanged).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, number, string, "refreshMe" | "onFindingChanged"]>([
+    ["403", 403, "Warden refused this: your Team or Role may have changed.", "refreshMe"],
+    [
+      "409",
+      409,
+      "This Finding changed since you opened it. Look again before deciding.",
+      "onFindingChanged",
+    ],
+  ])(
+    "a %s shows its line, keeps the reason and runs what it says",
+    async (_why, status, line, runs) => {
+      serve({ findingAction: () => json(status, { error: "Refused" }) });
+      const shown = show(OPEN, listed([]), { role: "member" });
+      const form = await openForm(shown.card, "Propose False positive");
+      await fill(form, "A test fixture");
+      await userEvent.click(form.getByRole("button", { name: "Propose" }));
+
+      expect(await form.findByRole("alert")).toHaveTextContent(line);
+      expect(reasonField(form)).toHaveValue("A test fixture");
+      expect(shown[runs]).toHaveBeenCalledOnce();
+    },
+  );
+});
+
+describe("a Lead's decision", () => {
+  it("Accept sends the reason and an until on the chosen day in the person's time zone; Until's earliest day is tomorrow", async () => {
+    serve({ findingAction: () => json(200, ACCEPTED) });
+    const { card } = show(OPEN, listed([]), { role: "lead" });
+    const form = await openForm(card, "Accept");
+    expect(form.getByLabelText("Until")).toHaveAttribute("min", earliestUntil());
+
+    await fill(form, "Fixed next sprint");
+    await userEvent.click(form.getByRole("button", { name: "Accept" }));
+
+    await card.findByRole("status");
+    const [body] = sent(`/api/findings/${ID}/accept`);
+    const accepted = AcceptBody.parse(body);
+    expect(accepted.reason).toBe("Fixed next sprint");
+    expect(localDay(accepted.until)).toBe(DAY);
+  });
+
+  it.each<[string, Finding, string]>([
+    ["Mark False positive", OPEN, "false-positive"],
+    ["Confirm fix", UNCONFIRMED, "confirm-fix"],
+    ["Reopen", FALSE_POSITIVE, "reopen"],
+  ])("%s sends its route with the reason and nothing else", async (button, focused, path) => {
+    serve({ findingAction: () => json(200, focused) });
+    const { card } = show(focused, listed([]), { role: "lead" });
+    const form = await openForm(card, button);
+    await fill(form);
+    await userEvent.click(form.getByRole("button", { name: button }));
+
+    await card.findByRole("status");
+    expect(sent(`/api/findings/${ID}/${path}`)).toEqual([{ reason: "Checked by hand" }]);
+  });
+
+  it("Mark moved lists each candidate with its short id, title and Location, and sends the one chosen", async () => {
+    serve({ findingAction: () => json(200, OPEN) });
+    const second = finding(SECOND, {
+      title: "Another agent reads .env",
+      location: { kind: "file", path: "apps/web/.claude/settings.json" },
+    });
+    const focused = finding(ID, {
+      status: "fixed",
+      unconfirmed_fix: { candidates: [OTHER, SECOND] },
+    });
+    const { card } = show(focused, listed([]), { role: "lead", candidates: [CANDIDATE, second] });
+    const form = await openForm(card, "Mark moved");
+
+    const radios = form.getAllByRole("radio");
+    expect(radios.map((radio) => radio.closest("label")?.textContent)).toEqual([
+      "a1c4e7f0 · The agent can read .env.local · .env.local:2",
+      "b2b2b2b2 · Another agent reads .env · apps/web/.claude/settings.json",
+    ]);
+    await userEvent.type(reasonField(form), "The same rule moved");
+    await userEvent.click(radios[1]!);
+    await userEvent.click(form.getByRole("button", { name: "Mark moved" }));
+
+    await card.findByRole("status");
+    expect(sent(`/api/findings/${ID}/mark-moved`)).toEqual([
+      { reason: "The same rule moved", candidate: SECOND },
+    ]);
+  });
+
+  it("Mark moved with no candidate in the list says so and can't be sent", async () => {
+    const { card } = show(UNCONFIRMED, listed([]), { role: "lead", candidates: [] });
+    const form = await openForm(card, "Mark moved");
+
+    expect(
+      form.getByText("The candidate isn't in this view's list. Reload to see it."),
+    ).toBeInTheDocument();
+    await userEvent.type(reasonField(form), "It moved");
+    expect(form.getByRole("button", { name: "Mark moved" })).toBeDisabled();
+  });
+
+  it("the submit is disabled for a blank or whitespace reason and an empty or too early Until; the reason takes at most 2,000 characters", async () => {
+    const { card } = show(OPEN, listed([]), { role: "lead" });
+    const form = await openForm(card, "Accept");
+    const submit = form.getByRole("button", { name: "Accept" });
+    expect(reasonField(form)).toHaveAttribute("maxlength", "2000");
+
+    pickUntil(form, DAY);
+    expect(submit).toBeDisabled();
+    await userEvent.type(reasonField(form), "   ");
+    expect(submit).toBeDisabled();
+    await userEvent.type(reasonField(form), "Fixed next sprint");
+    expect(submit).toBeEnabled();
+    pickUntil(form, "");
+    expect(submit).toBeDisabled();
+    pickUntil(form, localDay(new Date().toISOString()));
+    expect(submit).toBeDisabled();
+  });
+
+  it("Mark moved's submit is disabled until a candidate is chosen", async () => {
+    const { card } = show(UNCONFIRMED, listed([]), { role: "lead", candidates: [CANDIDATE] });
+    const form = await openForm(card, "Mark moved");
+    await userEvent.type(reasonField(form), "It moved");
+    const submit = form.getByRole("button", { name: "Mark moved" });
+
+    expect(submit).toBeDisabled();
+    await userEvent.click(form.getByRole("radio"));
+    expect(submit).toBeEnabled();
+  });
+
+  it("while the call runs, its submit is busy and disabled, and a second click sends nothing", async () => {
+    const answer = deferred<Response>();
+    serve({ findingAction: () => answer.promise });
+    const { card } = show(OPEN, listed([]), { role: "lead" });
+    const form = await openForm(card, "Mark False positive");
+    await fill(form);
+    const submit = form.getByRole("button", { name: "Mark False positive" });
+
+    await userEvent.click(submit);
+    expect(submit).toHaveAttribute("aria-busy", "true");
+    expect(submit).toBeDisabled();
+    await userEvent.click(submit);
+    fireEvent.submit(submit.closest("form")!);
+    expect(callsTo(`/api/findings/${ID}/false-positive`)).toHaveLength(1);
+
+    answer.resolve(json(200, FALSE_POSITIVE));
+    expect(await card.findByRole("status")).toHaveTextContent("Marked a False positive.");
+  });
+
+  it("Cancel closes the form, sends nothing, and puts focus back on the button that opened it", async () => {
+    serve({});
+    const { card } = show(ACCEPTED, listed([]), { role: "lead" });
+    const form = await openForm(card, "Reopen");
+    await userEvent.type(reasonField(form), "Changed my mind");
+
+    await userEvent.click(form.getByRole("button", { name: "Cancel" }));
+
+    expect(card.queryByRole("form")).not.toBeInTheDocument();
+    expect(card.getByRole("button", { name: "Reopen" })).toHaveFocus();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Finding, string]>([
+    [
+      "Accept",
+      OPEN,
+      `Accepted until ${new Date(`${DAY}T12:00`).toLocaleDateString(undefined, { dateStyle: "medium" })}.`,
+    ],
+    [
+      "Renew acceptance",
+      ACCEPTED,
+      `Accepted until ${new Date(`${DAY}T12:00`).toLocaleDateString(undefined, { dateStyle: "medium" })}.`,
+    ],
+    ["Mark False positive", OPEN, "Marked a False positive."],
+    ["Confirm fix", UNCONFIRMED, "Fix confirmed."],
+    ["Mark moved", UNCONFIRMED, "Marked moved: a1c4e7f0 merged into this Finding."],
+    ["Reopen", FALSE_POSITIVE, "Reopened."],
+  ])(
+    "after a 200, %s shows its done line with focus, and asks the Finding and the Proposals again once each",
+    async (button, focused, line) => {
+      serve({ findingAction: () => json(200, focused) });
+      const shown = show(focused, listed([]), { role: "lead", candidates: [CANDIDATE] });
+      const form = await openForm(shown.card, button);
+      await fill(form);
+      await userEvent.click(form.getByRole("button", { name: button }));
+
+      const done = await shown.card.findByRole("status");
+      expect(done).toHaveTextContent(line);
+      expect(done).toHaveFocus();
+      expect(shown.card.queryByRole("form")).not.toBeInTheDocument();
+      expect(shown.onFindingChanged).toHaveBeenCalledOnce();
+      expect(shown.onProposalsChanged).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each<[string, () => Response, string, "refreshMe" | "onFindingChanged" | null]>([
+    [
+      "400",
+      () => json(400, { error: "reason: Too big: expected string to have <=2000 characters" }),
+      "Warden refused this: reason: Too big: expected string to have <=2000 characters.",
+      null,
+    ],
+    [
+      "403",
+      () => json(403, { error: "Your Role can't do this" }),
+      "Only a Lead or an Admin can decide this. Your Role may have changed.",
+      "refreshMe",
+    ],
+    [
+      "404",
+      () => json(404, { error: "No such Finding" }),
+      "This Finding is no longer in your Team.",
+      "onFindingChanged",
+    ],
+    [
+      "409",
+      () => json(409, { error: "markFalsePositive takes a Finding that is open or accepted" }),
+      "This Finding changed since you opened it. Look again before deciding.",
+      "onFindingChanged",
+    ],
+    [
+      "not answering",
+      () => {
+        throw new TypeError("Failed to fetch");
+      },
+      "Warden's server isn't answering. Your reason is kept: try again.",
+      null,
+    ],
+    [
+      "too many attempts",
+      () => json(429, { error: "Too many" }, { "Retry-After": "12" }),
+      "Too many sign-in attempts. Try again in 12 seconds.",
+      null,
+    ],
+  ])(
+    "a %s shows its line, keeps the reason, and runs what it says",
+    async (_why, answer, line, runs) => {
+      serve({ findingAction: answer });
+      const shown = show(OPEN, listed([]), { role: "lead" });
+      const form = await openForm(shown.card, "Mark False positive");
+      await fill(form, "A test fixture");
+      await userEvent.click(form.getByRole("button", { name: "Mark False positive" }));
+
+      expect(await form.findByRole("alert")).toHaveTextContent(line);
+      expect(reasonField(form)).toHaveValue("A test fixture");
+      for (const call of ["refreshMe", "onFindingChanged"] as const) {
+        expect(shown[call]).toHaveBeenCalledTimes(call === runs ? 1 : 0);
+      }
+    },
+  );
+
+  it("a 409 after which the Finding's new Status no longer offers the decision closes the form and shows the new Status's row", async () => {
+    serve({
+      findingAction: () => json(409, { error: "accept takes a Finding that is open or accepted" }),
+    });
+    const { card, update } = show(OPEN, listed([]), { role: "lead" });
+    const form = await openForm(card, "Accept");
+    await fill(form);
+    await userEvent.click(form.getByRole("button", { name: "Accept" }));
+    await form.findByRole("alert");
+
+    update(FALSE_POSITIVE);
+
+    expect(card.queryByRole("form")).not.toBeInTheDocument();
+    expect(rowButtons(card)).toEqual(["Reopen"]);
+    expect(card.getByRole("alert")).toHaveTextContent(
+      "This Finding changed since you opened it. Look again before deciding.",
+    );
+  });
+
+  it("a session-ended answer signs the person out", async () => {
+    serve({ findingAction: () => json(401, { error: "Not signed in" }) });
+    const shown = show(OPEN, listed([]), { role: "lead" });
+    const form = await openForm(shown.card, "Mark False positive");
+    await fill(form);
+    await userEvent.click(form.getByRole("button", { name: "Mark False positive" }));
+
+    await vi.waitFor(() => expect(shown.onSessionEnded).toHaveBeenCalledOnce());
+  });
+});
+
+describe("a Lead's Approve and Reject", () => {
+  const fresh = proposal({ id: "p-fresh" });
+  const stale = proposal({ id: "p-stale", stale: true, reason: "Asked before a Scan" });
+  const decided: Routes["proposalAction"] = (id, action, body) =>
+    json(
+      200,
+      answeredProposal({
+        id,
+        state: action === "approve" ? "approved" : "rejected",
+        decided_by: ME,
+        decided_at: "2026-11-25T09:00:00Z",
+        decided_reason: action === "reject" ? (body as { reason: string }).reason : null,
+      }),
+    );
+  const buttonsOf = (item: HTMLElement) =>
+    within(item)
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+
+  it("a fresh Proposal offers Approve and Reject; a stale one only Reject", () => {
+    const { card } = show(OPEN, listed([fresh, stale]), { role: "lead" });
+    const [freshItem, staleItem] = proposalItems(card);
+    expect(buttonsOf(freshItem!)).toEqual(["Approve", "Reject"]);
+    expect(buttonsOf(staleItem!)).toEqual(["Reject"]);
+  });
+
+  it("Approve sends its route with no body; Reject sends the reason, and can't be sent blank", async () => {
+    serve({ proposalAction: decided });
+    const { card } = show(OPEN, listed([fresh, stale]), { role: "lead" });
+
+    await userEvent.click(within(proposalItems(card)[0]!).getByRole("button", { name: "Approve" }));
+    await card.findByRole("status");
+    expect(callsTo("/api/proposals/p-fresh/approve")).toEqual([
+      [
+        "/api/proposals/p-fresh/approve",
+        { method: "POST", headers: { Authorization: "Bearer session-token" } },
+      ],
+    ]);
+
+    await userEvent.click(within(proposalItems(card)[1]!).getByRole("button", { name: "Reject" }));
+    const form = formNamed(card, "Reject");
+    const submit = form.getByRole("button", { name: "Reject" });
+    expect(submit).toBeDisabled();
+    await userEvent.type(reasonField(form), "  ");
+    expect(submit).toBeDisabled();
+    await userEvent.type(reasonField(form), "Still in the build");
+    await userEvent.click(submit);
+
+    await vi.waitFor(() =>
+      expect(sent("/api/proposals/p-stale/reject")).toEqual([{ reason: "Still in the build" }]),
+    );
+  });
+
+  it("after an approve, says so with focus, asks the Proposals again and the Finding", async () => {
+    serve({ proposalAction: decided });
+    const shown = show(OPEN, listed([fresh]), { role: "lead" });
+    await userEvent.click(shown.card.getByRole("button", { name: "Approve" }));
+
+    const line = await shown.card.findByRole("status");
+    expect(line).toHaveTextContent("Proposal approved.");
+    expect(line).toHaveFocus();
+    expect(shown.onProposalsChanged).toHaveBeenCalledOnce();
+    expect(shown.onFindingChanged).toHaveBeenCalledOnce();
+  });
+
+  it("after a reject, says so with focus and asks the Proposals again", async () => {
+    serve({ proposalAction: decided });
+    const shown = show(OPEN, listed([fresh]), { role: "lead" });
+    const form = await openForm(shown.card, "Reject");
+    await fill(form, "Still in the build");
+    await userEvent.click(form.getByRole("button", { name: "Reject" }));
+
+    const line = await shown.card.findByRole("status");
+    expect(line).toHaveTextContent("Proposal rejected.");
+    expect(line).toHaveFocus();
+    expect(shown.onProposalsChanged).toHaveBeenCalledOnce();
+  });
+
+  it.each<[string, "Approve" | "Reject", number, string]>([
+    [
+      "a 409 on approve",
+      "Approve",
+      409,
+      "This Proposal was decided already, or its Finding changed. The list is refreshed.",
+    ],
+    [
+      "a 409 on reject",
+      "Reject",
+      409,
+      "This Proposal was decided already, or its Finding changed. The list is refreshed.",
+    ],
+    ["a 404 on approve", "Approve", 404, "This Proposal is no longer in your Team."],
+    ["a 404 on reject", "Reject", 404, "This Proposal is no longer in your Team."],
+  ])("%s shows its line and asks the Proposals again", async (_why, button, status, line) => {
+    serve({ proposalAction: () => json(status, { error: "Refused" }) });
+    const shown = show(OPEN, listed([fresh]), { role: "lead" });
+    if (button === "Approve") {
+      await userEvent.click(shown.card.getByRole("button", { name: "Approve" }));
+    } else {
+      const form = await openForm(shown.card, "Reject");
+      await fill(form);
+      await userEvent.click(form.getByRole("button", { name: "Reject" }));
+    }
+
+    expect(await shown.card.findByRole("alert")).toHaveTextContent(line);
+    expect(shown.onProposalsChanged).toHaveBeenCalledOnce();
   });
 });

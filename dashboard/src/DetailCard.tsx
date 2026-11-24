@@ -1,8 +1,30 @@
-// The detail card (docs/design.md: Side panel): the Finding the page has focused, above the chat, in its own tint, with
-// its own ✕. Its fields, then its pending Proposals, each its own list item. Read-only here; a Lead's decision buttons
-// join the card and each Proposal later, so nothing in this markup assumes it stays read-only.
-import type { Finding, PendingProposal } from "@warden/contracts";
+// The detail card (docs/design.md: Side panel, Detail card): the Finding the page has focused, above the chat, in its
+// own tint, with its own ✕. Its fields; then a Lead's decisions on it, or a Member's Proposals (story 4); then its
+// pending Proposals, each its own list item, with a Lead's Approve and Reject. One form at a time, in place of the
+// button that opened it. The server checks the Role on every call (ADR 0008): the card only hides what a Role can't do.
+import {
+  atLeast,
+  type Finding,
+  type PendingProposal,
+  type ProposalDecision,
+  type Role,
+} from "@warden/contracts";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { tryAgainIn, type GetToken } from "./api.ts";
 import { dayAndTimeWords, dayWords } from "./date-words.ts";
+import {
+  approveProposal,
+  decide,
+  decisionsFor,
+  earliestUntil,
+  endOfDay,
+  proposalsFor,
+  propose,
+  rejectProposal,
+  type ActionResult,
+  type Decision,
+  type DecisionCall,
+} from "./decisions.ts";
 import {
   ASSET_KIND_WORDS,
   locationWords,
@@ -16,23 +38,334 @@ import { personName, type ClerkUser } from "./person-name.ts";
 import type { ProposalsResult } from "./proposals.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
 
+/** What a person can do from the card. Each but approve opens a form. */
+type Action =
+  | { kind: "decide"; decision: Decision }
+  | { kind: "propose"; decision: ProposalDecision }
+  | { kind: "reject"; proposal: string }
+  | { kind: "approve"; proposal: string };
+
+/** An action's key: the opener button's `data-opener`, and where a refusal line belongs. */
+const keyOf = (action: Action) =>
+  action.kind === "reject" || action.kind === "approve"
+    ? `${action.kind}:${action.proposal}`
+    : `${action.kind}:${action.decision}`;
+
+const DECISION_LABELS: Record<Decision, string> = {
+  accept: "Accept",
+  mark_false_positive: "Mark False positive",
+  confirm_fix: "Confirm fix",
+  mark_moved: "Mark moved",
+  reopen: "Reopen",
+};
+
+/** A decision's button and submit: accepting an Accepted Finding again renews its acceptance. */
+const decisionLabel = (decision: Decision, finding: Finding) =>
+  decision === "accept" && finding.status === "accepted"
+    ? "Renew acceptance"
+    : DECISION_LABELS[decision];
+
+/** A Member's buttons: "Propose", the glossary's word (never "Suggest"). */
+const PROPOSE_LABELS: Record<ProposalDecision, string> = {
+  accept: "Propose accepting",
+  mark_false_positive: "Propose False positive",
+};
+
+/** What the done line says after a decision. */
+function doneWords(call: DecisionCall): string {
+  switch (call.decision) {
+    case "accept":
+      return `Accepted until ${dayWords(call.body.until)}.`;
+    case "mark_false_positive":
+      return "Marked a False positive.";
+    case "confirm_fix":
+      return "Fix confirmed.";
+    case "mark_moved":
+      return `Marked moved: ${shortId(call.body.candidate)} merged into this Finding.`;
+    case "reopen":
+      return "Reopened.";
+  }
+}
+
+const REFUSED = {
+  leadOnly: "Only a Lead or an Admin can decide this. Your Role may have changed.",
+  proposeForbidden: "Warden refused this: your Team or Role may have changed.",
+  findingGone: "This Finding is no longer in your Team.",
+  findingChanged: "This Finding changed since you opened it. Look again before deciding.",
+  proposalGone: "This Proposal is no longer in your Team.",
+  proposalChanged:
+    "This Proposal was decided already, or its Finding changed. The list is refreshed.",
+  notAnswering: "Warden's server isn't answering. Your reason is kept: try again.",
+};
+
+/** What a form holds while it's open: kept as typed after a refusal. */
+type Draft = { reason: string; until: string; candidate: string | null };
+const EMPTY_DRAFT: Draft = { reason: "", until: "", candidate: null };
+
+/** The card's one line: what was done (focused), or why a call was refused, at the action it answers. */
+type Line = { kind: "done"; text: string } | { kind: "refused"; text: string; at: string };
+
 export function DetailCard(props: {
   finding: Finding;
   /** The Team's pending Proposals, or loading. Only the focused Finding's show. */
   proposals: ProposalsResult | "loading";
   clerkUsers: Map<string, ClerkUser>;
+  /** The person's Role in the Team: a Lead or Admin decides, a Member proposes; null (not loaded) does neither. */
+  role: Role | null;
+  /** The signed-in person's user id: their own Proposals read "Asked by you". */
+  userId: string | null;
+  getToken: GetToken;
+  /** The focused Finding's Unconfirmed-fix candidates the page's list holds: Mark moved's choices. */
+  candidates: Finding[];
   /** The card's ✕: clears the page's focus. */
   onClear: () => void;
   /** Asks for the Proposals again, after they couldn't load. */
   onRetryProposals: () => void;
+  /** A decision or an approval changed the Finding (or may have): the page asks for it again. */
+  onFindingChanged: () => void;
+  /** A call changed the Proposals (or may have): the panel asks for them again. */
+  onProposalsChanged: () => void;
+  /** The server said the person's Role is too low: ask who they are again. */
+  refreshMe: () => void;
+  onSessionEnded: () => void;
 }) {
-  const { finding } = props;
+  const { finding, role, getToken } = props;
   const titleId = `detail-card-${finding.id}`;
-  const candidates = finding.unconfirmed_fix?.candidates.length ?? 0;
+  const candidateCount = finding.unconfirmed_fix?.candidates.length ?? 0;
   const secret = finding.evidence.secret;
 
+  const lead = role !== null && atLeast(role, "lead");
+  const decisions = lead ? decisionsFor(finding) : [];
+  const proposes = role === "member" ? proposalsFor(finding) : [];
+  const pending =
+    props.proposals !== "loading" && props.proposals.kind === "proposals"
+      ? props.proposals.proposals.filter((p) => p.finding_id === finding.id)
+      : [];
+
+  const [form, setForm] = useState<Action | null>(null);
+  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [running, setRunning] = useState<string | null>(null);
+  const [line, setLine] = useState<Line | null>(null);
+  const runningNow = useRef(false);
+  const cardRef = useRef<HTMLElement>(null);
+  /** What takes focus once the next render lands: the line, the open form's reason, or an opener (by its key). */
+  const focusNext = useRef<string | null>(null);
+
+  // A form whose action the card no longer offers closes: the Finding's Status changed (a 409, then the page's new
+  // answer), the person's Role was lowered, or the Proposal left the list. Its refusal line stays, in the card.
+  const offered =
+    form === null ||
+    (form.kind === "decide" && decisions.includes(form.decision)) ||
+    (form.kind === "propose" && proposes.includes(form.decision)) ||
+    (form.kind === "reject" && lead && pending.some((p) => p.id === form.proposal));
+  if (!offered) setForm(null);
+
+  useEffect(() => {
+    const target = focusNext.current;
+    const card = cardRef.current;
+    focusNext.current = null;
+    if (target === null || card === null) return;
+    const element =
+      target === "line"
+        ? card.querySelector<HTMLElement>(".card-line")
+        : target === "reason"
+          ? card.querySelector<HTMLElement>(".decision-form textarea")
+          : [...card.querySelectorAll<HTMLElement>("[data-opener]")].find(
+              (el) => el.dataset.opener === target,
+            );
+    element?.focus();
+  });
+
+  function open(action: Action) {
+    setForm(action);
+    setDraft(EMPTY_DRAFT);
+    setLine(null);
+    focusNext.current = "reason";
+  }
+
+  function cancel() {
+    if (form !== null) focusNext.current = keyOf(form);
+    setForm(null);
+    setLine(null);
+  }
+
+  function done(text: string) {
+    setLine({ kind: "done", text });
+    focusNext.current = "line";
+  }
+
+  /** One call at a time: its control is busy while it runs, and a second press sends nothing. */
+  async function run<T>(action: Action, call: () => Promise<ActionResult<T>>, onDone: () => void) {
+    if (runningNow.current) return;
+    runningNow.current = true;
+    setRunning(keyOf(action));
+    setLine(null);
+    const result = await call();
+    runningNow.current = false;
+    setRunning(null);
+    if (result.kind === "done") {
+      setForm(null);
+      onDone();
+    } else {
+      refused(result, action);
+    }
+  }
+
+  function refused(result: Exclude<ActionResult<unknown>, { kind: "done" }>, action: Action) {
+    const onProposal = action.kind === "approve" || action.kind === "reject";
+    let text: string;
+    switch (result.kind) {
+      case "session-ended":
+        props.onSessionEnded();
+        return;
+      case "invalid":
+        text = `Warden refused this: ${result.error.replace(/\.$/, "")}.`;
+        break;
+      case "forbidden":
+        text = action.kind === "propose" ? REFUSED.proposeForbidden : REFUSED.leadOnly;
+        props.refreshMe();
+        break;
+      case "not-found":
+      case "conflict":
+        if (onProposal) {
+          text = result.kind === "not-found" ? REFUSED.proposalGone : REFUSED.proposalChanged;
+          props.onProposalsChanged();
+        } else {
+          text = result.kind === "not-found" ? REFUSED.findingGone : REFUSED.findingChanged;
+        }
+        props.onFindingChanged();
+        break;
+      case "not-answering":
+        text = REFUSED.notAnswering;
+        break;
+      case "too-many-attempts":
+        text = tryAgainIn(result.retryAfter);
+        break;
+    }
+    setLine({ kind: "refused", text, at: keyOf(action) });
+  }
+
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (form === null || form.kind === "approve" || !ready(form)) return;
+    const reason = draft.reason.trim();
+    switch (form.kind) {
+      case "decide": {
+        const call = decisionCall(form.decision, reason);
+        void run(
+          form,
+          () => decide(getToken, finding.id, call),
+          () => {
+            done(doneWords(call));
+            props.onFindingChanged();
+            props.onProposalsChanged();
+          },
+        );
+        return;
+      }
+      case "propose":
+        void run(
+          form,
+          () =>
+            propose(
+              getToken,
+              finding.id,
+              form.decision === "accept"
+                ? { decision: "accept", reason, until: endOfDay(draft.until) }
+                : { decision: "mark_false_positive", reason },
+            ),
+          () => {
+            done("Proposal sent. A Lead or an Admin decides.");
+            props.onProposalsChanged();
+          },
+        );
+        return;
+      case "reject":
+        void run(
+          form,
+          () => rejectProposal(getToken, form.proposal, { reason }),
+          () => {
+            done("Proposal rejected.");
+            props.onProposalsChanged();
+          },
+        );
+        return;
+    }
+  }
+
+  function decisionCall(decision: Decision, reason: string): DecisionCall {
+    switch (decision) {
+      case "accept":
+        return { decision, body: { reason, until: endOfDay(draft.until) } };
+      case "mark_moved":
+        return { decision, body: { reason, candidate: draft.candidate ?? "" } };
+      default:
+        return { decision, body: { reason } };
+    }
+  }
+
+  function approve(proposal: PendingProposal) {
+    void run(
+      { kind: "approve", proposal: proposal.id },
+      () => approveProposal(getToken, proposal.id),
+      () => {
+        done("Proposal approved.");
+        props.onProposalsChanged();
+        props.onFindingChanged();
+      },
+    );
+  }
+
+  const earliest = earliestUntil();
+  const asksUntil = (action: Action) =>
+    (action.kind === "decide" || action.kind === "propose") && action.decision === "accept";
+  const asksCandidate = (action: Action) =>
+    action.kind === "decide" && action.decision === "mark_moved";
+
+  function ready(action: Action): boolean {
+    if (draft.reason.trim() === "") return false;
+    if (asksUntil(action) && (draft.until === "" || draft.until < earliest)) return false;
+    if (asksCandidate(action)) {
+      return props.candidates.some((candidate) => candidate.id === draft.candidate);
+    }
+    return true;
+  }
+
+  /** The open form, named for the button that opened it. */
+  function formFor(action: Action, name: string, submitLabel: string) {
+    const key = keyOf(action);
+    return (
+      <ActionForm
+        name={name}
+        submitLabel={submitLabel}
+        findingId={finding.id}
+        until={asksUntil(action) ? earliest : null}
+        candidates={asksCandidate(action) ? props.candidates : null}
+        draft={draft}
+        onDraft={(change) => setDraft((old) => ({ ...old, ...change }))}
+        ready={ready(action)}
+        busy={running === key}
+        refusal={line?.kind === "refused" && line.at === key ? line.text : null}
+        onSubmit={submit}
+        onCancel={cancel}
+      />
+    );
+  }
+
+  const rowForm =
+    form?.kind === "decide"
+      ? formFor(form, decisionLabel(form.decision, finding), decisionLabel(form.decision, finding))
+      : form?.kind === "propose"
+        ? formFor(form, PROPOSE_LABELS[form.decision], "Propose")
+        : null;
+  // A refusal shows in its form while that's open; otherwise (an approve, or a form that closed) in the card.
+  const cardLine =
+    line === null || (line.kind === "refused" && form !== null && line.at === keyOf(form))
+      ? null
+      : line;
+
   return (
-    <section className="detail-card" aria-labelledby={titleId}>
+    <section className="detail-card" aria-labelledby={titleId} ref={cardRef}>
       <div className="detail-card-top">
         <code className="detail-ids">
           {shortId(finding.id)} · {MODULE_WORDS[finding.module]} · {finding.rule_id}
@@ -52,9 +385,9 @@ export function DetailCard(props: {
       <p className="detail-status">
         <SeverityPill finding={finding} />
         <span>{STATUS_WORDS[finding.status]}</span>
-        {candidates > 0 && (
+        {candidateCount > 0 && (
           <span className="flag">
-            {UNCONFIRMED_FIX}: {candidates} {candidates === 1 ? "candidate" : "candidates"}
+            {UNCONFIRMED_FIX}: {candidateCount} {candidateCount === 1 ? "candidate" : "candidates"}
           </span>
         )}
       </p>
@@ -106,14 +439,193 @@ export function DetailCard(props: {
           </>
         )}
       </dl>
+      {cardLine?.kind === "done" && (
+        <p className="card-line" role="status" tabIndex={-1}>
+          {cardLine.text}
+        </p>
+      )}
+      {cardLine?.kind === "refused" && (
+        <p className="card-line refused" role="alert">
+          {cardLine.text}
+        </p>
+      )}
+      {rowForm ??
+        ((decisions.length > 0 || proposes.length > 0) && (
+          <div className="card-actions" role="group" aria-label="Decisions">
+            {decisions.map((decision) => (
+              <OpenerButton
+                key={decision}
+                action={{ kind: "decide", decision }}
+                label={decisionLabel(decision, finding)}
+                onOpen={open}
+              />
+            ))}
+            {proposes.map((decision) => (
+              <OpenerButton
+                key={decision}
+                action={{ kind: "propose", decision }}
+                label={PROPOSE_LABELS[decision]}
+                onOpen={open}
+              />
+            ))}
+          </div>
+        ))}
       <Proposals
         findingId={finding.id}
         proposals={props.proposals}
-        clerkUsers={props.clerkUsers}
+        pending={pending}
         onRetry={props.onRetryProposals}
-      />
+      >
+        {(proposal) => (
+          <ProposalItem
+            key={proposal.id}
+            proposal={proposal}
+            who={askedBy(proposal, props.userId, props.clerkUsers)}
+          >
+            {lead &&
+              (form?.kind === "reject" && form.proposal === proposal.id ? (
+                formFor(form, "Reject", "Reject")
+              ) : (
+                <div className="proposal-actions">
+                  {!proposal.stale && (
+                    <button
+                      type="button"
+                      className="primary"
+                      data-opener={`approve:${proposal.id}`}
+                      disabled={running === `approve:${proposal.id}`}
+                      aria-busy={running === `approve:${proposal.id}` ? "true" : undefined}
+                      onClick={() => approve(proposal)}
+                    >
+                      Approve
+                    </button>
+                  )}
+                  <OpenerButton
+                    action={{ kind: "reject", proposal: proposal.id }}
+                    label="Reject"
+                    onOpen={open}
+                  />
+                </div>
+              ))}
+          </ProposalItem>
+        )}
+      </Proposals>
     </section>
   );
+}
+
+/** A secondary button that opens its action's form; Cancel puts focus back on it, found by `data-opener`. */
+function OpenerButton(props: { action: Action; label: string; onOpen: (action: Action) => void }) {
+  return (
+    <button
+      type="button"
+      className="secondary"
+      data-opener={keyOf(props.action)}
+      onClick={() => props.onOpen(props.action)}
+    >
+      {props.label}
+    </button>
+  );
+}
+
+/**
+ * A decision's, a Proposal's or a rejection's form: Reason always; Until (from `until`, the earliest day) on an
+ * accept; the candidates on Mark moved. Its submit is disabled until it's ready, and busy while its call runs.
+ */
+function ActionForm(props: {
+  name: string;
+  submitLabel: string;
+  findingId: string;
+  until: string | null;
+  candidates: Finding[] | null;
+  draft: Draft;
+  onDraft: (change: Partial<Draft>) => void;
+  ready: boolean;
+  busy: boolean;
+  refusal: string | null;
+  onSubmit: (event: FormEvent) => void;
+  onCancel: () => void;
+}) {
+  const { draft, onDraft } = props;
+  return (
+    <form className="decision-form" aria-label={props.name} onSubmit={props.onSubmit}>
+      <label className="field">
+        <span className="field-label">Reason</span>
+        <textarea
+          rows={3}
+          maxLength={2000}
+          value={draft.reason}
+          onChange={(event) => onDraft({ reason: event.target.value })}
+        />
+      </label>
+      {props.until !== null && (
+        <label className="field">
+          <span className="field-label">Until</span>
+          <input
+            type="date"
+            min={props.until}
+            value={draft.until}
+            onChange={(event) => onDraft({ until: event.target.value })}
+          />
+        </label>
+      )}
+      {props.candidates !== null &&
+        (props.candidates.length === 0 ? (
+          <p className="form-note">The candidate isn't in this view's list. Reload to see it.</p>
+        ) : (
+          <fieldset className="field candidates">
+            <legend className="field-label">Candidate</legend>
+            {props.candidates.map((candidate) => (
+              <label key={candidate.id} className="candidate">
+                <input
+                  type="radio"
+                  name={`candidate-${props.findingId}`}
+                  value={candidate.id}
+                  checked={draft.candidate === candidate.id}
+                  onChange={() => onDraft({ candidate: candidate.id })}
+                />
+                <span>
+                  <code>{shortId(candidate.id)}</code>
+                  {" · "}
+                  {candidate.title}
+                  {" · "}
+                  <code>{locationWords(candidate.location)}</code>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        ))}
+      {props.refusal !== null && (
+        <p className="card-line refused" role="alert">
+          {props.refusal}
+        </p>
+      )}
+      <div className="form-actions">
+        <button
+          type="submit"
+          className="primary"
+          disabled={!props.ready || props.busy}
+          aria-busy={props.busy ? "true" : undefined}
+        >
+          {props.submitLabel}
+        </button>
+        <button type="button" className="secondary" onClick={props.onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** Who asked for a Proposal: "you" for the signed-in person, "an agent", or the person's name. */
+function askedBy(
+  proposal: PendingProposal,
+  userId: string | null,
+  clerkUsers: Map<string, ClerkUser>,
+): string {
+  const asker = proposal.requested_by;
+  if (asker.kind === "agent") return "an agent";
+  if (asker.id === userId) return "you";
+  return personName(asker.id, clerkUsers.get(asker.id));
 }
 
 /**
@@ -123,8 +635,9 @@ export function DetailCard(props: {
 function Proposals(props: {
   findingId: string;
   proposals: ProposalsResult | "loading";
-  clerkUsers: Map<string, ClerkUser>;
+  pending: PendingProposal[];
   onRetry: () => void;
+  children: (proposal: PendingProposal) => ReactNode;
 }) {
   if (props.proposals === "loading") return null;
   if (props.proposals.kind !== "proposals") {
@@ -137,30 +650,20 @@ function Proposals(props: {
       </p>
     );
   }
-  const mine = props.proposals.proposals.filter((p) => p.finding_id === props.findingId);
-  if (mine.length === 0) return null;
+  if (props.pending.length === 0) return null;
   const headingId = `proposals-${props.findingId}`;
   return (
     <section className="detail-proposals" aria-labelledby={headingId}>
       <h4 id={headingId}>Pending Proposals</h4>
       <ul className="proposal-list" aria-labelledby={headingId}>
-        {mine.map((proposal) => (
-          <ProposalItem key={proposal.id} proposal={proposal} clerkUsers={props.clerkUsers} />
-        ))}
+        {props.pending.map(props.children)}
       </ul>
     </section>
   );
 }
 
-function ProposalItem({
-  proposal,
-  clerkUsers,
-}: {
-  proposal: PendingProposal;
-  clerkUsers: Map<string, ClerkUser>;
-}) {
-  const asker = proposal.requested_by;
-  const who = asker.kind === "agent" ? "an agent" : personName(asker.id, clerkUsers.get(asker.id));
+function ProposalItem(props: { proposal: PendingProposal; who: string; children: ReactNode }) {
+  const { proposal } = props;
   return (
     <li className="proposal">
       <p className="proposal-decision">
@@ -174,12 +677,13 @@ function ProposalItem({
       </p>
       <p className="proposal-reason">{proposal.reason}</p>
       <p className="proposal-asked">
-        Asked by {who},{" "}
+        Asked by {props.who},{" "}
         <time dateTime={proposal.requested_at}>{dayAndTimeWords(proposal.requested_at)}</time>
       </p>
       {proposal.stale && (
         <p className="proposal-stale">The Finding has changed since this was asked.</p>
       )}
+      {props.children}
     </li>
   );
 }
