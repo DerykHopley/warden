@@ -184,6 +184,15 @@ button:focus-visible,
   outline-offset: 2px;
 }
 
+/* A date input's ring, on the input itself. In WebKit (Safari) the keyboard focuses the date's inner month, day and
+   year fields, in the input's own shadow tree: the input is the document's active element, but it never matches
+   :focus-visible, so the rule above draws nothing there. :focus-within does match it while an inner field has focus,
+   in every browser. Its own rule, so a browser that refused the selector would drop only this one. */
+.field input[type="date"]:focus-within {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
 button:disabled,
 .role-picker:disabled {
   cursor: not-allowed;

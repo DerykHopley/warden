@@ -220,6 +220,9 @@ test.describe("the keyboard", () => {
       await c.getByRole("button", { name: "Clear the focus" }).focus();
       await reachEach(page, [
         form.getByRole("textbox", { name: "Reason" }),
+        // The ring is read off the date input itself. In WebKit the keyboard focuses its inner fields, so the input
+        // never matches :focus-visible; styles.css rings it through :focus-within, which this reads (failed in WebKit
+        // before that rule, run 45488827212).
         form.getByLabel("Until"),
         form.getByRole("button", { name: "Accept" }),
         form.getByRole("button", { name: "Cancel" }),
