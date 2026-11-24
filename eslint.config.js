@@ -53,11 +53,17 @@ export default tseslint.config(
     },
   },
   {
-    // ADR 0005: Guard, Patch and Vouch import the shared code, never the other way. The start-up file wires the
-    // modules in, and tests may import them as it does. A dynamic import() counts too, when its specifier is a string
-    // or a template literal naming a modules path.
+    // ADR 0005: Guard, Patch and Vouch import the shared code, never the other way. The start-up files wire the
+    // modules in (the server's, and the demo seed's, which reconciles as the server does), and tests may import them
+    // as they do. A dynamic import() counts too, when its specifier is a string or a template literal naming a
+    // modules path.
     files: ["server/src/**/*.ts"],
-    ignores: ["server/src/modules/**", "server/src/index.ts", "server/src/**/*.test.ts"],
+    ignores: [
+      "server/src/modules/**",
+      "server/src/index.ts",
+      "server/src/seed.ts",
+      "server/src/**/*.test.ts",
+    ],
     rules: {
       "no-restricted-imports": [
         "error",

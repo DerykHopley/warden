@@ -42,6 +42,12 @@ describe("ADR 0005's import rule", () => {
     },
   );
 
+  it("lets the demo seed's start-up file import a module, as the server's does", async () => {
+    const code =
+      'import { guardMoveRule } from "./modules/guard/move-rule.ts";\nvoid guardMoveRule;\n';
+    expect(await lint(code, "server/src/seed.ts")).toEqual([]);
+  });
+
   it("lets shared code import() anything else", async () => {
     expect(
       await lint('await import("./findings/index.ts");\nexport {};\n', "server/src/x.ts"),
