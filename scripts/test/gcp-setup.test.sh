@@ -127,13 +127,15 @@ assert_equal "the provider admits only the repository's pushes and dispatches on
   "'--attribute-condition=assertion.repository_id == \"$repo_id\" && assertion.event_name in [\"push\", \"workflow_dispatch\"] && (assertion.ref == \"refs/heads/main\" || assertion.ref.startsWith(\"refs/heads/preview/\"))'" \
   "$(grep -o "'--attribute-condition=[^']*'" <<<"$provider" || true)"
 # google.subject may be at most 127 characters: the run, not the branch, whose name has no such bound.
-assert_equal "the subject is the repository and the run, and the mapping carries the branch kind" \
-  "'--attribute-mapping=google.subject=assertion.repository_id + \":\" + assertion.run_id + \":\" + assertion.run_attempt,attribute.repository_id=assertion.repository_id,attribute.ref=assertion.ref,attribute.event_name=assertion.event_name,attribute.branch_kind=assertion.ref == \"refs/heads/main\" ? \"main\" : (assertion.ref.startsWith(\"refs/heads/preview/\") ? \"preview\" : \"other\")'" \
+# attribute.deploy carries the repository id beside the branch kind, so a token from another repository (through
+# another provider in the pool) can never match a binding.
+assert_equal "the subject is the repository and the run, and the mapping carries the repository and branch kind" \
+  "'--attribute-mapping=google.subject=assertion.repository_id + \":\" + assertion.run_id + \":\" + assertion.run_attempt,attribute.repository_id=assertion.repository_id,attribute.ref=assertion.ref,attribute.event_name=assertion.event_name,attribute.deploy=assertion.repository_id + \":\" + (assertion.ref == \"refs/heads/main\" ? \"main\" : (assertion.ref.startsWith(\"refs/heads/preview/\") ? \"preview\" : \"other\"))'" \
   "$(grep -o "'--attribute-mapping=[^']*'" <<<"$provider" || true)"
 pool_set="principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github"
-assert_equal "only main tokens may act as warden-deploy, and only preview/* tokens as warden-preview-deploy" \
-  "warden-deploy@$project.iam.gserviceaccount.com --member=$pool_set/attribute.branch_kind/main
-warden-preview-deploy@$project.iam.gserviceaccount.com --member=$pool_set/attribute.branch_kind/preview" \
+assert_equal "only this repository's main tokens may act as warden-deploy, and only its preview/* tokens as warden-preview-deploy" \
+  "warden-deploy@$project.iam.gserviceaccount.com --member=$pool_set/attribute.deploy/$repo_id:main
+warden-preview-deploy@$project.iam.gserviceaccount.com --member=$pool_set/attribute.deploy/$repo_id:preview" \
   "$(grep -F 'roles/iam.workloadIdentityUser' <<<"$output" | awk '{
     for (i = 1; i <= NF; i++) {
       if ($i == "add-iam-policy-binding") account = $(i + 1)
@@ -320,21 +322,32 @@ FAKE
 chmod +x "$scratch/fake-gcloud"
 
 # A Cloud SQL Auth Proxy that listens on the port it's given (so the script's wait for it ends), and records its pid
-# and arguments.
+# and arguments. FAKE_PROXY=fail makes it exit at once as on a port another process holds; fail-once, only the first
+# time.
 cat >"$scratch/fake-proxy" <<FAKE
 #!/usr/bin/env bash
 dir=\$(dirname "\$0")
 echo "\$\$" >"\$dir/proxy-pid"
 printf '%s\n' "\$*" >>"\$dir/proxy-calls"
 for arg in "\$@"; do [[ \$arg == --port=* ]] && port=\${arg#--port=}; done
+if [[ \${FAKE_PROXY-} == fail || ( \${FAKE_PROXY-} == fail-once && ! -f \$dir/proxy-failed ) ]]; then
+  touch "\$dir/proxy-failed"
+  echo "listen tcp 127.0.0.1:\$port: bind: address already in use" >&2
+  exit 1
+fi
 PORT=\$port exec "$real_node" -e 'require("node:net").createServer((s) => s.end()).listen(Number(process.env.PORT), "127.0.0.1")'
 FAKE
 chmod +x "$scratch/fake-proxy"
 
 # A node that stands in for the roles script only, recording the set, the database and where it connects, and the
-# passwords it was given (one per line), and exiting FAKE_ROLES_EXIT; anything else goes to the real node.
+# passwords it was given (one per line), and exiting FAKE_ROLES_EXIT. With FAKE_FREE_PORT, the script's free-port
+# lookup gets that port. Anything else goes to the real node.
 cat >"$scratch/fake-node" <<FAKE
 #!/usr/bin/env bash
+if [[ -n \${FAKE_FREE_PORT-} && \${1-} == -e && \${2-} == *'listen(0'* ]]; then
+  printf '%s' "\$FAKE_FREE_PORT"
+  exit 0
+fi
 if [[ \${1-} == */server/src/roles.ts ]]; then
   dir=\$(dirname "\$0")
   printf '%s %s %s %s:%s\n' "\$WARDEN_DATABASE_ROLES" "\$PGDATABASE" "\$PGUSER" "\$PGHOST" "\$PGPORT" >>"\$dir/roles-runs"
@@ -432,7 +445,7 @@ policy=$(cat "$scratch/fresh/policy")
 assert_line "the policy written back logs Secret Manager's reads" '"logType":"DATA_READ"' "$policy"
 assert_line "the policy written back keeps the etag it was read with" '"etag":"BwX="' "$policy"
 assert_line "warden-deploy's pool binding names the project's number" \
-  "principalSet://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/github/attribute.branch_kind/main" \
+  "principalSet://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/github/attribute.deploy/$repo_id:main" \
   "$calls"
 assert_line "a first run makes the service" "run deploy warden " "$calls"
 assert_line "a first run makes the preview service" "run deploy warden-preview " "$calls"
@@ -452,6 +465,33 @@ assert_no_line "a failing roles run: nothing after it runs" "service-accounts cr
 [[ -s $scratch/roles-fail/proxy-pid ]] || fail "a failing roles run: the proxy never started"
 if kill -0 "$(cat "$scratch/roles-fail/proxy-pid")" 2>/dev/null; then fail "a failing roles run: the proxy is still running"; fi
 pass "a failing roles run: the proxy is stopped"
+
+# A proxy that can't bind its port, which another process holds: the script never takes that process for the proxy,
+# so no password is sent to it. It tries once more on a fresh port, then stops.
+"$real_node" -e 'const s = require("node:net").createServer((c) => c.end());
+  s.listen(0, "127.0.0.1", () => console.log(s.address().port));' >"$scratch/squatter-port" &
+squatter=$!
+trap 'kill "$squatter" 2>/dev/null; rm -rf "$scratch"' EXIT
+for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s $scratch/squatter-port ]] && break; sleep 0.2; done
+squatted=$(cat "$scratch/squatter-port")
+[[ $squatted =~ ^[0-9]+$ ]] || fail "the squatter didn't report its port"
+real_run port-taken fresh FAKE_PROXY=fail FAKE_FREE_PORT="$squatted"
+kill "$squatter" 2>/dev/null || true
+assert_equal "a proxy that can't bind: the script exits 1" 1 "$code"
+assert_line "a proxy that can't bind: it says the proxy stopped" "the Cloud SQL Auth Proxy stopped before it was ready" "$out"
+[[ ! -e $scratch/port-taken/roles-runs ]] || fail "a proxy that can't bind: the roles script ran against another process"
+pass "a proxy that can't bind: no roles run, so no password is sent to the process holding the port"
+assert_equal "a proxy that can't bind: it's tried twice" 2 "$(wc -l <"$scratch/port-taken/proxy-calls" | tr -d ' ')"
+
+# A proxy that fails to bind once: the script retries on a fresh port, and the roles run there.
+real_run proxy-retry fresh FAKE_PROXY=fail-once
+[[ $code == 0 ]] || fail "a proxy that fails once: the run failed: $out"
+ports=$(grep -o -- '--port=[0-9]*' "$scratch/proxy-retry/proxy-calls" | cut -d= -f2)
+assert_equal "a proxy that fails once: it's started twice" 2 "$(wc -l <<<"$ports" | tr -d ' ')"
+assert_equal "a proxy that fails once: the roles connect to the second proxy's port" \
+  "127.0.0.1:$(tail -1 <<<"$ports")
+127.0.0.1:$(tail -1 <<<"$ports")" \
+  "$(cut -d' ' -f4 "$scratch/proxy-retry/roles-runs")"
 
 # A rerun: nothing is made again, and each setting is put back.
 real_run rerun rerun

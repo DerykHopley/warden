@@ -32,6 +32,11 @@ readonly SECRET_READS_SERVICE=secretmanager.googleapis.com
 # Cloud SQL's docs: "the transaction log retention setting must be less than the backup retention setting".
 readonly BACKUPS=7
 readonly LOG_DAYS=6
+# The database passwords the script generates: each set's app and migration roles. (Assigned, then made readonly:
+# the form bash 3.2 accepts.)
+GENERATED_SECRETS=(warden-db-app-password warden-db-migrate-password warden-db-preview-app-password
+  warden-db-preview-migrate-password)
+readonly GENERATED_SECRETS
 # The repository this script is in: the roles step runs its server/src/roles.ts.
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readonly ROOT
@@ -222,18 +227,23 @@ free_port() {
     s.listen(0, "127.0.0.1", () => { process.stdout.write(String(s.address().port)); s.close(); });'
 }
 
-# Starts the Cloud SQL Auth Proxy for <connection> on a free local port, and waits until it listens. It connects
-# with application-default credentials. The EXIT trap stops it, also when the script fails.
-start_proxy() {
+# Whether the proxy this script started is still running.
+proxy_running() { [[ -n $PROXY_PID ]] && kill -0 "$PROXY_PID" 2>/dev/null; }
+
+# One try at the Cloud SQL Auth Proxy for <connection>, on a fresh free local port: 0 once it listens, 1 when it
+# stopped first (on a port another process took since it was free, say; its error is above). The port is probed only
+# while the proxy runs, and the proxy must still run a second after the port answers: a port that answers when the
+# proxy is gone belongs to another process, which must never be sent a password.
+launch_proxy() {
   local connection=$1 waited=0
   PROXY_PORT=$(free_port)
   cloud-sql-proxy --quiet --address=127.0.0.1 --port="$PROXY_PORT" "$connection" >&2 &
   PROXY_PID=$!
-  until (exec 3<>"/dev/tcp/127.0.0.1/$PROXY_PORT") 2>/dev/null; do
-    if ! kill -0 "$PROXY_PID" 2>/dev/null; then
-      PROXY_PID=""
-      echo "gcp-setup: the Cloud SQL Auth Proxy stopped before it was ready; its error is above" >&2
-      exit 1
+  while proxy_running; do
+    if (exec 3<>"/dev/tcp/127.0.0.1/$PROXY_PORT") 2>/dev/null; then
+      sleep 1
+      if proxy_running; then return 0; fi
+      break
     fi
     if [[ $waited -ge 30 ]]; then
       echo "gcp-setup: the Cloud SQL Auth Proxy wasn't listening on 127.0.0.1:$PROXY_PORT after 30s" >&2
@@ -242,6 +252,45 @@ start_proxy() {
     sleep 1
     waited=$((waited + 1))
   done
+  wait "$PROXY_PID" 2>/dev/null || true
+  PROXY_PID=""
+  return 1
+}
+
+# Starts the Cloud SQL Auth Proxy for <connection> on a free local port, and waits until it listens: tried once more
+# on a fresh port when it stops first. It connects with application-default credentials. The EXIT trap stops it, also
+# when the script fails.
+start_proxy() {
+  if launch_proxy "$1"; then return 0; fi
+  echo "gcp-setup: the Cloud SQL Auth Proxy stopped before it was ready; trying once more on another port" >&2
+  if launch_proxy "$1"; then return 0; fi
+  echo "gcp-setup: the Cloud SQL Auth Proxy stopped before it was ready; its error is above" >&2
+  exit 1
+}
+
+# grant_secrets <project> <account> <secret...>: each secret readable by that account.
+grant_secrets() {
+  local project=$1 account=$2 secret
+  shift 2
+  for secret in "$@"; do
+    run_retrying gcloud secrets add-iam-policy-binding "$secret" --member="serviceAccount:$account" \
+      --role=roles/secretmanager.secretAccessor --project="$project"
+  done
+}
+
+# ensure_service <project> <service> <service account> <max instances>: made with Google's placeholder image, public,
+# or its settings and public access put back, keeping whatever image it runs now.
+ensure_service() {
+  local project=$1 service=$2 account=$3 max=$4
+  if ! exists gcloud run services describe "$service" --region="$REGION" --project="$project"; then
+    run gcloud run deploy "$service" --image="$SERVICE_IMAGE" --region="$REGION" --service-account="$account" \
+      --allow-unauthenticated --max-instances="$max" --project="$project"
+  else
+    run gcloud run services update "$service" --region="$REGION" --service-account="$account" \
+      --max-instances="$max" --project="$project"
+    run_retrying gcloud run services add-iam-policy-binding "$service" --region="$REGION" --member=allUsers \
+      --role=roles/run.invoker --project="$project"
+  fi
 }
 
 # The roles run for a set as the dry run prints it: <set> <database> <app secret> <migrate secret>.
@@ -346,8 +395,7 @@ main() {
 
   step "5. Secrets"
   local secret
-  for secret in warden-db-app-password warden-db-migrate-password warden-db-preview-app-password \
-    warden-db-preview-migrate-password; do
+  for secret in ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
     if exists gcloud secrets describe "$secret" --project="$project"; then continue; fi
     local create=(gcloud secrets create "$secret" --replication-policy=user-managed --locations="$REGION"
       --data-file=- --project="$project")
@@ -359,8 +407,7 @@ main() {
   done
   note "Each secret's replication: each should be user-managed, in $REGION only"
   for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-    warden-db-app-password warden-db-migrate-password warden-db-preview-app-password \
-    warden-db-preview-migrate-password; do
+    ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
     run gcloud secrets describe "$secret" --format='yaml(name,replication)' --project="$project"
   done
 
@@ -393,19 +440,10 @@ main() {
     run_retrying gcloud projects add-iam-policy-binding "$project" --member="serviceAccount:$account" \
       --role=roles/cloudsql.client --condition=None
   done
-  # grant_secrets <account> <secret...>: each secret readable by that account.
-  grant_secrets() {
-    local account=$1 secret
-    shift
-    for secret in "$@"; do
-      run_retrying gcloud secrets add-iam-policy-binding "$secret" --member="serviceAccount:$account" \
-        --role=roles/secretmanager.secretAccessor --project="$project"
-    done
-  }
-  grant_secrets "$run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-app-password
-  grant_secrets "$migrate_sa" warden-db-app-password warden-db-migrate-password
-  grant_secrets "$preview_run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-preview-app-password
-  grant_secrets "$preview_migrate_sa" warden-db-preview-migrate-password
+  grant_secrets "$project" "$run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-app-password
+  grant_secrets "$project" "$migrate_sa" warden-db-app-password warden-db-migrate-password
+  grant_secrets "$project" "$preview_run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-preview-app-password
+  grant_secrets "$project" "$preview_migrate_sa" warden-db-preview-migrate-password
   # warden-deploy (main): Cloud Run on the project, the warden repository, the live accounts.
   run_retrying gcloud projects add-iam-policy-binding "$project" --member="serviceAccount:$deploy_sa" \
     --role=roles/run.developer --condition=None
@@ -431,9 +469,10 @@ main() {
   local condition="assertion.repository_id == \"$GITHUB_REPO_ID\" && assertion.event_name in [\"push\", \"workflow_dispatch\"] && (assertion.ref == \"refs/heads/main\" || assertion.ref.startsWith(\"refs/heads/preview/\"))"
   # google.subject "can't exceed 127 characters" (Google's Workload Identity Federation docs), and GitHub's `sub`
   # holds the branch name, which has no such bound: the subject is the repository and the run, at most about 40.
-  # attribute.branch_kind says which deploy account a token may act as: main or preview. (No comma in it: gcloud
-  # splits the mapping on commas.)
-  local mapping="google.subject=assertion.repository_id + \":\" + assertion.run_id + \":\" + assertion.run_attempt,attribute.repository_id=assertion.repository_id,attribute.ref=assertion.ref,attribute.event_name=assertion.event_name,attribute.branch_kind=assertion.ref == \"refs/heads/main\" ? \"main\" : (assertion.ref.startsWith(\"refs/heads/preview/\") ? \"preview\" : \"other\")"
+  # attribute.deploy says which deploy account a token may act as: <repository id>:main or <repository id>:preview.
+  # The repository id is in the value, so a token from another repository (through another provider in the pool)
+  # can never match a binding. (No comma in it: gcloud splits the mapping on commas.)
+  local mapping="google.subject=assertion.repository_id + \":\" + assertion.run_id + \":\" + assertion.run_attempt,attribute.repository_id=assertion.repository_id,attribute.ref=assertion.ref,attribute.event_name=assertion.event_name,attribute.deploy=assertion.repository_id + \":\" + (assertion.ref == \"refs/heads/main\" ? \"main\" : (assertion.ref.startsWith(\"refs/heads/preview/\") ? \"preview\" : \"other\"))"
   note "GitHub repository: $GITHUB_REPO (id $GITHUB_REPO_ID)"
   if ! exists gcloud iam workload-identity-pools describe "$POOL" --location=global --project="$project"; then
     run gcloud iam workload-identity-pools create "$POOL" --location=global --display-name="GitHub Actions" \
@@ -452,30 +491,18 @@ main() {
   local pool_name="projects/$number/locations/global/workloadIdentityPools/$POOL"
   run_retrying gcloud iam service-accounts add-iam-policy-binding "$deploy_sa" \
     --role=roles/iam.workloadIdentityUser \
-    --member="principalSet://iam.googleapis.com/$pool_name/attribute.branch_kind/main" --project="$project"
+    --member="principalSet://iam.googleapis.com/$pool_name/attribute.deploy/$GITHUB_REPO_ID:main" \
+    --project="$project"
   run_retrying gcloud iam service-accounts add-iam-policy-binding "$preview_deploy_sa" \
     --role=roles/iam.workloadIdentityUser \
-    --member="principalSet://iam.googleapis.com/$pool_name/attribute.branch_kind/preview" --project="$project"
+    --member="principalSet://iam.googleapis.com/$pool_name/attribute.deploy/$GITHUB_REPO_ID:preview" \
+    --project="$project"
 
   step "9. The services and the preview migration job"
   # Made here because the deploy accounts can't set IAM policy, so they can't make a service public, and
   # warden-preview-deploy's Cloud Run roles are on the preview service and job themselves. Sign-in is Clerk's job.
-  # ensure_service <service> <service account> <max instances>: made with Google's placeholder image, or its settings
-  # put back, keeping whatever image it runs now.
-  ensure_service() {
-    local service=$1 account=$2 max=$3
-    if ! exists gcloud run services describe "$service" --region="$REGION" --project="$project"; then
-      run gcloud run deploy "$service" --image="$SERVICE_IMAGE" --region="$REGION" --service-account="$account" \
-        --allow-unauthenticated --max-instances="$max" --project="$project"
-    else
-      run gcloud run services update "$service" --region="$REGION" --service-account="$account" \
-        --max-instances="$max" --project="$project"
-      run_retrying gcloud run services add-iam-policy-binding "$service" --region="$REGION" --member=allUsers \
-        --role=roles/run.invoker --project="$project"
-    fi
-  }
-  ensure_service "$SERVICE" "$run_sa" 2
-  ensure_service "$PREVIEW_SERVICE" "$preview_run_sa" 1
+  ensure_service "$project" "$SERVICE" "$run_sa" 2
+  ensure_service "$project" "$PREVIEW_SERVICE" "$preview_run_sa" 1
   if ! exists gcloud run jobs describe "$PREVIEW_JOB" --region="$REGION" --project="$project"; then
     run gcloud run jobs create "$PREVIEW_JOB" --image="$JOB_IMAGE" --region="$REGION" \
       --service-account="$preview_migrate_sa" --project="$project"
