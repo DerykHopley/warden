@@ -26,6 +26,7 @@ function open(url = "/findings", list: Finding[] = demoFindings, routes: Routes 
     me: { userId: "user_1", team: TEAM, role: "member" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
+    panel: { setContext: vi.fn(), open: vi.fn() },
   };
   render(<FindingsPage {...props} />);
   return props;

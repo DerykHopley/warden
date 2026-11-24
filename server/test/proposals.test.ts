@@ -429,8 +429,8 @@ describe("the Team's pending Proposals", () => {
     await expect(findings.approveProposal(team, old.id, { actor: lead })).rejects.toThrow(
       /changed since the Proposal was asked/,
     );
-    await expect(
-      findings.approveProposal(team, fresh.id, { actor: lead }),
-    ).resolves.toMatchObject({ state: "approved" });
+    await expect(findings.approveProposal(team, fresh.id, { actor: lead })).resolves.toMatchObject({
+      state: "approved",
+    });
   });
 });
