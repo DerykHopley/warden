@@ -23,7 +23,37 @@ export type Status = z.infer<typeof Status>;
 /** An id Warden or a module gave: a Finding, a Team, a Scan or a Spot run. */
 export const Id = z.string().min(1).max(200);
 
-export const Title = z.string().min(1).max(200);
+/**
+ * Text a person reads: at least one character that isn't whitespace. A pattern, so the JSON Schema carries it, and an
+ * explicit class rather than `\S`, whose meaning differs between regex engines (Rust's `\s` leaves out U+FEFF). The
+ * README lists the same characters: JavaScript's `\s`.
+ */
+export const BLANK_CODE_POINTS: readonly (readonly [number] | readonly [number, number])[] = [
+  [0x0009, 0x000d], // tab, line feed, vertical tab, form feed, carriage return
+  [0x0020], // space
+  [0x00a0], // no-break space
+  [0x1680], // Ogham space mark
+  [0x2000, 0x200a], // en quad to hair space
+  [0x2028], // line separator
+  [0x2029], // paragraph separator
+  [0x202f], // narrow no-break space
+  [0x205f], // medium mathematical space
+  [0x3000], // ideographic space
+  [0xfeff], // byte order mark
+];
+
+/** A code point as a regex escape of exactly four hex digits, which JavaScript, Rust and Python all read. */
+const escape = (codePoint: number) => `\\u${codePoint.toString(16).toUpperCase().padStart(4, "0")}`;
+
+export const NOT_BLANK = new RegExp(
+  `[^${BLANK_CODE_POINTS.map((range) => range.map(escape).join("-")).join("")}]`,
+);
+const NOT_BLANK_MESSAGE = "holds at least one character that isn't whitespace";
+
+/** Free text a person reads, of at most `max` characters, never only whitespace. */
+export const Text = (max: number) => z.string().min(1).max(max).regex(NOT_BLANK, NOT_BLANK_MESSAGE);
+
+export const Title = Text(200);
 
 /** An ISO 8601 date-time, with `Z` or an offset. */
 export const DateTime = z.iso.datetime({ offset: true });
@@ -279,7 +309,7 @@ export const FindingFields = z.strictObject({
   // Lifecycle
   status: Status,
   unconfirmed_fix: UnconfirmedFix.nullable(),
-  accepted_reason: z.string().min(1).max(2000).nullable(),
+  accepted_reason: Text(2000).nullable(),
   accepted_until: DateTime.nullable(),
   /** The id of the Scan or Spot run that first saw it. */
   first_seen_scan: Id,
@@ -398,7 +428,38 @@ export const Observation = z
   });
 export type Observation = z.infer<typeof Observation>;
 
-const assetKey = (asset: Asset) => `${asset.kind}:${asset.ref}`;
+/** An Asset as one string, for lookups: TypeScript has no value equality (ADR 0005). A kind holds no `:`. */
+export const assetKey = (asset: Asset) => `${asset.kind}:${asset.ref}`;
+
+/** One problem as one string: an Asset and a Fingerprint. Reconcile matches a Finding by it. */
+export const problemKeyOf = (asset: Asset, fingerprintValue: string) =>
+  JSON.stringify([asset.kind, asset.ref, fingerprintValue]);
+
+/** The problem an Observation reports. A run reports each problem once (the README's "one problem, once"). */
+export const problemKey = (observation: Pick<Observation, "asset" | "rule_id" | "location">) =>
+  problemKeyOf(observation.asset, fingerprint(observation.rule_id, observation.location));
+
+/** Refuses an item equal (by `key`) to an earlier one, on the later one's index, naming the earlier index. */
+function refuseRepeats<T>(
+  items: readonly T[],
+  key: (item: T) => string,
+  field: string,
+  message: (earlier: string) => string,
+  ctx: z.RefinementCtx,
+): void {
+  const seen = new Map<string, number>();
+  items.forEach((item, i) => {
+    const earlier = seen.get(key(item));
+    if (earlier !== undefined) {
+      ctx.addIssue({ code: "custom", path: [field, i], message: message(`${field}[${earlier}]`) });
+    } else {
+      seen.set(key(item), i);
+    }
+  });
+}
+
+const sameProblem = (earlier: string) =>
+  `the same problem (Asset and Fingerprint) as ${earlier}: a run reports each problem once`;
 
 /** What `reconcile(scan)` takes: what one Scan covered and what it saw. */
 export const Scan = z
@@ -432,6 +493,11 @@ export const Scan = z
         });
       }
     });
+    const listedOnce = (what: string) => (earlier: string) =>
+      `the same ${what} as ${earlier}: each is listed once`;
+    refuseRepeats(scan.assets, assetKey, "assets", listedOnce("Asset"), ctx);
+    refuseRepeats(scan.rules, (rule) => rule, "rules", listedOnce("Rule"), ctx);
+    refuseRepeats(scan.observations, problemKey, "observations", sameProblem, ctx);
     const covered = new Set(scan.assets.map(assetKey));
     scan.observations.forEach((observation, i) => {
       if (!covered.has(assetKey(observation.asset))) {
@@ -467,6 +533,7 @@ export const SpotRun = z
     observations: z.array(Observation),
   })
   .superRefine((run, ctx) => {
+    refuseRepeats(run.observations, problemKey, "observations", sameProblem, ctx);
     run.observations.forEach((observation, i) => {
       if (!ruleBelongsTo(run.module, observation.rule_id)) {
         ctx.addIssue({
