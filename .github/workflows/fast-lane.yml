@@ -1,0 +1,68 @@
+name: Fast lane
+
+on:
+  pull_request:
+    branches: [main, "spec/**"]
+  push:
+    branches: [main]
+
+# A newer push to a PR replaces its older run; every push to main runs to the end.
+concurrency:
+  group: fast-lane-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  fast-lane:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: warden
+          POSTGRES_DB: warden
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U warden"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: warden
+      PGDATABASE: warden
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: eslint
+        run: pnpm lint
+      - name: prettier --check
+        run: pnpm format:check
+      - name: tsc --noEmit
+        run: pnpm typecheck
+      - name: vitest (contracts)
+        run: pnpm --filter @warden/contracts test
+      - name: vitest (server, against Postgres 17 with pgvector)
+        run: pnpm --filter @warden/server test
+      - name: vitest (dashboard)
+        run: pnpm --filter @warden/dashboard test
+      - name: Design lint
+        run: pnpm design-lint
+      - name: Image build (not pushed)
+        # A stand-in publishable key: the build needs one, and a real key isn't a CI secret worth keeping.
+        run: >-
+          docker build
+          --build-arg VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2ktcGxhY2Vob2xkZXIuY2xlcmsuYWNjb3VudHMuZGV2JA
+          --tag warden:ci .
