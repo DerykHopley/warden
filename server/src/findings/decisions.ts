@@ -11,7 +11,7 @@ import {
   type Finding,
   type Status,
 } from "@warden/contracts";
-import { sql, type Transaction } from "kysely";
+import { sql, type ExpressionBuilder, type Transaction } from "kysely";
 import type { z } from "zod";
 import type { Database } from "../schema.ts";
 import { lockTeamFindings, writtenAt } from "./reconcile.ts";
@@ -144,6 +144,24 @@ export async function applyDecision(
 }
 
 /**
+ * A subquery of the Team's history rows (`h`) written on the outer query's Proposal's (`asked`) Finding after it was
+ * asked: any one makes that Proposal stale. Approving refuses a stale Proposal and the pending list marks it, both
+ * through this one subquery, so the two can't disagree; each reads it in the same statement as the Proposal. Compared in Postgres, at its microseconds: a JavaScript Date would round `requested_at` to
+ * the millisecond. Both times are written at `writtenAt`, so in the Team lock's order.
+ */
+export function changesSinceAsked(eb: AskedProposal, team: string) {
+  return eb
+    .selectFrom("finding_history as h")
+    .select("h.at")
+    .where("h.team_id", "=", team)
+    .whereRef("h.finding_id", "=", "asked.finding_id")
+    .whereRef("h.at", ">", "asked.requested_at");
+}
+
+/** An expression builder over `proposals as asked`: the Proposal changesSinceAsked correlates to. */
+export type AskedProposal = ExpressionBuilder<Database & { asked: Database["proposals"] }, "asked">;
+
+/**
  * applyDecision's work, for a caller that already holds the Team's lock and has rechecked the Lead. With `proposal`,
  * the decision approves that Proposal: it is refused when the Finding has changed since the Proposal was asked (a
  * history row after its `requested_at`, both written at `writtenAt`, so in the Team lock's order), and each history
@@ -159,24 +177,15 @@ export async function applyLockedDecision(
 ): Promise<Finding> {
   const { finding, refuse } = await findingFor(tx, team, id, decision.call);
   if (proposal) {
-    // Compared in Postgres, at its microseconds: a JavaScript Date would round requested_at to the millisecond.
-    const later = await tx
-      .selectFrom("finding_history")
-      .select("at")
-      .where("team_id", "=", team)
-      .where("finding_id", "=", id)
-      .where("at", ">", (eb) =>
-        eb
-          .selectFrom("proposals")
-          .select("requested_at")
-          .where("team_id", "=", team)
-          .where("id", "=", proposal.id),
-      )
-      .orderBy("id")
-      .executeTakeFirst();
-    if (later) {
+    const { later } = await tx
+      .selectFrom("proposals as asked")
+      .select((eb) => changesSinceAsked(eb, team).orderBy("h.id").limit(1).as("later"))
+      .where("asked.team_id", "=", team)
+      .where("asked.id", "=", proposal.id)
+      .executeTakeFirstOrThrow();
+    if (later !== null) {
       throw refuse(
-        `it changed since the Proposal was asked (at ${later.at.toISOString()}): ask again`,
+        `it changed since the Proposal was asked (at ${later.toISOString()}): ask again`,
       );
     }
   }

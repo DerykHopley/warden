@@ -1,4 +1,5 @@
-// docs/design.md, Layout: the Findings page at 390, 1024 and 1600px, in light and dark. Nothing scrolls sideways;
+// docs/design.md, Layout: the Findings page at 390, 1024 and 1600px, in light and dark, with the Ask Warden panel
+// closed, floating and pinned (where pinning is offered). Nothing scrolls sideways;
 // under 640px one column and a table of Severity, Finding and Status; from 640 to 1100px the cards wrap two or three to
 // a row; from 1100px five sit in a row; content stays within about 1480px, centred.
 import type { Page } from "@playwright/test";
@@ -66,6 +67,63 @@ for (const scheme of SCHEMES) {
     });
   }
 }
+
+/** The Ask Warden panel's states at each width: closed everywhere, open (full screen under 640px), pinned from 1100px. */
+const PANEL_STATES: Record<(typeof WIDTHS)[number], ("closed" | "floating" | "pinned")[]> = {
+  390: ["closed", "floating"],
+  1024: ["closed", "floating"],
+  1600: ["closed", "floating", "pinned"],
+};
+
+for (const scheme of SCHEMES) {
+  for (const width of WIDTHS) {
+    for (const state of PANEL_STATES[width]) {
+      test(`at ${width}px in ${scheme}, with the panel ${state} and a Finding focused, nothing scrolls sideways`, async ({
+        page,
+      }) => {
+        // Pinned at its widest, the page has the least room. Selecting a row opens a closed panel floating; the seed's
+        // longest title has a 41-character package name with no space in it.
+        await page.addInitScript(
+          (stored) => localStorage.setItem("warden.askWardenPanel", stored),
+          JSON.stringify({ mode: state === "pinned" ? "pinned" : "closed", width: 680 }),
+        );
+        await openAt(page, width, scheme);
+        if (state !== "closed") {
+          await page.locator(".finding-link", { hasText: "@aws-sdk" }).click();
+          await expect(page.locator(".detail-card")).toBeVisible();
+          await expect(page.locator(".ask-warden")).toHaveAttribute(
+            "data-shown",
+            state === "floating" && width < 640 ? "full-screen" : state,
+          );
+        }
+        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }));
+        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+      });
+    }
+  }
+}
+
+test("at 1100px with the panel pinned 680px wide, nothing scrolls sideways and the cards wrap to the page's column", async ({
+  page,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("warden.askWardenPanel", JSON.stringify({ mode: "pinned", width: 680 })),
+  );
+  await openAt(page, 1100, "light");
+  await expect(page.locator(".ask-warden")).toHaveAttribute("data-shown", "pinned");
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  // A 420px column is a phone's: the cards stack, and the table drops its Asset column.
+  const boxes = await cardBoxes(page);
+  expect(new Set(boxes.map((b) => b.top)).size).toBe(5);
+  expect(await visibleColumns(page)).toEqual(["Severity", "Finding", "Status"]);
+});
 
 test("at 390px, a title holding a 60-character word with no break in it still doesn't scroll sideways", async ({
   page,

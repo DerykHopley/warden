@@ -65,6 +65,7 @@ function renderPeople(role: Role, routes: Routes = {}) {
     me: { userId: "user_1", team: "org_a", role },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
+    panel: { setContext: vi.fn(), open: vi.fn() },
   };
   render(<PeoplePage {...props} />);
   return props;

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "e2e": "playwright test",
+    "e2e": "playwright test --project chromium",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -5,10 +5,13 @@ on:
     branches: [main, "spec/**"]
   push:
     branches: [main]
+  # The full lane runs these checks through it, beside its browser jobs.
+  workflow_call:
 
-# A newer push to a PR replaces its older run; every push to main runs to the end.
+# A newer push to a PR replaces its older run; every push to main runs to the end. The group names the workflow that
+# runs it (in a call, the caller's), so the full lane's call never cancels, or is cancelled by, the PR's own fast lane.
 concurrency:
-  group: fast-lane-${{ github.ref }}
+  group: fast-lane-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

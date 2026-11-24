@@ -26,6 +26,7 @@ function open(url = "/findings", list: Finding[] = demoFindings, routes: Routes 
     me: { userId: "user_1", team: TEAM, role: "member" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
+    panel: { setContext: vi.fn(), open: vi.fn() },
   };
   render(<FindingsPage {...props} />);
   return props;
@@ -162,6 +163,18 @@ describe("the filter tabs", () => {
     expect(tab("Severity", "High")).toHaveAttribute("aria-pressed", "true");
     expect(rows().map((cells) => cells[0])).toEqual(["High", "High", "High"]);
     expect(screen.getByText("/findings?severity=high")).toHaveClass("view-path");
+  });
+
+  it("adds no history entry for a tab that's already chosen, so Back still steps to the last view", async () => {
+    open();
+    await screen.findByRole("table");
+    const entries = history.length;
+
+    await userEvent.click(tab("Status", "Fixed"));
+    await userEvent.click(tab("Status", "Fixed"));
+
+    expect(history.length).toBe(entries + 1);
+    expect(address()).toBe("/findings?status=fixed");
   });
 
   it("follows Back to the last view", async () => {

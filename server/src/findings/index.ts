@@ -15,6 +15,7 @@ import {
   type Finding,
   type HistoryCauseKind,
   type Module,
+  type PendingProposal,
   type Proposal,
   type RuleId,
   type Severity,
@@ -31,7 +32,7 @@ import {
   type DecisionInput,
 } from "./decisions.ts";
 import { applyExpiry, type ExpiryLimits } from "./expiry.ts";
-import { applyApprove, applyPropose, applyReject } from "./proposals.ts";
+import { applyApprove, applyPropose, applyReject, listPending } from "./proposals.ts";
 import { applyRun, type MoveRule, type ReconcileOutcome } from "./reconcile.ts";
 import { fromRow, isoDateTime, loadFinding } from "./rows.ts";
 
@@ -146,6 +147,11 @@ export interface Findings {
     proposalId: string,
     input: ReasonBody & { actor: Actor },
   ): Promise<Proposal>;
+  /**
+   * The Team's pending Proposals, oldest first, each `stale` when its Finding has changed since it was asked: the
+   * same test approveProposal refuses one with. Approved and rejected ones aren't listed.
+   */
+  pendingProposals(team: string): Promise<PendingProposal[]>;
 
   /**
    * The daily Job's work for one Team: every Accepted Finding whose until is at or before `now` reopens, with a `job`
@@ -210,6 +216,10 @@ export function createFindings({
       const person = personOf(actor);
       const checked = ReasonBody.parse(input);
       return withTeam(team, (tx) => applyReject(tx, team, proposalId, person, checked.reason));
+    },
+
+    pendingProposals(team) {
+      return withTeam(team, (tx) => listPending(tx, team));
     },
 
     expireAcceptances(team, now, limits) {

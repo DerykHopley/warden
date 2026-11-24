@@ -78,6 +78,25 @@ body {
   padding: 32px 16px;
 }
 
+/* The app's frame: the header and the page in one column, and the Ask Warden panel beside them when pinned. The
+   column takes the width the panel leaves, and the pages' layouts follow the column's width (container queries on
+   `app-column`), not the window's: the breakpoints in docs/design.md, Layout, are the column's. */
+.app-frame {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-column {
+  flex: 1 1 0;
+  min-width: 0;
+  container: app-column / inline-size;
+}
+
+/* Room under the page's last line for the closed panel's button, which floats over the page's bottom right. */
+.app-column .page {
+  padding-bottom: 96px;
+}
+
 .card {
   max-width: 560px;
   padding: 24px;
@@ -153,7 +172,9 @@ button.secondary:hover:enabled,
 
 button:focus-visible,
 .role-picker:focus-visible,
-.page-links a:focus-visible {
+.page-links a:focus-visible,
+.panel-divider:focus-visible,
+.chat-input:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
@@ -297,7 +318,7 @@ button[aria-busy="true"],
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 639px) {
+@container app-column (max-width: 639px) {
   .people .joined {
     display: none;
   }
@@ -348,13 +369,13 @@ button[aria-busy="true"],
   list-style: none;
 }
 
-@media (min-width: 640px) {
+@container app-column (min-width: 640px) {
   .top-five {
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   }
 }
 
-@media (min-width: 1100px) {
+@container app-column (min-width: 1100px) {
   .top-five {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
@@ -591,7 +612,7 @@ button[aria-busy="true"],
   white-space: nowrap;
 }
 
-@media (max-width: 639px) {
+@container app-column (max-width: 639px) {
   .findings-table .asset-col {
     display: none;
   }
@@ -606,5 +627,317 @@ button[aria-busy="true"],
     display: block;
     width: fit-content;
     margin: 4px 0 0;
+  }
+}
+
+/* The Ask Warden panel (docs/design.md: Side panel, Layout, Motion). Closed, it is a button over the page's bottom
+   right; floating, it sits over the page at the right; pinned, beside the page, the window's full height; under 640px
+   an open panel fills the screen. */
+.ask-warden-button {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  box-shadow: var(--shadow);
+}
+
+.ask-warden {
+  display: flex;
+  flex-direction: column;
+  color: var(--fg);
+  background: var(--surface);
+}
+
+/* Floating, it starts below the header (the shell measures it), so the header's controls stay reachable. */
+.ask-warden.floating {
+  position: fixed;
+  top: calc(var(--header-height, 61px) + 16px);
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  width: min(var(--panel-width), calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  animation: panel-slide-in 150ms ease-out;
+}
+
+.ask-warden.pinned {
+  position: sticky;
+  top: 0;
+  flex: 0 0 auto;
+  width: var(--panel-width);
+  height: 100vh;
+  border-left: 1px solid var(--line);
+}
+
+.ask-warden.full-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+@keyframes panel-slide-in {
+  from {
+    transform: translateX(calc(100% + 16px));
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* The divider: a 16px handle over the pinned panel's left edge, with a grip in its middle. Hover fills the handle;
+   dragging runs an accent bar down the edge; focus shows the ring. */
+.panel-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  z-index: 1;
+  width: 16px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.panel-divider::before {
+  content: "";
+  position: absolute;
+  top: calc(50% - 20px);
+  left: 6px;
+  width: 4px;
+  height: 40px;
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.panel-divider:hover {
+  background: var(--chip);
+}
+
+.panel-divider[data-dragging="true"]::before {
+  top: 0;
+  left: 7px;
+  width: 2px;
+  height: 100%;
+  background: var(--accent);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-header h2 {
+  margin: 0 auto 0 0;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+/* A ✕: the Button's height, and as wide, with no frame until hovered. */
+.icon-button {
+  min-width: 44px;
+  padding: 0;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.icon-button:hover {
+  background: var(--chip);
+}
+
+/* The detail card and the chat scroll; the context line and the input stay at the panel's foot. */
+.panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.panel-foot {
+  padding: 8px 16px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.context-line {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.chat-form {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* A Chat message: the person's on the quiet fill at the right, Warden's on the page background at the left. */
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-message {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+.chat-message.from-person {
+  align-self: flex-end;
+  background: var(--chip);
+}
+
+.chat-message.from-warden {
+  align-self: flex-start;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+/* The detail card: the item the chat is talking about, in its own tint, fading in. */
+.detail-card {
+  padding: 8px 8px 16px 16px;
+  background: var(--focus-bg);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+  animation: detail-card-in 120ms ease-out;
+}
+
+@keyframes detail-card-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.detail-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.detail-ids {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.detail-title {
+  margin: 0 8px 8px 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.detail-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 12px 0;
+}
+
+.detail-status .flag {
+  margin-left: 0;
+}
+
+.detail-fields {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 8px 0 0;
+  font-size: 0.875rem;
+}
+
+.detail-fields dt {
+  color: var(--muted);
+}
+
+.detail-fields dd {
+  margin: 0;
+}
+
+.detail-proposals {
+  margin-right: 8px;
+}
+
+.detail-proposals h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.proposal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal {
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
+}
+
+.proposal p {
+  margin: 0;
+}
+
+.proposal-decision {
+  font-weight: 600;
+}
+
+.proposal-asked {
+  color: var(--muted);
+}
+
+/* "Couldn't load Proposals", with Retry beside it. */
+.proposals-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 16px 8px 0 0;
+}
+
+/* A stale Proposal says so in words, set apart by weight, not colour. */
+.proposal .proposal-stale {
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-warden.floating,
+  .detail-card {
+    animation: none;
   }
 }

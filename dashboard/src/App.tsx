@@ -1,10 +1,20 @@
 import { ClerkFailed, OrganizationSwitcher, SignIn, useAuth, useOrganization } from "@clerk/react";
 import type { Role } from "@warden/contracts";
-import { useCallback, useEffect, useState, type ComponentType } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type CSSProperties,
+} from "react";
 import { askAboutTeam, type GetToken } from "./api.ts";
+import { AskWardenPanel, usePanelState } from "./AskWardenPanel.tsx";
 import { FindingsPage } from "./Findings.tsx";
 import { landingPage } from "./landing.ts";
 import { fetchMe, type MeResult } from "./me.ts";
+import type { PagePanel, PanelContext } from "./panel.ts";
 import { PeoplePage } from "./People.tsx";
 import { ROLE_WORDS } from "./roles.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
@@ -100,7 +110,11 @@ export type PageProps = {
   onSessionEnded: () => void;
   /** Ask /api/me again, after a change that may have moved the person's own Role. */
   refreshMe: () => void;
+  /** The Ask Warden panel: what the page is talking about, and opening it. Without a context it names the page. */
+  panel: PagePanel;
 };
+
+const noFocusToClear = () => {};
 
 /**
  * Warden's pages, in the header's order. The main area shows the one whose path is the address bar's; `/` shows the
@@ -149,66 +163,115 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
     if (landing !== null && currentPath() === "/") history.replaceState(null, "", landing);
   }, [landing]);
 
+  // The panel is on every page; a page tells it what it's talking about. Until it does, the context is the page. A
+  // page clears its context as it unmounts, and a new Team clears it at once, so one Team's Finding never shows in
+  // another's detail card.
+  const panelState = usePanelState();
+  const [pageContext, setPageContext] = useState<PanelContext | null>(null);
+  const team = signedIn?.team ?? null;
+  const [contextTeam, setContextTeam] = useState(team);
+  if (contextTeam !== team) {
+    setContextTeam(team);
+    setPageContext(null);
+  }
+  const { openFloating } = panelState;
+
+  // The floating panel starts below the header, so the header's controls stay reachable while it floats.
+  const headerRef = useRef<HTMLElement>(null);
+  const [headerHeight, setHeaderHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const header = headerRef.current;
+    if (header === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setHeaderHeight(header.offsetHeight));
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+  const frameStyle = (
+    headerHeight === null ? undefined : { "--header-height": `${headerHeight}px` }
+  ) as CSSProperties | undefined;
+  const pagePanel = useMemo<PagePanel>(
+    () => ({ setContext: setPageContext, open: openFloating }),
+    [openFloating],
+  );
+  const showsPage = signedIn !== null && !noTeam && page !== undefined;
+  const panelContext = pageContext ?? {
+    view: page === undefined ? [] : [page.label],
+    focus: null,
+    clearFocus: noFocusToClear,
+  };
+
   return (
-    <>
-      <header className="app-header">
-        <div className="app-header-inner">
-          <span className="brand">Warden</span>
-          {(me.result === "loading" || (signedIn && !noTeam)) && (
-            <span className="team">
-              <span className="team-name">
-                {signedIn && organization?.id === signedIn.team ? organization.name : "…"}
+    <div className="app-frame" style={frameStyle}>
+      <div className="app-column">
+        <header className="app-header" ref={headerRef}>
+          <div className="app-header-inner">
+            <span className="brand">Warden</span>
+            {(me.result === "loading" || (signedIn && !noTeam)) && (
+              <span className="team">
+                <span className="team-name">
+                  {signedIn && organization?.id === signedIn.team ? organization.name : "…"}
+                </span>
+                <span className="role">{signedIn?.role ? ROLE_WORDS[signedIn.role] : "…"}</span>
               </span>
-              <span className="role">{signedIn?.role ? ROLE_WORDS[signedIn.role] : "…"}</span>
-            </span>
-          )}
-          <div className="header-end">
-            {!noTeam && (
-              <>
-                <nav className="page-links" aria-label="Pages">
-                  {PAGES.map(({ path, label }) => (
-                    <a
-                      key={path}
-                      href={path}
-                      aria-current={page?.path === path ? "page" : undefined}
-                    >
-                      {label}
-                    </a>
-                  ))}
-                </nav>
-                <div className="switcher">{switcher}</div>
-              </>
             )}
-            <button type="button" className="secondary" onClick={props.onSignOut}>
-              Sign out
-            </button>
+            <div className="header-end">
+              {!noTeam && (
+                <>
+                  <nav className="page-links" aria-label="Pages">
+                    {PAGES.map(({ path, label }) => (
+                      <a
+                        key={path}
+                        href={path}
+                        aria-current={page?.path === path ? "page" : undefined}
+                      >
+                        {label}
+                      </a>
+                    ))}
+                  </nav>
+                  <div className="switcher">{switcher}</div>
+                </>
+              )}
+              <button type="button" className="secondary" onClick={props.onSignOut}>
+                Sign out
+              </button>
+            </div>
           </div>
-        </div>
-      </header>
-      <main className="page">
-        {me.result === "loading" && (
-          <p className="muted">Checking your session with Warden's server…</p>
-        )}
-        {me.result !== "loading" && <CallRefused result={me.result} onRetry={me.retry} />}
-        {me.result !== "loading" && <TeamRefused result={me.result} />}
-        {noTeam && (
-          <div className="card">
-            <p>Create a Team, or choose one you've been invited to</p>
-            {switcher}
-          </div>
-        )}
-        {signedIn !== null && !noTeam && page === undefined && (
-          <p className="muted">There's no page here. Choose one above.</p>
-        )}
-        {signedIn !== null && !noTeam && page !== undefined && (
-          <page.Page
-            getToken={getToken}
-            me={signedIn}
-            onSessionEnded={onSessionEnded}
-            refreshMe={me.refresh}
-          />
-        )}
-      </main>
-    </>
+        </header>
+        <main className="page">
+          {me.result === "loading" && (
+            <p className="muted">Checking your session with Warden's server…</p>
+          )}
+          {me.result !== "loading" && <CallRefused result={me.result} onRetry={me.retry} />}
+          {me.result !== "loading" && <TeamRefused result={me.result} />}
+          {noTeam && (
+            <div className="card">
+              <p>Create a Team, or choose one you've been invited to</p>
+              {switcher}
+            </div>
+          )}
+          {signedIn !== null && !noTeam && page === undefined && (
+            <p className="muted">There's no page here. Choose one above.</p>
+          )}
+          {signedIn !== null && !noTeam && page !== undefined && (
+            <page.Page
+              getToken={getToken}
+              me={signedIn}
+              onSessionEnded={onSessionEnded}
+              refreshMe={me.refresh}
+              panel={pagePanel}
+            />
+          )}
+        </main>
+      </div>
+      {showsPage && (
+        <AskWardenPanel
+          panel={panelState}
+          context={panelContext}
+          getToken={getToken}
+          team={signedIn?.team ?? null}
+          onSessionEnded={onSessionEnded}
+        />
+      )}
+    </div>
   );
 }

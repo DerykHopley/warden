@@ -1,10 +1,10 @@
 // The People page: everyone in the Team who has opened Warden, with their Role. An Admin gives Roles here.
-import { useOrganization } from "@clerk/react";
 import { Role, type TeamMember } from "@warden/contracts";
 import { useCallback, useState } from "react";
 import { tryAgainIn } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import { changeMemberRole, fetchMembers, type MembersResult } from "./members.ts";
+import { personName, useClerkUsers, type ClerkUser } from "./person-name.ts";
 import { ROLE_WORDS } from "./roles.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
@@ -21,11 +21,8 @@ const MESSAGES = {
 // Said above the list, not in the row: the list is asked for again, and the person's row goes with it.
 const LEFT_THE_TEAM = "This person is no longer in the Team.";
 
-// Names live in Clerk, not Warden. A Team past this many people shows the rest by email or user id.
-const MEMBERSHIPS_PAGE = { pageSize: 100 };
-
 export function PeoplePage({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
-  const { memberships } = useOrganization({ memberships: MEMBERSHIPS_PAGE });
+  const clerkUsers = useClerkUsers();
   const listMembers = useCallback(() => fetchMembers(getToken), [getToken]);
   const list = useWardenCall<MembersResult>(listMembers, onSessionEnded);
   const [rows, setRows] = useState<Record<string, RowState>>({});
@@ -70,11 +67,6 @@ export function PeoplePage({ getToken, me, onSessionEnded, refreshMe }: PageProp
     }
   }
 
-  const clerkUsers = new Map(
-    (memberships?.data ?? []).flatMap((m) =>
-      m.publicUserData?.userId ? [[m.publicUserData.userId, m.publicUserData] as const] : [],
-    ),
-  );
   const members =
     list.result !== "loading" && list.result.kind === "members" ? list.result.members : null;
 
@@ -119,8 +111,6 @@ export function PeoplePage({ getToken, me, onSessionEnded, refreshMe }: PageProp
   );
 }
 
-type ClerkUser = { firstName: string | null; lastName: string | null; identifier: string };
-
 function PersonRow(props: {
   member: TeamMember;
   clerkUser: ClerkUser | undefined;
@@ -129,21 +119,18 @@ function PersonRow(props: {
   onChange: (role: Role) => void;
 }) {
   const { member, clerkUser, state } = props;
-  const fullName = [clerkUser?.firstName, clerkUser?.lastName]
-    .filter((part) => part?.trim())
-    .join(" ");
-  // Their name in Clerk, else their email, else (no Clerk membership found) their user id.
-  const name = fullName || clerkUser?.identifier;
+  const name = personName(member.userId, clerkUser);
   const busy = state.pending !== undefined;
 
   return (
     <tr>
-      <td>{name || <code>{member.userId}</code>}</td>
+      {/* A user id (no Clerk membership found) shows as code. */}
+      <td>{name === member.userId ? <code>{name}</code> : name}</td>
       <td className="role-cell">
         {props.picker ? (
           <select
             className="role-picker"
-            aria-label={`Role for ${name || member.userId}`}
+            aria-label={`Role for ${name}`}
             value={state.pending ?? member.role}
             disabled={busy}
             aria-busy={busy}

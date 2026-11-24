@@ -1,0 +1,79 @@
+name: Full lane
+
+# Every test in every browser (CLAUDE.md, CI): the fast lane's checks, called as they are, with the browser tests in
+# Chromium, Firefox and WebKit alongside. Nightly, by hand, before each deploy (#24's release workflow will call it),
+# and on a PR that changes this file or the browsers it runs.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  workflow_call:
+  # For now, after each merge to main. #24's release workflow calls this lane through workflow_call before each deploy,
+  # and then replaces this trigger: both would run it twice per merge.
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main, "spec/**"]
+    paths:
+      - .github/workflows/full-lane.yml
+      - e2e/playwright.config.ts
+
+# A newer push to a PR replaces its older run; a nightly, a by-hand, a push or a called run goes to the end.
+concurrency:
+  group: full-lane-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    # The fast lane's own workflow, so its checks live in one file: eslint, prettier, tsc, the vitest suites (the
+    # server's against Postgres 17 with pgvector), the design lint, the script tests, Chromium's browser tests and the
+    # image build.
+    name: Fast lane's checks
+    uses: ./.github/workflows/fast-lane.yml
+
+  browsers:
+    # One job per browser, alongside the checks, each with its own Postgres and only its own browser installed.
+    name: Browser tests (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: warden
+          POSTGRES_DB: warden
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U warden"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: warden
+      PGDATABASE: warden
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Playwright's ${{ matrix.browser }}
+        run: pnpm --filter @warden/e2e exec playwright install --with-deps ${{ matrix.browser }}
+      - name: Browser tests (Playwright, ${{ matrix.browser }})
+        # The real server on a throwaway database of the job's Postgres, serving the dashboard built in Vite's e2e mode,
+        # where a stand-in replaces Clerk: no Clerk keys or network.
+        run: pnpm --filter @warden/e2e exec playwright test --project=${{ matrix.browser }}

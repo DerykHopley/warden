@@ -101,10 +101,10 @@ Warden runs both in a small desktop-app window and on a wide browser screen, so 
 | Level header line | current Level, link to Overview |
 | Journey card (Overview) | done, current (accent border), not started; progress bar and next step |
 | Audit Control row (Overview) | default, hover, selected |
-| Ask Warden panel | closed (button with message count), floating, pinned; divider: default, hover, focus, dragging |
-| Detail card | Finding, Control, cleared (✕) |
-| Context line | with focus ("F-103 · view …"), without focus ("view …") |
-| Chat message | user, Warden, Proposal (approve or reject), streaming |
+| Ask Warden panel | closed (a button, "Ask Warden", then "· 2 messages" once the person has sent any), floating (slides in from the right; Esc closes it and focus returns to the button), pinned (beside the page, the window's full height); under 640px open means full screen; Pin is offered from 1100px; a ✕ closes it. Divider (pinned only, a focusable separator): default (a short grip on the edge), hover (the handle fills with `--chip`), focus (the ring), dragging (an `--accent` bar down the edge) |
+| Detail card | Finding (short id, module and Rule id in mono; title; Severity pill, Status, Unconfirmed fix with its candidate count; Asset, Location, evidence summary, a secret's type, path, line and mask, Control, an acceptance's reason and until), then its pending Proposals (decision, reason, until on an accept, who asked and when; a stale one adds "The Finding has changed since this was asked."), or "Couldn't load Proposals" with Retry; Control (Overview, later); cleared (✕: the focus leaves the URL, the panel stays) |
+| Context line | with focus ("Talking about: 3f9a1c2e · view: Findings, Open, High", the short id in mono), without focus ("Talking about: view: Findings, Open"; on People "Talking about: view: People") |
+| Chat message | user (on `--chip`, at the right), Warden (on `--bg`, at the left; until the agent spec, its one reply is the placeholder "Warden's chat isn't connected yet."), Proposal (approve or reject), streaming |
 
 **Checklist:** every state in the row is reachable and looks as described, in light and dark.
 

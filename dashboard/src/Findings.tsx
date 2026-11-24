@@ -21,6 +21,8 @@ import {
   topFive,
   type FindingsResult,
 } from "./findings.ts";
+import { findingsViewWords } from "./panel.ts";
+import { SeverityPill } from "./SeverityPill.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 /** The view the address bar's query names; a value it doesn't know reads as that field's default. */
@@ -48,7 +50,7 @@ const MODULE_CHOICES: Choice<FindingsView["module"]>[] = [
   ...Module.options.map((value) => ({ value, label: MODULE_WORDS[value] })),
 ];
 
-export function FindingsPage({ getToken, me, onSessionEnded }: PageProps) {
+export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps) {
   // An answer about a Team the person just switched away from is asked again, then counts as not answering.
   const listFindings = useCallback(
     (signal: AbortSignal) =>
@@ -84,15 +86,35 @@ export function FindingsPage({ getToken, me, onSessionEnded }: PageProps) {
     if (here() !== path) history.replaceState(null, "", path);
   }, [path]);
 
-  /** A filter tab: a new history entry, and the table swaps at once. */
+  /** A filter tab: a new history entry, and the table swaps at once. A tab already chosen changes nothing. */
   function choose(change: Partial<FindingsView>) {
     const next = { ...shown, ...change };
-    history.pushState(null, "", findingsViewPath(next));
+    const nextPath = findingsViewPath(next);
+    if (nextPath === path) return;
+    history.pushState(null, "", nextPath);
     setView(next);
   }
 
-  /** Selecting a Finding replaces the address's entry (the effect above writes it). */
-  const select = (id: string) => setView({ ...shown, finding: id });
+  // The Ask Warden panel talks about this view and the focused Finding; its detail card's ✕ clears the focus.
+  const focusedFinding = findings?.find((f) => f.id === focused) ?? null;
+  const clearFocus = useCallback(() => setView((old) => ({ ...old, finding: undefined })), []);
+  const { setContext, open: openPanel } = panel;
+  const { status, severity, module } = shown;
+  useEffect(() => {
+    setContext({
+      view: findingsViewWords({ status, severity, module }),
+      focus: focusedFinding,
+      clearFocus,
+    });
+  }, [setContext, status, severity, module, focusedFinding, clearFocus]);
+  // As the page goes (a Team switch, sign-out), its context goes with it.
+  useEffect(() => () => setContext(null), [setContext]);
+
+  /** Selecting a Finding replaces the address's entry (the effect above writes it), and opens a closed panel. */
+  const select = (id: string) => {
+    setView({ ...shown, finding: id });
+    openPanel();
+  };
 
   return (
     <>
@@ -137,12 +159,6 @@ export function FindingsPage({ getToken, me, onSessionEnded }: PageProps) {
         </>
       )}
     </>
-  );
-}
-
-function SeverityPill({ finding }: { finding: Finding }) {
-  return (
-    <span className={`sev-pill sev-${finding.severity}`}>{SEVERITY_WORDS[finding.severity]}</span>
   );
 }
 

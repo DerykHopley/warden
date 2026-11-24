@@ -98,6 +98,7 @@ const noFindings: Findings = {
   propose: noDatabase,
   approveProposal: noDatabase,
   rejectProposal: noDatabase,
+  pendingProposals: noDatabase,
   expireAcceptances: noDatabase,
 };
 
