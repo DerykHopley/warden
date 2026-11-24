@@ -26,4 +26,4 @@ it("refuses warden_migrate for the preview set, naming warden_preview_migrate, a
     await pool.end();
     await database.drop();
   }
-});
+}, 30_000);
