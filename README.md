@@ -325,20 +325,36 @@ notice naming each missing variable (a rollback needs the first four).
    traffic.
 6. **Traffic:** 100% of the service's traffic to that revision, by its name. The same call tags the release it took
    the traffic from `previous` (a tag moves no traffic), which is where a rollback goes by default. So only a
-   revision that served is ever tagged `previous`: one whose health gate failed never is.
+   revision that served is ever tagged `previous`: one whose health gate failed never is. When the revision it took
+   the traffic from isn't a release (after a rollback by name to another revision), the same call removes the
+   `previous` tag instead, so a rollback never goes to a stale release.
 7. **The daily Job:** `warden-daily-expiry` gets the same image and its settings afresh (`node
    server/src/daily-expiry.ts`, as `warden-daily`, one retry, its two passwords pinned), so the Job and the service
    run the same code. The Cloud Scheduler job that starts it isn't changed. If this step fails, the run fails after
    the traffic has moved, naming the Job: dispatch the release again, or set the image by hand (below).
 
-**One at a time.** Only the deploy job (steps 2 to 7) holds the release lock, which a rollback shares; full lanes
-run side by side. A running deploy is never cancelled. While one runs, GitHub keeps only the newest waiting behind
-it: an older waiting one shows as cancelled. And a deploy releases only while its commit is still `main`'s newest:
-when `main` has moved on, it skips with a notice, and the newer commit's own run releases it.
+**One at a time, and never backwards.** Only the deploy job (steps 2 to 7) holds the `release` lock; full lanes run
+side by side. A running deploy is never cancelled. While one runs, GitHub keeps only the newest waiting behind it: an
+older waiting one shows as cancelled. Since full lanes finish in any order, the deploy script first compares this
+commit with the serving release's (the `<sha7>` in its `warden-rel-` name, looked up in `main`'s history, which the
+workflow checks out whole):
+
+- this commit isn't on `main`: the run fails, before anything changes;
+- a release of a newer commit is serving: the run skips, exits green, and says so;
+- a release of this same commit is serving (a re-run after step 7 failed): only the daily Job is set (step 7);
+- otherwise (an older release serves, or a revision that isn't a release, or one whose commit isn't in the
+  history): it releases. So a good commit still releases when a newer one never does (its full lane failed, or it
+  skipped CI).
 
 To release again without a merge (to retry a failed one), run "Release" by hand from `main`
 (`gh workflow run release.yml --ref main`), or re-run the failed run: the revision name ends in the run's attempt,
 so a re-run makes a new revision.
+
+**Releases and rollbacks.** A rollback has its own lock (`rollback`), so a waiting rollback and a waiting release
+never cancel each other, and the two can run at the same time. A rollback reads the serving revision when it starts
+(and with `from`, stops if it isn't that one), then again just before it moves the traffic: if a release moved the
+traffic meanwhile, it stops with traffic unchanged, and you dispatch it again if it's still wanted. A release that
+starts after a rollback moved the traffic releases forward from it, as any merge to `main` does.
 
 Secrets are pinned as for previews: see "Secrets are pinned" in "Owner previews" above. The live service reads
 `warden-db-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key`; the migration job
@@ -347,7 +363,7 @@ reaches them with the next release after the PR that moves its number.
 
 **Roll back** with the "Rollback" workflow, by hand from `main`, which runs `scripts/cloud-run-rollback.sh
 [revision]`. **During an incident, name both revisions**: the one to go back to, and the one you saw serving. Then
-nothing changes if a release lands while the rollback waits for the lock:
+nothing changes if a release lands before the rollback starts:
 
 ```sh
 gh workflow run rollback.yml --ref main -f revision=<revision to go back to> -f from=<revision serving now>
@@ -357,7 +373,8 @@ With no `revision`, it goes back to the release tagged `previous` (step 6 above)
 
 1. tags the revision `rollback` and waits for `https://rollback---warden-<project-number>.europe-west1.run.app/api/health`
    to answer 200. If it never does, it stops there and traffic stays where it is;
-2. moves 100% of `warden`'s traffic to it, by name;
+2. reads the serving revision again, and stops with traffic unchanged if a release moved it meanwhile; otherwise
+   moves 100% of `warden`'s traffic to it, by name;
 3. gives `warden-daily-expiry` that revision's image by its digest (the one Cloud Run resolved when it deployed the
    revision, not the movable `:<commit>` tag), with the Job's whole configuration set afresh by the same function a
    release uses (`update_daily_job` in `scripts/lib/cloud-run.sh`), so with today's pinned secret versions;

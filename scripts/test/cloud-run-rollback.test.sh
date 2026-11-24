@@ -58,17 +58,22 @@ cat >"$scratch/revisions.json" <<JSON
 JSON
 
 # A stub gcloud: records each call, one per line. The service's traffic is all on FAKE_SERVING (or split 50/50 with
-# the placeholder, with FAKE_SPLIT=1), and FAKE_PREVIOUS, when set, is the revision tagged previous.
+# the placeholder, with FAKE_SPLIT=1), and FAKE_PREVIOUS, when set, is the revision tagged previous. With
+# FAKE_SERVING_LATER set, every describe after the first reports that revision serving: a release moved the traffic.
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
 printf 'gcloud %s\n' "$*" >>"$dir/calls"
 case "$*" in
   "run services describe warden "*)
+    serving=$FAKE_SERVING
+    if [[ -n ${FAKE_SERVING_LATER-} && $(grep -c '^gcloud run services describe ' "$dir/calls") -gt 1 ]]; then
+      serving=$FAKE_SERVING_LATER
+    fi
     if [[ ${FAKE_SPLIT-} == 1 ]]; then
-      traffic="{\"revisionName\":\"$FAKE_SERVING\",\"percent\":50},{\"revisionName\":\"warden-00001-xyz\",\"percent\":50}"
+      traffic="{\"revisionName\":\"$serving\",\"percent\":50},{\"revisionName\":\"warden-00001-xyz\",\"percent\":50}"
     else
-      traffic="{\"revisionName\":\"$FAKE_SERVING\",\"percent\":100}"
+      traffic="{\"revisionName\":\"$serving\",\"percent\":100}"
     fi
     if [[ -n ${FAKE_PREVIOUS-} ]]; then
       traffic+=",{\"revisionName\":\"$FAKE_PREVIOUS\",\"tag\":\"previous\"}"
@@ -193,6 +198,17 @@ assert_equal "with the rollback tag answering 503: exit 1" 1 "$code"
 assert_line "with the rollback tag answering 503: says traffic is unchanged" "traffic is unchanged" "$out"
 assert_no_match "with the rollback tag answering 503: no traffic moves" '--to-revisions' "$calls"
 assert_no_match "with the rollback tag answering 503: the daily Job isn't touched" 'warden-daily-expiry' "$calls"
+
+# --- A release moves the traffic while the rollback checks its target: the rollback stops before moving it ---
+run_rollback 200 warden-rel-ccccccc-12-1 FAKE_SERVING_LATER=warden-rel-ddddddd-13-1 --
+assert_equal "with a release moving the traffic meanwhile: exit 1" 1 "$code"
+assert_line "with a release moving the traffic meanwhile: names the new serving revision" "warden-rel-ddddddd-13-1" \
+  "$out"
+(($(grep -c '^gcloud run services describe ' <<<"$calls") == 2)) ||
+  fail "the serving revision isn't read again before the traffic moves"
+pass "with a release moving the traffic meanwhile: the serving revision is read again after the tag's health check"
+assert_no_match "with a release moving the traffic meanwhile: no traffic moves" '--to-revisions' "$calls"
+assert_no_match "with a release moving the traffic meanwhile: the daily Job isn't touched" 'warden-daily-expiry' "$calls"
 
 # --- No release to go back to: traffic stays ---
 # no_target <what> <message> [VAR=value...]: a rollback with no revision named that must refuse.

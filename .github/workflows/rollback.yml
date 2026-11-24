@@ -48,9 +48,11 @@ jobs:
       vars.CLOUD_SQL_CONNECTION != ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Shares the release's lock, so a rollback never moves traffic beside a release's deploy.
+    # Its own lock, so a waiting rollback and a waiting release never cancel each other (GitHub keeps one waiting job
+    # per group). It runs beside a release instead: the script re-reads the serving revision just before it moves the
+    # traffic, and stops if a release moved it (README.md, "Releasing").
     concurrency:
-      group: release
+      group: rollback
       cancel-in-progress: false
     # The only job that may ask GitHub for an OIDC token, which Workload Identity Federation trades for
     # warden-deploy's credentials.

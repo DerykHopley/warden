@@ -11,11 +11,13 @@
 #        digits and hyphens, starting with a letter and not ending in a hyphen (20 keeps the revision name short).
 #        release: the warden service, a revision tagged candidate on the warden database, as the live accounts only;
 #        after its health gate, 100% of traffic by revision name (the release it replaces tagged previous, for a
-#        rollback), then the daily Job warden-daily-expiry's image.
+#        rollback), then the daily Job warden-daily-expiry's image. Run in a checkout with main's whole history: it
+#        releases only a commit on main that is newer than the serving release's (release_order).
 # Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>) and VITE_CLERK_PUBLISHABLE_KEY (public),
 #        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT (default 1), which GitHub
 #        Actions sets, name the revision. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health gate.
-# Needs: gcloud signed in as an account that may deploy the mode's job and service and act as its accounts; curl; jq.
+# Needs: gcloud signed in as an account that may deploy the mode's job and service and act as its accounts; curl; jq;
+#        git, for a release.
 # The secret versions it pins, and what it shares with the rollback, are in scripts/lib/cloud-run.sh.
 set -euo pipefail
 
@@ -102,12 +104,43 @@ deploy_revision() {
     --project="$GCP_PROJECT_ID"
 }
 
+# Release only: whether this commit releases, from the checkout's history (the workflow checks out all of it) and
+# <serving>, the revision with the traffic now. Prints `release`; `job` when a release of this same commit serves
+# already (a re-run after the daily Job's update failed: only the Job is set); or `skip` when a release of a newer
+# commit serves (this run's full lane finished after a later one's). A serving revision that isn't a release, or whose
+# commit isn't in the history, doesn't stop a release. Fails when this commit isn't on main's tip's history.
+release_order() {
+  local served
+  git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main || fail "couldn't fetch main from origin"
+  git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main 2>/dev/null ||
+    fail "$GITHUB_SHA isn't on main; nothing was released"
+  if [[ $1 =~ ^${RELEASE_PREFIX}([0-9a-f]{7})- ]] &&
+    served=$(git rev-parse --verify --quiet "${BASH_REMATCH[1]}^{commit}"); then
+    if [[ $served == "$GITHUB_SHA" ]]; then
+      echo job
+      return 0
+    fi
+    if git merge-base --is-ancestor "$GITHUB_SHA" "$served"; then
+      echo skip
+      return 0
+    fi
+  fi
+  echo release
+}
+
 # Release only: 100% of the service's traffic to the new revision, by its name (never --to-latest, which would follow
-# whatever revision is newest). <serving>, the revision that had the traffic, is tagged previous in the same call when
-# it's a release, so only a revision that served is ever a rollback's default target. Tags move no traffic.
+# whatever revision is newest). In the same call, the revision that had the traffic is tagged previous when it's a
+# release, so only a revision that served is ever a rollback's default target; when it isn't (after a rollback by name
+# to another revision), an older previous tag is removed, so it can't send a rollback to a stale release. Tags move no
+# traffic. <description> is the service's, read before the deploy.
 move_traffic() {
-  local tags=()
-  [[ $1 == "$RELEASE_PREFIX"* ]] && tags=(--update-tags="previous=$1")
+  local serving tags=()
+  serving=$(serving_revision "$1")
+  if [[ $serving == "$RELEASE_PREFIX"* ]]; then
+    tags=(--update-tags="previous=$serving")
+  elif [[ -n $(jq -r '.status.traffic[]? | select(.tag == "previous") | .revisionName' <<<"$1") ]]; then
+    tags=(--remove-tags=previous)
+  fi
   gcloud run services update-traffic "$SERVICE" \
     --to-revisions="$SERVICE-$SUFFIX=100" \
     ${tags[@]+"${tags[@]}"} \
@@ -157,6 +190,23 @@ main() {
     echo "${!list}"
   )
 
+  if [[ $mode == release ]]; then
+    local serving order
+    serving=$(serving_revision "$described")
+    order=$(release_order "$serving") || exit 1
+    case $order in
+      skip)
+        say "Skipped: \`$serving\`, from a newer commit than $GITHUB_SHA, is serving; nothing to release."
+        return 0
+        ;;
+      job)
+        update_daily_job "$IMAGE" || fail "updating the daily Job $DAILY_JOB failed; it still runs an older image"
+        say "\`$serving\`, from this commit, is already serving; only $DAILY_JOB was set to its image."
+        return 0
+        ;;
+    esac
+  fi
+
   migrate
   deploy_revision "$parties"
   wait_for_health "${tagged[0]}" || fail "the revision gets no traffic"
@@ -165,7 +215,7 @@ main() {
     say "Preview \`$TAG\` is up, with no traffic: ${tagged[0]}"
     return 0
   fi
-  move_traffic "$(serving_revision "$described")"
+  move_traffic "$described"
   update_daily_job "$IMAGE" ||
     fail "traffic moved to $SERVICE-$SUFFIX, but updating the daily Job $DAILY_JOB failed; it still runs the previous image. Dispatch the release again, or set it by hand (README.md, Releasing)"
   say "Released \`$SERVICE-$SUFFIX\`: it has 100% of traffic at ${service[0]}, and $DAILY_JOB runs its image."

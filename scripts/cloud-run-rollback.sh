@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Rolls the live service back to an earlier revision. It never moves traffic to a revision that hasn't answered:
 #   1. tag the revision rollback, and wait for https://rollback---<host>/api/health to answer 200 (no traffic moves);
-#   2. move 100% of warden's traffic to it by name;
+#   2. read the serving revision again, and stop if a release moved the traffic meanwhile; otherwise move 100% of
+#      warden's traffic to it by name;
 #   3. give the daily Job warden-daily-expiry that revision's image, by digest, with the Job's whole configuration set
 #      afresh as a release sets it (scripts/lib/cloud-run.sh), so the Job and the service run the same code;
 #   4. check that the service's own /api/health answers 200.
@@ -66,6 +67,12 @@ main() {
   gcloud run services update-traffic "$SERVICE" --update-tags="rollback=$target" --region="$REGION" \
     --project="$GCP_PROJECT_ID"
   wait_for_health "$(tag_url rollback "$url")" || fail "$target didn't answer on its rollback tag; traffic is unchanged"
+  # A release runs beside a rollback (each has its own lock), so the serving revision is read again just before the
+  # traffic moves: if a release moved it meanwhile, the rollback stops rather than undo that release unseen.
+  local now
+  now=$(serving_revision "$(describe_service "$SERVICE")") || fail "couldn't read $SERVICE again; traffic is unchanged"
+  [[ $now == "$serving" ]] ||
+    fail "$SERVICE's serving revision changed while $target was checked (${now:-a split} now, not ${serving:-a split}); traffic is unchanged. Dispatch the rollback again if it's still wanted"
   gcloud run services update-traffic "$SERVICE" --to-revisions="$target=100" --region="$REGION" \
     --project="$GCP_PROJECT_ID"
   update_daily_job "$digest" ||

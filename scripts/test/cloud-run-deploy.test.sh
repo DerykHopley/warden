@@ -43,11 +43,35 @@ assert_no_match() {
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
+# A checkout like the release workflow's: main is c1 → c2 → c3 in a bare origin, and side, off c1, is on no branch of
+# origin. The script runs in it, and reads main's tip from origin.
+fixture_git() {
+  env -i HOME="$scratch" PATH=/usr/bin:/bin GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t \
+    GIT_COMMITTER_EMAIL=t@example.com git -C "$scratch/repo" "$@"
+}
+git init -q --bare "$scratch/origin.git"
+git init -q -b main "$scratch/repo"
+fixture_git remote add origin "$scratch/origin.git"
+fixture_git commit -q --allow-empty -m c1
+c1=$(fixture_git rev-parse HEAD)
+fixture_git commit -q --allow-empty -m c2
+c2=$(fixture_git rev-parse HEAD)
+fixture_git commit -q --allow-empty -m c3
+c3=$(fixture_git rev-parse HEAD)
+fixture_git push -q origin main
+fixture_git checkout -q -b side "$c1"
+fixture_git commit -q --allow-empty -m side
+side=$(fixture_git rev-parse HEAD)
+fixture_git checkout -q main
+# rel_of <commit>: a release revision of that commit, as a release names it.
+rel_of() { printf 'warden-rel-%s-9-1' "${1:0:7}"; }
+
 # A stub gcloud: records each call, one per line, and answers as FAKE_MIGRATION says (ok, or fail: the job's
 # execution fails the way `gcloud run jobs execute --wait` reports it). FAKE_DESCRIBE=fail makes reading the service
 # fail, as when the deploy account can't; FAKE_DESCRIBE=nourl describes a service with no URL at all (no status.url,
 # no annotation), as before its first revision is ready. FAKE_DAILY=fail makes updating the daily Job fail. The
-# service's traffic is all on FAKE_SERVING (default: a release revision, <service>-rel-0000000-11-1).
+# service's traffic is all on FAKE_SERVING (default: a release revision, <service>-rel-0000000-11-1, of a commit
+# that isn't in the checkout), and FAKE_PREVIOUS, when set, is the revision tagged previous.
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
@@ -67,10 +91,13 @@ case "$*" in
     esac
     new="https://$service-123456789012.europe-west1.run.app"
     old="https://$service-abcdefghij-ew.a.run.app"
-    serving=${FAKE_SERVING:-$service-rel-0000000-11-1}
+    traffic="{\"revisionName\":\"${FAKE_SERVING:-$service-rel-0000000-11-1}\",\"percent\":100}"
+    if [[ -n ${FAKE_PREVIOUS-} ]]; then
+      traffic+=",{\"revisionName\":\"$FAKE_PREVIOUS\",\"tag\":\"previous\"}"
+    fi
     cat <<JSON
 {"metadata":{"name":"$service","annotations":{"run.googleapis.com/urls":"[\"$new\",\"$old\"]"}},
- "status":{"url":"$new","traffic":[{"revisionName":"$serving","percent":100}]}}
+ "status":{"url":"$new","traffic":[$traffic]}}
 JSON
     ;;
   "run jobs execute "*)
@@ -96,15 +123,15 @@ printf '%s' "$FAKE_HEALTH"
 FAKE
 chmod +x "$scratch/gcloud" "$scratch/curl"
 
-# run_deploy <health> <migration> [VAR=value...] -- [arguments]: the script with only the stubs, /usr/bin and /bin on
-# PATH, the variables the workflow sets plus any given (VAR= unsets one), no wait between health tries. Its output
-# (stdout and stderr) is in $out, its exit code in $code, the stubs' calls in $calls. DEPLOY_SCRIPT runs another
-# copy of the script.
+# run_deploy <health> <migration> [VAR=value...] -- [arguments]: the script in the fixture checkout, with only the
+# stubs, /usr/bin and /bin on PATH, the variables the workflow sets (GITHUB_SHA main's tip, c3) plus any given (VAR=
+# unsets one), no wait between health tries. Its output (stdout and stderr) is in $out, its exit code in $code, the
+# stubs' calls in $calls. DEPLOY_SCRIPT runs another copy of the script.
 run_deploy() {
   local health=$1 migration=$2
   shift 2
   local vars=(GCP_PROJECT_ID="$project" CLOUD_SQL_CONNECTION="$connection" VITE_CLERK_PUBLISHABLE_KEY="$publishable"
-    GITHUB_SHA=abc1234def5678abc1234def5678abc1234def56 GITHUB_RUN_NUMBER=12 GITHUB_RUN_ATTEMPT=1)
+    GITHUB_SHA="$c3" GITHUB_RUN_NUMBER=12 GITHUB_RUN_ATTEMPT=1)
   while [[ $1 != -- ]]; do
     vars+=("$1")
     shift
@@ -112,8 +139,8 @@ run_deploy() {
   shift
   : >"$scratch/calls"
   set +e
-  out=$(env -i HOME="$scratch" PATH="$scratch:/usr/bin:/bin" FAKE_HEALTH="$health" FAKE_MIGRATION="$migration" \
-    HEALTH_INTERVAL=0 "${vars[@]}" bash "${DEPLOY_SCRIPT:-$deploy}" "$@" 2>&1)
+  out=$(cd "$scratch/repo" && env -i HOME="$scratch" PATH="$scratch:/usr/bin:/bin" FAKE_HEALTH="$health" \
+    FAKE_MIGRATION="$migration" HEALTH_INTERVAL=0 "${vars[@]}" bash "${DEPLOY_SCRIPT:-$deploy}" "$@" 2>&1)
   code=$?
   set -e
   calls=$(cat "$scratch/calls")
@@ -177,7 +204,7 @@ assert_no_match "no call names roles.ts or the postgres password" 'roles\.ts|war
 
 assert_line "the revision gets no traffic" " --no-traffic" "$service_deploy"
 assert_equal "the revision is tagged demo" demo "$(flag tag "$service_deploy")"
-assert_equal "the revision's suffix is pre-demo-<sha7>-<run>" pre-demo-abc1234-12-1 \
+assert_equal "the revision's suffix is pre-demo-<sha7>-<run>" "pre-demo-${c3:0:7}-12-1" \
   "$(flag revision-suffix "$service_deploy")"
 assert_equal "the revision runs the image" "$image" "$(flag image "$service_deploy")"
 assert_equal "the revision runs as warden-preview-run" "warden-preview-run@$project.iam.gserviceaccount.com" \
@@ -281,7 +308,7 @@ assert_no_match "release: no call names roles.ts or the postgres password" 'role
 service_deploy=$(call_of "gcloud run deploy warden ")
 assert_line "release: the revision gets no traffic" " --no-traffic" "$service_deploy"
 assert_equal "release: the revision is tagged candidate" candidate "$(flag tag "$service_deploy")"
-assert_equal "release: the revision's suffix is rel-<sha7>-<run>-<attempt>" rel-abc1234-12-1 \
+assert_equal "release: the revision's suffix is rel-<sha7>-<run>-<attempt>" "rel-${c3:0:7}-12-1" \
   "$(flag revision-suffix "$service_deploy")"
 assert_equal "release: the revision runs the image" "$release_image" "$(flag image "$service_deploy")"
 assert_equal "release: the revision runs as warden-run" "warden-run@$project.iam.gserviceaccount.com" \
@@ -309,7 +336,7 @@ assert_equal "release: each of the revision's secrets is pinned to a version num
 assert_line "release: the health gate calls /api/health on the candidate tag's URL" \
   "https://candidate---warden-123456789012.europe-west1.run.app/api/health" "$(grep '^curl ' <<<"$calls")"
 traffic=$(call_of "gcloud run services update-traffic warden ")
-assert_equal "release: traffic moves, all of it, to the new revision by name" "warden-rel-abc1234-12-1=100" \
+assert_equal "release: traffic moves, all of it, to the new revision by name" "warden-rel-${c3:0:7}-12-1=100" \
   "$(flag to-revisions "$traffic")"
 assert_equal "release: the same call tags the release that was serving previous, for a rollback" \
   "previous=warden-rel-0000000-11-1" "$(flag update-tags "$traffic")"
@@ -353,6 +380,43 @@ assert_line "release: after the traffic move, the script prints the service's UR
 run_deploy 200 ok FAKE_SERVING=warden-00001-xyz -- "$release_image" release
 assert_equal "release from the placeholder: exit 0" 0 "$code"
 assert_no_match "release from the placeholder: the placeholder isn't tagged previous" '--update-tags' "$calls"
+assert_no_match "release from the placeholder, with no previous tag: no tag is removed" '--remove-tags' "$calls"
+
+# --- A release from a revision that isn't a release (after a rollback to it by name): a stale previous goes ---
+run_deploy 200 ok FAKE_SERVING=warden-00001-xyz FAKE_PREVIOUS="$(rel_of "$c1")" -- "$release_image" release
+assert_equal "release from a non-release with a stale previous: exit 0" 0 "$code"
+traffic=$(call_of "gcloud run services update-traffic warden ")
+assert_equal "release from a non-release with a stale previous: the same call removes the previous tag" previous \
+  "$(flag remove-tags "$traffic")"
+assert_no_match "release from a non-release with a stale previous: nothing is tagged previous" '--update-tags' \
+  "$traffic"
+
+# --- Which commit releases: only one on main, and only one newer than the serving release ---
+# A commit newer than the serving release releases, even when main's tip (c3) is newer still and never released (its
+# full lane failed, or it skipped CI).
+run_deploy 200 ok GITHUB_SHA="$c2" FAKE_SERVING="$(rel_of "$c1")" -- "$release_image" release
+assert_equal "c2, with c1 serving and c3 main's tip: exit 0" 0 "$code"
+assert_equal "c2, with c1 serving and c3 main's tip: releases c2" "warden-rel-${c2:0:7}-12-1=100" \
+  "$(flag to-revisions "$(call_of "gcloud run services update-traffic warden ")")"
+# An older commit than the serving release skips everything, and exits 0.
+run_deploy 200 ok GITHUB_SHA="$c2" FAKE_SERVING="$(rel_of "$c3")" -- "$release_image" release
+assert_equal "c2, with c3 serving: exit 0" 0 "$code"
+assert_line "c2, with c3 serving: says a newer commit is serving" "newer" "$out"
+assert_no_match "c2, with c3 serving: nothing is migrated, deployed, moved or updated" \
+  '^gcloud run (jobs (deploy|execute|update)|deploy|services update-traffic) ' "$calls"
+# The same commit as the serving release (a re-run after the daily Job's update failed): only the daily Job is set.
+run_deploy 200 ok GITHUB_SHA="$c2" FAKE_SERVING="$(rel_of "$c2")" -- "$release_image" release
+assert_equal "c2, with c2 serving: exit 0" 0 "$code"
+assert_line "c2, with c2 serving: says it's already serving" "already serving" "$out"
+assert_no_match "c2, with c2 serving: nothing is migrated, deployed or moved" \
+  '^gcloud run (jobs (deploy|execute)|deploy|services update-traffic) ' "$calls"
+assert_equal "c2, with c2 serving: the daily Job is set to the release's image" "$release_image" \
+  "$(flag image "$(call_of "gcloud run jobs update warden-daily-expiry ")")"
+# A commit that isn't on main stops before anything changes.
+run_deploy 200 ok GITHUB_SHA="$side" FAKE_SERVING="$(rel_of "$c1")" -- "$release_image" release
+assert_equal "a commit not on main: exit 1" 1 "$code"
+assert_line "a commit not on main: says so" "isn't on main" "$out"
+assert_no_match "a commit not on main: nothing is migrated or deployed" '^gcloud run (jobs )?deploy ' "$calls"
 
 # --- A release whose candidate never answers 200 ---
 run_deploy 503 ok -- "$release_image" release
