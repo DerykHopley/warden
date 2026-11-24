@@ -1,6 +1,6 @@
 // Story 3 (part): requireRole lets a person through only with a Role at least the one a route needs, read from
 // Warden's own table, never the token (ADR 0008, threat A4). Throwaway routes are mounted behind the real app's
-// middleware; the decisions that will use it are slice 8's.
+// middleware; the decision routes that use it are proved in decisions-api.test.ts.
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import type { CryptoKey } from "jose";
