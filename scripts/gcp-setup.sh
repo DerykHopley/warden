@@ -4,11 +4,11 @@
 # GitHub's deploy identity and the public service. Safe to run again: it creates only what's missing, and sets each
 # setting to the value below whatever it was. README.md's "Setting up Google Cloud" says what it makes, and why.
 #
-# Usage: scripts/gcp-setup.sh <project-id> <instance>
-#        DRY_RUN=1 scripts/gcp-setup.sh <project-id> <instance>   prints each gcloud command instead of running it,
-#                                                                 needs no credentials, and assumes nothing exists
-# Env:   WARDEN_GITHUB_REPO, WARDEN_GITHUB_REPO_ID   the GitHub repository that may deploy, by name and numeric id
-#        (`gh api repos/<owner>/<repo> --jq .id`); this repository's by default.
+# Usage: [DRY_RUN=1] scripts/gcp-setup.sh <project-id> <instance>
+#        DRY_RUN=1 (exactly 1) prints each gcloud command instead of running it, needs no credentials, and assumes
+#        nothing exists yet. Any other value, or none, is a real run.
+# Env:   WARDEN_GITHUB_REPO (<owner>/<repo>) and WARDEN_GITHUB_REPO_ID (its numeric id:
+#        `gh api repos/<owner>/<repo> --jq .id`), both required: the one GitHub repository that may deploy.
 #
 # No secret value is printed, logged or written to a file: each password is generated in a pipe straight into
 # `gcloud secrets create --data-file=-`.
@@ -19,14 +19,12 @@ readonly REPOSITORY=warden
 readonly SERVICE=warden
 readonly POOL=github
 readonly PROVIDER=warden
-readonly GITHUB_REPO=${WARDEN_GITHUB_REPO:-DerykHopley/warden}
-readonly GITHUB_REPO_ID=${WARDEN_GITHUB_REPO_ID:-1468893661}
 readonly SECRET_READS_SERVICE=secretmanager.googleapis.com
 # Cloud SQL's docs: "the transaction log retention setting must be less than the backup retention setting".
 readonly BACKUPS=7
 readonly LOG_DAYS=6
 
-dry_run() { [[ -n "${DRY_RUN:-}" ]]; }
+dry_run() { [[ ${DRY_RUN:-0} == 1 ]]; }
 
 # A command as it would be typed: arguments with anything but safe characters single-quoted.
 print_command() {
@@ -61,10 +59,21 @@ run_retrying() {
   done
 }
 
-# Whether a describe command finds its resource. A dry run assumes nothing exists.
+# How each describe command this script runs says it found nothing: NOT_FOUND from most APIs, a bare 404 from
+# Cloud SQL's databases, Cloud Run's own message, and Cloud SQL's for an instance (which it also gives when you may
+# not see the instance).
+readonly NOT_FOUND='NOT_FOUND|HTTPError 404|Cannot find service \[|There was no instance found at '
+
+# Whether a describe command finds its resource. Found nothing: false. Any other failure (no permission, a network
+# error) stops the script, printing gcloud's error, as the resource's absence isn't known. A dry run assumes
+# nothing exists.
 exists() {
   if dry_run; then return 1; fi
-  "$@" >/dev/null 2>&1
+  local error
+  if error=$("$@" 2>&1 >/dev/null); then return 0; fi
+  if [[ $error =~ $NOT_FOUND ]]; then return 1; fi
+  printf 'gcp-setup: %s failed:\n%s\n' "$(print_command "$@")" "$error" >&2
+  exit 1
 }
 
 # A value read from Google, or the placeholder a dry run prints in its place.
@@ -99,6 +108,26 @@ with_secret_reads_logged() {
   '
 }
 
+# The one GitHub repository that may deploy, from WARDEN_GITHUB_REPO and WARDEN_GITHUB_REPO_ID: both required, with
+# no default, so a fork can't set up a project that trusts another repository by mistake.
+github_repository() {
+  if [[ -z "${WARDEN_GITHUB_REPO:-}" || -z "${WARDEN_GITHUB_REPO_ID:-}" ]]; then
+    echo "gcp-setup: set WARDEN_GITHUB_REPO (<owner>/<repo>) and WARDEN_GITHUB_REPO_ID" \
+      "(gh api repos/<owner>/<repo> --jq .id): the GitHub repository that may deploy" >&2
+    exit 1
+  fi
+  if [[ ! $WARDEN_GITHUB_REPO_ID =~ ^[0-9]+$ ]]; then
+    echo "gcp-setup: WARDEN_GITHUB_REPO_ID must be the repository's numeric id, not '$WARDEN_GITHUB_REPO_ID'" >&2
+    exit 1
+  fi
+  if [[ ! $WARDEN_GITHUB_REPO =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+    echo "gcp-setup: WARDEN_GITHUB_REPO must be <owner>/<repo>, not '$WARDEN_GITHUB_REPO'" >&2
+    exit 1
+  fi
+  GITHUB_REPO=$WARDEN_GITHUB_REPO
+  GITHUB_REPO_ID=$WARDEN_GITHUB_REPO_ID
+}
+
 preflight() {
   if dry_run; then
     note "DRY_RUN: printing the commands only, as if nothing existed yet; a real run skips what's already there"
@@ -116,15 +145,28 @@ preflight() {
     echo "gcp-setup: node isn't on PATH; it edits the project's audit-log policy" >&2
     exit 1
   fi
+  # What the owner makes by hand, checked before any change.
+  local project=$1 instance=$2 missing=() secret
+  exists gcloud sql instances describe "$instance" --project="$project" ||
+    missing+=("Cloud SQL instance $instance")
+  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key; do
+    exists gcloud secrets describe "$secret" --project="$project" || missing+=("secret $secret")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "gcp-setup: make these first (README.md, \"Setting up Google Cloud\"); nothing was changed:" >&2
+    printf '  %s\n' "${missing[@]}" >&2
+    exit 1
+  fi
 }
 
 main() {
   if [[ $# -ne 2 ]]; then
-    echo "usage: scripts/gcp-setup.sh <project-id> <instance>" >&2
+    echo "usage: [DRY_RUN=1] scripts/gcp-setup.sh <project-id> <instance>" >&2
     exit 1
   fi
   local project=$1 instance=$2
-  preflight
+  github_repository
+  preflight "$project" "$instance"
   # A missing flag fails instead of waiting at a prompt.
   export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 
@@ -229,10 +271,13 @@ main() {
   done
 
   step "7. Workload Identity Federation (GitHub Actions deploys as warden-deploy)"
-  # Only this repository, by its numeric id (a renamed or re-created repository gets another), and only its main
-  # and preview/* branches: a workflow on another branch, or from a pull request, gets no token.
-  local condition="assertion.repository_id == \"$GITHUB_REPO_ID\" && (assertion.ref == \"refs/heads/main\" || assertion.ref.startsWith(\"refs/heads/preview/\"))"
-  local mapping="google.subject=assertion.sub,attribute.repository_id=assertion.repository_id,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
+  # Only this repository, by its numeric id (a renamed or re-created repository gets another), only a push or a
+  # manual dispatch, and only on its main and preview/* branches: a workflow on another branch, or started by any
+  # other event (a pull request, pull_request_target, a schedule), gets no token.
+  local condition="assertion.repository_id == \"$GITHUB_REPO_ID\" && assertion.event_name in [\"push\", \"workflow_dispatch\"] && (assertion.ref == \"refs/heads/main\" || assertion.ref.startsWith(\"refs/heads/preview/\"))"
+  # google.subject "can't exceed 127 characters" (Google's Workload Identity Federation docs), and GitHub's `sub`
+  # holds the branch name, which has no such bound: the subject is the repository and the run, at most about 40.
+  local mapping="google.subject=assertion.repository_id + \":\" + assertion.run_id + \":\" + assertion.run_attempt,attribute.repository_id=assertion.repository_id,attribute.ref=assertion.ref,attribute.event_name=assertion.event_name"
   note "GitHub repository: $GITHUB_REPO (id $GITHUB_REPO_ID)"
   if ! exists gcloud iam workload-identity-pools describe "$POOL" --location=global --project="$project"; then
     run gcloud iam workload-identity-pools create "$POOL" --location=global --display-name="GitHub Actions" \
@@ -259,6 +304,12 @@ main() {
   if ! exists gcloud run services describe "$SERVICE" --region="$REGION" --project="$project"; then
     run gcloud run deploy "$SERVICE" --image=us-docker.pkg.dev/cloudrun/container/hello --region="$REGION" \
       --service-account="$run_sa" --allow-unauthenticated --max-instances=2 --project="$project"
+  else
+    # Its settings put back, keeping whatever image it runs now.
+    run gcloud run services update "$SERVICE" --region="$REGION" --service-account="$run_sa" --max-instances=2 \
+      --project="$project"
+    run_retrying gcloud run services add-iam-policy-binding "$SERVICE" --region="$REGION" --member=allUsers \
+      --role=roles/run.invoker --project="$project"
   fi
 
   step "The database's network"

@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# The Google Cloud setup script, run with DRY_RUN=1: asserts on the gcloud commands it prints, so nothing reaches
-# Google and no credentials are needed. Stops at the first failed assertion, exiting 1.
+# The Google Cloud setup script: its dry run (asserting on the gcloud commands it prints), then real runs against a
+# fake gcloud, so nothing reaches Google and no credentials are needed. Stops at the first failed assertion, exiting 1.
 # Run from anywhere: scripts/test/gcp-setup.test.sh
 set -euo pipefail
+
+# Only what each case sets reaches the script.
+unset DRY_RUN WARDEN_GITHUB_REPO WARDEN_GITHUB_REPO_ID
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 setup="$root/scripts/gcp-setup.sh"
 project=test-project
 instance=test-db
-repo_id=1468893661
+repo=example-owner/example-repo
+repo_id=987654321
+usage="usage: [DRY_RUN=1] scripts/gcp-setup.sh <project-id> <instance>"
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -22,19 +27,30 @@ assert_equal() {
   pass "$1"
 }
 
-# assert_line <what> <fixed string>: some line of the output contains it.
+# assert_line <what> <fixed string> [text]: some line of the text (the dry run's output by default) contains it.
 assert_line() {
-  grep -qF -- "$2" <<<"$output" || fail "$1: no line contains: $2"
+  grep -qF -- "$2" <<<"${3-$output}" || fail "$1: no line contains: $2"
   pass "$1"
 }
 
-# assert_no_line <what> <fixed string>
+# assert_no_line <what> <fixed string> [text]
 assert_no_line() {
-  if grep -qF -- "$2" <<<"$output"; then fail "$1: a line contains: $2"; fi
+  if grep -qF -- "$2" <<<"${3-$output}"; then fail "$1: a line contains: $2"; fi
   pass "$1"
 }
 
-output=$(DRY_RUN=1 "$setup" "$project" "$instance")
+# capture <command...>: its output (stdout and stderr) in $out, its exit code in $code.
+capture() {
+  set +e
+  out=$("$@" 2>&1)
+  code=$?
+  set -e
+}
+
+# The setup script with the repository variables set, plus any VAR=value given before the arguments.
+setup_with() { env WARDEN_GITHUB_REPO="$repo" WARDEN_GITHUB_REPO_ID="$repo_id" "$@"; }
+
+output=$(setup_with DRY_RUN=1 "$setup" "$project" "$instance")
 
 # Every IAM binding granted to a service account, one per line as "<kind> <resource> <role>", sorted.
 bindings_to() {
@@ -74,13 +90,18 @@ assert_line "the repository binding is on the warden repository in europe-west1"
 
 assert_no_line "no service account key is made" "keys create"
 
-# The Workload Identity provider: this repository by its numeric id, and only main and preview/* branches.
-condition=$(grep -F 'providers create-oidc' <<<"$output" | grep -o "'--attribute-condition=[^']*'" || true)
-assert_equal "the provider admits only this repository's main and preview/* refs" \
-  "'--attribute-condition=assertion.repository_id == \"$repo_id\" && (assertion.ref == \"refs/heads/main\" || assertion.ref.startsWith(\"refs/heads/preview/\"))'" \
-  "$condition"
+# The Workload Identity provider: the repository by its numeric id, pushed or dispatched, on main or preview/* only.
+provider=$(grep -F 'providers create-oidc' <<<"$output")
+assert_equal "the provider admits only the repository's pushes and dispatches on main and preview/*" \
+  "'--attribute-condition=assertion.repository_id == \"$repo_id\" && assertion.event_name in [\"push\", \"workflow_dispatch\"] && (assertion.ref == \"refs/heads/main\" || assertion.ref.startsWith(\"refs/heads/preview/\"))'" \
+  "$(grep -o "'--attribute-condition=[^']*'" <<<"$provider" || true)"
+# google.subject may be at most 127 characters: the run, not the branch, whose name has no such bound.
+assert_equal "the subject is the repository and the run, and ref and repository_id stay attributes" \
+  "'--attribute-mapping=google.subject=assertion.repository_id + \":\" + assertion.run_id + \":\" + assertion.run_attempt,attribute.repository_id=assertion.repository_id,attribute.ref=assertion.ref,attribute.event_name=assertion.event_name'" \
+  "$(grep -o "'--attribute-mapping=[^']*'" <<<"$provider" || true)"
 assert_line "the pool may act as warden-deploy, for this repository only" \
   "--role=roles/iam.workloadIdentityUser --member=principalSet://iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository_id/$repo_id"
+assert_line "the repository is named from WARDEN_GITHUB_REPO" "# GitHub repository: $repo (id $repo_id)"
 
 assert_line "authorized networks are cleared and connectors are required" \
   "gcloud sql instances patch $instance --clear-authorized-networks --connector-enforcement=REQUIRED --project=$project"
@@ -124,91 +145,162 @@ GCP_WIF_PROVIDER
 VITE_CLERK_PUBLISHABLE_KEY" \
   "$variables"
 assert_line "the deploy account variable names warden-deploy" \
-  "gh variable set GCP_DEPLOY_SA --body warden-deploy@$project.iam.gserviceaccount.com"
+  "gh variable set GCP_DEPLOY_SA --body warden-deploy@$project.iam.gserviceaccount.com --repo $repo"
 assert_line "the connection variable names the instance" \
-  "gh variable set CLOUD_SQL_CONNECTION --body $project:europe-west1:$instance"
+  "gh variable set CLOUD_SQL_CONNECTION --body $project:europe-west1:$instance --repo $repo"
 assert_line "the publishable key is read from the keyring when the line is pasted, not by the script" \
-  "gh variable set VITE_CLERK_PUBLISHABLE_KEY --body \"\$(secret-tool lookup service warden-clerk-publishable)\""
+  "gh variable set VITE_CLERK_PUBLISHABLE_KEY --body \"\$(secret-tool lookup service warden-clerk-publishable)\" --repo $repo"
 assert_no_line "no variable line names a password or a Clerk secret key" "password --body"
 
 # Missing arguments: exit 1 with a usage line, before anything runs.
-for args in "" "$project"; do
-  set +e
-  # shellcheck disable=SC2086 # the arguments split on purpose
-  usage=$(DRY_RUN=1 "$setup" $args 2>&1)
-  code=$?
-  set -e
-  assert_equal "with ${args:-no arguments}: exit 1" 1 "$code"
-  assert_equal "with ${args:-no arguments}: a usage line and nothing else" \
-    "usage: scripts/gcp-setup.sh <project-id> <instance>" "$usage"
-done
+check_usage() {
+  local label=$1
+  shift
+  capture setup_with DRY_RUN=1 "$setup" "$@"
+  assert_equal "$label: exit 1" 1 "$code"
+  assert_equal "$label: a usage line and nothing else" "$usage" "$out"
+}
+check_usage "with no arguments"
+check_usage "with only the project" "$project"
 
-# Outside DRY_RUN: no gcloud, or one that isn't signed in, stops it before any change.
+# The repository that may deploy: both variables, the id numeric, before anything runs.
+check_repository() {
+  local label=$1 message=$2
+  shift 2
+  capture env DRY_RUN=1 "$@" "$setup" "$project" "$instance"
+  assert_equal "$label: exit 1" 1 "$code"
+  assert_line "$label: says so" "$message" "$out"
+  assert_no_line "$label: prints no command" "gcloud " "$out"
+}
+check_repository "without WARDEN_GITHUB_REPO" "set WARDEN_GITHUB_REPO" WARDEN_GITHUB_REPO_ID="$repo_id"
+check_repository "without WARDEN_GITHUB_REPO_ID" "set WARDEN_GITHUB_REPO" WARDEN_GITHUB_REPO="$repo"
+check_repository "with a repository id that isn't a number" "WARDEN_GITHUB_REPO_ID must be the repository's numeric id" \
+  WARDEN_GITHUB_REPO="$repo" WARDEN_GITHUB_REPO_ID=12ab
+
+# Outside DRY_RUN=1: no gcloud, or one that isn't signed in, stops it before any change.
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 mkdir "$scratch/bin"
-set +e
-missing=$(PATH="$scratch/bin" "$BASH" "$setup" "$project" "$instance" 2>&1)
-code=$?
-set -e
+capture env PATH="$scratch/bin" WARDEN_GITHUB_REPO="$repo" WARDEN_GITHUB_REPO_ID="$repo_id" \
+  "$BASH" "$setup" "$project" "$instance"
 assert_equal "without gcloud: exit 1" 1 "$code"
-grep -qF "gcloud isn't on PATH" <<<"$missing" || fail "without gcloud: says so (got: $missing)"
-pass "without gcloud: says so"
+assert_line "without gcloud: says so" "gcloud isn't on PATH" "$out"
 
-# A gcloud that lists no signed-in account, and records every call.
+# A gcloud that lists no signed-in account, and records every call. DRY_RUN=0 is a real run.
 cat >"$scratch/bin/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$(dirname "$0")/calls"
 FAKE
 chmod +x "$scratch/bin/gcloud"
-set +e
-signed_out=$(PATH="$scratch/bin:/usr/bin:/bin" "$setup" "$project" "$instance" 2>&1)
-code=$?
-set -e
+capture setup_with DRY_RUN=0 PATH="$scratch/bin:/usr/bin:/bin" "$setup" "$project" "$instance"
 assert_equal "signed out: exit 1" 1 "$code"
-grep -qF "gcloud isn't signed in" <<<"$signed_out" || fail "signed out: says so (got: $signed_out)"
-pass "signed out: says so"
+assert_line "signed out: says so" "gcloud isn't signed in" "$out"
 assert_equal "signed out: gcloud was only asked who is signed in" \
   "auth list --filter=status:ACTIVE --format=value(account)" "$(cat "$scratch/bin/calls")"
 
-# A real run against a fake gcloud that's signed in and finds nothing yet: the passwords reach `secrets create` on
-# its stdin and nowhere else, and the policy written back has Secret Manager's reads logged.
-mkdir "$scratch/real"
-cat >"$scratch/real/gcloud" <<'FAKE'
+# A fake gcloud that's signed in, records every call, and finds what FAKE_STATE says:
+#   fresh       the instance and the four hand-made secrets only, as on a first run
+#   rerun       everything, with point-in-time recovery on
+#   unprepared  neither the instance nor warden-clerk-jwt-key
+#   denied      every secret refuses with PERMISSION_DENIED
+# Each describe that finds nothing fails the way that gcloud command does.
+cat >"$scratch/fake-gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
 printf '%s\n' "$*" >>"$dir/calls"
+not_found() { echo "ERROR: (gcloud.$1) $2" >&2; exit 1; }
 case "$*" in
   "auth list"*) echo owner@example.com ;;
-  "sql instances describe"*pointInTimeRecoveryEnabled*) echo False ;;
+  "sql instances describe"*pointInTimeRecoveryEnabled*)
+    if [[ $FAKE_STATE == rerun ]]; then echo True; else echo False; fi ;;
   "projects describe"*) echo 123456789 ;;
   "projects get-iam-policy"*) echo '{"bindings":[{"role":"roles/owner","members":["user:a@example.com"]}],"etag":"BwX="}' ;;
   "projects set-iam-policy"*) cp "$4" "$dir/policy" ;;
   "secrets create"*) cat >"$dir/secret-$3" ;;
   *describe*--format=*) echo "name: $3" ;;
-  *describe*) exit 1 ;;
+  "secrets describe"*)
+    [[ $FAKE_STATE == denied ]] && not_found secrets.describe "PERMISSION_DENIED: Permission denied on secret $3."
+    [[ $FAKE_STATE == rerun ]] && exit 0
+    case "$3" in
+      warden-db-password | warden-clerk-secret | warden-clerk-publishable) exit 0 ;;
+      warden-clerk-jwt-key) [[ $FAKE_STATE == fresh ]] && exit 0 ;;
+    esac
+    not_found secrets.describe "NOT_FOUND: Secret [projects/1/secrets/$3] not found or has no versions." ;;
+  "sql instances describe"*)
+    [[ $FAKE_STATE == unprepared ]] &&
+      not_found sql.instances.describe "There was no instance found at projects/p/instances/$4 or you are not authorized to access it."
+    exit 0 ;;
+  *describe*) [[ $FAKE_STATE == rerun ]] && exit 0 ;;&
+  "sql databases describe"*) not_found sql.databases.describe "HTTPError 404: Not Found" ;;
+  "run services describe"*) not_found run.services.describe "Cannot find service [$4]" ;;
+  *describe*) not_found describe "NOT_FOUND: Requested entity was not found." ;;
 esac
+exit 0
 FAKE
-chmod +x "$scratch/real/gcloud"
-real=$(PATH="$scratch/real:$PATH" "$setup" "$project" "$instance" 2>&1) || fail "real run failed: $real"
-pass "a real run against the fake gcloud ends"
+chmod +x "$scratch/fake-gcloud"
+
+# real_run <state>: a real run against the fake in that state; its calls are in $calls.
+real_run() {
+  local dir="$scratch/$1"
+  mkdir "$dir"
+  cp "$scratch/fake-gcloud" "$dir/gcloud"
+  touch "$dir/calls"
+  capture setup_with FAKE_STATE="$1" PATH="$dir:$PATH" "$setup" "$project" "$instance"
+  calls=$(cat "$dir/calls")
+}
+# A call that changes something: anything but signing in and reading.
+changes() { grep -vE '^auth list|describe|get-iam-policy' <<<"$calls" || true; }
+
+real_run unprepared
+assert_equal "before the instance and the hand-made secrets exist: exit 1" 1 "$code"
+assert_line "it names the missing instance" "Cloud SQL instance $instance" "$out"
+assert_line "it names the missing secret" "secret warden-clerk-jwt-key" "$out"
+assert_no_line "it names no secret that exists" "secret warden-clerk-secret" "$out"
+assert_equal "it changes nothing" "" "$(changes)"
+
+real_run denied
+assert_equal "a describe refused for another reason than not found: exit 1" 1 "$code"
+assert_line "it prints gcloud's error" "PERMISSION_DENIED: Permission denied on secret" "$out"
+assert_equal "it changes nothing" "" "$(changes)"
+
+# A first run: the passwords reach `secrets create` on its stdin and nowhere else.
+real_run fresh
+[[ $code == 0 ]] || fail "a first run against the fake gcloud failed: $out"
+pass "a first run against the fake gcloud ends"
 for secret in warden-db-app-password warden-db-migrate-password; do
-  value=$(cat "$scratch/real/secret-$secret")
+  value=$(cat "$scratch/fresh/secret-$secret")
   [[ $value =~ ^[0-9a-f]{64}$ ]] || fail "$secret: the value piped in isn't 64 hex characters"
   pass "$secret: a 64-hex-character value is piped in"
-  if grep -qF -- "$value" <<<"$real"; then fail "$secret: its value is in the output"; fi
-  if grep -qF -- "$value" "$scratch/real/calls"; then fail "$secret: its value is in a command line"; fi
-  pass "$secret: its value is in no output and no command line"
+  assert_no_line "$secret: its value isn't in the output" "$value" "$out"
+  assert_no_line "$secret: its value isn't on a command line" "$value" "$calls"
 done
-[[ $(cat "$scratch/real/secret-warden-db-app-password") != $(cat "$scratch/real/secret-warden-db-migrate-password") ]] ||
+[[ $(cat "$scratch/fresh/secret-warden-db-app-password") != $(cat "$scratch/fresh/secret-warden-db-migrate-password") ]] ||
   fail "the two passwords are the same"
 pass "the two passwords differ"
-assert_equal "the policy written back keeps the bindings and etag, and logs Secret Manager's reads" \
-  '{"bindings":[{"role":"roles/owner","members":["user:a@example.com"]}],"etag":"BwX=","auditConfigs":[{"service":"secretmanager.googleapis.com","auditLogConfigs":[{"logType":"DATA_READ"}]}]}' \
-  "$(cat "$scratch/real/policy")"
-grep -qF "principalSet://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/github/attribute.repository_id/$repo_id" "$scratch/real/calls" ||
-  fail "the pool binding doesn't name the project's number"
-pass "the pool binding names the project's number"
+policy=$(cat "$scratch/fresh/policy")
+assert_line "the policy written back logs Secret Manager's reads" '"logType":"DATA_READ"' "$policy"
+assert_line "the policy written back keeps the etag it was read with" '"etag":"BwX="' "$policy"
+assert_line "the pool binding names the project's number" \
+  "principalSet://iam.googleapis.com/projects/123456789/locations/global/workloadIdentityPools/github/attribute.repository_id/$repo_id" \
+  "$calls"
+assert_line "a first run makes the service" "run deploy warden" "$calls"
+
+# A rerun: nothing is made again, and each setting is put back.
+real_run rerun
+[[ $code == 0 ]] || fail "a rerun against the fake gcloud failed: $out"
+pass "a rerun against the fake gcloud ends"
+for made in "secrets create" "sql databases create" "service-accounts create" "workload-identity-pools create" \
+  "providers create-oidc" "run deploy" "repositories create" "--enable-point-in-time-recovery"; do
+  assert_no_line "a rerun doesn't run $made" "$made" "$calls"
+done
+assert_line "a rerun puts the provider's condition back" \
+  "iam workload-identity-pools providers update-oidc warden" "$calls"
+assert_line "a rerun puts the service's account and instance limit back" \
+  "run services update warden --region=europe-west1 --service-account=warden-run@$project.iam.gserviceaccount.com --max-instances=2 --project=$project" \
+  "$calls"
+assert_line "a rerun keeps the service public" \
+  "run services add-iam-policy-binding warden --region=europe-west1 --member=allUsers --role=roles/run.invoker --project=$project" \
+  "$calls"
 
 # with_secret_reads_logged: the policy edit itself, on policies with and without audit configs.
 # shellcheck source=../gcp-setup.sh

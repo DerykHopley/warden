@@ -108,7 +108,7 @@ describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
   async function checkNamed(role: string) {
     const pool = createPool(silent, { user: role, database, max: 1 });
     try {
-      return await checkDatabaseRole(pool, undefined, names);
+      return await checkDatabaseRole(pool, { names });
     } finally {
       await pool.end();
     }

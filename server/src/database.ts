@@ -80,12 +80,17 @@ select * from (
  order by via = role desc, via
  limit 1`;
 
-/** Whether the role `client` connected as can get around row-level security, and why; undefined when it can't.
- * `names` are the migration and admin roles refused by name; tests pass their own. */
+export type CheckDatabaseRoleOptions = {
+  /** How long the check waits for its answer. */
+  timeoutMs?: number;
+  /** The migration and admin roles, refused by name; tests pass their own. */
+  names?: Pick<DatabaseRoleNames, "migrate" | "admin">;
+};
+
+/** Whether the role `client` connected as can get around row-level security, and why; undefined when it can't. */
 export async function checkDatabaseRole(
   client: Pick<pg.ClientBase, "query">,
-  timeoutMs = ROLE_CHECK_TIMEOUT_MS,
-  names: Pick<DatabaseRoleNames, "migrate" | "admin"> = DATABASE_ROLE_NAMES,
+  { timeoutMs = ROLE_CHECK_TIMEOUT_MS, names = DATABASE_ROLE_NAMES }: CheckDatabaseRoleOptions = {},
 ): Promise<DatabaseRoleRefusal | undefined> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -133,7 +138,7 @@ export function guardDatabaseRole(
   return async (client: pg.ClientBase) => {
     let refusal: DatabaseRoleRefusal | undefined;
     try {
-      refusal = await checkDatabaseRole(client, timeoutMs);
+      refusal = await checkDatabaseRole(client, { timeoutMs });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new DatabaseRoleCheckError(`database role check failed: ${message}`, { cause: error });

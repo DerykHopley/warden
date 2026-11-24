@@ -46,19 +46,22 @@ export async function createRoles(
   checkPassword(names.migrate, passwords.migrate);
   const {
     rows: [runner],
-  } = await pool.query<{ name: string; superuser: boolean; bypassrls: boolean }>(
-    `select current_user as name, rolsuper as superuser, rolbypassrls as bypassrls
+  } = await pool.query<{
+    name: string;
+    superuser: boolean;
+    bypassrls: boolean;
+    adminBypassrls: boolean;
+  }>(
+    `select current_user as name, rolsuper as superuser, rolbypassrls as bypassrls,
+            coalesce((select rolbypassrls from pg_roles where rolname = $1), false) as "adminBypassrls"
        from pg_roles where rolname = current_user`,
+    [names.admin],
   );
   if (!runner) throw new Error("the user running roles isn't in pg_roles");
   // Postgres lets only a superuser, or a role that has BYPASSRLS itself, give BYPASSRLS or take it away.
   const canGrantBypass = runner.superuser || runner.bypassrls;
-  const { rows: adminRows } = await pool.query<{ bypassrls: boolean }>(
-    "select rolbypassrls as bypassrls from pg_roles where rolname = $1",
-    [names.admin],
-  );
   // Warned only when warden_admin will end without it: one that already has it keeps it.
-  if (!canGrantBypass && !adminRows[0]?.bypassrls) {
+  if (!canGrantBypass && !runner.adminBypassrls) {
     logger.warn(`${names.admin} gets no BYPASSRLS: ${runner.name} can't grant it`, {
       role: names.admin,
       user: runner.name,

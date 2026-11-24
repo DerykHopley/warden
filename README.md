@@ -97,33 +97,40 @@ sets.
 | Logging | the `_Default` log bucket keeps 30 days; Data Access audit logs (`DATA_READ`) for Secret Manager only, so each read of a secret is recorded |
 | Secrets | `warden-db-app-password` and `warden-db-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all six secrets' replication |
 | Service accounts | `warden-run` (the service): Cloud SQL client, and the Clerk secret, the Clerk JWT key and the app password. `warden-migrate` (the migration jobs): Cloud SQL client, and the three database passwords. `warden-deploy` (GitHub Actions): Cloud Run developer, writer on the `warden` repository, and may act as `warden-run` and `warden-migrate`; it reads no secret. None has a key |
-| Workload Identity Federation | the pool `github` and its provider `warden`, which admits only this repository, by its numeric id, and only its `main` and `preview/*` branches; that pool may act as `warden-deploy` |
-| The service | Cloud Run service `warden`, with Google's placeholder image, running as `warden-run`, public, at most 2 instances. The script makes it because `warden-deploy` can't make a service public. Sign-in is Clerk's job |
+| Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches; that pool may act as `warden-deploy` |
+| The service | Cloud Run service `warden`, with Google's placeholder image, running as `warden-run`, public, at most 2 instances. The script makes it because `warden-deploy` can't make a service public. Run again, it puts the service account, the instance limit and public access back, keeping the image the service runs. Sign-in is Clerk's job |
 
-**Run it:**
+**Run it.** Below, `<project-id>` is your project, `<instance>` your Cloud SQL instance, and `<owner>/<repo>` the
+GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-db` and `DerykHopley/warden`).
 
-1. Sign in and pick the project:
+1. Sign in, pick the project, and name the repository that may deploy, with its numeric id. The script needs both
+   and stops without them:
 
    ```sh
    gcloud auth login
-   gcloud config set project coherent-bay-515713-r7
+   gcloud config set project <project-id>
+   export WARDEN_GITHUB_REPO=<owner>/<repo>
+   export WARDEN_GITHUB_REPO_ID=$(gh api repos/<owner>/<repo> --jq .id)
    ```
 
 2. Dry run first: it prints every `gcloud` command instead of running it, and needs no credentials. A dry run
-   assumes nothing exists yet, so it shows everything a first run would do.
+   assumes nothing exists yet, so it shows everything a first run would do. `DRY_RUN=1` is the only value that
+   makes a dry run.
 
    ```sh
-   DRY_RUN=1 scripts/gcp-setup.sh coherent-bay-515713-r7 warden-db
+   DRY_RUN=1 scripts/gcp-setup.sh <project-id> <instance>
    ```
 
 3. The run:
 
    ```sh
-   scripts/gcp-setup.sh coherent-bay-515713-r7 warden-db
+   scripts/gcp-setup.sh <project-id> <instance>
    ```
 
-   Turning on point-in-time recovery restarts the instance once (Cloud SQL's docs say so), closing open
-   connections; the script warns first, and skips that flag when it's already on.
+   Before changing anything it checks the instance and the four secrets above exist, and stops naming any that
+   don't. A `gcloud` error other than "not found" also stops it, printing the error. Turning on point-in-time
+   recovery restarts the instance once (Cloud SQL's docs say so), closing open connections; the script warns
+   first, and skips that flag when it's already on.
 
 4. Paste the `gh variable set` lines it prints last. They hold names and ids only, never a secret:
    `GCP_PROJECT_ID`, `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`, `CLOUD_SQL_CONNECTION` and
@@ -131,11 +138,8 @@ sets.
    when you paste it:
 
    ```sh
-   gh variable set VITE_CLERK_PUBLISHABLE_KEY --body "$(secret-tool lookup service warden-clerk-publishable)" --repo DerykHopley/warden
+   gh variable set VITE_CLERK_PUBLISHABLE_KEY --body "$(secret-tool lookup service warden-clerk-publishable)" --repo <owner>/<repo>
    ```
-
-A fork deploys from its own repository: set `WARDEN_GITHUB_REPO` and `WARDEN_GITHUB_REPO_ID`
-(`gh api repos/<owner>/<repo> --jq .id`) before running it.
 
 **Why the database keeps a public IP.** A private IP needs a VPC network, private services access and Direct VPC
 egress, and Warden has none of them. Instead the instance has no authorized networks, so no address can reach it
@@ -145,7 +149,7 @@ instance's IP configuration at the end.
 
 With connectors required, `gcloud sql connect` stops working. To reach the database yourself, run the
 [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/connect-auth-proxy):
-`cloud-sql-proxy --port 5433 coherent-bay-515713-r7:europe-west1:warden-db`, then `psql -h 127.0.0.1 -p 5433 -U postgres`.
+`cloud-sql-proxy --port 5433 <project-id>:europe-west1:<instance>`, then `psql -h 127.0.0.1 -p 5433 -U postgres`.
 
 ## The image
 
