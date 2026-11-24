@@ -79,7 +79,8 @@ body {
 }
 
 /* The app's frame: the header and the page in one column, and the Ask Warden panel beside them when pinned. The
-   column takes the width the panel leaves. */
+   column takes the width the panel leaves, and the pages' layouts follow the column's width (container queries on
+   `app-column`), not the window's: the breakpoints in docs/design.md, Layout, are the column's. */
 .app-frame {
   display: flex;
   min-height: 100vh;
@@ -88,6 +89,7 @@ body {
 .app-column {
   flex: 1 1 0;
   min-width: 0;
+  container: app-column / inline-size;
 }
 
 /* Room under the page's last line for the closed panel's button, which floats over the page's bottom right. */
@@ -316,7 +318,7 @@ button[aria-busy="true"],
   overflow-wrap: anywhere;
 }
 
-@media (max-width: 639px) {
+@container app-column (max-width: 639px) {
   .people .joined {
     display: none;
   }
@@ -367,13 +369,13 @@ button[aria-busy="true"],
   list-style: none;
 }
 
-@media (min-width: 640px) {
+@container app-column (min-width: 640px) {
   .top-five {
     grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   }
 }
 
-@media (min-width: 1100px) {
+@container app-column (min-width: 1100px) {
   .top-five {
     grid-template-columns: repeat(5, minmax(0, 1fr));
   }
@@ -610,7 +612,7 @@ button[aria-busy="true"],
   white-space: nowrap;
 }
 
-@media (max-width: 639px) {
+@container app-column (max-width: 639px) {
   .findings-table .asset-col {
     display: none;
   }
@@ -646,9 +648,10 @@ button[aria-busy="true"],
   background: var(--surface);
 }
 
+/* Floating, it starts below the header (the shell measures it), so the header's controls stay reachable. */
 .ask-warden.floating {
   position: fixed;
-  top: 16px;
+  top: calc(var(--header-height, 61px) + 16px);
   right: 16px;
   bottom: 16px;
   z-index: 20;
@@ -915,6 +918,15 @@ button[aria-busy="true"],
 
 .proposal-asked {
   color: var(--muted);
+}
+
+/* "Couldn't load Proposals", with Retry beside it. */
+.proposals-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 16px 8px 0 0;
 }
 
 /* A stale Proposal says so in words, set apart by weight, not colour. */

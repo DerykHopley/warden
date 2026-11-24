@@ -35,23 +35,10 @@ async function pinnedAt1400(page: Page) {
   await expect(panel(page)).toHaveAttribute("data-shown", "pinned");
 }
 
-test.describe("the starting state by window width", () => {
-  for (const width of [1024, 1400]) {
-    test(`at ${width}px the panel starts closed`, async ({ page }) => {
-      await openAt(page, width);
-      await expect(askWarden(page)).toHaveText("Ask Warden");
-      await expect(panel(page)).toHaveCount(0);
-    });
-  }
+// The starting state by width: closed at 1024px (the floating test) and at 1400px (pinnedAt1400) opens from the
+// button; pinned at 1700px is story 9's. Each width's rule is panel.test.ts's.
 
-  test("at 1700px the panel starts pinned", async ({ page }) => {
-    await openAt(page, 1700);
-    await expect(panel(page)).toHaveAttribute("data-shown", "pinned");
-    expect(await panelWidth(page)).toBe(400);
-  });
-});
-
-test("opened at 1024px, the panel floats over the page; Esc closes it and puts focus back on its button", async ({
+test("opened at 1024px, the panel floats over the page below the header; Esc closes it and puts focus back on its button", async ({
   page,
 }) => {
   await openAt(page, 1024);
@@ -64,6 +51,17 @@ test("opened at 1024px, the panel floats over the page; Esc closes it and puts f
   // Over the page: the page keeps its width, and the panel overlaps its right side.
   expect(main.x + main.width).toBeGreaterThan(box.x);
   expect(await panel(page).evaluate((el) => getComputedStyle(el).position)).toBe("fixed");
+  // Below the header: Sign out is still the element under its own centre, and takes a click.
+  const header = (await page.getByRole("banner").boundingBox())!;
+  expect(box.y).toBeGreaterThanOrEqual(header.y + header.height);
+  const signOut = page.getByRole("button", { name: "Sign out" });
+  const at = (await signOut.boundingBox())!;
+  expect(
+    await signOut.evaluate((el, point) => document.elementFromPoint(point.x, point.y) === el, {
+      x: at.x + at.width / 2,
+      y: at.y + at.height / 2,
+    }),
+  ).toBe(true);
 
   await page.keyboard.press("Escape");
   await expect(panel(page)).toHaveCount(0);
@@ -100,71 +98,54 @@ test("pinned at 1400px, the page ends at or left of the panel's left edge", asyn
   expect(box.x + box.width).toBe(await viewportRight(page));
 });
 
-test("the divider takes focus; → narrows and ← widens by 24px, within 320 to 680px", async ({
-  page,
-}) => {
+// The keys' steps and limits, and aria-valuenow, are AskWardenPanel.test.tsx's; here, that a real key moves the panel.
+test("the divider takes focus; → narrows and ← widens the panel by 24px", async ({ page }) => {
   await pinnedAt1400(page);
   await divider(page).focus();
   await expect(divider(page)).toBeFocused();
-  await expect(divider(page)).toHaveAttribute("aria-valuenow", "400");
 
   await page.keyboard.press("ArrowRight");
   expect(await panelWidth(page)).toBe(376);
   await page.keyboard.press("ArrowLeft");
-  await page.keyboard.press("ArrowLeft");
-  expect(await panelWidth(page)).toBe(424);
-  await expect(divider(page)).toHaveAttribute("aria-valuenow", "424");
-
-  for (let i = 0; i < 20; i++) await page.keyboard.press("ArrowLeft");
-  expect(await panelWidth(page)).toBe(680);
-  for (let i = 0; i < 20; i++) await page.keyboard.press("ArrowRight");
-  expect(await panelWidth(page)).toBe(320);
+  expect(await panelWidth(page)).toBe(400);
 });
 
-test("dragging the divider past either end stops at 680 or 320px", async ({ page }) => {
+test("dragging the divider past either end stops at 680 or 320px, and stores the width when the drag ends", async ({
+  page,
+}) => {
   await pinnedAt1400(page);
   const right = await viewportRight(page);
   const grip = (await divider(page).boundingBox())!;
   const y = grip.y + grip.height / 2;
+  const storedWidth = () =>
+    page.evaluate(
+      () =>
+        (JSON.parse(localStorage.getItem("warden.askWardenPanel") ?? "{}") as { width?: number })
+          .width,
+    );
 
   await page.mouse.move(grip.x + grip.width / 2, y);
   await page.mouse.down();
   await expect(divider(page)).toHaveAttribute("data-dragging", "true");
-  await page.mouse.move(right - 500, y, { steps: 5 });
-  expect(await panelWidth(page)).toBe(500);
   await page.mouse.move(10, y, { steps: 5 });
   expect(await panelWidth(page)).toBe(680);
   await page.mouse.move(right - 10, y, { steps: 5 });
   expect(await panelWidth(page)).toBe(320);
+  expect(await storedWidth()).toBe(400);
   await page.mouse.up();
   await expect(divider(page)).not.toHaveAttribute("data-dragging");
+  expect(await storedWidth()).toBe(320);
 });
 
-test.describe("a person's choice survives a reload, over the width default", () => {
-  test("pinned at a width, at 1400px where it starts closed", async ({ page }) => {
-    await pinnedAt1400(page);
-    await divider(page).focus();
-    await page.keyboard.press("ArrowLeft");
-    await page.reload();
-    await expect(panel(page)).toHaveAttribute("data-shown", "pinned");
-    expect(await panelWidth(page)).toBe(424);
-  });
-
-  test("closed, at 1700px where it starts pinned", async ({ page }) => {
-    await openAt(page, 1700);
-    await panel(page).getByRole("button", { name: "Close Ask Warden" }).click();
-    await page.reload();
-    await expect(page.locator(".findings-table tbody tr")).toHaveCount(7);
-    await expect(askWarden(page)).toBeVisible();
-    await expect(panel(page)).toHaveCount(0);
-  });
-
-  test("floating, at 1700px where it starts pinned", async ({ page }) => {
-    await openAt(page, 1700);
-    await panel(page).getByRole("button", { name: "Unpin" }).click();
-    await page.reload();
-    await expect(panel(page)).toHaveAttribute("data-shown", "floating");
-  });
+test("a person's choice survives a reload and wins over the width default: pinned at a width, at 1400px", async ({
+  page,
+}) => {
+  await pinnedAt1400(page);
+  await divider(page).focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.reload();
+  await expect(panel(page)).toHaveAttribute("data-shown", "pinned");
+  expect(await panelWidth(page)).toBe(424);
 });
 
 test("story 9: a Member at 1700px lands on Findings with the panel pinned, and the first card fills the detail card", async ({
@@ -174,6 +155,7 @@ test("story 9: a Member at 1700px lands on Findings with the panel pinned, and t
   await page.goto("/");
   await expect(page).toHaveURL(/\/findings$/);
   await expect(panel(page)).toHaveAttribute("data-shown", "pinned");
+  expect(await panelWidth(page)).toBe(400);
 
   const first = page.locator(".finding-card").first();
   const title = await first.locator(".card-title").textContent();

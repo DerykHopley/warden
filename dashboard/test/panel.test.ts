@@ -1,17 +1,18 @@
 // The Ask Warden panel's rules below the UI: its starting state by window width and a person's stored choice, how it
-// shows at each width, its context line, and its closed button's words.
+// shows at each width, its width limits, what a change shows and what it chooses, its context line's view words, and
+// its closed button's words.
 import { describe, expect, it } from "vitest";
 import {
   askWardenLabel,
-  contextLine,
+  clampWidth,
   findingsViewWords,
+  panelReducer,
   panelShownAs,
   startingPanel,
+  type PanelStore,
 } from "../src/panel.ts";
-import { finding } from "./findings-fixture.ts";
 
 const stored = (value: unknown) => JSON.stringify(value);
-const noop = () => {};
 
 describe("startingPanel", () => {
   it.each([
@@ -76,32 +77,12 @@ describe("panelShownAs", () => {
   });
 });
 
-describe("the context line", () => {
-  it("with a focus: the Finding's short id, then the view", () => {
-    const focus = finding("3f9a1c2e-0000-4000-8000-000000000001");
-    expect(
-      contextLine({
-        view: findingsViewWords({ status: "open", severity: "high", module: "all" }),
-        focus,
-        clearFocus: noop,
-      }),
-    ).toBe("Talking about: 3f9a1c2e · view: Findings, Open, High");
-  });
-
-  it("without a focus: the view alone", () => {
-    expect(
-      contextLine({
-        view: findingsViewWords({ status: "open", severity: "all", module: "all" }),
-        focus: null,
-        clearFocus: noop,
-      }),
-    ).toBe("Talking about: view: Findings, Open");
-    expect(contextLine({ view: ["People"], focus: null, clearFocus: noop })).toBe(
-      "Talking about: view: People",
-    );
-  });
-
-  it("names each filter that isn't all, in the order status, severity, module, in the dashboard's words", () => {
+describe("the context line's view words", () => {
+  it("name the page, then each filter that isn't all, in the order status, severity, module, in the dashboard's words", () => {
+    expect(findingsViewWords({ status: "open", severity: "all", module: "all" })).toEqual([
+      "Findings",
+      "Open",
+    ]);
     expect(
       findingsViewWords({ status: "false_positive", severity: "critical", module: "patch" }),
     ).toEqual(["Findings", "False positive", "Critical", "Patch"]);
@@ -109,6 +90,57 @@ describe("the context line", () => {
       "Findings",
       "Guard",
     ]);
+  });
+});
+
+describe("clampWidth", () => {
+  it("keeps a width within 320 to 680px, in whole pixels", () => {
+    expect(clampWidth(319)).toBe(320);
+    expect(clampWidth(-50)).toBe(320);
+    expect(clampWidth(320)).toBe(320);
+    expect(clampWidth(500.4)).toBe(500);
+    expect(clampWidth(680)).toBe(680);
+    expect(clampWidth(681)).toBe(680);
+    expect(clampWidth(5000)).toBe(680);
+  });
+});
+
+describe("panelReducer: what shows, and what the person chose", () => {
+  const start: PanelStore = { shown: { mode: "closed", width: 400 }, chosen: null };
+
+  it("a choice shows and is chosen", () => {
+    expect(panelReducer(start, { type: "choose", mode: "pinned" })).toEqual({
+      shown: { mode: "pinned", width: 400 },
+      chosen: { mode: "pinned", width: 400 },
+    });
+  });
+
+  it("a close that keeps the choice shows without choosing", () => {
+    const chosen = { mode: "pinned", width: 512 } as const;
+    const open = { shown: { mode: "pinned", width: 512 }, chosen } as const;
+    expect(panelReducer(open, { type: "show", mode: "closed" })).toEqual({
+      shown: { mode: "closed", width: 512 },
+      chosen,
+    });
+  });
+
+  it("an automatic open floats a closed panel without choosing, and leaves an open one", () => {
+    expect(panelReducer(start, { type: "open" })).toEqual({
+      shown: { mode: "floating", width: 400 },
+      chosen: null,
+    });
+    const pinned = panelReducer(start, { type: "choose", mode: "pinned" });
+    expect(panelReducer(pinned, { type: "open" })).toBe(pinned);
+  });
+
+  it("a drag resizes what shows, clamped, and its end chooses it", () => {
+    const pinned = panelReducer(start, { type: "choose", mode: "pinned" });
+    const dragging = panelReducer(pinned, { type: "resize", width: 900 });
+    expect(dragging).toEqual({ shown: { mode: "pinned", width: 680 }, chosen: pinned.chosen });
+    expect(panelReducer(dragging, { type: "commit" })).toEqual({
+      shown: { mode: "pinned", width: 680 },
+      chosen: { mode: "pinned", width: 680 },
+    });
   });
 });
 

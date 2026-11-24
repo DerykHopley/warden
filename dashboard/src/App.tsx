@@ -1,6 +1,14 @@
 import { ClerkFailed, OrganizationSwitcher, SignIn, useAuth, useOrganization } from "@clerk/react";
 import type { Role } from "@warden/contracts";
-import { useCallback, useEffect, useMemo, useState, type ComponentType } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type CSSProperties,
+} from "react";
 import { askAboutTeam, type GetToken } from "./api.ts";
 import { AskWardenPanel, usePanelState } from "./AskWardenPanel.tsx";
 import { FindingsPage } from "./Findings.tsx";
@@ -155,10 +163,32 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
     if (landing !== null && currentPath() === "/") history.replaceState(null, "", landing);
   }, [landing]);
 
-  // The panel is on every page; a page tells it what it's talking about. Until it does, the context is the page.
+  // The panel is on every page; a page tells it what it's talking about. Until it does, the context is the page. A
+  // page clears its context as it unmounts, and a new Team clears it at once, so one Team's Finding never shows in
+  // another's detail card.
   const panelState = usePanelState();
   const [pageContext, setPageContext] = useState<PanelContext | null>(null);
+  const team = signedIn?.team ?? null;
+  const [contextTeam, setContextTeam] = useState(team);
+  if (contextTeam !== team) {
+    setContextTeam(team);
+    setPageContext(null);
+  }
   const { openFloating } = panelState;
+
+  // The floating panel starts below the header, so the header's controls stay reachable while it floats.
+  const headerRef = useRef<HTMLElement>(null);
+  const [headerHeight, setHeaderHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const header = headerRef.current;
+    if (header === null || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => setHeaderHeight(header.offsetHeight));
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, []);
+  const frameStyle = (
+    headerHeight === null ? undefined : { "--header-height": `${headerHeight}px` }
+  ) as CSSProperties | undefined;
   const pagePanel = useMemo<PagePanel>(
     () => ({ setContext: setPageContext, open: openFloating }),
     [openFloating],
@@ -171,9 +201,9 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
   };
 
   return (
-    <div className="app-frame">
+    <div className="app-frame" style={frameStyle}>
       <div className="app-column">
-        <header className="app-header">
+        <header className="app-header" ref={headerRef}>
           <div className="app-header-inner">
             <span className="brand">Warden</span>
             {(me.result === "loading" || (signedIn && !noTeam)) && (

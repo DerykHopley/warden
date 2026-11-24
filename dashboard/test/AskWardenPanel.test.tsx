@@ -1,12 +1,12 @@
 // The Ask Warden panel in the app shell (story 9, story 3): its closed button, the Findings page opening it with the
-// detail card, the card's pending Proposals from GET /api/proposals, clearing the focus, the context line and the
-// placeholder chat. The whole App renders, Clerk and Warden's server faked; jsdom's window is 1024px wide, where the
-// panel starts closed. Its starting state by width is tested below the UI (panel.test.ts); its layout, motion and
-// keyboard in the browser (e2e/).
-import { render, screen, within } from "@testing-library/react";
+// detail card, the card's pending Proposals from GET /api/proposals, clearing the focus, the context line, the
+// placeholder chat, the person's stored choice, Esc, the divider's keys and an Organization switch. The whole App
+// renders, Clerk and Warden's server faked; jsdom's window is 1024px wide, where the panel starts closed. Its starting
+// state by width is tested below the UI (panel.test.ts); its layout, motion and drag in the browser (e2e/).
+import { createEvent, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { PendingProposal } from "@warden/contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "../src/App.tsx";
 import { callsTo, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { clerk, resetClerk } from "./fake-clerk.tsx";
@@ -64,7 +64,7 @@ function open(url = "/findings", routes: Routes = {}) {
     proposals: () => proposalsAnswer(),
     ...routes,
   });
-  render(<App />);
+  return render(<App />);
 }
 
 const panel = () => screen.getByRole("complementary", { name: "Ask Warden" });
@@ -106,13 +106,136 @@ describe("the closed panel", () => {
     expect(queryPanel()).not.toBeInTheDocument();
     expect(askWardenButton("Ask Warden · 2 messages")).toBeInTheDocument();
   });
+});
 
-  it("starts closed whatever a stored value that doesn't parse says", async () => {
-    localStorage.setItem("warden.askWardenPanel", "{pinned");
+const STORED = "warden.askWardenPanel";
+const stored = () => JSON.parse(localStorage.getItem(STORED) ?? "null") as unknown;
+
+/** Renders at `width` (jsdom's window is 1024px otherwise), and puts it back after. */
+function atWidth(width: number) {
+  window.innerWidth = width;
+  onTestFinished(() => {
+    window.innerWidth = 1024;
+  });
+}
+
+describe("the person's choice", () => {
+  it("is stored when they open the panel themselves, and not when selecting a Finding opens it", async () => {
+    open();
+    await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
+    expect(panel()).toHaveAttribute("data-shown", "floating");
+    expect(stored()).toBeNull();
+
+    await userEvent.click(within(panel()).getByRole("button", { name: "Close Ask Warden" }));
+    await userEvent.click(askWardenButton());
+    expect(stored()).toEqual({ mode: "floating", width: 400 });
+  });
+
+  it("stays pinned when the panel is closed where it can't pin", async () => {
+    localStorage.setItem(STORED, JSON.stringify({ mode: "pinned", width: 512 }));
+    open();
+    expect(await screen.findByRole("complementary", { name: "Ask Warden" })).toHaveAttribute(
+      "data-shown",
+      "floating",
+    );
+
+    await userEvent.click(within(panel()).getByRole("button", { name: "Close Ask Warden" }));
+
+    expect(queryPanel()).not.toBeInTheDocument();
+    expect(stored()).toEqual({ mode: "pinned", width: 512 });
+  });
+});
+
+describe("Esc", () => {
+  it("closes a floating panel and puts focus back on its button", async () => {
     open();
     await screen.findByRole("table");
+    await userEvent.click(askWardenButton());
+
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+
     expect(queryPanel()).not.toBeInTheDocument();
-    expect(askWardenButton("Ask Warden")).toBeInTheDocument();
+    expect(askWardenButton()).toHaveFocus();
+  });
+
+  it.each([
+    ["while an input method composes", { key: "Escape", isComposing: true }],
+    ["that something else already handled", { key: "Escape" }],
+  ])("leaves the panel open for an Esc %s", async (why, init) => {
+    open();
+    await screen.findByRole("table");
+    await userEvent.click(askWardenButton());
+    const event = createEvent.keyDown(document.activeElement!, init);
+    if (why.startsWith("that")) event.preventDefault();
+
+    fireEvent(document.activeElement!, event);
+
+    expect(panel()).toHaveAttribute("data-shown", "floating");
+  });
+});
+
+describe("the divider", () => {
+  const divider = () => within(panel()).getByRole("separator", { name: "Resize Ask Warden" });
+
+  it("→ narrows and ← widens the pinned panel by 24px, within 320 to 680px, and says its width", async () => {
+    atWidth(1400);
+    localStorage.setItem(STORED, JSON.stringify({ mode: "pinned", width: 400 }));
+    open();
+    await screen.findByRole("complementary", { name: "Ask Warden" });
+    expect(divider()).toHaveAttribute("aria-valuenow", "400");
+    expect(divider()).toHaveAttribute("tabindex", "0");
+
+    fireEvent.keyDown(divider(), { key: "ArrowRight" });
+    expect(divider()).toHaveAttribute("aria-valuenow", "376");
+    fireEvent.keyDown(divider(), { key: "ArrowLeft" });
+    fireEvent.keyDown(divider(), { key: "ArrowLeft" });
+    expect(divider()).toHaveAttribute("aria-valuenow", "424");
+    expect(panel().style.getPropertyValue("--panel-width")).toBe("424px");
+    expect(stored()).toEqual({ mode: "pinned", width: 424 });
+
+    for (let i = 0; i < 20; i++) fireEvent.keyDown(divider(), { key: "ArrowLeft" });
+    expect(divider()).toHaveAttribute("aria-valuenow", "680");
+    for (let i = 0; i < 20; i++) fireEvent.keyDown(divider(), { key: "ArrowRight" });
+    expect(divider()).toHaveAttribute("aria-valuenow", "320");
+  });
+});
+
+describe("an Organization switch", () => {
+  it("never paints the last Team's focused Finding in the detail card", async () => {
+    const { rerender } = open();
+    await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
+    expect(within(card()).getByRole("heading", { level: 3 })).toHaveTextContent("lodash 4.17.20");
+
+    // Every detail card title painted from here on.
+    const painted: string[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          for (const title of node.querySelectorAll(".detail-card h3")) {
+            painted.push(title.textContent ?? "");
+          }
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    onTestFinished(() => observer.disconnect());
+
+    clerk.auth.orgId = "org_b";
+    clerk.orgNames.org_b = "Bluebird";
+    const bluebird = demoFindings.map((f) => ({ ...f, id: `b-${f.id}`, team: "org_b" }));
+    serve({
+      me: () => json(200, { userId: "user_grace", team: "org_b", role: "member" }),
+      findings: () => json(200, { team: "org_b", findings: bluebird }),
+      proposals: () => proposalsAnswer([], "org_b"),
+    });
+    rerender(<App />);
+    await screen.findByText("Bluebird");
+    await screen.findByRole("table");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(painted).toEqual([]);
+    expect(queryCard()).not.toBeInTheDocument();
   });
 });
 
@@ -140,55 +263,57 @@ describe("selecting a Finding", () => {
   );
 
   it("leaves a pinned panel pinned", async () => {
-    localStorage.setItem("warden.askWardenPanel", JSON.stringify({ mode: "pinned", width: 400 }));
-    window.innerWidth = 1400;
-    try {
-      open();
-      expect(await screen.findByRole("complementary", { name: "Ask Warden" })).toHaveAttribute(
-        "data-shown",
-        "pinned",
-      );
-      await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
-      expect(panel()).toHaveAttribute("data-shown", "pinned");
-    } finally {
-      window.innerWidth = 1024;
-    }
+    localStorage.setItem(STORED, JSON.stringify({ mode: "pinned", width: 400 }));
+    atWidth(1400);
+    open();
+    expect(await screen.findByRole("complementary", { name: "Ask Warden" })).toHaveAttribute(
+      "data-shown",
+      "pinned",
+    );
+    await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
+    expect(panel()).toHaveAttribute("data-shown", "pinned");
   });
 });
 
+// What the card shows of the list (each field, the focused Finding's only, stale, failures) is DetailCard.test.tsx's;
+// here, how the panel asks for it and hands it over.
 describe("the detail card's Proposals, from GET /api/proposals", () => {
-  it("lists the focused Finding's pending Proposals, and no other Finding's, naming who asked", async () => {
-    open("/findings", {
-      proposals: () =>
-        proposalsAnswer([
-          pending(),
-          pending({ id: "p-2", finding_id: ID.secret, reason: "Another Finding's" }),
-        ]),
-    });
+  it("shows the server's Proposal for the focused Finding", async () => {
+    open();
     await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
 
     const list = await within(card()).findByRole("list", { name: "Pending Proposals" });
-    const items = within(list).getAllByRole("listitem");
-    expect(items).toHaveLength(1);
-    expect(items[0]).toHaveTextContent("Mark False positive");
-    expect(items[0]).toHaveTextContent("Only a dev dependency");
-    expect(items[0]).toHaveTextContent("Asked by Grace Hopper");
-    expect(screen.queryByText("Another Finding's")).not.toBeInTheDocument();
+    expect(list).toHaveTextContent("Only a dev dependency");
   });
 
-  it("asks once per Team, when the card first shows, with the session token", async () => {
+  it("asks when the card first shows, with the session token, and again for each Finding focused after", async () => {
     open();
     await screen.findByRole("table");
     expect(callsTo("/api/proposals")).toHaveLength(0);
 
     await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
     await within(card()).findByRole("list", { name: "Pending Proposals" });
-    await userEvent.click(await cardOf("A live Stripe secret key is committed"));
-    await within(card()).findByRole("heading", { name: "A live Stripe secret key is committed" });
-
     expect(callsTo("/api/proposals")).toEqual([
       ["/api/proposals", { method: "GET", headers: { Authorization: "Bearer session-token" } }],
     ]);
+
+    await userEvent.click(await cardOf("A live Stripe secret key is committed"));
+    await within(card()).findByRole("heading", { name: "A live Stripe secret key is committed" });
+    await vi.waitFor(() => expect(callsTo("/api/proposals")).toHaveLength(2));
+  });
+
+  it("after Couldn't load Proposals, Retry asks again and shows the list", async () => {
+    const answers = [json(503, { error: "Down" }), proposalsAnswer()];
+    open("/findings", { proposals: () => answers.shift() ?? proposalsAnswer() });
+    await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
+    await within(card()).findByText("Couldn't load Proposals");
+
+    await userEvent.click(within(card()).getByRole("button", { name: "Retry" }));
+
+    expect(
+      await within(card()).findByRole("list", { name: "Pending Proposals" }),
+    ).toHaveTextContent("Only a dev dependency");
+    expect(within(card()).queryByText("Couldn't load Proposals")).not.toBeInTheDocument();
   });
 
   it.each<[string, () => Response | Promise<Response>]>([
@@ -262,14 +387,10 @@ describe("the context line", () => {
     open(`/findings?severity=high&finding=${ID.lodash}`);
     await screen.findByRole("table");
     await userEvent.click(askWardenButton());
-    expect(contextLine()).toHaveTextContent("Talking about: a1c4e7f0 · view: Findings, Open, High");
-  });
-
-  it("without a focus, names the view", async () => {
-    open("/findings");
-    await screen.findByRole("table");
-    await userEvent.click(askWardenButton());
-    expect(contextLine()).toHaveTextContent(/^Talking about: view: Findings, Open$/);
+    expect(contextLine()).toHaveTextContent(
+      /^Talking about: a1c4e7f0 · view: Findings, Open, High$/,
+    );
+    expect(within(contextLine()).getByText("a1c4e7f0").tagName).toBe("CODE");
   });
 
   it("on People, names the page", async () => {

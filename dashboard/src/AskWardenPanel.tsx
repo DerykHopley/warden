@@ -5,6 +5,7 @@
 import {
   useCallback,
   useEffect,
+  useReducer,
   useRef,
   useState,
   type CSSProperties,
@@ -13,12 +14,12 @@ import {
 } from "react";
 import { askAboutTeam, type GetToken } from "./api.ts";
 import { DetailCard } from "./DetailCard.tsx";
+import { shortId } from "./findings.ts";
 import {
   askWardenLabel,
-  clampWidth,
-  contextLine,
   PANEL_STORAGE_KEY,
   PANEL_WIDTH,
+  panelReducer,
   panelShownAs,
   PIN_FROM,
   startingPanel,
@@ -63,41 +64,43 @@ function useWindowWidth(): number {
 }
 
 export type PanelControls = {
+  /** What shows. */
   state: PanelState;
-  setMode: (mode: PanelMode) => void;
-  setWidth: (width: number) => void;
-  /** Opens the panel floating when it's closed; an open or pinned panel stays as it is. */
+  /** The person's choice of mode: it shows, and it's stored. */
+  choose: (mode: PanelMode) => void;
+  /** A mode that shows without being stored. */
+  show: (mode: PanelMode) => void;
+  /** A width that shows (clamped) without being stored: the divider while it's dragged. */
+  resize: (width: number) => void;
+  /** Stores what shows: a drag's end, or a keyboard step. */
+  commit: () => void;
+  /** Opens the panel floating when it's closed, without storing it; an open or pinned panel stays as it is. */
   openFloating: () => void;
 };
 
 /**
- * The panel's state, for the shell: the width default or the person's stored choice on load. Each change the person
- * makes is stored, so it wins over the width default next time. Every function keeps its identity across renders.
+ * The panel's state, for the shell: the width default or the person's stored choice on load. Each choice the person
+ * makes is stored, so it wins over the width default next time; an automatic open and a drag in progress aren't.
+ * Every function keeps its identity across renders.
  */
 export function usePanelState(): PanelControls {
-  const [state, setState] = useState(() => startingPanel(window.innerWidth, readStored()));
-  const chosen = useRef(false);
+  const [{ shown, chosen }, dispatch] = useReducer(panelReducer, undefined, () => ({
+    shown: startingPanel(window.innerWidth, readStored()),
+    chosen: null,
+  }));
   useEffect(() => {
-    if (chosen.current) store(state);
-  }, [state]);
+    if (chosen !== null) store(chosen);
+  }, [chosen]);
 
-  const change = useCallback((update: (old: PanelState) => PanelState) => {
-    chosen.current = true;
-    setState(update);
-  }, []);
-  const setMode = useCallback((mode: PanelMode) => change((old) => ({ ...old, mode })), [change]);
-  const setWidth = useCallback(
-    (width: number) => change((old) => ({ ...old, width: clampWidth(width) })),
-    [change],
-  );
-  const openFloating = useCallback(
-    () => change((old) => (old.mode === "closed" ? { ...old, mode: "floating" } : old)),
-    [change],
-  );
-  return { state, setMode, setWidth, openFloating };
+  const choose = useCallback((mode: PanelMode) => dispatch({ type: "choose", mode }), []);
+  const show = useCallback((mode: PanelMode) => dispatch({ type: "show", mode }), []);
+  const resize = useCallback((width: number) => dispatch({ type: "resize", width }), []);
+  const commit = useCallback(() => dispatch({ type: "commit" }), []);
+  const openFloating = useCallback(() => dispatch({ type: "open" }), []);
+  return { state: shown, choose, show, resize, commit, openFloating };
 }
 
-/** Not asked yet: the Proposals load when the detail card first shows. */
+/** Not asked: the Proposals load while the detail card shows. */
 const NOT_ASKED = { kind: "not-asked" } as const;
 
 export function AskWardenPanel(props: {
@@ -119,21 +122,19 @@ export function AskWardenPanel(props: {
   /** Where focus goes once the next render lands: back to the closed button, or into the input. */
   const focusNext = useRef<"button" | "input" | null>(null);
 
-  // The Proposals load once the detail card first shows, then once per Team.
-  const cardShown = shownAs !== "closed" && context.focus !== null;
-  const [proposalsWanted, setProposalsWanted] = useState(false);
-  if (cardShown && !proposalsWanted) setProposalsWanted(true);
+  // The Proposals load whenever the detail card shows a newly focused Finding, so a Proposal asked since shows too.
+  const cardFocus = shownAs === "closed" ? null : (context.focus?.id ?? null);
   const askProposals = useCallback(
     async (signal: AbortSignal) =>
-      proposalsWanted
-        ? askAboutTeam(
+      cardFocus === null
+        ? NOT_ASKED
+        : askAboutTeam(
             () => fetchProposals(getToken),
             (result) => (result.kind === "proposals" ? result.team : undefined),
             team,
             signal,
-          )
-        : NOT_ASKED,
-    [proposalsWanted, getToken, team],
+          ),
+    [cardFocus, getToken, team],
   );
   const proposals = useWardenCall<ProposalsResult | typeof NOT_ASKED>(askProposals, onSessionEnded);
 
@@ -143,18 +144,23 @@ export function AskWardenPanel(props: {
     focusNext.current = null;
   });
 
-  const { setMode } = panel;
+  const { choose, show } = panel;
+  const mode = panel.state.mode;
+  // Closing where pinning isn't offered keeps a pinned choice: the person chose pinned for a wider window.
   const close = useCallback(() => {
     focusNext.current = "button";
-    setMode("closed");
-  }, [setMode]);
+    if (mode === "pinned" && windowWidth < PIN_FROM) show("closed");
+    else choose("closed");
+  }, [mode, windowWidth, choose, show]);
 
-  // Esc closes a floating (or full-screen) panel, wherever focus is.
+  // Esc closes a floating (or full-screen) panel, wherever focus is, unless something else took it first or an input
+  // method is composing.
   const overPage = shownAs === "floating" || shownAs === "full-screen";
   useEffect(() => {
     if (!overPage) return;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") close();
+      if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+      close();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
@@ -170,7 +176,7 @@ export function AskWardenPanel(props: {
         className="secondary ask-warden-button"
         onClick={() => {
           focusNext.current = "input";
-          setMode("floating");
+          choose("floating");
         }}
       >
         {askWardenLabel(sent)}
@@ -203,14 +209,16 @@ export function AskWardenPanel(props: {
       aria-labelledby="ask-warden-title"
       style={style}
     >
-      {shownAs === "pinned" && <Divider width={panel.state.width} onResize={panel.setWidth} />}
+      {shownAs === "pinned" && (
+        <Divider width={panel.state.width} onResize={panel.resize} onCommit={panel.commit} />
+      )}
       <div className="panel-header">
         <h2 id="ask-warden-title">Ask Warden</h2>
         {windowWidth >= PIN_FROM && (
           <button
             type="button"
             className="secondary"
-            onClick={() => setMode(shownAs === "pinned" ? "floating" : "pinned")}
+            onClick={() => choose(shownAs === "pinned" ? "floating" : "pinned")}
           >
             {shownAs === "pinned" ? "Unpin" : "Pin"}
           </button>
@@ -226,6 +234,7 @@ export function AskWardenPanel(props: {
             finding={context.focus}
             proposals={proposalsShown}
             clerkUsers={clerkUsers}
+            onRetryProposals={proposals.retry}
             onClear={() => {
               focusNext.current = "input";
               context.clearFocus();
@@ -260,16 +269,37 @@ export function AskWardenPanel(props: {
   );
 }
 
-/** What "this" means to the chat: the focused item's short id, then the page's view. */
+/**
+ * What "this" means to the chat: "Talking about: 3f9a1c2e · view: Findings, Open, High", the focused item's short id
+ * in mono; without a focus "Talking about: view: Findings, Open".
+ */
 export function ContextLine({ context }: { context: PanelContext }) {
-  return <p className="context-line">{contextLine(context)}</p>;
+  return (
+    <p className="context-line">
+      Talking about:{" "}
+      {context.focus !== null && (
+        <>
+          <code>{shortId(context.focus.id)}</code> ·{" "}
+        </>
+      )}
+      view: {context.view.join(", ")}
+    </p>
+  );
 }
 
 /**
- * The pinned panel's divider: a focusable separator. Dragging it resizes the panel; ← widens and → narrows it by 24px.
- * The width stays within 320 to 680px either way.
+ * The pinned panel's divider: a focusable separator. Dragging it resizes the panel, stored when the drag ends; ← widens
+ * and → narrows it by 24px, each step stored. The width stays within 320 to 680px either way.
  */
-function Divider({ width, onResize }: { width: number; onResize: (width: number) => void }) {
+function Divider({
+  width,
+  onResize,
+  onCommit,
+}: {
+  width: number;
+  onResize: (width: number) => void;
+  onCommit: () => void;
+}) {
   const [dragging, setDragging] = useState(false);
 
   function onKeyDown(event: KeyboardEvent) {
@@ -277,6 +307,13 @@ function Divider({ width, onResize }: { width: number; onResize: (width: number)
     if (step === undefined) return;
     event.preventDefault();
     onResize(width + step);
+    onCommit();
+  }
+
+  function endDrag() {
+    if (!dragging) return;
+    setDragging(false);
+    onCommit();
   }
 
   return (
@@ -301,8 +338,8 @@ function Divider({ width, onResize }: { width: number; onResize: (width: number)
         // The panel's right edge is the viewport's: its width is what lies right of the pointer.
         if (dragging) onResize(document.documentElement.clientWidth - event.clientX);
       }}
-      onPointerUp={() => setDragging(false)}
-      onPointerCancel={() => setDragging(false)}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
     />
   );
 }

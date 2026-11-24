@@ -1,8 +1,8 @@
 // The Ask Warden panel's rules (docs/design.md: Side panel, Chat context, Layout): its starting state by window width
-// and a person's stored choice, how each state shows at a width, and what the context line says.
+// and a person's stored choice, what a change shows and what it chooses, how each state shows at a width, and the
+// context line's view words.
 import type { Finding, FindingsView } from "@warden/contracts";
 import { MODULE_WORDS, SEVERITY_WORDS, STATUS_WORDS } from "./finding-words.ts";
-import { shortId } from "./findings.ts";
 
 /** A person's choice: closed (a button), floating over the page, or pinned beside it. */
 export type PanelMode = "closed" | "floating" | "pinned";
@@ -59,6 +59,43 @@ export function startingPanel(windowWidth: number, stored: string | null): Panel
   };
 }
 
+/**
+ * The panel's state: what shows, and the person's latest choice (null until they make one), which is what's stored. An
+ * automatic open (selecting a Finding) and a drag in progress change only what shows.
+ */
+export type PanelStore = { shown: PanelState; chosen: PanelState | null };
+
+export type PanelAction =
+  /** The person's choice of mode: it shows, and it's chosen. */
+  | { type: "choose"; mode: PanelMode }
+  /** A mode that shows without being chosen: a close that keeps a pinned choice. */
+  | { type: "show"; mode: PanelMode }
+  /** An automatic open (selecting a Finding): floating when closed, not chosen; an open panel stays as it is. */
+  | { type: "open" }
+  /** A width that shows (clamped) without being chosen: the divider while it's dragged. */
+  | { type: "resize"; width: number }
+  /** What shows becomes the person's choice: a drag's end, or a keyboard step after its resize. */
+  | { type: "commit" };
+
+export function panelReducer(store: PanelStore, action: PanelAction): PanelStore {
+  switch (action.type) {
+    case "choose": {
+      const shown = { ...store.shown, mode: action.mode };
+      return { shown, chosen: shown };
+    }
+    case "show":
+      return { ...store, shown: { ...store.shown, mode: action.mode } };
+    case "open":
+      return store.shown.mode === "closed"
+        ? panelReducer(store, { type: "show", mode: "floating" })
+        : store;
+    case "resize":
+      return { ...store, shown: { ...store.shown, width: clampWidth(action.width) } };
+    case "commit":
+      return { ...store, chosen: store.shown };
+  }
+}
+
 /** How a mode shows at a window width: an open panel fills a phone's screen, and floats where pinning isn't offered. */
 export function panelShownAs(
   mode: PanelMode,
@@ -82,8 +119,8 @@ export type PanelContext = {
 
 /** What the shell gives a page to talk to the panel. Both functions keep their identity across renders. */
 export type PagePanel = {
-  /** Tells the panel what the page is talking about. */
-  setContext: (context: PanelContext) => void;
+  /** Tells the panel what the page is talking about; null (as the page unmounts) gives it back the page's name. */
+  setContext: (context: PanelContext | null) => void;
   /** Opens the panel floating when it's closed; an open or pinned panel stays as it is. */
   open: () => void;
 };
@@ -96,12 +133,6 @@ export function findingsViewWords(view: Pick<FindingsView, "status" | "severity"
     ...(view.severity === "all" ? [] : [SEVERITY_WORDS[view.severity]]),
     ...(view.module === "all" ? [] : [MODULE_WORDS[view.module]]),
   ];
-}
-
-/** "Talking about: 3f9a1c2e · view: Findings, Open, High", or without a focus "Talking about: view: Findings, Open". */
-export function contextLine(context: PanelContext): string {
-  const focus = context.focus === null ? "" : `${shortId(context.focus.id)} · `;
-  return `Talking about: ${focus}view: ${context.view.join(", ")}`;
 }
 
 /** The closed panel's button: "Ask Warden", then "· 2 messages" once the person has sent any. */

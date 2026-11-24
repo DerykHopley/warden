@@ -26,6 +26,8 @@ export function DetailCard(props: {
   clerkUsers: Map<string, ClerkUser>;
   /** The card's ✕: clears the page's focus. */
   onClear: () => void;
+  /** Asks for the Proposals again, after they couldn't load. */
+  onRetryProposals: () => void;
 }) {
   const { finding } = props;
   const titleId = `detail-card-${finding.id}`;
@@ -107,20 +109,36 @@ export function DetailCard(props: {
           </>
         )}
       </dl>
-      <Proposals findingId={finding.id} proposals={props.proposals} clerkUsers={props.clerkUsers} />
+      <Proposals
+        findingId={finding.id}
+        proposals={props.proposals}
+        clerkUsers={props.clerkUsers}
+        onRetry={props.onRetryProposals}
+      />
     </section>
   );
 }
 
-/** The focused Finding's pending Proposals: nothing while they load or when it has none; one line when they failed. */
+/**
+ * The focused Finding's pending Proposals: nothing while they load or when it has none; one line and Retry when they
+ * couldn't load (not answering, a body that doesn't parse, 403 or 409 alike).
+ */
 function Proposals(props: {
   findingId: string;
   proposals: ProposalsResult | "loading";
   clerkUsers: Map<string, ClerkUser>;
+  onRetry: () => void;
 }) {
   if (props.proposals === "loading") return null;
   if (props.proposals.kind !== "proposals") {
-    return <p className="muted">Couldn't load Proposals</p>;
+    return (
+      <p className="proposals-failed">
+        <span className="muted">Couldn't load Proposals</span>
+        <button type="button" className="secondary" onClick={props.onRetry}>
+          Retry
+        </button>
+      </p>
+    );
   }
   const mine = props.proposals.proposals.filter((p) => p.finding_id === props.findingId);
   if (mine.length === 0) return null;

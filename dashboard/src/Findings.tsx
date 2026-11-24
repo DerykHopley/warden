@@ -107,6 +107,8 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
       clearFocus,
     });
   }, [setContext, status, severity, module, focusedFinding, clearFocus]);
+  // As the page goes (a Team switch, sign-out), its context goes with it.
+  useEffect(() => () => setContext(null), [setContext]);
 
   /** Selecting a Finding replaces the address's entry (the effect above writes it), and opens a closed panel. */
   const select = (id: string) => {

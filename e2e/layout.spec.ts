@@ -106,6 +106,25 @@ for (const scheme of SCHEMES) {
   }
 }
 
+test("at 1100px with the panel pinned 680px wide, nothing scrolls sideways and the cards wrap to the page's column", async ({
+  page,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("warden.askWardenPanel", JSON.stringify({ mode: "pinned", width: 680 })),
+  );
+  await openAt(page, 1100, "light");
+  await expect(page.locator(".ask-warden")).toHaveAttribute("data-shown", "pinned");
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  // A 420px column is a phone's: the cards stack, and the table drops its Asset column.
+  const boxes = await cardBoxes(page);
+  expect(new Set(boxes.map((b) => b.top)).size).toBe(5);
+  expect(await visibleColumns(page)).toEqual(["Severity", "Finding", "Status"]);
+});
+
 test("at 390px, a title holding a 60-character word with no break in it still doesn't scroll sideways", async ({
   page,
 }) => {

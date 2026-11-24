@@ -43,15 +43,17 @@ function show(
   proposals: ProposalsResult | "loading" = listed([]),
   onClear = vi.fn(),
 ) {
+  const onRetry = vi.fn();
   render(
     <DetailCard
       finding={focused}
       proposals={proposals}
       clerkUsers={clerkUsers}
       onClear={onClear}
+      onRetryProposals={onRetry}
     />,
   );
-  return { card: within(screen.getByRole("region", { name: focused.title })), onClear };
+  return { card: within(screen.getByRole("region", { name: focused.title })), onClear, onRetry };
 }
 
 /** Each field's label and value, as the card's definition list holds them. */
@@ -240,6 +242,12 @@ describe("the detail card's pending Proposals", () => {
     expect(card.getByText("Couldn't load Proposals")).toBeInTheDocument();
     expect(card.getByRole("heading", { name: "The agent can read .env files" })).toBeVisible();
     expect(fields(card).Evidence).toBe("permissions.allow lets the agent read .env");
+  });
+
+  it("offers Retry after Couldn't load Proposals", async () => {
+    const { card, onRetry } = show(finding(ID), { kind: "not-answering" });
+    await userEvent.click(card.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledOnce();
   });
 
   it("shows neither the list nor the failure while the Proposals load", () => {
