@@ -84,10 +84,12 @@ export function FindingsPage({ getToken, me, onSessionEnded }: PageProps) {
     if (here() !== path) history.replaceState(null, "", path);
   }, [path]);
 
-  /** A filter tab: a new history entry, and the table swaps at once. */
+  /** A filter tab: a new history entry, and the table swaps at once. A tab already chosen changes nothing. */
   function choose(change: Partial<FindingsView>) {
     const next = { ...shown, ...change };
-    history.pushState(null, "", findingsViewPath(next));
+    const nextPath = findingsViewPath(next);
+    if (nextPath === path) return;
+    history.pushState(null, "", nextPath);
     setView(next);
   }
 
