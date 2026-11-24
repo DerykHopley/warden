@@ -387,7 +387,8 @@ FAKE
 chmod +x "$scratch/fake-proxy"
 
 # A node that stands in for the roles script only, recording the set, the database and where it connects, and the
-# passwords it was given (one per line), and exiting FAKE_ROLES_EXIT. With FAKE_FREE_PORT, the script's free-port
+# passwords it was given (one per line), and exiting FAKE_ROLES_EXIT. FAKE_ROLES_ERROR=28P01 makes it fail as when
+# postgres's password doesn't match, logging the error as roles.ts does. With FAKE_FREE_PORT, the script's free-port
 # lookup gets that port. Anything else goes to the real node.
 cat >"$scratch/fake-node" <<FAKE
 #!/usr/bin/env bash
@@ -399,6 +400,10 @@ if [[ \${1-} == */server/src/roles.ts ]]; then
   dir=\$(dirname "\$0")
   printf '%s %s %s %s:%s\n' "\$WARDEN_DATABASE_ROLES" "\$PGDATABASE" "\$PGUSER" "\$PGHOST" "\$PGPORT" >>"\$dir/roles-runs"
   printf '%s\n' "\$PGPASSWORD" "\$WARDEN_APP_PASSWORD" "\$WARDEN_MIGRATE_PASSWORD" "admin:\${WARDEN_ADMIN_PASSWORD-}" >>"\$dir/roles-passwords"
+  if [[ \${FAKE_ROLES_ERROR-} == 28P01 ]]; then
+    echo '{"error":{"name":"error","message":"password authentication failed for user \\"postgres\\"","code":"28P01"},"severity":"ERROR","message":"creating the roles failed"}'
+    exit 1
+  fi
   [[ \${FAKE_ROLES_EXIT:-0} == 0 ]] || echo '{"severity":"ERROR","message":"creating the roles failed"}'
   exit "\${FAKE_ROLES_EXIT:-0}"
 fi
@@ -546,6 +551,20 @@ assert_no_line "a failing roles run: nothing after it runs" "service-accounts cr
 [[ -s $scratch/roles-fail/proxy-pid ]] || fail "a failing roles run: the proxy never started"
 if kill -0 "$(cat "$scratch/roles-fail/proxy-pid")" 2>/dev/null; then fail "a failing roles run: the proxy is still running"; fi
 pass "a failing roles run: the proxy is stopped"
+assert_no_line "a failing roles run for another reason: no password hint" "doesn't match the secret" "$out"
+
+# postgres's password on the instance doesn't match warden-db-password (28P01): a plain line says how to reset it,
+# with the command that reads the secret when pasted, never the password itself.
+real_run roles-28P01 fresh FAKE_ROLES_ERROR=28P01
+assert_equal "postgres's password doesn't match: the script keeps the roles script's exit code" 1 "$code"
+assert_line "postgres's password doesn't match: it says so, naming the secret, and to run the script again after" \
+  "the postgres password doesn't match the secret warden-db-password; reset it with this command, then run this script again:" \
+  "$out"
+# shellcheck disable=SC2016 # the command as printed, for the owner to paste
+assert_equal "postgres's password doesn't match: the reset command is on its own line, ready to paste" \
+  '  gcloud sql users set-password postgres --instance='"$instance"' --project='"$project"' --password="$(gcloud secrets versions access latest --secret=warden-db-password --project='"$project"')"' \
+  "$(tail -1 <<<"$out")"
+assert_no_line "postgres's password doesn't match: the password isn't printed" "fake-warden-db-password" "$out"
 
 # A proxy that can't bind its port, which another process holds: the script never takes that process for the proxy,
 # so no password is sent to it. It tries once more on a fresh port, then stops.

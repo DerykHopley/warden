@@ -133,6 +133,10 @@ And these, made by hand:
 - the secrets `warden-db-password` (the instance's `postgres` user's password), `warden-clerk-secret`,
   `warden-clerk-publishable` and `warden-clerk-jwt-key`.
 
+The `postgres` user's password must be the latest version of `warden-db-password`: the roles step logs in with it.
+When they differ, the script says so and prints the `gcloud sql users set-password` command that sets it from the
+secret.
+
 **Two sets of identities.** Live (`main`) and owner previews (`preview/*` branches) each get their own service
 accounts and their own database roles, with their own passwords. A preview runs on the `warden-preview` service and
 the `warden_preview` database, and nothing in it can act as a live account or role, or read a live password.
