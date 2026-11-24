@@ -10,7 +10,9 @@ const PATTERNS: [RegExp, string][] = [
   [/\bsk_(test|live)_[A-Za-z0-9]+/g, `sk_$1_${MASK}`],
   [/\bBearer\s+[^\s"',;]+/gi, `Bearer ${MASK}`],
   [/\beyJ[\w-]*\.[\w-]*\.[\w-]*/g, MASK],
-  [/(postgres(?:ql)?:\/\/[^:/@\s]*:)[^@\s]*@/gi, `$1${MASK}@`],
+  // A URL's password runs to the last @ before the host, so a password holding an @ is masked whole: that @ is the
+  // one with no further @ in the host after it. It never runs into a second URL (no `://` inside it).
+  [/(postgres(?:ql)?:\/\/[^:/@\s]*:)(?:(?!:\/\/)\S)*?@(?![^@\s/?#]*@)/gi, `$1${MASK}@`],
   [/([?&][^=&#\s?]+=)[^&#\s"']*/g, `$1${MASK}`],
 ];
 
