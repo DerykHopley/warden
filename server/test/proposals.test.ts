@@ -8,16 +8,14 @@ import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { ZodError } from "zod";
 import {
   createFindings,
-  DecisionRefused,
   FindingNotFound,
-  ProposalDecided,
   ProposalNotFound,
   type Findings,
 } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { seedTeam } from "./helpers.ts";
+import { refusal, seedTeam } from "./helpers.ts";
 
 let pool: pg.Pool;
 let withTeam: WithTeam;
@@ -38,6 +36,10 @@ const lead: Actor = { kind: "person", id: "user_lead" };
 const member: Actor = { kind: "person", id: "user_member" };
 const agent: Actor = { kind: "agent", id: "guard-bot" };
 const nextWeek = () => new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+
+/** Approving a Proposal whose Finding changed since it was asked: the refusal's words, as the API answers them. */
+const STALE =
+  "This Finding changed after the Proposal was asked, so the Proposal can't be approved: ask again.";
 
 /** A new Team with a Lead and a Member, and one Open Finding. */
 async function teamWithFinding(overrides: Partial<Finding> = {}) {
@@ -171,9 +173,10 @@ describe("approving a Proposal the decision would now refuse", () => {
     );
     const before = await stored(team);
 
-    await expect(findings.approveProposal(team, "p-stale", { actor: lead })).rejects.toThrow(
-      DecisionRefused,
-    );
+    expect(await refusal(findings.approveProposal(team, "p-stale", { actor: lead }))).toEqual({
+      name: "DecisionRefused",
+      message: "The expiry date has passed, so it can't be accepted.",
+    });
 
     expect(await stored(team)).toEqual(before);
   });
@@ -189,9 +192,9 @@ describe("approving a Proposal the decision would now refuse", () => {
     await findings.markFalsePositive(team, finding.id, { actor: lead, reason: "A fixture" });
     const before = await stored(team);
 
-    await expect(findings.approveProposal(team, proposed.id, { actor: lead })).rejects.toThrow(
-      DecisionRefused,
-    );
+    expect(
+      await refusal(findings.approveProposal(team, proposed.id, { actor: lead })),
+    ).toMatchObject({ name: "DecisionRefused" });
 
     expect(await stored(team)).toEqual(before);
     expect(before.proposals).toMatchObject([{ id: proposed.id, state: "pending" }]);
@@ -235,9 +238,11 @@ describe("approving, when a transaction began before the other but wrote after i
     await accepting;
     const before = await stored(team);
 
-    await expect(findings.approveProposal(team, proposed.id, { actor: lead })).rejects.toThrow(
-      /changed since the Proposal was asked/,
-    );
+    // The one exact text for a stale Proposal: only approving makes it, so decisions.test.ts can't hold it.
+    expect(await refusal(findings.approveProposal(team, proposed.id, { actor: lead }))).toEqual({
+      name: "DecisionRefused",
+      message: STALE,
+    });
 
     expect(await stored(team)).toEqual(before);
     expect(before.findings).toMatchObject([{ status: "accepted" }]);
@@ -320,13 +325,15 @@ describe("proposing", () => {
     await withTeam(team, (tx) => tx.insertInto("findings").values(toRow(merged)).execute());
     const before = await stored(team);
 
-    await expect(
-      findings.propose(team, merged.id, {
-        requester: agent,
-        decision: "mark_false_positive",
-        reason: "r",
-      }),
-    ).rejects.toThrow(/it is merged into/);
+    expect(
+      await refusal(
+        findings.propose(team, merged.id, {
+          requester: agent,
+          decision: "mark_false_positive",
+          reason: "r",
+        }),
+      ),
+    ).toMatchObject({ name: "DecisionRefused" });
 
     expect(await stored(team)).toEqual(before);
   });
@@ -350,25 +357,35 @@ describe("proposing", () => {
 });
 
 describe("a Proposal no longer pending, or not the Team's", () => {
-  it("throws ProposalDecided naming its state, for approve and reject alike", async () => {
-    const { team, finding } = await teamWithFinding();
-    const proposed = await findings.propose(team, finding.id, {
-      requester: member,
-      decision: "mark_false_positive",
-      reason: "r",
-    });
-    await findings.rejectProposal(team, proposed.id, { actor: lead, reason: "Fix it now" });
-    const before = await stored(team);
+  it.each([
+    ["rejected", "This Proposal was rejected already."],
+    ["approved", "This Proposal was approved already."],
+  ] as const)(
+    "throws ProposalDecided saying it was %s, in plain words, for approve and reject alike",
+    async (state, words) => {
+      const { team, finding } = await teamWithFinding();
+      const proposed = await findings.propose(team, finding.id, {
+        requester: member,
+        decision: "mark_false_positive",
+        reason: "r",
+      });
+      if (state === "rejected") {
+        await findings.rejectProposal(team, proposed.id, { actor: lead, reason: "Fix it now" });
+      } else {
+        await findings.approveProposal(team, proposed.id, { actor: lead });
+      }
+      const before = await stored(team);
 
-    await expect(findings.approveProposal(team, proposed.id, { actor: lead })).rejects.toThrow(
-      new ProposalDecided(proposed.id, "rejected"),
-    );
-    await expect(
-      findings.rejectProposal(team, proposed.id, { actor: lead, reason: "Again" }),
-    ).rejects.toThrow(ProposalDecided);
+      for (const again of [
+        () => findings.approveProposal(team, proposed.id, { actor: lead }),
+        () => findings.rejectProposal(team, proposed.id, { actor: lead, reason: "Again" }),
+      ]) {
+        expect(await refusal(again())).toEqual({ name: "ProposalDecided", message: words });
+      }
 
-    expect(await stored(team)).toEqual(before);
-  });
+      expect(await stored(team)).toEqual(before);
+    },
+  );
 
   it("throws ProposalNotFound for another Team's Proposal id", async () => {
     const a = await teamWithFinding();
@@ -426,9 +443,9 @@ describe("the Team's pending Proposals", () => {
       ["Asked before the accept", true],
       ["Asked after the accept", false],
     ]);
-    await expect(findings.approveProposal(team, old.id, { actor: lead })).rejects.toThrow(
-      /changed since the Proposal was asked/,
-    );
+    expect(await refusal(findings.approveProposal(team, old.id, { actor: lead }))).toMatchObject({
+      name: "DecisionRefused",
+    });
     await expect(findings.approveProposal(team, fresh.id, { actor: lead })).resolves.toMatchObject({
       state: "approved",
     });

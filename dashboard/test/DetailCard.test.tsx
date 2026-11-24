@@ -775,11 +775,8 @@ describe("a Lead's decision", () => {
     ],
     [
       "409 with the server's reason",
-      () =>
-        json(409, {
-          error: "markFalsePositive refused: the Finding is false_positive, and it changed",
-        }),
-      "markFalsePositive refused: the Finding is false_positive, and it changed.",
+      () => json(409, { error: "This Finding is a False positive already." }),
+      "This Finding is a False positive already.",
       "onFindingChanged",
     ],
     [
@@ -965,12 +962,12 @@ describe("a Lead's Approve and Reject", () => {
 
   it("a 409 on approve whose body says why shows the server's words: the Finding changed since it was asked", async () => {
     const why =
-      "accept refused: the Finding is open, and it changed since the Proposal was asked (at 2026-11-24T12:31:00.000Z): ask again";
+      "This Finding changed after the Proposal was asked, so the Proposal can't be approved: ask again.";
     serve({ proposalAction: () => json(409, { error: why }) });
     const { card } = show(OPEN, listed([fresh]), { role: "lead" });
     await userEvent.click(card.getByRole("button", { name: "Approve" }));
 
-    expect(await card.findByRole("alert")).toHaveTextContent(`${why}.`);
+    expect(await card.findByRole("alert")).toHaveTextContent(why);
   });
 
   it("a finished call closes only its own form: an Approve on B leaves the Reject form on A and its text", async () => {

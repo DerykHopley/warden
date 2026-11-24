@@ -9,6 +9,7 @@ import {
   DECISION_TAKES,
   MarkMovedBody,
   ReasonBody,
+  STATUS_WORDS,
   type Decision as ContractDecision,
   type Finding,
   type Status,
@@ -47,18 +48,45 @@ export class FindingNotFound extends Error {
   }
 }
 
-/** The call isn't allowed on the Finding as it is now. Nothing was written. */
+/**
+ * The call isn't allowed on the Finding as it is now. Nothing was written. Its message is the API's 409 and the
+ * detail card's line, so it is for people: the glossary's words, with no id, Status value or call name.
+ */
 export class DecisionRefused extends Error {
   readonly call: DecisionCall;
   readonly status: Status;
 
-  constructor(call: DecisionCall, status: Status, why: string) {
-    super(`${call} refused: the Finding is ${status}, and ${why}`);
+  constructor(call: DecisionCall, status: Status, words: string) {
+    super(words);
     this.name = "DecisionRefused";
     this.call = call;
     this.status = status;
   }
 }
+
+/** A Status as a refusal's sentence says it: the contracts' words, with "a" before False positive. */
+const STATUS_IN_SENTENCE: Record<Status, string> = {
+  ...STATUS_WORDS,
+  false_positive: `a ${STATUS_WORDS.false_positive}`,
+};
+
+/** What a refused call can't do, as a refusal ends: "…, so …". */
+const CANT: Record<DecisionCall, string> = {
+  accept: "it can't be accepted",
+  markFalsePositive: "it can't be marked a False positive",
+  confirmFix: "its fix can't be confirmed",
+  markMoved: "it can't be marked moved",
+  reopen: "it can't be reopened",
+};
+
+/** The Status each call leaves a Finding in, when it changes the Status: asked again, the Finding is so already. */
+const LEAVES: Partial<Record<DecisionCall, Status>> = {
+  markFalsePositive: "false_positive",
+  reopen: "open",
+};
+
+/** markMoved's refusals about its chosen candidate end the same way. */
+const CANT_MERGE = "so it can't be merged into this one.";
 
 /**
  * Under the Team's lock, the person isn't a Lead or Admin in the Team (any more): a Role change may have committed
@@ -126,14 +154,19 @@ export async function findingFor(
   team: string,
   id: string,
   call: DecisionCall,
-): Promise<{ finding: Finding; refuse: (why: string) => DecisionRefused }> {
+): Promise<{ finding: Finding; refuse: (words: string) => DecisionRefused }> {
   const finding = await loadFinding(tx, team, id);
   if (!finding) throw new FindingNotFound(id);
-  const refuse = (why: string) => new DecisionRefused(call, finding.status, why);
-  if (finding.moved_to !== null) throw refuse(`it is merged into ${finding.moved_to}`);
-  const allowed = allowedFrom(call);
-  if (!allowed.includes(finding.status)) {
-    throw refuse(`${call} takes a Finding that is ${allowed.join(" or ")}`);
+  const refuse = (words: string) => new DecisionRefused(call, finding.status, words);
+  if (finding.moved_to !== null) {
+    throw refuse(`This Finding was merged into another Finding, so ${CANT[call]}.`);
+  }
+  if (!allowedFrom(call).includes(finding.status)) {
+    throw refuse(
+      LEAVES[call] === finding.status
+        ? `This Finding is ${STATUS_IN_SENTENCE[finding.status]} already.`
+        : `This Finding is now ${STATUS_IN_SENTENCE[finding.status]}, so ${CANT[call]}.`,
+    );
   }
   return { finding, refuse };
 }
@@ -193,7 +226,7 @@ export async function applyLockedDecision(
       .executeTakeFirstOrThrow();
     if (later !== null) {
       throw refuse(
-        `it changed since the Proposal was asked (at ${later.toISOString()}): ask again`,
+        "This Finding changed after the Proposal was asked, so the Proposal can't be approved: ask again.",
       );
     }
   }
@@ -206,7 +239,7 @@ export async function applyLockedDecision(
     case "accept":
       // Checked when the input was parsed; a Proposal's until may have passed since it was asked.
       if (Date.parse(decision.until) <= Date.now()) {
-        throw refuse(`its until (${decision.until}) has passed`);
+        throw refuse("The expiry date has passed, so it can't be accepted.");
       }
       changes.push({
         before: finding,
@@ -228,22 +261,27 @@ export async function applyLockedDecision(
       changes.push({ before: finding, after: { ...finding, status: "open", ...notAccepted } });
       break;
     case "confirmFix":
-      if (finding.unconfirmed_fix === null) throw refuse("it has no Unconfirmed fix to confirm");
+      if (finding.unconfirmed_fix === null) {
+        throw refuse("This Finding has no Unconfirmed fix to confirm.");
+      }
       changes.push({ before: finding, after: { ...finding, unconfirmed_fix: null } });
       break;
     case "markMoved": {
-      if (finding.unconfirmed_fix === null) throw refuse("it has no Unconfirmed fix to move");
+      if (finding.unconfirmed_fix === null) {
+        throw refuse("This Finding has no Unconfirmed fix to mark moved.");
+      }
       if (!finding.unconfirmed_fix.candidates.includes(decision.candidate)) {
-        throw refuse(`${decision.candidate} isn't one of its candidates`);
+        throw refuse("The chosen Finding isn't one of this Unconfirmed fix's candidates.");
       }
       const candidate = await loadFinding(tx, team, decision.candidate);
-      if (!candidate || candidate.status !== "open" || candidate.moved_to !== null) {
-        const state = !candidate
-          ? "gone"
-          : candidate.moved_to !== null
-            ? `merged into ${candidate.moved_to}`
-            : candidate.status;
-        throw refuse(`its candidate ${decision.candidate} is ${state}, not open`);
+      if (!candidate) throw refuse(`The chosen Finding no longer exists, ${CANT_MERGE}`);
+      if (candidate.moved_to !== null) {
+        throw refuse(`The chosen Finding was merged into another Finding, ${CANT_MERGE}`);
+      }
+      if (candidate.status !== "open") {
+        throw refuse(
+          `The chosen Finding is ${STATUS_IN_SENTENCE[candidate.status]}, not Open, ${CANT_MERGE}`,
+        );
       }
       // The old Finding keeps its module, Rule and Asset, so it can only take a problem with the same three.
       const differs = [
@@ -252,7 +290,7 @@ export async function applyLockedDecision(
         !sameAsset(candidate.asset, finding.asset) && "Asset",
       ].filter(Boolean);
       if (differs.length > 0) {
-        throw refuse(`its candidate ${decision.candidate} has another ${differs.join(" and ")}`);
+        throw refuse(`The chosen Finding has another ${differs.join(" and ")}, ${CANT_MERGE}`);
       }
       changes.push({
         before: candidate,

@@ -10,7 +10,14 @@ import {
   type ProposalDecision,
   type Role,
 } from "@warden/contracts";
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { tryAgainIn, type GetToken } from "./api.ts";
 import { dayAndTimeWords, dayWords } from "./date-words.ts";
 import {
@@ -604,8 +611,20 @@ function ActionForm(props: {
   onCancel: () => void;
 }) {
   const { draft, onDraft } = props;
+  // Esc anywhere in the form cancels it (focus back on its opener). Marked handled, so a floating panel's Esc, which
+  // listens on the document, leaves the panel open.
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    props.onCancel();
+  }
   return (
-    <form className="decision-form" aria-label={props.name} onSubmit={props.onSubmit}>
+    <form
+      className="decision-form"
+      aria-label={props.name}
+      onSubmit={props.onSubmit}
+      onKeyDown={onKeyDown}
+    >
       <label className="field">
         <span className="field-label">Reason</span>
         <textarea

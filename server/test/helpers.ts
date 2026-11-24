@@ -158,3 +158,12 @@ export function testApp(options: {
   );
   return { app, lines };
 }
+
+/** What `promise` was refused with: its class's name and its words (undefined when it resolved). */
+export async function refusal(promise: Promise<unknown>) {
+  const error = await promise.then(
+    () => undefined,
+    (e: unknown) => e,
+  );
+  return error instanceof Error ? { name: error.name, message: error.message } : error;
+}

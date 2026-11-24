@@ -20,6 +20,14 @@ export type Severity = z.infer<typeof Severity>;
 export const Status = z.enum(["open", "fixed", "accepted", "false_positive"]);
 export type Status = z.infer<typeof Status>;
 
+/** Each Status as people read it (GLOSSARY.md): the dashboard's labels and the server's refusals. */
+export const STATUS_WORDS: Readonly<Record<Status, string>> = {
+  open: "Open",
+  fixed: "Fixed",
+  accepted: "Accepted",
+  false_positive: "False positive",
+};
+
 /** An id Warden or a module gave: a Finding, a Team, a Scan or a Spot run. */
 export const Id = z.string().min(1).max(200);
 

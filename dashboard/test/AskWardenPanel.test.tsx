@@ -158,6 +158,20 @@ describe("Esc", () => {
     expect(askWardenButton()).toHaveFocus();
   });
 
+  it("in an open form's field closes only the form, keeps the panel open, and puts focus on the form's opener", async () => {
+    open();
+    await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
+    await userEvent.click(within(card()).getByRole("button", { name: "Propose False positive" }));
+    const form = within(card()).getByRole("form", { name: "Propose False positive" });
+    await userEvent.type(within(form).getByRole("textbox", { name: "Reason" }), "A fixture");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(within(card()).queryByRole("form")).not.toBeInTheDocument();
+    expect(panel()).toHaveAttribute("data-shown", "floating");
+    expect(within(card()).getByRole("button", { name: "Propose False positive" })).toHaveFocus();
+  });
+
   it.each([
     ["while an input method composes", { key: "Escape", isComposing: true }],
     ["that something else already handled", { key: "Escape" }],

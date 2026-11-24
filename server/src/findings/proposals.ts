@@ -34,13 +34,16 @@ export class ProposalNotFound extends Error {
   }
 }
 
-/** The Proposal was already approved or rejected: it is decided once. Nothing was written. */
+/**
+ * The Proposal was already approved or rejected: it is decided once. Nothing was written. Its message is the API's
+ * 409 and the detail card's line, so it is for people: no id.
+ */
 export class ProposalDecided extends Error {
   readonly proposalId: string;
-  readonly state: Proposal["state"];
+  readonly state: Exclude<Proposal["state"], "pending">;
 
-  constructor(proposalId: string, state: Proposal["state"]) {
-    super(`Proposal ${proposalId} is already ${state}`);
+  constructor(proposalId: string, state: Exclude<Proposal["state"], "pending">) {
+    super(`This Proposal was ${state} already.`);
     this.name = "ProposalDecided";
     this.proposalId = proposalId;
     this.state = state;
