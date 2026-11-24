@@ -3,6 +3,7 @@ import { Role, type TeamMember } from "@warden/contracts";
 import { useCallback, useState } from "react";
 import { tryAgainIn } from "./api.ts";
 import type { PageProps } from "./App.tsx";
+import { dayWords } from "./date-words.ts";
 import { changeMemberRole, fetchMembers, type MembersResult } from "./members.ts";
 import { personName, useClerkUsers, type ClerkUser } from "./person-name.ts";
 import { ROLE_WORDS } from "./roles.ts";
@@ -152,9 +153,7 @@ function PersonRow(props: {
         )}
       </td>
       <td className="joined">
-        <time dateTime={member.joinedAt}>
-          {new Date(member.joinedAt).toLocaleDateString(undefined, { dateStyle: "medium" })}
-        </time>
+        <time dateTime={member.joinedAt}>{dayWords(member.joinedAt)}</time>
       </td>
     </tr>
   );

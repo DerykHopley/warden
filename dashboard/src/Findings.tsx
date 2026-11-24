@@ -29,7 +29,6 @@ import {
   topFive,
   type FindingsResult,
 } from "./findings.ts";
-import { useOverview } from "./overview.ts";
 import { findingsViewWords } from "./panel.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
@@ -72,12 +71,6 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     [getToken, me.team],
   );
   const list = useWardenCall<FindingsResult>(listFindings, onSessionEnded);
-  // The Level line's call: while it waits, or when it fails, the line is absent and the page shows no error for it.
-  const overview = useOverview(getToken, me.team, onSessionEnded);
-  const level =
-    overview.result !== "loading" && overview.result.kind === "overview"
-      ? overview.result.body.level
-      : null;
   const [view, setView] = useState(viewInAddress);
 
   // Back and Forward bring back the view their entry's address names.
@@ -138,7 +131,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
       {list.result !== "loading" && <TeamRefused result={list.result} />}
       {findings !== null && (
         <>
-          {level !== null && <LevelLine level={level} />}
+          {me.level !== null && <LevelLine level={me.level} />}
           <h1 className="summary-line">{summaryLine(findings)}</h1>
           <TopFive findings={topFive(findings)} focused={focused} onSelect={select} />
           {findings.length > 0 && (

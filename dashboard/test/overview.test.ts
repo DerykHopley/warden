@@ -57,6 +57,7 @@ const body = (fields: Partial<OverviewBody>): OverviewBody => ({
   team: "org_a",
   level: "quick",
   last_scan_at: SCANNED,
+  has_findings: true,
   period_days: 30,
   open_at_start: 0,
   open_now: 7,
@@ -64,8 +65,10 @@ const body = (fields: Partial<OverviewBody>): OverviewBody => ({
   ...fields,
 });
 
+const nothingCounted = { open_at_start: 0, open_now: 0, fix_rate: { fixed: 0, of: 0 } };
+
 describe("trendLine", () => {
-  it("says where Open Findings went, and the fix rate rounded to a whole percent", () => {
+  it("says where Open Findings went, and the fix rate as a whole percent", () => {
     expect(trendLine(body({}))).toBe("Open Findings went from 0 to 7 in 30 days; fix rate 9%.");
   });
 
@@ -75,23 +78,31 @@ describe("trendLine", () => {
     );
   });
 
-  it("rounds a half up: 1 of 8 is 13%", () => {
-    expect(trendLine(body({ fix_rate: { fixed: 1, of: 8 } }))).toBe(
-      "Open Findings went from 0 to 7 in 30 days; fix rate 13%.",
+  it("rounds the rate down, so 199 of 200 is 99%, never a 100% that isn't", () => {
+    expect(trendLine(body({ fix_rate: { fixed: 199, of: 200 } }))).toBe(
+      "Open Findings went from 0 to 7 in 30 days; fix rate 99%.",
+    );
+  });
+
+  it("shows at least 1% when any was fixed: 1 of 300 is 1%", () => {
+    expect(trendLine(body({ fix_rate: { fixed: 1, of: 300 } }))).toBe(
+      "Open Findings went from 0 to 7 in 30 days; fix rate 1%.",
     );
   });
 
   it("drops the fix rate when nothing was there to fix", () => {
-    expect(trendLine(body({ open_at_start: 0, open_now: 0, fix_rate: { fixed: 0, of: 0 } }))).toBe(
+    expect(trendLine(body(nothingCounted))).toBe("Open Findings stayed at 0 over 30 days.");
+  });
+
+  it("with Findings that all stay out of the counts (Accepted and old) and no Scan, still gives the trend", () => {
+    expect(trendLine(body({ ...nothingCounted, last_scan_at: null }))).toBe(
       "Open Findings stayed at 0 over 30 days.",
     );
   });
 
   it("with no Findings and no Scan, says the trend starts after the first Scan", () => {
-    expect(
-      trendLine(
-        body({ last_scan_at: null, open_at_start: 0, open_now: 0, fix_rate: { fixed: 0, of: 0 } }),
-      ),
-    ).toBe("No Findings yet: the trend starts after the first Scan.");
+    expect(trendLine(body({ ...nothingCounted, has_findings: false, last_scan_at: null }))).toBe(
+      "No Findings yet: the trend starts after the first Scan.",
+    );
   });
 });

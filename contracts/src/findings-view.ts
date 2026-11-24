@@ -29,6 +29,8 @@ export const OverviewBody = z.object({
   level: Level,
   /** The latest Scan's `started_at` (Spot runs don't count); null before the first Scan. */
   last_scan_at: DateTime.nullable(),
+  /** Whether the Team has any Finding at all, whatever its Status. */
+  has_findings: z.boolean(),
   period_days: z.number().int().positive(),
   /** Findings Open at the start of the period. */
   open_at_start: Count,
@@ -36,7 +38,8 @@ export const OverviewBody = z.object({
   open_now: Count,
   /**
    * `of`: Findings Open at the start, or opened or reopened during the period, each once. `fixed`: those of them that
-   * moved into Fixed during it and are still Fixed, with no Unconfirmed fix and not merged into another.
+   * moved into Fixed during it and are still Fixed, with no Unconfirmed fix. A Finding merged into another counts in
+   * neither.
    */
   fix_rate: z.object({ fixed: Count, of: Count }),
 });

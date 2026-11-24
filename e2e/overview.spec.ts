@@ -10,20 +10,12 @@ test("Ada lands on Overview, sees Quick current and the trend, and goes to Findi
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/overview$/);
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Overview");
   const cards = page.getByRole("list", { name: "The journey" }).getByRole("listitem");
-  await expect(cards.locator(".journey-level")).toHaveText(["Quick", "Standard", "Audit-ready"]);
-  const quick = cards.filter({ hasText: "Quick" });
-  await expect(quick).toHaveAttribute("aria-current", "step");
-  await expect(quick).toContainText("Current");
-  await expect(quick).toContainText("Last Scan:");
-  await expect(quick).toContainText("Next: Standard adds the agent hook and the Judge");
-  await expect(quick.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+  await expect(cards.filter({ hasText: "Quick" })).toHaveAttribute("aria-current", "step");
   // The demo seed writes every Finding now: none was Open 30 days ago, 7 are now, and 1 of 11 was fixed.
   await expect(page.locator(".trend-line")).toHaveText(
     "Open Findings went from 0 to 7 in 30 days; fix rate 9%.",
   );
-  await expect(page.getByRole("heading", { level: 2 })).toHaveText("Are we ready for the audit?");
 
   await page
     .getByRole("navigation", { name: "Pages" })

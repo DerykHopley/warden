@@ -18,7 +18,7 @@ describe("GET /api/me", () => {
     const { app } = testApp({ publicPem });
     const res = await app.request("/api/me", bearer(await sessionToken(key, "user_abc")));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ userId: "user_abc", team: null, role: null });
+    expect(await res.json()).toEqual({ userId: "user_abc", team: null, role: null, level: null });
   });
 
   it.each(["bearer", "BEARER", "beaRer"])(
@@ -30,7 +30,7 @@ describe("GET /api/me", () => {
         headers: { Authorization: `${scheme} ${token}` },
       });
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ userId: "user_abc", team: null, role: null });
+      expect(await res.json()).toEqual({ userId: "user_abc", team: null, role: null, level: null });
     },
   );
 

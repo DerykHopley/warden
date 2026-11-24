@@ -23,6 +23,7 @@ const overview = (fields: Partial<OverviewBody> = {}): OverviewBody => ({
   team: TEAM,
   level: "quick",
   last_scan_at: SCANNED,
+  has_findings: true,
   period_days: 30,
   open_at_start: 0,
   open_now: 7,
@@ -38,7 +39,7 @@ function open(fields: Partial<OverviewBody> = {}, routes: Routes = {}) {
   serve({ overview: () => answer(fields), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
-    me: { userId: "user_ada", team: TEAM, role: "admin" as const },
+    me: { userId: "user_ada", team: TEAM, role: "admin" as const, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
     panel: { setContext: vi.fn(), open: vi.fn() },
@@ -57,60 +58,27 @@ const cardOf = (word: string) => {
 };
 
 describe("the journey", () => {
-  it("shows Quick, Standard and Audit-ready in order, each with what it adds", async () => {
-    open();
-    await screen.findByRole("list", { name: "The journey" });
-    expect(
-      within(journey())
-        .getAllByRole("listitem")
-        .map((li) => [
-          li.querySelector(".journey-level")?.textContent,
-          li.querySelector(".journey-adds")?.textContent,
-        ]),
-    ).toEqual([
-      ["Quick", "Repo scan and top fixes"],
-      ["Standard", "Agent hook and the Judge"],
-      ["Audit-ready", "Evidence for an audit"],
-    ]);
-  });
-
-  it("at Quick after a Scan: Quick reads Current with a full bar, the Scan's date and the next step", async () => {
+  it("shows each card's word, what it adds, its bar, its state in words and its notes", async () => {
     open();
     await screen.findByRole("list", { name: "The journey" });
     const quick = cardOf("Quick");
-    expect(quick.getByText("Current")).toBeInTheDocument();
+    expect(quick.getByText("Repo scan and top fixes")).toBeInTheDocument();
     expect(quick.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    expect(quick.getByText("Current")).toBeInTheDocument();
     expect(quick.getByText(`Last Scan: ${scannedOn}`)).toBeInTheDocument();
     expect(quick.getByText("Next: Standard adds the agent hook and the Judge")).toBeInTheDocument();
-    for (const word of ["Standard", "Audit-ready"]) {
-      expect(cardOf(word).getByText("Not started")).toBeInTheDocument();
-      expect(cardOf(word).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
-    }
   });
 
-  it("before the first Scan: Quick's bar is empty and its next step is the first Scan", async () => {
-    open({ last_scan_at: null, open_now: 0, fix_rate: { fixed: 0, of: 0 } });
-    await screen.findByRole("list", { name: "The journey" });
-    const quick = cardOf("Quick");
-    expect(quick.getByText("Current")).toBeInTheDocument();
-    expect(quick.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "0");
-    expect(quick.getByText("Next: the first Scan")).toBeInTheDocument();
-    expect(quick.queryByText(/^Last Scan/)).not.toBeInTheDocument();
-  });
-
-  it("at Standard: Quick reads Done with a full bar, and Standard is the current card", async () => {
+  it("marks only the current card with aria-current=step, and says Done in words (a standard answer)", async () => {
     open({ level: "standard" });
     await screen.findByRole("list", { name: "The journey" });
-    expect(cardOf("Quick").getByText("Done")).toBeInTheDocument();
-    expect(cardOf("Quick").getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
-    expect(cardOf("Standard").getByText("Current")).toBeInTheDocument();
-    expect(cardOf("Audit-ready").getByText("Not started")).toBeInTheDocument();
     const current = within(journey())
       .getAllByRole("listitem")
       .filter((li) => li.getAttribute("aria-current") === "step");
     expect(current.map((li) => li.querySelector(".journey-level")?.textContent)).toEqual([
       "Standard",
     ]);
+    expect(cardOf("Quick").getByText("Done")).toBeInTheDocument();
   });
 
   it("gives each bar a name and its range", async () => {

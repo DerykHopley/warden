@@ -67,17 +67,6 @@ test("Tab reaches the Level line's link, each card, then each filter tab, then e
   expect(reached.slice(26)).toEqual(["button:Ask Warden", "body"]);
 });
 
-test("Tab reaches the header's Overview link between Findings and People, and leaves it", async ({
-  page,
-}) => {
-  await open(page, 1024);
-  await page
-    .getByRole("navigation", { name: "Pages" })
-    .getByRole("link", { name: "Findings" })
-    .focus();
-  expect(await tabThrough(page, 2)).toEqual(["a:Overview", "a:People"]);
-});
-
 test("Tab reaches the open panel's controls after the page's, in order, and then leaves them", async ({
   page,
 }) => {

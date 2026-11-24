@@ -45,7 +45,7 @@ export {
   type DecisionInput,
 } from "./decisions.ts";
 export { DAILY_EXPIRY, type ExpiryLimits } from "./expiry.ts";
-export type { FindingsOverview } from "./overview.ts";
+export { OVERVIEW_PERIOD_DAYS, type FindingsOverview } from "./overview.ts";
 export { ProposalDecided, ProposalNotFound } from "./proposals.ts";
 export type { MoveRule, ReconcileOutcome } from "./reconcile.ts";
 export { sameAsset } from "./rows.ts";
@@ -108,10 +108,10 @@ export interface Findings {
   /** One Finding's history, oldest first. Throws FindingNotFound for an id the Team doesn't have. */
   history(team: string, findingId: string): Promise<HistoryEntry[]>;
   /**
-   * The Overview's numbers (story 10): the Team's latest Scan, its Open Findings at `since` and now, and the Fix rate
-   * from `since` to now, read from the Findings and their history.
+   * The Overview's numbers (story 10): the Team's latest Scan, whether it has any Finding, its Open Findings at the
+   * start of the last `days` days and now, and the Fix rate over them, read from the Findings and their history.
    */
-  overview(team: string, since: Date): Promise<FindingsOverview>;
+  overview(team: string, days: number): Promise<FindingsOverview>;
 
   // A person's named decisions. Each throws for an agent Actor before anything is read, a zod error for bad input,
   // NotALead when, under the Team's lock, the person isn't a Lead (any more), FindingNotFound for an id the Team
@@ -286,8 +286,8 @@ export function createFindings({
       );
     },
 
-    overview(team, since) {
-      return withTeam(team, (tx) => readOverview(tx, team, since));
+    overview(team, days) {
+      return withTeam(team, (tx) => readOverview(tx, team, days));
     },
 
     history(team, findingId) {

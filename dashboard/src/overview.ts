@@ -3,6 +3,7 @@
 import { Level, OverviewBody } from "@warden/contracts";
 import { useCallback } from "react";
 import { askAboutTeam, callWarden, parsed, type GetToken, type Refused } from "./api.ts";
+import { dayWords } from "./date-words.ts";
 import { LEVEL_WORDS } from "./finding-words.ts";
 import { useWardenCall } from "./warden-call.tsx";
 
@@ -25,8 +26,8 @@ export async function fetchOverview(getToken: GetToken): Promise<OverviewResult>
 }
 
 /**
- * GET /api/overview for the person's Team, as a page's call: an answer about a Team they just switched away from is
- * asked again, then counts as not answering. The Overview and the Findings page's Level line both read it.
+ * GET /api/overview for the person's Team, as the Overview's call: an answer about a Team they just switched away from
+ * is asked again, then counts as not answering.
  */
 export function useOverview(getToken: GetToken, team: string | null, onSessionEnded: () => void) {
   const ask = useCallback(
@@ -67,8 +68,6 @@ const ADDS: Record<Level, string> = {
   audit_ready: "Evidence for an audit",
 };
 
-const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
-
 /**
  * The three journey cards, Quick, Standard, Audit-ready, for a Team at `level`: a Level before it is done (a full
  * bar), after it not started (an empty bar). Quick's one part in the foundation is a Scan, so while current its bar
@@ -86,18 +85,30 @@ export function journeyCards(level: Level, lastScanAt: string | null): JourneyCa
     return {
       ...card,
       progress: 100,
-      notes: [`Last Scan: ${day(lastScanAt)}`, "Next: Standard adds the agent hook and the Judge"],
+      notes: [
+        `Last Scan: ${dayWords(lastScanAt)}`,
+        "Next: Standard adds the agent hook and the Judge",
+      ],
     };
   });
 }
 
 /**
+ * The Fix rate as a whole percent, rounded down so it never claims 100% before everything is fixed, and at least 1%
+ * once anything is, so a fix never reads as 0%.
+ */
+function fixRatePercent({ fixed, of }: OverviewBody["fix_rate"]): number {
+  const percent = Math.floor((fixed * 100) / of);
+  return fixed > 0 ? Math.max(1, percent) : percent;
+}
+
+/**
  * The Overview's trend, one line: where Open Findings went over the period, and the Fix rate as a whole percent. With
- * nothing to fix the rate is left out; with no Findings and no Scan, the trend hasn't started.
+ * nothing to fix the rate is left out; with no Findings at all and no Scan, the trend hasn't started.
  */
 export function trendLine(body: OverviewBody): string {
   const { open_at_start: from, open_now: to, period_days: days, fix_rate } = body;
-  if (body.last_scan_at === null && from === 0 && to === 0 && fix_rate.of === 0) {
+  if (!body.has_findings && body.last_scan_at === null) {
     return "No Findings yet: the trend starts after the first Scan.";
   }
   const moved =
@@ -105,5 +116,5 @@ export function trendLine(body: OverviewBody): string {
       ? `Open Findings stayed at ${to} over ${days} days`
       : `Open Findings went from ${from} to ${to} in ${days} days`;
   if (fix_rate.of === 0) return `${moved}.`;
-  return `${moved}; fix rate ${Math.round((fix_rate.fixed / fix_rate.of) * 100)}%.`;
+  return `${moved}; fix rate ${fixRatePercent(fix_rate)}%.`;
 }

@@ -8,6 +8,3 @@ import type { Level } from "@warden/contracts";
 export function teamLevel(): Level {
   return "quick";
 }
-
-/** How many days the Overview's trend looks back over. */
-export const OVERVIEW_PERIOD_DAYS = 30;

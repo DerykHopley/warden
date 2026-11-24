@@ -20,13 +20,14 @@ afterEach(() => vi.unstubAllGlobals());
 
 const header = () => within(screen.getByRole("banner"));
 const me = (team: string | null, role: string | null) =>
-  json(200, { userId: "user_1", team, role });
+  json(200, { userId: "user_1", team, role, level: team === null ? null : "quick" });
 
 const overview = (team = "org_a") =>
   json(200, {
     team,
     level: "quick",
     last_scan_at: null,
+    has_findings: false,
     period_days: 30,
     open_at_start: 0,
     open_now: 0,
@@ -44,7 +45,6 @@ describe("the landing page by Role", () => {
     serve({
       me: () => me("org_a", "member"),
       findings: () => json(200, { team: "org_a", findings: [] }),
-      overview: () => overview(),
     });
     const entries = history.length;
     render(<App />);

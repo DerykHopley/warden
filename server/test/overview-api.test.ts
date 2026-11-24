@@ -86,6 +86,7 @@ describe("GET /api/overview", () => {
       team,
       level: "quick",
       last_scan_at: "2026-11-24T09:00:00Z",
+      has_findings: true,
       period_days: 30,
       open_at_start: 0,
       open_now: 2,
