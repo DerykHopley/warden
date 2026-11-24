@@ -19,7 +19,11 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    ```sh
    secret-tool store --label "Warden Clerk secret key" service warden-clerk-secret
    secret-tool store --label "Warden Clerk publishable key" service warden-clerk-publishable
+   secret-tool store --label "Warden Clerk JWT key" service warden-clerk-jwt-key
    ```
+
+   The JWT key is the JWKS Public Key (PEM) on the Clerk Dashboard's API keys page; with it, the server checks
+   session tokens without calling Clerk.
 
 2. `direnv allow`: the committed `.envrc` loads the keys from the keyring and points the `PG*` variables at the
    compose database. `.env.example` lists every variable Warden reads.
@@ -39,9 +43,14 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    `warden_migrate` (the `.envrc` user `warden` is refused), so every table gets the app's grants. Run it again
    after pulling new migrations.
 6. `pnpm dev`: the server on `PORT` (default 8080) and the dashboard on Vite's port (5173), which hands `/api` to
-   the server. Open http://localhost:5173.
+   the server. Open http://localhost:5173. The server runs as `warden_app`, whatever `PGUSER` says: `.envrc`
+   keeps `PGUSER=warden` for `roles` and the tests, which need the compose superuser.
 
 The server checks its configuration at start-up and stops, naming the variable, when a required one is missing.
+It also stops, naming the role and the reason, when its database role can bypass row-level security: a superuser,
+a role with `BYPASSRLS`, or one that can become such a role or a table's owner (`warden_migrate`, `warden_admin`).
+When the database can't be reached at start, it stays up and checks the role on the first connection that
+succeeds.
 `GET /api/health` answers 200 when the database answers and offers the `vector` extension, and 503 naming the
 failed part otherwise.
 
