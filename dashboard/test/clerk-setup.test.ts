@@ -21,4 +21,11 @@ describe("Clerk localization", () => {
     expect(all.length).toBeGreaterThan(10);
     expect(all.filter((s) => /organi[sz]ation/i.test(s))).toEqual([]);
   });
+
+  // Deleting a Team isn't built (#6), and Clerk's org:admin role can't delete an Organization, so Clerk's screens
+  // never offer a delete in Warden's words.
+  it("offers no delete: no delete string and no deleteOrganization key", () => {
+    expect(strings(localization).filter((s) => /delet/i.test(s))).toEqual([]);
+    expect(JSON.stringify(localization)).not.toContain("deleteOrganization");
+  });
 });

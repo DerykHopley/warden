@@ -61,11 +61,9 @@ export const localization = {
             "Are you sure you want to leave this Team? You will lose access to it and its Warden.",
           successMessage: "You have left the Team.",
         },
-        deleteOrganization: {
-          title: "Delete Team",
-          messageLine1: "Are you sure you want to delete this Team?",
-          successMessage: "You have deleted the Team.",
-        },
+        // No deleteOrganization: deleting a Team isn't built (#6), and Clerk's org:admin role has no
+        // org:sys_profile:delete, so Clerk shows no delete. Deleting only the Clerk Organization would leave
+        // the Team's Warden data behind.
       },
     },
   },
