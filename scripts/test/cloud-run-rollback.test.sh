@@ -237,6 +237,14 @@ assert_line "a revision that doesn't exist: names it" "warden-rel-zzzzzzz-99-1" 
 assert_no_match "a revision that doesn't exist: no call changes traffic or tags" 'update-traffic' "$calls"
 assert_no_match "a revision that doesn't exist: the daily Job isn't touched" 'warden-daily-expiry' "$calls"
 
+# --- A named revision that isn't a release: Google's placeholder answers 200 anywhere, but can't run the daily Job ---
+run_rollback 200 warden-rel-ccccccc-12-1 -- warden-00001-xyz
+assert_equal "the placeholder revision by name: exit 1" 1 "$code"
+assert_line "the placeholder revision by name: names the rule" "only to a release revision (warden-rel-" "$out"
+assert_no_match "the placeholder revision by name: no call changes traffic or tags" 'update-traffic' "$calls"
+assert_no_match "the placeholder revision by name: the daily Job isn't touched" 'jobs update' "$calls"
+assert_equal "the placeholder revision by name: no gcloud call" "" "$calls"
+
 # --- The service's health check never answers 200 afterwards ---
 run_rollback 503 warden-rel-ccccccc-12-1 FAKE_TAG_HEALTH=200 --
 assert_equal "with /api/health answering 503 after the move: exit 1" 1 "$code"

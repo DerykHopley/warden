@@ -326,7 +326,7 @@ notice naming each missing variable (a rollback needs the first four).
 6. **Traffic:** 100% of the service's traffic to that revision, by its name. The same call tags the release it took
    the traffic from `previous` (a tag moves no traffic), which is where a rollback goes by default. So only a
    revision that served is ever tagged `previous`: one whose health gate failed never is. When the revision it took
-   the traffic from isn't a release (after a rollback by name to another revision), the same call removes the
+   the traffic from isn't a release (Google's placeholder before the first release, or after a rollback by hand), the same call removes the
    `previous` tag instead, so a rollback never goes to a stale release.
 7. **The daily Job:** `warden-daily-expiry` gets the same image and its settings afresh (`node
    server/src/daily-expiry.ts`, as `warden-daily`, one retry, its two passwords pinned), so the Job and the service
@@ -334,7 +334,9 @@ notice naming each missing variable (a rollback needs the first four).
    the traffic has moved, naming the Job: dispatch the release again, or set the image by hand (below).
 
 **One at a time, and never backwards.** Only the deploy job (steps 2 to 7) holds the `release` lock; full lanes run
-side by side. A running deploy is never cancelled. While one runs, GitHub keeps only the newest waiting behind it: an
+side by side. (GitHub applies a called workflow's `concurrency` with the caller's context, so `full-lane.yml` and the
+`fast-lane.yml` it calls give each called run a group of its own, the release run's id: one group for every merge
+would queue them.) A running deploy is never cancelled. While one runs, GitHub keeps only the newest waiting behind it: an
 older waiting one shows as cancelled. Since full lanes finish in any order, the deploy script first compares this
 commit with the serving release's (the `<sha7>` in its `warden-rel-` name, looked up in `main`'s history, which the
 workflow checks out whole):
@@ -381,8 +383,9 @@ With no `revision`, it goes back to the release tagged `previous` (step 6 above)
 4. checks that the service's own `/api/health` answers 200, and fails the run otherwise.
 
 It fails before changing anything when no release is tagged `previous` (or that one is already serving, as after a
-rollback), when traffic is split and no revision is named, when the revision isn't one of `warden`'s, or when the
-serving revision isn't the `from` one. To roll back by hand instead:
+rollback), when traffic is split and no revision is named, when the named revision isn't a release (`warden-rel-…`;
+Google's placeholder `warden-00001-…` answers 200 anywhere but can't run the daily Job), when the revision isn't one
+of `warden`'s, or when the serving revision isn't the `from` one. To roll back by hand instead:
 
 ```sh
 gcloud run revisions list --service warden --region europe-west1

@@ -9,7 +9,8 @@
 # README.md's "Releasing" says when to use it.
 #
 # Usage: scripts/cloud-run-rollback.sh [revision]
-#        With a revision: that one, which must be one of warden's revisions.
+#        With a revision: that one, which must be one of warden's release revisions (warden-rel-…), never Google's
+#        placeholder.
 #        With none: the release revision tagged previous, which a release tags when it takes the traffic from it, so
 #        only a revision that served is chosen. A newer revision whose health gate failed never gets that tag.
 # Env:   GCP_PROJECT_ID and CLOUD_SQL_CONNECTION (<project>:<region>:<instance>), required. ROLLBACK_FROM, optional:
@@ -31,6 +32,10 @@ main() {
   [[ $# -le 1 ]] || usage_error "give at most one revision"
   local target=${1-} from=${ROLLBACK_FROM:-}
   [[ -z $target || $target =~ $REVISION_NAME ]] || usage_error "'$target' isn't a revision name"
+  # Google's placeholder (warden-00001-…) answers 200 on any path, so the health checks would pass, but its image
+  # can't run the daily Job: a rollback goes only to a revision a release made.
+  [[ -z $target || $target == "$RELEASE_PREFIX"* ]] ||
+    usage_error "'$target' isn't a release: a rollback goes only to a release revision (${RELEASE_PREFIX}…); nothing changed"
   [[ -z $from || $from =~ $REVISION_NAME ]] || usage_error "ROLLBACK_FROM '$from' isn't a revision name"
   local var
   for var in GCP_PROJECT_ID CLOUD_SQL_CONNECTION; do

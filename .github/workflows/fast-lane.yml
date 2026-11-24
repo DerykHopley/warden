@@ -8,10 +8,12 @@ on:
   # The full lane runs these checks through it, beside its browser jobs.
   workflow_call:
 
-# A newer push to a PR replaces its older run; every push to main runs to the end. The group names the workflow that
-# runs it (in a call, the caller's), so the full lane's call never cancels, or is cancelled by, the PR's own fast lane.
+# A newer push to a PR replaces its older run. On a PR the group names the workflow that runs it (in a call, the
+# caller's), so the full lane's call never cancels, or is cancelled by, the PR's own fast lane. Any other run (a push
+# to main, or a call from a release's full lane) has a group of its own (its run's id), so it runs to the end beside
+# any other: GitHub keeps one waiting run per group, so a shared one would let a third quick merge cancel the second's.
 concurrency:
-  group: fast-lane-${{ github.workflow }}-${{ github.ref }}
+  group: fast-lane-${{ github.event_name == 'pull_request' && format('{0}-{1}', github.workflow, github.ref) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
