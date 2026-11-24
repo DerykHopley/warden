@@ -105,26 +105,17 @@ export async function listPending(
   tx: Transaction<Database>,
   team: string,
 ): Promise<PendingProposal[]> {
+  // One statement, so `stale` and the list read the same snapshot.
   const rows = await tx
-    .selectFrom("proposals")
-    .selectAll()
-    .where("team_id", "=", team)
-    .where("state", "=", "pending")
-    .orderBy("requested_at")
-    .orderBy("id")
+    .selectFrom("proposals as asked")
+    .selectAll("asked")
+    .select((eb) => eb.exists(changesSinceAsked(eb, team)).as("stale"))
+    .where("asked.team_id", "=", team)
+    .where("asked.state", "=", "pending")
+    .orderBy("asked.requested_at")
+    .orderBy("asked.id")
     .execute();
-  const stale = new Set(
-    (
-      await changesSinceAsked(tx, team)
-        .select("asked.id")
-        .distinct()
-        .where("asked.state", "=", "pending")
-        .execute()
-    ).map((row) => row.id),
-  );
-  return rows.map((row) =>
-    PendingProposal.parse({ ...proposalFromRow(row), stale: stale.has(row.id) }),
-  );
+  return rows.map(({ stale, ...row }) => PendingProposal.parse({ ...proposalFromRow(row), stale }));
 }
 
 /** Under the Team's lock, the Lead `person` rechecked, the Team's pending Proposal `id`. */

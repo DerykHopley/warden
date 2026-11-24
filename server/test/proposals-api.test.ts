@@ -366,71 +366,43 @@ describe("GET /api/proposals", () => {
     ["Member", MEMBER],
     ["Lead", LEAD],
     ["Admin", ADMIN],
-  ])("answers a %s the Team's id and its pending Proposals, oldest first", async (_role, as) => {
-    const { team, finding } = await teamWithFinding();
-    const first = Proposal.parse(
-      (await propose(team, finding.id, { decision: "mark_false_positive", reason: "First" })).body,
-    );
-    const second = Proposal.parse(
-      (
-        await propose(team, finding.id, {
-          decision: "accept",
-          reason: "Second",
-          until: nextWeek(),
-        })
-      ).body,
-    );
-
-    const answer = await listProposals(as, team);
-
-    expect(answer.status).toBe(200);
-    expect(ProposalsBody.parse(answer.body)).toEqual({
-      team,
-      proposals: [
-        { ...first, stale: false },
-        { ...second, stale: false },
-      ],
-    });
-  });
-
-  it("leaves out approved and rejected Proposals", async () => {
-    const { team, finding } = await teamWithFinding();
-    const ask = async (reason: string) =>
-      Proposal.parse(
-        (await propose(team, finding.id, { decision: "mark_false_positive", reason })).body,
+  ])(
+    "answers a %s the Team's id and its pending Proposals, oldest first, each marked stale or not",
+    async (_role, as) => {
+      // Which Proposals are listed, and the stale rule itself, are Findings.pendingProposals' (proposals.test.ts).
+      const { team, finding } = await teamWithFinding();
+      const first = Proposal.parse(
+        (await propose(team, finding.id, { decision: "mark_false_positive", reason: "First" }))
+          .body,
       );
-    const rejected = await ask("To reject");
-    const pending = await ask("Still pending");
-    await reject(team, rejected.id, { reason: "No" });
-    const approved = await ask("To approve");
-    expect((await approve(team, approved.id)).status).toBe(200);
+      // A Lead's decision after the first was asked makes it stale.
+      await post(`/api/findings/${finding.id}/accept`, {
+        as: LEAD,
+        team,
+        body: { reason: "Fixed next sprint", until: nextWeek() },
+      });
+      const second = Proposal.parse(
+        (
+          await propose(team, finding.id, {
+            decision: "accept",
+            reason: "Second",
+            until: nextWeek(),
+          })
+        ).body,
+      );
 
-    const answer = await listProposals(MEMBER, team);
+      const answer = await listProposals(as, team);
 
-    expect(ProposalsBody.parse(answer.body).proposals.map((p) => p.id)).toEqual([pending.id]);
-  });
-
-  it("lists a Proposal whose Finding changed after it was asked as stale, and approving it still answers 409", async () => {
-    const { team, finding, proposal } = await pendingProposal();
-    await post(`/api/findings/${finding.id}/accept`, {
-      as: LEAD,
-      team,
-      body: { reason: "Fixed next sprint", until: nextWeek() },
-    });
-    const fresh = Proposal.parse(
-      (await propose(team, finding.id, { decision: "mark_false_positive", reason: "Fresh" })).body,
-    );
-
-    const answer = await listProposals(MEMBER, team);
-
-    expect(
-      ProposalsBody.parse(answer.body).proposals.map((p) => ({ id: p.id, stale: p.stale })),
-    ).toEqual([
-      { id: proposal.id, stale: true },
-      { id: fresh.id, stale: false },
-    ]);
-    expect((await approve(team, proposal.id)).status).toBe(409);
-  });
+      expect(answer.status).toBe(200);
+      expect(ProposalsBody.parse(answer.body)).toEqual({
+        team,
+        proposals: [
+          { ...first, stale: true },
+          { ...second, stale: false },
+        ],
+      });
+    },
+  );
 
   it("never answers another Team's Proposals", async () => {
     const a = await pendingProposal();
