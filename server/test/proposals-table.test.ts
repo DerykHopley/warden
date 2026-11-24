@@ -2,16 +2,16 @@
 // Proposal, a change to a pending one's own fields, and every delete and truncate, for warden_app and for the tables'
 // owner, warden_migrate. warden_app has no delete or truncate grant, so Postgres refuses those first; the triggers
 // refuse the rest. Deciding a pending one (its state and decided_* columns) is the one update allowed.
+// It runs on a database of its own: the owner's truncate takes a lock on proposals and, through finding_history's
+// foreign key, on finding_history too, which deadlocks another file writing history on the suite's shared database.
 import { randomUUID } from "node:crypto";
 import { sql, type RawBuilder } from "kysely";
-import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { inject } from "vitest";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
-import { poolAs, type DatabaseRole } from "./databases.ts";
+import { createMigratedTestDatabase, poolAs, type DatabaseRole } from "./databases.ts";
 
 const team = `org_proposals_${randomUUID()}`;
-const pools: pg.Pool[] = [];
+const ends: (() => Promise<unknown>)[] = [];
 const withTeamAs = {} as Record<"warden_app" | "warden_migrate", WithTeam>;
 
 const finding = (id: string) => ({
@@ -65,9 +65,11 @@ const decide = (id: string, role: "warden_app" | "warden_migrate" = "warden_app"
   );
 
 beforeAll(async () => {
+  const database = await createMigratedTestDatabase();
+  ends.push(database.drop);
   for (const role of ["warden_app", "warden_migrate"] as const satisfies DatabaseRole[]) {
-    const pool = poolAs(role, inject("testDatabase"));
-    pools.push(pool);
+    const pool = poolAs(role, database.name);
+    ends.push(() => pool.end());
     withTeamAs[role] = createWithTeam(pool);
   }
   await withTeamAs.warden_app(team, async (tx) => {
@@ -80,11 +82,11 @@ beforeAll(async () => {
   await pending("p-pending");
   await pending("p-decided");
   await decide("p-decided");
-});
+}, 30_000);
 
 afterAll(async () => {
-  for (const pool of pools) await pool.end();
-});
+  for (const end of ends.splice(0).reverse()) await end();
+}, 30_000);
 
 const rows = () =>
   withTeamAs.warden_app(team, (tx) =>
