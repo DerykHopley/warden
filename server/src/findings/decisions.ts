@@ -144,6 +144,22 @@ export async function applyDecision(
 }
 
 /**
+ * The Team's history rows (`h`) written on a Proposal's (`asked`) Finding after it was asked: any one makes that
+ * Proposal stale. Approving refuses a stale Proposal and the pending list marks it, both through this one query, so
+ * the two can't disagree. Compared in Postgres, at its microseconds: a JavaScript Date would round `requested_at` to
+ * the millisecond. Both times are written at `writtenAt`, so in the Team lock's order.
+ */
+export function changesSinceAsked(tx: Transaction<Database>, team: string) {
+  return tx
+    .selectFrom("finding_history as h")
+    .innerJoin("proposals as asked", (join) =>
+      join.onRef("asked.team_id", "=", "h.team_id").onRef("asked.finding_id", "=", "h.finding_id"),
+    )
+    .where("h.team_id", "=", team)
+    .whereRef("h.at", ">", "asked.requested_at");
+}
+
+/**
  * applyDecision's work, for a caller that already holds the Team's lock and has rechecked the Lead. With `proposal`,
  * the decision approves that Proposal: it is refused when the Finding has changed since the Proposal was asked (a
  * history row after its `requested_at`, both written at `writtenAt`, so in the Team lock's order), and each history
@@ -159,20 +175,10 @@ export async function applyLockedDecision(
 ): Promise<Finding> {
   const { finding, refuse } = await findingFor(tx, team, id, decision.call);
   if (proposal) {
-    // Compared in Postgres, at its microseconds: a JavaScript Date would round requested_at to the millisecond.
-    const later = await tx
-      .selectFrom("finding_history")
-      .select("at")
-      .where("team_id", "=", team)
-      .where("finding_id", "=", id)
-      .where("at", ">", (eb) =>
-        eb
-          .selectFrom("proposals")
-          .select("requested_at")
-          .where("team_id", "=", team)
-          .where("id", "=", proposal.id),
-      )
-      .orderBy("id")
+    const later = await changesSinceAsked(tx, team)
+      .select("h.at")
+      .where("asked.id", "=", proposal.id)
+      .orderBy("h.id")
       .executeTakeFirst();
     if (later) {
       throw refuse(

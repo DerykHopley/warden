@@ -3,11 +3,18 @@
 // who decided. Every call runs inside the caller's `withTeam` transaction, under the Team's Findings lock, so a
 // Proposal is decided at most once and a refusal writes nothing.
 import { randomUUID } from "node:crypto";
-import { Proposal, type Actor, type ProposalDecision, type ProposeBody } from "@warden/contracts";
+import {
+  PendingProposal,
+  Proposal,
+  type Actor,
+  type ProposalDecision,
+  type ProposeBody,
+} from "@warden/contracts";
 import type { Selectable, Transaction } from "kysely";
 import type { Database } from "../schema.ts";
 import {
   applyLockedDecision,
+  changesSinceAsked,
   findingFor,
   recheckLead,
   type Decision,
@@ -91,6 +98,33 @@ export async function applyPropose(
     .returningAll()
     .executeTakeFirstOrThrow();
   return proposalFromRow(row);
+}
+
+/** The Team's pending Proposals, oldest first, each marked stale when its Finding has changed since it was asked. */
+export async function listPending(
+  tx: Transaction<Database>,
+  team: string,
+): Promise<PendingProposal[]> {
+  const rows = await tx
+    .selectFrom("proposals")
+    .selectAll()
+    .where("team_id", "=", team)
+    .where("state", "=", "pending")
+    .orderBy("requested_at")
+    .orderBy("id")
+    .execute();
+  const stale = new Set(
+    (
+      await changesSinceAsked(tx, team)
+        .select("asked.id")
+        .distinct()
+        .where("asked.state", "=", "pending")
+        .execute()
+    ).map((row) => row.id),
+  );
+  return rows.map((row) =>
+    PendingProposal.parse({ ...proposalFromRow(row), stale: stale.has(row.id) }),
+  );
 }
 
 /** Under the Team's lock, the Lead `person` rechecked, the Team's pending Proposal `id`. */

@@ -1,6 +1,7 @@
 // The Findings page: `GET /api/findings`'s answer, and the page's view state as its URL carries it
 // (`/findings?status=fixed&severity=high&module=patch&finding=<id>`).
 import { z } from "zod";
+import { Proposal } from "./decisions.ts";
 import { Finding, Id, Module, Severity, Status } from "./finding.ts";
 
 /**
@@ -9,6 +10,20 @@ import { Finding, Id, Module, Severity, Status } from "./finding.ts";
  */
 export const FindingsBody = z.object({ team: Id, findings: z.array(Finding) });
 export type FindingsBody = z.infer<typeof FindingsBody>;
+
+/**
+ * A pending Proposal, and whether it is stale: its Finding has changed since it was asked (a history row later than
+ * its `requested_at`), so approving it would be refused with 409. It can still be rejected.
+ */
+export const PendingProposal = Proposal.extend({ stale: z.boolean() });
+export type PendingProposal = z.infer<typeof PendingProposal>;
+
+/**
+ * `GET /api/proposals`: the session's Team's pending Proposals, oldest first, and that Team's id, as in
+ * `FindingsBody`. Approved and rejected Proposals aren't listed.
+ */
+export const ProposalsBody = z.object({ team: Id, proposals: z.array(PendingProposal) });
+export type ProposalsBody = z.infer<typeof ProposalsBody>;
 
 const ALL = "all";
 

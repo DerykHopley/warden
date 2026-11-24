@@ -2,7 +2,13 @@
 // and who decided (ADR 0008). Through the real app, as the person each session names; each case uses Teams of its own
 // in the suite's shared database, with Findings from real Scans through the Findings module.
 import { randomUUID } from "node:crypto";
-import { HistoryBody, Proposal, type Observation, type Scan } from "@warden/contracts";
+import {
+  HistoryBody,
+  Proposal,
+  ProposalsBody,
+  type Observation,
+  type Scan,
+} from "@warden/contracts";
 import type { Hono } from "hono";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
@@ -42,6 +48,7 @@ const ENV = "guard/agent-can-read-env";
 const LEAD = "user_lead";
 const OTHER_LEAD = "user_other_lead";
 const MEMBER = "user_member";
+const ADMIN = "user_admin";
 const nextWeek = () => new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
 
 const observation = (path: string): Observation => ({
@@ -63,10 +70,11 @@ const scan = (team: string, id: string, startedAt: string, paths: string[]): Sca
   observations: paths.map(observation),
 });
 
-/** A Team with two Leads and a Member, and one Open Finding a Scan opened. */
+/** A Team with an Admin, two Leads and a Member, and one Open Finding a Scan opened. */
 async function teamWithFinding() {
   const team = `org_${randomUUID()}`;
   await seedTeam(withTeam, team, [
+    [ADMIN, "admin"],
     [LEAD, "lead"],
     [OTHER_LEAD, "lead"],
     [MEMBER, "member"],
@@ -341,6 +349,123 @@ describe("a Proposal its decision would refuse now", () => {
     });
     expect(await stored(team)).toEqual(before);
     expect(before.proposals).toMatchObject([{ id: proposal.id, state: "pending" }]);
+  });
+});
+
+/** GET /api/proposals as `as` in `team`; with `claims`, the token carries those instead of the Team's. */
+async function listProposals(as: string, team: string, claims?: Record<string, unknown>) {
+  const token = await sessionToken(key, as, 60, claims ?? activeOrganization(team));
+  const res = await app.request("/api/proposals", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+describe("GET /api/proposals", () => {
+  it.each([
+    ["Member", MEMBER],
+    ["Lead", LEAD],
+    ["Admin", ADMIN],
+  ])("answers a %s the Team's id and its pending Proposals, oldest first", async (_role, as) => {
+    const { team, finding } = await teamWithFinding();
+    const first = Proposal.parse(
+      (await propose(team, finding.id, { decision: "mark_false_positive", reason: "First" })).body,
+    );
+    const second = Proposal.parse(
+      (
+        await propose(team, finding.id, {
+          decision: "accept",
+          reason: "Second",
+          until: nextWeek(),
+        })
+      ).body,
+    );
+
+    const answer = await listProposals(as, team);
+
+    expect(answer.status).toBe(200);
+    expect(ProposalsBody.parse(answer.body)).toEqual({
+      team,
+      proposals: [
+        { ...first, stale: false },
+        { ...second, stale: false },
+      ],
+    });
+  });
+
+  it("leaves out approved and rejected Proposals", async () => {
+    const { team, finding } = await teamWithFinding();
+    const ask = async (reason: string) =>
+      Proposal.parse(
+        (await propose(team, finding.id, { decision: "mark_false_positive", reason })).body,
+      );
+    const rejected = await ask("To reject");
+    const pending = await ask("Still pending");
+    await reject(team, rejected.id, { reason: "No" });
+    const approved = await ask("To approve");
+    expect((await approve(team, approved.id)).status).toBe(200);
+
+    const answer = await listProposals(MEMBER, team);
+
+    expect(ProposalsBody.parse(answer.body).proposals.map((p) => p.id)).toEqual([pending.id]);
+  });
+
+  it("lists a Proposal whose Finding changed after it was asked as stale, and approving it still answers 409", async () => {
+    const { team, finding, proposal } = await pendingProposal();
+    await post(`/api/findings/${finding.id}/accept`, {
+      as: LEAD,
+      team,
+      body: { reason: "Fixed next sprint", until: nextWeek() },
+    });
+    const fresh = Proposal.parse(
+      (await propose(team, finding.id, { decision: "mark_false_positive", reason: "Fresh" })).body,
+    );
+
+    const answer = await listProposals(MEMBER, team);
+
+    expect(
+      ProposalsBody.parse(answer.body).proposals.map((p) => ({ id: p.id, stale: p.stale })),
+    ).toEqual([
+      { id: proposal.id, stale: true },
+      { id: fresh.id, stale: false },
+    ]);
+    expect((await approve(team, proposal.id)).status).toBe(409);
+  });
+
+  it("never answers another Team's Proposals", async () => {
+    const a = await pendingProposal();
+    const b = await pendingProposal();
+
+    const answer = await listProposals(MEMBER, a.team);
+
+    const parsed = ProposalsBody.parse(answer.body);
+    expect(parsed.team).toBe(a.team);
+    expect(parsed.proposals.map((p) => p.id)).toEqual([a.proposal.id]);
+    expect(JSON.stringify(answer.body)).not.toContain(b.team);
+    expect(JSON.stringify(answer.body)).not.toContain(b.proposal.id);
+  });
+
+  it("answers 401 with no session", async () => {
+    const res = await app.request("/api/proposals");
+    expect({ status: res.status, body: await res.json() }).toEqual({
+      status: 401,
+      body: { error: "Not signed in" },
+    });
+  });
+
+  it("answers 403 with no active Team", async () => {
+    const { team } = await teamWithFinding();
+    expect(await listProposals(MEMBER, team, {})).toEqual({
+      status: 403,
+      body: { error: "Choose a Team first" },
+    });
+  });
+
+  it("answers 409 for a Team not yet opened", async () => {
+    expect(await listProposals("user_new", `org_${randomUUID()}`)).toEqual({
+      status: 409,
+      body: { error: "Your Team's Admin must open Warden first" },
+    });
   });
 });
 

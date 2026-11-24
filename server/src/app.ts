@@ -17,6 +17,7 @@ import {
   type MeBody,
   type MembersBody,
   type Proposal,
+  type ProposalsBody,
   type TeamMember,
   type Role,
 } from "@warden/contracts";
@@ -320,6 +321,14 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     const team = c.get("team");
     const list = await findings.list(team);
     return c.json({ team, findings: list } satisfies FindingsBody);
+  });
+
+  // Any person in the Team reads its pending Proposals, oldest first, each marked stale when its Finding has changed
+  // since it was asked (story 3). Approving and rejecting stay a Lead's.
+  app.get("/api/proposals", requireRole("member"), async (c) => {
+    const team = c.get("team");
+    const proposals = await findings.pendingProposals(team);
+    return c.json({ team, proposals } satisfies ProposalsBody);
   });
 
   // Any person in the Team reads a Finding's history, oldest first.

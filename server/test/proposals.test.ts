@@ -385,3 +385,52 @@ describe("a Proposal no longer pending, or not the Team's", () => {
     expect((await stored(a.team)).proposals).toMatchObject([{ state: "pending" }]);
   });
 });
+
+describe("the Team's pending Proposals", () => {
+  it("lists only pending ones, oldest first, each with the Proposal's fields", async () => {
+    const { team, finding } = await teamWithFinding();
+    const ask = (reason: string) =>
+      findings.propose(team, finding.id, {
+        requester: member,
+        decision: "mark_false_positive",
+        reason,
+      });
+    const first = await ask("first");
+    const rejected = await ask("rejected");
+    const third = await ask("third");
+    await findings.rejectProposal(team, rejected.id, { actor: lead, reason: "No" });
+
+    expect(await findings.pendingProposals(team)).toEqual([
+      { ...first, stale: false },
+      { ...third, stale: false },
+    ]);
+  });
+
+  it("marks one stale when its Finding changed after it was asked, the same as approving it refuses", async () => {
+    const { team, finding } = await teamWithFinding();
+    const old = await findings.propose(team, finding.id, {
+      requester: member,
+      decision: "mark_false_positive",
+      reason: "Asked before the accept",
+    });
+    await findings.accept(team, finding.id, { actor: lead, reason: "Later", until: nextWeek() });
+    const fresh = await findings.propose(team, finding.id, {
+      requester: agent,
+      decision: "mark_false_positive",
+      reason: "Asked after the accept",
+    });
+
+    expect(
+      (await findings.pendingProposals(team)).map((p) => [p.reason, p.stale] as const),
+    ).toEqual([
+      ["Asked before the accept", true],
+      ["Asked after the accept", false],
+    ]);
+    await expect(findings.approveProposal(team, old.id, { actor: lead })).rejects.toThrow(
+      /changed since the Proposal was asked/,
+    );
+    await expect(
+      findings.approveProposal(team, fresh.id, { actor: lead }),
+    ).resolves.toMatchObject({ state: "approved" });
+  });
+});
