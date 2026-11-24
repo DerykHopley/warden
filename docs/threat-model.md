@@ -1,0 +1,316 @@
+# Warden's threat model
+
+What can go wrong with Warden's security, who might make it go wrong, and how each threat is met. It's written
+before Warden receives anyone's Agent events, so what Warden protects is decided, not discovered. What Warden
+stores, for how long and where it goes is in [`data.md`](data.md).
+
+**Built or designed.** Every threat row says which. **Built** means the mitigation exists in code with a test, and
+names the slice that built it. **Designed** means it's decided but not built yet, and names the spec that will
+build it. A designed row is a plan, not a guarantee. Slices are the foundation spec's (#1): slice 1a is #4, slice 2
+is this document. The Guard, Patch and Vouch specs come after the foundation.
+
+Where this document and an ADR disagree, the ADR wins.
+
+## Method
+
+[STRIDE](https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats), applied at each
+trust boundary:
+
+- **S, Spoofing:** can someone pretend to be another person, Team or service?
+- **T, Tampering:** can someone change data or code they shouldn't?
+- **R, Repudiation:** can someone deny what they did, for lack of a record?
+- **I, Information disclosure:** can someone read what they shouldn't?
+- **D, Denial of service:** can someone stop Warden working, or run up its bill?
+- **E, Elevation of privilege:** can someone do more than their Role or credential allows?
+
+## The system on one page
+
+Each box named TB1 to TB9 is a trust boundary: whatever crosses its edge is checked on the way in.
+
+```mermaid
+flowchart LR
+  subgraph TB1["TB1: the person's browser"]
+    UI["Dashboard"]
+  end
+
+  subgraph TB5["TB5: the developer's laptop"]
+    CC["Claude Code"]
+    MH["Managed hook settings, with the Team's hook token"]
+    SA["safeagents scrub, where present"]
+    CC --> MH
+    MH --> SA
+  end
+
+  subgraph GCP["Warden's GCP project, europe-west1"]
+    subgraph TB2["TB2: the API on Cloud Run"]
+      API["API: Clerk session and Role checks"]
+      HOOK["Hook endpoint: token, limits, redact on arrival"]
+      WH["GitHub webhook receiver: signature check"]
+      JUDGE["Judge: a Spot run"]
+    end
+    subgraph TB3["TB3: the database, through withTeam"]
+      DB[("Cloud SQL Postgres, row-level security")]
+    end
+    subgraph TB4["TB4: Secret Manager"]
+      SM["Clerk key, database passwords, hook tokens, GitHub app key, OpenRouter key, pseudonym keys"]
+    end
+    LOG["Cloud Logging, through the redactor"]
+  end
+
+  subgraph TB6["TB6: GitHub, through the GitHub app"]
+    GH["The Team's repos"]
+  end
+
+  subgraph TB7["TB7: the Judge calling OpenRouter"]
+    OR["OpenRouter and its providers, ZDR only"]
+  end
+
+  subgraph TB8["TB8: Langfuse Cloud"]
+    LF["Traces of Warden's model calls, metadata only"]
+  end
+
+  subgraph TB9["TB9: CI and the release from main"]
+    CI["GitHub Actions: fast lane, release from main"]
+  end
+
+  CLERK["Clerk: identity and Clerk Organizations"]
+
+  UI -->|"HTTPS, Clerk session token"| API
+  UI -->|"sign-in"| CLERK
+  API -->|"verify session"| CLERK
+  SA -->|"HTTPS POST, hook token in a header"| HOOK
+  API -->|"withTeam"| DB
+  HOOK -->|"withTeam"| DB
+  JUDGE -->|"withTeam"| DB
+  WH -->|"withTeam"| DB
+  API --> SM
+  HOOK --> SM
+  JUDGE --> SM
+  GH -->|"signed webhooks"| WH
+  API -->|"read with Contents read; Fix PRs only with the write grant"| GH
+  JUDGE -->|"redacted events and repo text as tagged data"| OR
+  JUDGE -->|"metadata only"| LF
+  API --> LOG
+  HOOK --> LOG
+  CI -->|"release, only from main"| API
+```
+
+| Boundary | What crosses it | Checked by | Built or designed |
+|---|---|---|---|
+| TB1 the browser and the dashboard | A person's requests, carrying a Clerk session token | Clerk session check, Role check on the server, security headers | Built in part: session check and headers (slice 1a, #4). Designed: Role check (slice 5) |
+| TB2 the API on Cloud Run | Every request from outside Google Cloud | The checks above, plus the hook token and the webhook signature | Built in part: slice 1a (#4). Designed: hook and webhooks (Guard spec), Cloud Run itself (slice 1b) |
+| TB3 the database through `withTeam` | Every query from request and job code | Row-level security, forced, on every Team-owned table | Designed: slice 4 |
+| TB4 Secret Manager | Secret values, read by Warden's service account | IAM: only Warden's own service account reads them | Designed: slice 1b |
+| TB5 the developer's laptop and its managed hook, into the hook endpoint | Agent events | The hook token, the limits, redaction on arrival | Designed: Guard spec |
+| TB6 the GitHub app, both ways | Webhooks in; repo reads and Fix PRs out | Webhook signature in; the app's permissions out | Designed: Guard spec |
+| TB7 the Judge calling OpenRouter | Redacted Agent events and repo text | Tagged data, ZDR-only routing, spending limits | Designed: Guard spec |
+| TB8 Langfuse | Metadata about Warden's model calls | Metadata only: no input or output | Designed: Guard spec |
+| TB9 CI and the release from `main` | Code and the container image | The merge gate; releases only from `main` | Built in part: the merge gate (rig) and the fast lane (slice 1a, #4). Designed: the release (slice 1b) |
+
+## Who might attack
+
+- **An outside attacker on the public URL** has the URL and anything they can send to it, and wants any Team's
+  data, a way in, or a big bill.
+- **A person in another Team** has a real sign-in and Role in their own Team, and wants another Team's Findings, or
+  to change them.
+- **A Member who tries a Lead's or Admin's action** has a Member Role, and wants to accept risk, mark a False
+  positive or change Roles without the right Role.
+- **A developer in the Team** has the Team's hook token, readable from their own laptop's managed settings, and
+  controls the laptop's environment. They want to hide their own sessions, fake someone else's, or reach more than
+  events with the token.
+- **Text written to steer the Judge, inside Agent events or repo files,** has only the words the Judge will read,
+  and wants the Judge to miss a problem, open false Findings, or act beyond its run.
+- **Whoever holds a leaked secret** (the hook token, the GitHub app's private key, the OpenRouter key, or Clerk's
+  secret key) has that secret's power until it's rotated, and wants to write events, read repos or open PRs, spend
+  on models, or sign anyone in.
+- **A compromised dependency or CI step** has code running at build time or in the server, and wants secrets, a
+  backdoor in the release, or Team data.
+- **Warden's own operator, who holds the database's admin role,** has every Team's rows through that role, and might
+  read or change any Team's data, deliberately or by mistake.
+
+## Threats
+
+Each table covers one component. The source names the ADR, secure default (`docs/secure-defaults.md`, "SD"), glossary
+entry or decision a mitigation comes from. Decisions numbered "#5 d1" to "#5 d8" are the eight security choices
+settled on ticket #5.
+
+### Hook endpoint (designed, Guard spec)
+
+| # | Threat | STRIDE | Who | Impact | Mitigation | Where built | Built or designed | Source |
+|---|---|---|---|---|---|---|---|---|
+| H1 | Events sent with no token or a wrong one | S | Outside attacker | Fake events in a Team; paid Judge calls | The endpoint refuses any event without a valid token, compared in constant time; a refused event is never stored or judged | Guard spec | Designed | ADR 0007 |
+| H2 | A token used to write into another Team | S, E | A developer in the Team; a leaked token's holder | Events land in the wrong Team | The token names the Team. The endpoint takes the Team from the token alone, never from the body, and writes through `withTeam`, so an event reaches only its own Team | Guard spec | Designed | ADR 0007, ADR 0006 |
+| H3 | The token read from a laptop used for more than events | E | A developer in the Team | Reading the Team's data, or changing a Status | Every developer in the Team can read the token, so it grants writing Agent events into that Team and nothing else: the API never accepts it, so no read, no Status change, no other Team | Guard spec | Designed | ADR 0007, #5 d6 |
+| H4 | A leaked token kept in use | S | A leaked token's holder | Fake or flooding events until it's stopped | Tokens live in Secret Manager and an Admin rotates them per Team. On rotation the old token stays valid for 24 hours, so the managed settings can be redeployed, then stops | Guard spec | Designed | ADR 0007, #5 d6 |
+| H5 | A token in a URL ends up in the logs | I | Anyone who reads the logs | A working token leaks | The token goes only in a request header (the hook's `headers`, from a variable in `allowedEnvVars`), never in a URL, because Cloud Run's request logs keep the URL. The redactor masks bearer tokens in Warden's own lines | Guard spec (header); slice 1a, #4 (redactor) | Designed (header); Built (redactor) | SD redaction in logs |
+| H6 | A flood of events | D | An outside attacker with a token; a developer | Each event leads to a paid Judge call: a big bill, a slow endpoint | A per-Team rate limit and a body size limit; events over them are refused, and the refusals are counted in the session record | Guard spec | Designed | SD rate limits on every paid or slow path |
+| H7 | Event content written to the logs | I | Anyone who reads the logs; the operator | Agent event content kept 30 days, outside judge-then-drop | Event bodies are never logged: only the Team, the event name, its size and the outcome | Guard spec | Designed | SD redaction in logs, ADR 0007 |
+| H8 | Secrets or personal data stored from event content | I | Anyone with database access; the operator | Secrets, prompts or names kept | Redacted on arrival, whatever the Privacy tier, including the home folder name in `cwd` and `transcript_path`. Fields above the Team's Privacy tier are dropped before anything is stored | Guard spec | Designed | ADR 0007, SD redaction on output |
+| H9 | Events kept longer than needed | I | Anyone who reaches the database later | More data to leak | Judge, then drop: events kept only until judged and at most 7 days; a daily job deletes the rest (`data.md`) | Guard spec | Designed | ADR 0007, SD retention |
+| H10 | A developer forges or floods their own Team's events, or sends another developer's identifier | S, R | A developer in the Team | False or hidden sessions in their own Team | Accepted residual risk: it costs the Team's own budget, the limits in H6 cap it, and it shows in the session records | Guard spec | Designed | ADR 0007 |
+| H11 | A developer switches the hook off | R | A developer in the Team | Sessions go unseen | The hook is set in managed settings, which outrank a developer's own settings. A developer with admin rights on their laptop can still remove them: an accepted residual risk | Guard spec | Designed | ADR 0007 |
+
+### GitHub app (designed, Guard spec)
+
+| # | Threat | STRIDE | Who | Impact | Mitigation | Where built | Built or designed | Source |
+|---|---|---|---|---|---|---|---|---|
+| G1 | The app can read or change more than it needs | I, E | Whoever holds the app's private key; a bug in Warden | Wider access to a Team's repos | Read-only by default: the repository permissions **Contents** (read) and **Metadata** (read), and nothing else | Guard spec | Designed | SD personal data or private code, Glossary (Quick) |
+| G2 | Write access held for a Team that never granted it | E, T | Whoever holds the app's private key | Commits to a Team's repos | The Fix PR write grant is opt-in per Team, given by an Admin: **Contents** (write) and **Pull requests** (write). GitHub gives an app the same permissions in every installation, so the grant is a separate installation (open question 2) | Guard spec | Designed | Glossary (Fix PR, Admin) |
+| G3 | A change lands without a person | T, E | A bug in Warden; text steering the Judge | Unreviewed code in a Team's main branch | A Fix PR is only ever a pull request on its own branch; the app never pushes to the default branch, and a person merges it | Guard spec | Designed | Glossary (Fix PR) |
+| G4 | The app's private key or webhook secret leaks | S | Whoever finds it | Acting as the app on every Team's repos | Both live in Secret Manager, read only by Warden's service account, and are rotated if exposed | Guard spec | Designed | SD secrets |
+| G5 | A forged webhook | S, T | Outside attacker | Fake repo events, false Scans | Every webhook's `X-Hub-Signature-256` is checked (HMAC-SHA256 with the webhook secret, constant-time compare) before anything is read; a missing or wrong signature is refused | Guard spec | Designed | SD public URL, #5 (GitHub's guidance) |
+| G6 | An installation's events reach the wrong Team | I, T | A person in another Team | Another Team's repos scanned into yours | An Admin links each installation to one Team; webhooks for an unlinked installation are ignored, and the Team never comes from the payload | Guard spec | Designed | ADR 0006 |
+| G7 | A Real-world run's Findings seen beyond the repo's owner | I | Others in the Team; the eval | A cohort member's problems shown to others | Its Findings are held in a Team only the repo's owner belongs to, never used as eval data, and never copied to the preview database. Only repos whose owners opted in are scanned | Guard spec | Designed | Glossary (Real-world run) |
+
+### Judge (designed, Guard spec)
+
+| # | Threat | STRIDE | Who | Impact | Mitigation | Where built | Built or designed | Source |
+|---|---|---|---|---|---|---|---|---|
+| J1 | Outside text steers the Judge | T, E | Text written to steer the Judge | Missed problems, false Findings | Outside text (Agent events, repo files) goes into prompts as tagged data, never as instructions | Guard spec | Designed | SD outside text as tagged data |
+| J2 | Steering text goes unnoticed | R | Text written to steer the Judge | An attempt leaves no record | Text that reads like instructions is flagged | Guard spec | Designed | SD flag instruction-like text |
+| J3 | A change quietly breaks J1 or J2 | T | A bug in Warden | Steering starts working again | An injection fixture, with a test that the app ignores it | Guard spec | Designed | SD injection fixture |
+| J4 | The Judge decides what a person must decide | E | Text written to steer the Judge; a bug | A Finding closed without a person | The Judge is a Spot run: through `report` it can only open Findings. It can't mark one Fixed, Accepted or False positive. Agents only propose | Guard spec (on slice 7's `report`) | Designed | ADR 0005, Glossary (Actor, Spot run) |
+| J5 | Spending runs away | D | An outside attacker; a developer; a looping run | The month's budget gone | Three limits: the $15 cap on the OpenRouter key; per-Team limits that count every spending path (chat, Judge, retries, Scans), with a test for each path; a call budget per run | Guard spec | Designed | SD spending cap, per-Team limits, call budget |
+| J6 | Event content kept or trained on by a model provider | I | The model provider | A Team's content outside Warden's retention | Routing only to Zero Data Retention endpoints, with training off, on the account and per request; the local-model option sends nothing to OpenRouter (`data.md`) | Guard spec | Designed | SD local-model option, SD data.md lists what leaves |
+| J7 | The Judge's input kept in Langfuse | I | Anyone with Langfuse access | Event content kept beyond 7 days | A Judge call's trace holds metadata only: model, tokens, cost, timing, outcome | Guard spec | Designed | ADR 0007, #5 d2 |
+| J8 | A flagged session's evidence questioned later | R | A developer; an assessor | The Finding can't be checked against what the Judge saw | The Finding keeps the masked events the Judge used and a SHA-256 hash of the redacted events it read, in order | Guard spec | Designed | ADR 0007, #5 d4 |
+
+### Dashboard and API (built in part, #4; Roles in slice 5)
+
+| # | Threat | STRIDE | Who | Impact | Mitigation | Where built | Built or designed | Source |
+|---|---|---|---|---|---|---|---|---|
+| A1 | API calls without a valid session | S | Outside attacker | Reading a person's data | Every API request but the health check needs a valid Clerk session token; a missing, expired or wrongly signed token gets 401 | Slice 1a, #4 | Built | ADR 0008 |
+| A2 | Framing, injected scripts, MIME sniffing | T, I | Outside attacker | Clickjacking, script injection | Every response carries a Content-Security-Policy with `frame-ancestors 'none'`, and `X-Content-Type-Options: nosniff` | Slice 1a, #4 | Built | SD security headers |
+| A3 | An error leaks detail | I | Outside attacker | Stack traces or internals revealed | A 500 answers with a generic body: no stack, no error message | Slice 1a, #4 | Built | SD redaction on output |
+| A4 | A Member tries a Lead's or Admin's action | E | A Member | Risk accepted, or Roles changed, without the right Role | The Role is read from Warden's own table, on the server, on every data-changing request; never trusted from the client | Slice 5 (Roles), slice 8 (decisions) | Designed | SD Roles server-side, ADR 0008 |
+| A5 | Sign-in guessed or flooded | S, D | Outside attacker | Accounts taken over, sign-in down | A rate limit on sign-in | Slice 5 | Designed | SD rate limits on sign-in |
+| A6 | Another Team's object asked for by id | I, T | A person in another Team | Reading or changing another Team's Findings | Each request runs in `withTeam` with the Team from the session's Clerk Organization; a test shows Team B can't read or change Team A's Findings | Slices 4 and 7 | Designed | SD authorization per object, ADR 0006 |
+| A7 | A person denies a decision | R | A Lead; an Admin | No evidence of who decided | Every decision names its Actor and reason; a Proposal keeps who asked and who approved; history is append-only | Slices 5, 7 and 8 | Designed | ADR 0008, SD append-only |
+| A8 | A Team left with no Admin | D | An Admin, by mistake | Nobody can manage the Team | A Team always keeps one Admin: removing the last is refused | Slice 5 | Designed | ADR 0008, Glossary (Admin) |
+
+### Database (slices 4, 5 and 7)
+
+| # | Threat | STRIDE | Who | Impact | Mitigation | Where built | Built or designed | Source |
+|---|---|---|---|---|---|---|---|---|
+| D1 | A query forgets the Team | I, T | A bug in Warden; a person in another Team | Another Team's rows read or changed | Row-level security, forced, on every Team-owned table, read and write. `withTeam` is the only way request and job code reaches the database; no Team set means no rows | Slice 4 | Designed | ADR 0006 |
+| D2 | A new table without the policies | I | A bug in Warden | A table every Team can read | A CI check fails when a Team-owned table lacks the policies | Slice 4 | Designed | ADR 0006 |
+| D3 | A foreign key reveals another Team's rows | I | A person in another Team | Learning that another Team's rows exist | Foreign keys carry the Team: `(team_id, id)` | Slice 4, and every later table | Designed | ADR 0006 |
+| D4 | The app's connection bypasses the policies | E | A bug in Warden; the operator | Policies don't apply | Separate roles: the app role (bound by the policies), the migration role, and the admin role, used from one marked place in the code. Checked on the real Cloud SQL that the app role is bound | Slice 4; slice 1b for the Cloud SQL check | Designed | ADR 0006 |
+| D5 | A pooled connection carries a Team into its next use | I | A bug in Warden | One request sees another Team's rows | `withTeam` sets the Team for one transaction only | Slice 4 | Designed | ADR 0006 |
+| D6 | History edited to hide a decision | T, R | The app role; a bug | Audit evidence changed | Status history and Role history are append-only, enforced in Postgres (a trigger or grants), with a test that an update or delete fails | Slice 5 (Role history), slice 7 (Status history) | Designed | SD append-only |
+| D7 | The database reached from the internet | I, S | Outside attacker | Direct access to every Team | Cloud SQL is reached only through Cloud Run's Cloud SQL connection, as Warden's service account; no public authorized networks | Slice 1b | Designed | SD least-privilege service account |
+
+### Secrets and the release (slice 1b, #4)
+
+| # | Threat | STRIDE | Who | Impact | Mitigation | Where built | Built or designed | Source |
+|---|---|---|---|---|---|---|---|---|
+| R1 | A secret committed to the repo | I | Anyone who reads the repo | The secret leaks | Locally, secrets live in the keyring and a committed `.envrc` reads them; `.env.example` lists names only, and no `.env` exists | Slice 1a, #4 | Built | SD secrets |
+| R2 | A secret baked into the image or its settings | I | Anyone who reads the image or the service's settings | The secret leaks | On Cloud Run, secrets come from Secret Manager, never from the image | Slice 1b | Designed | SD secrets |
+| R3 | The running app holds too much power | E | Whoever controls the running app | Access to the whole GCP project | Cloud Run runs as its own least-privilege service account, never the default one | Slice 1b | Designed | SD least-privilege service account |
+| R4 | Unreviewed code released | T | A person with push access; a bad merge | Unchecked code live | Releases go only from `main`, and code reaches `main` only through the merge gate (`scripts/merge-on-green.sh`: every check green, merge commit); a bad release is rolled back to the previous revision | Merge gate: built (rig). Release and rollback: slice 1b | Built (merge gate); Designed (release) | SD public URL, project rule (merge gate) |
+| R5 | A compromised dependency or CI step | T, E | A compromised package or action | Secrets stolen, a backdoor released | CI installs with the frozen lockfile; the image runs as a non-root user; pull request workflows get no cloud credentials, only the release from `main` can deploy, and it signs in through Workload Identity Federation rather than a stored key | Slice 1a, #4 (lockfile, non-root); slice 1b (deploy rights) | Built (lockfile, non-root); Designed (deploy rights) | SD least-privilege service account, SD secrets |
+
+### Logs (#4)
+
+| # | Threat | STRIDE | Who | Impact | Mitigation | Where built | Built or designed | Source |
+|---|---|---|---|---|---|---|---|---|
+| L1 | A secret or session token written to a log | I | Anyone who reads the logs | Tokens and keys leak | One logger, with a redactor on every line: the Authorization, Cookie and Set-Cookie headers are never logged; Clerk secret keys, bearer tokens, JWTs and a Postgres URL's password are masked in messages, fields and stacks; query string values are masked | Slice 1a, #4 | Built | SD redaction in logs |
+| L2 | Agent event content logged | I | Anyone who reads the logs | Content kept outside judge-then-drop | Event bodies are never logged (H7) | Guard spec | Designed | ADR 0007 |
+| L3 | Cloud Run's request logs, which skip the redactor, hold a secret | I | Anyone who reads the logs | A token in a URL leaks | No secret or token ever goes in a URL; request logs keep 30 days | Slice 1b; Guard spec for the hook (H5) | Designed | SD redaction in logs |
+| L4 | Changes to the cloud setup hidden | R | The operator; a leaked key's holder | No record of who changed what | Google's Admin Activity audit logs go to the `_Required` bucket, kept 400 days, which nobody can shorten | Slice 1b | Designed | SD audit trail |
+
+## Accepted residual risks
+
+What Warden doesn't protect against, and why. Each names the spec that builds what limits it.
+
+- **A developer forging their own Team's events** (H10; Guard spec). The token has to sit on every developer's
+  laptop, so any of them can send events as their Team. It costs only their own Team's budget, the limits cap it,
+  and it shows in the session records. The developer identifier is whatever the laptop's environment says, so one
+  developer can also claim another's pseudonym.
+- **Warden's operator reading data through the admin role** (slice 4 builds the roles). Whoever runs Warden runs
+  its database. The admin role is used from one marked place in the code, Google's audit logs record changes to the
+  cloud setup, and Agent events are gone within 14 days, but an operator who wants to read a Team's Findings can.
+- **Backups holding dropped events for up to 7 days** (slice 1b sets the backups). Cloud SQL's backups and recovery
+  logs can't be edited row by row, so an Agent event dropped from the live database stays in them until they age
+  out: 14 days at most in any form.
+- **A developer with admin rights on their laptop removing the managed hook** (H11; Guard spec). Managed settings
+  outrank a developer's own settings, but not the person who controls the machine.
+- **Clerk holds identity in the United States** (slice 1a, #4, and slice 5). Clerk offers no region choice. Warden
+  keeps no names or emails of its own, so Clerk is the only place they are.
+
+## Before the hook goes live
+
+The Guard spec's tickets carry each line as a criterion. Each line names the spec that builds it.
+
+- [ ] The endpoint refuses events with no token or a wrong one, compared in constant time (H1; Guard spec).
+- [ ] The Team comes from the token alone, and every write goes through `withTeam` (H2; Guard spec, on slice 4).
+- [ ] The API refuses the hook token: it writes events into its own Team only (H3; Guard spec).
+- [ ] Tokens live in Secret Manager; an Admin can rotate a Team's token, and the old one stops 24 hours later (H4;
+      Guard spec).
+- [ ] The token is sent in a header, never a URL (H5; Guard spec).
+- [ ] A per-Team rate limit and a body size limit are in force (H6; Guard spec).
+- [ ] No log line holds an event body, with a test (H7, L2; Guard spec).
+- [ ] Events are redacted on arrival, home folder names included, and fields above the Privacy tier are dropped
+      before storing (H8; Guard spec).
+- [ ] The daily job drops events once judged or after 7 days, with a test (H9; Guard spec).
+- [ ] Cloud SQL's backups and point-in-time recovery logs are set to 7 days on the live instance (`data.md`; slice
+      1b, checked again by the Guard spec).
+- [ ] The pseudonym is an HMAC-SHA256 with a per-Team key in Secret Manager, and the developer identifier's source
+      is decided (open question 1; Guard spec).
+- [ ] The OpenRouter account refuses providers that train on or keep prompts, and each Judge call asks for ZDR
+      (J6; Guard spec).
+- [ ] Judge prompts tag outside text as data, instruction-like text is flagged, and the injection fixture's test
+      passes (J1 to J3; Guard spec).
+- [ ] The Judge opens Findings only through `report` (J4; Guard spec, on slice 7).
+- [ ] The $15 cap, the per-Team limits with a test per spending path, and the call budget per run are in force (J5;
+      Guard spec).
+- [ ] Judge traces in Langfuse hold metadata only, with a test (J7; Guard spec).
+- [ ] A flagged session's Finding keeps only the masked events and the hash of the redacted events (J8; Guard
+      spec).
+- [ ] No hook is ever pointed at a preview revision (`data.md`; Guard spec).
+- [ ] `/security-review` has run on the hook's code (Guard spec).
+
+## Secure defaults, where each is met
+
+Every default in `docs/secure-defaults.md`, and the row that carries it.
+
+| Secure default | Met by | Built or designed |
+|---|---|---|
+| Security headers on every response | A2 | Built: slice 1a, #4 |
+| Rate limits on sign-in and on every paid or slow path | A5 (sign-in), H6 (hook), J5 (Judge) | Designed: slice 5 (sign-in), Guard spec (hook, Judge) |
+| Cloud Run's own least-privilege service account | R3, D7 | Designed: slice 1b |
+| A spending cap set at OpenRouter | J5 | Designed: Guard spec (the cap is set on the key) |
+| Per-Team limits that count every spending path, with a test for each | J5 | Designed: Guard spec |
+| A call budget per run | J5 | Designed: Guard spec |
+| Outside text as tagged data, never instructions | J1 | Designed: Guard spec |
+| Text that reads like instructions is flagged | J2 | Designed: Guard spec |
+| An injection fixture with a test that the app ignores it | J3 | Designed: Guard spec |
+| A test that Team B can't read or change Team A's Findings | A6, D1 | Designed: slices 4 and 7 |
+| Roles kept server-side, never trusted from the client | A4 | Designed: slice 5 |
+| Redaction on output and in logs; secret values never stored, only masked | L1, A3, H8; `data.md`, Data minimisation | Built: logs and 500 bodies (slice 1a, #4). Designed: events (Guard spec), evidence (slice 6) |
+| A retention period and a way to delete | H9; `data.md`, Retention and deletion | Decided: slice 2 (this document). Designed: the drop job (Guard spec); Team deletion (not yet planned) |
+| `docs/data.md` lists what leaves the machine | `data.md`, What leaves the machine | Built: slice 2 (this document) |
+| A local-model option for the Judge | J6; `data.md`, What leaves the machine | Designed: Guard spec |
+| Append-only history enforced in Postgres, with a test | D6 | Designed: slices 5 and 7 |
+| Secrets: keyring and `.envrc` locally, Secret Manager on the host | R1, R2 | Built: keyring and `.envrc` (slice 1a, #4). Designed: Secret Manager (slice 1b) |
+
+## Open questions
+
+1. **Which developer identifier the hook sends** (Guard spec). Claude Code's `http` hook body names no person, so
+   the managed settings must add a header from a laptop environment variable. Which one, and how it maps to a
+   Clerk user when an Admin turns names on.
+2. **How the write grant is given** (Guard spec). A GitHub app has the same permissions in every installation, so
+   a per-Team grant needs either a second app with write permissions that a Team installs to grant it
+   (recommended: a Team that never grants never gives Warden a write key) or one app that always holds write.
+3. **Which spec builds Team deletion** (not yet planned). It should land before the first release to real users.
+4. **How long agent checkpoints are kept** (the chat agent spec, not yet planned).
+5. **How a Real-world run's Findings are held** (Guard spec): a Team per repo owner, as `data.md` assumes, or
+   another way that keeps them to the owner.
+6. **Where the Judge's local model runs** (Guard spec), and how a Team turns it on.
+7. **How the endpoint checks a token** (Guard spec): read from Secret Manager per request, or a cached copy, and
+   how the 24-hour overlap is held.
+8. **Whether Cloud SQL accepts 7 days of recovery logs beside 7 backups** (slice 1b). One Google summary says the
+   log setting must be less than the backup count; if so, the logs are set to 6 days, and the bounds in `data.md`
+   still hold.
+9. **Whether a managed hook resists a developer without admin rights** (Guard spec): checked on a real laptop,
+   since ADR 0007 relies on it.
