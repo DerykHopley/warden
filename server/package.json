@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node --watch src/index.ts",
+    "dev": "PGUSER=warden_app node --watch src/index.ts",
     "start": "node src/index.ts",
     "roles": "node src/roles.ts",
     "migrate": "node src/migrate.ts",
