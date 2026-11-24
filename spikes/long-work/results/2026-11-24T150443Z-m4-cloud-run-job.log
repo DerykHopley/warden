@@ -1,0 +1,190 @@
+# m4-cloud-run-job, started 2026-11-24T15:04:43Z, project coherent-bay-515713-r7, region europe-west1
+[15:04:43] Measurement 4: spike-long-work-job, its settings:
+spec:
+  template:
+    spec:
+      taskCount: 1
+      template:
+        spec:
+          maxRetries: 1
+          timeoutSeconds: '600'
+[15:04:43] Execute with SCAN={"scanId":"m4-job-5min","team":"spike-team","seconds":300} (an env override at execution time), and wait for it
+Creating execution...
+Provisioning resources.....................done
+Starting execution..................................................................................................................................................................................................done
+Running execution..............................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................................done
+Done.
+Execution [spike-long-work-job-2zblh] has successfully completed.
+
+View details about this execution by running:
+gcloud run jobs executions describe spike-long-work-job-2zblh
+
+Or visit https://console.cloud.google.com/run/jobs/executions/details/europe-west1/spike-long-work-job-2zblh?project=642855677290
+[15:10:09] called at 2026-11-24T15:04:43Z, returned at 2026-11-24T15:10:09Z
+metadata:
+  creationTimestamp: '2026-11-24T15:04:44.532435Z'
+  name: spike-long-work-job-2zblh
+status:
+  completionTime: '2026-11-24T15:10:06.957008Z'
+  conditions:
+  - lastTransitionTime: '2026-11-24T15:10:06.957008Z'
+    message: Execution completed successfully in 5m20.65s.
+    status: 'True'
+    type: Completed
+  - lastTransitionTime: '2026-11-24T15:04:45.442878Z'
+    message: Provisioned imported containers.
+    status: 'True'
+    type: ResourcesAvailable
+  - lastTransitionTime: '2026-11-24T15:05:03.394873Z'
+    message: Started deployed execution in 17.95s.
+    status: 'True'
+    type: Started
+  - lastTransitionTime: '2026-11-24T15:04:45.353354Z'
+    message: Imported container image.
+    status: 'True'
+    type: ContainerReady
+  logUri: https://console.cloud.google.com/logs/viewer?project=coherent-bay-515713-r7&advancedFilter=resource.type%3D%22cloud_run_job%22%0Aresource.labels.job_name%3D%22spike-long-work-job%22%0Aresource.labels.location%3D%22europe-west1%22%0Alabels.%22run.googleapis.com/execution_name%22%3D%22spike-long-work-job-2zblh%22
+  observedGeneration: 1
+  startTime: '2026-11-24T15:04:46.297926Z'
+  succeededCount: 1
+[15:10:09] Execute with SCAN={"scanId":"m4-retry","team":"spike-team","seconds":10,"failFirstAttempt":true} (an env override at execution time), and wait for it
+Creating execution...
+Provisioning resources.....................done
+Starting execution..........................................................................................................................................................................................................................................................................done
+Running execution.........................................................................................................................................................................................................................................................................................................................................................................................................................................................................................done
+Done.
+Execution [spike-long-work-job-twnh5] has successfully completed.
+
+View details about this execution by running:
+gcloud run jobs executions describe spike-long-work-job-twnh5
+
+Or visit https://console.cloud.google.com/run/jobs/executions/details/europe-west1/spike-long-work-job-twnh5?project=642855677290
+[15:11:20] called at 2026-11-24T15:10:09Z, returned at 2026-11-24T15:11:20Z
+metadata:
+  creationTimestamp: '2026-11-24T15:10:10.400009Z'
+  name: spike-long-work-job-twnh5
+status:
+  completionTime: '2026-11-24T15:11:18.565210Z'
+  conditions:
+  - lastTransitionTime: '2026-11-24T15:11:18.565210Z'
+    message: Execution completed successfully in 1m4.45s.
+    status: 'True'
+    type: Completed
+  - lastTransitionTime: '2026-11-24T15:10:11.344524Z'
+    message: Provisioned imported containers.
+    status: 'True'
+    type: ResourcesAvailable
+  - lastTransitionTime: '2026-11-24T15:10:37.377456Z'
+    message: Started deployed execution in 26.03s.
+    status: 'True'
+    type: Started
+  - lastTransitionTime: '2026-11-24T15:10:11.263422Z'
+    message: Imported container image.
+    status: 'True'
+    type: ContainerReady
+  logUri: https://console.cloud.google.com/logs/viewer?project=coherent-bay-515713-r7&advancedFilter=resource.type%3D%22cloud_run_job%22%0Aresource.labels.job_name%3D%22spike-long-work-job%22%0Aresource.labels.location%3D%22europe-west1%22%0Alabels.%22run.googleapis.com/execution_name%22%3D%22spike-long-work-job-twnh5%22
+  observedGeneration: 1
+  retriedCount: 1
+  startTime: '2026-11-24T15:10:14.114220Z'
+  succeededCount: 1
+[15:11:21] Execute with SCAN={"scanId":"m4-no-team","seconds":10} (an env override at execution time), and wait for it
+Creating execution...
+Provisioning resources....................done
+Starting execution.....................................................................................................................................................done
+Running execution.......................................................................................................................................................................................................................................................................................................................................................................................................failed
+Executing job failed
+ERROR: (gcloud.run.jobs.execute) The execution failed.
+View details about this execution by running:
+gcloud run jobs executions describe spike-long-work-job-cjdb4
+
+Or visit https://console.cloud.google.com/run/jobs/executions/details/europe-west1/spike-long-work-job-cjdb4?project=642855677290
+[15:12:13] the execution failed (exit code 1)
+[15:12:13] called at 2026-11-24T15:11:21Z, returned at 2026-11-24T15:12:13Z
+---
+metadata:
+  creationTimestamp: '2026-11-24T15:11:22.162328Z'
+  name: spike-long-work-job-cjdb4
+status:
+  completionTime: '2026-11-24T15:12:10.781772Z'
+  conditions:
+  - lastTransitionTime: '2026-11-24T15:12:10.781772Z'
+    message: 'Task spike-long-work-job-cjdb4-task0 failed with exit code: 2 and message:
+      The container exited with an error.'
+    reason: NonZeroExitCode
+    status: 'False'
+    type: Completed
+  - lastTransitionTime: '2026-11-24T15:11:23.084435Z'
+    message: Provisioned imported containers.
+    status: 'True'
+    type: ResourcesAvailable
+  - lastTransitionTime: '2026-11-24T15:11:36.065457Z'
+    message: Started deployed execution in 12.98s.
+    status: 'True'
+    type: Started
+  - lastTransitionTime: '2026-11-24T15:11:23.006011Z'
+    message: Imported container image.
+    status: 'True'
+    type: ContainerReady
+  failedCount: 1
+  logUri: https://console.cloud.google.com/logs/viewer?project=coherent-bay-515713-r7&advancedFilter=resource.type%3D%22cloud_run_job%22%0Aresource.labels.job_name%3D%22spike-long-work-job%22%0Aresource.labels.location%3D%22europe-west1%22%0Alabels.%22run.googleapis.com/execution_name%22%3D%22spike-long-work-job-cjdb4%22
+  observedGeneration: 1
+  retriedCount: 1
+  startTime: '2026-11-24T15:11:26.132478Z'
+[15:12:13] Waiting 1 minute for the log delay.
+[15:13:15] Cloud Logging, job (raw entries: 2026-11-24T150443Z-m4-cloud-run-job-job.json):
+┌─────────────────────────────┬──────────┬────────────────────────┬─────────────┬──────┬────────┬────────┬──────┬────────┬───────┬──────┬─────────┬─────────────────────────┬──────┬─────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│          TIMESTAMP          │ INSTANCE │        MESSAGE         │     SCAN    │ TICK │ GAP_MS │ IDLE_S │ UP_S │ ANSWER │ RETRY │ EXEC │ ATTEMPT │          SECRET         │ HTTP │ LATENCY │                                                              TEXT                                                             │
+├─────────────────────────────┼──────────┼────────────────────────┼─────────────┼──────┼────────┼────────┼──────┼────────┼───────┼──────┼─────────┼─────────────────────────┼──────┼─────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 2026-11-24T15:05:04.158688Z │ b96125ab │ job started            │ m4-job-5min │      │        │        │      │        │       │      │ 0       │ secret found, length 48 │      │         │                                                                                                                               │
+│ 2026-11-24T15:05:04.158696Z │ b96125ab │ work started           │ m4-job-5min │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:05:14.159887Z │ b96125ab │ tick                   │ m4-job-5min │ 1    │ 10001  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:05:24.164320Z │ b96125ab │ tick                   │ m4-job-5min │ 2    │ 10004  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:05:34.170118Z │ b96125ab │ tick                   │ m4-job-5min │ 3    │ 10007  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:05:44.178291Z │ b96125ab │ tick                   │ m4-job-5min │ 4    │ 10007  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:05:54.179646Z │ b96125ab │ tick                   │ m4-job-5min │ 5    │ 10002  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:06:04.184132Z │ b96125ab │ tick                   │ m4-job-5min │ 6    │ 10004  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:06:14.189809Z │ b96125ab │ tick                   │ m4-job-5min │ 7    │ 10006  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:06:24.198059Z │ b96125ab │ tick                   │ m4-job-5min │ 8    │ 10008  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:06:34.198996Z │ b96125ab │ tick                   │ m4-job-5min │ 9    │ 10002  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:06:44.202212Z │ b96125ab │ tick                   │ m4-job-5min │ 10   │ 10002  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:06:54.206950Z │ b96125ab │ tick                   │ m4-job-5min │ 11   │ 10006  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:07:04.213936Z │ b96125ab │ tick                   │ m4-job-5min │ 12   │ 10006  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:07:14.214817Z │ b96125ab │ tick                   │ m4-job-5min │ 13   │ 10001  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:07:24.217966Z │ b96125ab │ tick                   │ m4-job-5min │ 14   │ 10003  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:07:34.221724Z │ b96125ab │ tick                   │ m4-job-5min │ 15   │ 10004  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:07:44.229221Z │ b96125ab │ tick                   │ m4-job-5min │ 16   │ 10007  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:07:54.235805Z │ b96125ab │ tick                   │ m4-job-5min │ 17   │ 10007  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:08:04.238093Z │ b96125ab │ tick                   │ m4-job-5min │ 18   │ 10002  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:08:14.241894Z │ b96125ab │ tick                   │ m4-job-5min │ 19   │ 10004  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:08:24.248146Z │ b96125ab │ tick                   │ m4-job-5min │ 20   │ 10006  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:08:34.256064Z │ b96125ab │ tick                   │ m4-job-5min │ 21   │ 10009  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:08:44.258358Z │ b96125ab │ tick                   │ m4-job-5min │ 22   │ 10001  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:08:54.261200Z │ b96125ab │ tick                   │ m4-job-5min │ 23   │ 10004  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:09:04.264422Z │ b96125ab │ tick                   │ m4-job-5min │ 24   │ 10002  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:09:14.271125Z │ b96125ab │ tick                   │ m4-job-5min │ 25   │ 10008  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:09:24.272090Z │ b96125ab │ tick                   │ m4-job-5min │ 26   │ 10000  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:09:34.274833Z │ b96125ab │ tick                   │ m4-job-5min │ 27   │ 10003  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:09:44.279788Z │ b96125ab │ tick                   │ m4-job-5min │ 28   │ 10005  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:09:54.285463Z │ b96125ab │ tick                   │ m4-job-5min │ 29   │ 10006  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:10:04.159600Z │ b96125ab │ tick                   │ m4-job-5min │ 30   │ 9873   │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:10:04.159621Z │ b96125ab │ work finished          │ m4-job-5min │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:10:04.159624Z │ b96125ab │ job finished           │ m4-job-5min │      │        │        │      │        │       │      │ 0       │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:10:04.195303Z │          │                        │             │      │        │        │      │        │       │      │         │                         │      │         │ ['C', 'o', 'n', 't', 'a', 'i', 'n', 'e', 'r', ' ', 'c', 'a', 'l', 'l', 'e', 'd', ' ', 'e', 'x', 'i', 't', '(', '0', ')', '.'] │
+│ 2026-11-24T15:10:07.994347Z │          │                        │             │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:10:38.079040Z │ 7f0736eb │ job started            │ m4-retry    │      │        │        │      │        │       │      │ 0       │ secret found, length 48 │      │         │                                                                                                                               │
+│ 2026-11-24T15:10:38.079049Z │ 7f0736eb │ job failing on purpose │ m4-retry    │      │        │        │      │        │       │      │ 0       │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:10:38.137631Z │          │                        │             │      │        │        │      │        │       │      │         │                         │      │         │ ['C', 'o', 'n', 't', 'a', 'i', 'n', 'e', 'r', ' ', 'c', 'a', 'l', 'l', 'e', 'd', ' ', 'e', 'x', 'i', 't', '(', '1', ')', '.'] │
+│ 2026-11-24T15:11:04.891822Z │ d135f590 │ job started            │ m4-retry    │      │        │        │      │        │       │      │ 1       │ secret found, length 48 │      │         │                                                                                                                               │
+│ 2026-11-24T15:11:04.891833Z │ d135f590 │ work started           │ m4-retry    │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:11:14.895123Z │ d135f590 │ tick                   │ m4-retry    │ 1    │ 10003  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:11:14.895132Z │ d135f590 │ work finished          │ m4-retry    │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:11:14.895136Z │ d135f590 │ job finished           │ m4-retry    │      │        │        │      │        │       │      │ 1       │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:11:14.958308Z │          │                        │             │      │        │        │      │        │       │      │         │                         │      │         │ ['C', 'o', 'n', 't', 'a', 'i', 'n', 'e', 'r', ' ', 'c', 'a', 'l', 'l', 'e', 'd', ' ', 'e', 'x', 'i', 't', '(', '0', ')', '.'] │
+│ 2026-11-24T15:11:20.233940Z │          │                        │             │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:11:36.563163Z │ 669e24a5 │ job refused            │             │      │        │        │      │        │       │      │ 0       │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:11:36.624130Z │          │                        │             │      │        │        │      │        │       │      │         │                         │      │         │ ['C', 'o', 'n', 't', 'a', 'i', 'n', 'e', 'r', ' ', 'c', 'a', 'l', 'l', 'e', 'd', ' ', 'e', 'x', 'i', 't', '(', '2', ')', '.'] │
+│ 2026-11-24T15:12:06.830379Z │ 2e257a46 │ job refused            │             │      │        │        │      │        │       │      │ 1       │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:12:06.860031Z │          │                        │             │      │        │        │      │        │       │      │         │                         │      │         │ ['C', 'o', 'n', 't', 'a', 'i', 'n', 'e', 'r', ' ', 'c', 'a', 'l', 'l', 'e', 'd', ' ', 'e', 'x', 'i', 't', '(', '2', ')', '.'] │
+│ 2026-11-24T15:12:12.416660Z │          │                        │             │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+└─────────────────────────────┴──────────┴────────────────────────┴─────────────┴──────┴────────┴────────┴──────┴────────┴───────┴──────┴─────────┴─────────────────────────┴──────┴─────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+[15:13:16] Log: spikes/long-work/results/2026-11-24T150443Z-m4-cloud-run-job.log

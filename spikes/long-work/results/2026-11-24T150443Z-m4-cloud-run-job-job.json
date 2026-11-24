@@ -1,0 +1,2014 @@
+[
+  {
+    "insertId": "6b05a7a000026be0b5525de0",
+    "jsonPayload": {
+      "at": "2026-11-24T15:05:04.131Z",
+      "attempt": 0,
+      "instance": "b96125ab",
+      "message": "job started",
+      "processUptimeMs": 490,
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "secret": "secret found, length 48",
+      "service": "spike-long-work-job",
+      "taskIndex": 0,
+      "team": "spike-team"
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:05:04.163914406Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:05:04.158688Z"
+  },
+  {
+    "insertId": "6b05a7a000026be8b8c5237f",
+    "jsonPayload": {
+      "at": "2026-11-24T15:05:04.157Z",
+      "instance": "b96125ab",
+      "message": "work started",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "seconds": 300,
+      "service": "spike-long-work-job",
+      "team": "spike-team"
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:05:04.163914406Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:05:04.158696Z"
+  },
+  {
+    "insertId": "6b05a7aa0002708fbadd73ae",
+    "jsonPayload": {
+      "at": "2026-11-24T15:05:14.158Z",
+      "elapsedMs": 10001,
+      "gapMs": 10001,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 1
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:05:14.490385301Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:05:14.159887Z"
+  },
+  {
+    "insertId": "6b05a7b4000281e0b015a82d",
+    "jsonPayload": {
+      "at": "2026-11-24T15:05:24.162Z",
+      "elapsedMs": 20005,
+      "gapMs": 10004,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 2
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:05:24.478999181Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:05:24.164320Z"
+  },
+  {
+    "insertId": "6b05a7be000298860c4204aa",
+    "jsonPayload": {
+      "at": "2026-11-24T15:05:34.169Z",
+      "elapsedMs": 30012,
+      "gapMs": 10007,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 3
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:05:34.467384968Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:05:34.170118Z"
+  },
+  {
+    "insertId": "6b05a7c80002b8736d6d51d1",
+    "jsonPayload": {
+      "at": "2026-11-24T15:05:44.176Z",
+      "elapsedMs": 40019,
+      "gapMs": 10007,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 4
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:05:44.463853201Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:05:44.178291Z"
+  },
+  {
+    "insertId": "6b05a7d20002bdbef630ed43",
+    "jsonPayload": {
+      "at": "2026-11-24T15:05:54.178Z",
+      "elapsedMs": 50021,
+      "gapMs": 10002,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 5
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:05:54.450904182Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:05:54.179646Z"
+  },
+  {
+    "insertId": "6b05a7dc0002cf442fc7a33c",
+    "jsonPayload": {
+      "at": "2026-11-24T15:06:04.182Z",
+      "elapsedMs": 60025,
+      "gapMs": 10004,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 6
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:06:04.446003638Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:06:04.184132Z"
+  },
+  {
+    "insertId": "6b05a7e60002e57116c7ce3a",
+    "jsonPayload": {
+      "at": "2026-11-24T15:06:14.188Z",
+      "elapsedMs": 70031,
+      "gapMs": 10006,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 7
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:06:14.431154662Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:06:14.189809Z"
+  },
+  {
+    "insertId": "6b05a7f0000305abb8173db1",
+    "jsonPayload": {
+      "at": "2026-11-24T15:06:24.196Z",
+      "elapsedMs": 80039,
+      "gapMs": 10008,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 8
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:06:24.420103783Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:06:24.198059Z"
+  },
+  {
+    "insertId": "6b05a7fa000309549bae16d6",
+    "jsonPayload": {
+      "at": "2026-11-24T15:06:34.198Z",
+      "elapsedMs": 90041,
+      "gapMs": 10002,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 9
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:06:34.414718521Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:06:34.198996Z"
+  },
+  {
+    "insertId": "6b05a804000315e47065f02b",
+    "jsonPayload": {
+      "at": "2026-11-24T15:06:44.200Z",
+      "elapsedMs": 100043,
+      "gapMs": 10002,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 10
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:06:44.408384416Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:06:44.202212Z"
+  },
+  {
+    "insertId": "6b05a80e000328667d70c6e0",
+    "jsonPayload": {
+      "at": "2026-11-24T15:06:54.206Z",
+      "elapsedMs": 110049,
+      "gapMs": 10006,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 11
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:06:54.398558428Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:06:54.206950Z"
+  },
+  {
+    "insertId": "6b05a818000343b00af6fda1",
+    "jsonPayload": {
+      "at": "2026-11-24T15:07:04.212Z",
+      "elapsedMs": 120055,
+      "gapMs": 10006,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 12
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:07:04.385830186Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:07:04.213936Z"
+  },
+  {
+    "insertId": "6b05a822000347212c8564fc",
+    "jsonPayload": {
+      "at": "2026-11-24T15:07:14.213Z",
+      "elapsedMs": 130056,
+      "gapMs": 10001,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 13
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:07:14.374236322Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:07:14.214817Z"
+  },
+  {
+    "insertId": "6b05a82c0003536eededb7ed",
+    "jsonPayload": {
+      "at": "2026-11-24T15:07:24.216Z",
+      "elapsedMs": 140059,
+      "gapMs": 10003,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 14
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:07:24.366733554Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:07:24.217966Z"
+  },
+  {
+    "insertId": "6b05a8360003621c1a53f782",
+    "jsonPayload": {
+      "at": "2026-11-24T15:07:34.220Z",
+      "elapsedMs": 150063,
+      "gapMs": 10004,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 15
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:07:34.354180347Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:07:34.221724Z"
+  },
+  {
+    "insertId": "6b05a84000037f652844d800",
+    "jsonPayload": {
+      "at": "2026-11-24T15:07:44.227Z",
+      "elapsedMs": 160070,
+      "gapMs": 10007,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 16
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:07:44.348113455Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:07:44.229221Z"
+  },
+  {
+    "insertId": "6b05a84a0003991ddad2d74a",
+    "jsonPayload": {
+      "at": "2026-11-24T15:07:54.234Z",
+      "elapsedMs": 170077,
+      "gapMs": 10007,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 17
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:07:54.334053269Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:07:54.235805Z"
+  },
+  {
+    "insertId": "6b05a8540003a20dd3942431",
+    "jsonPayload": {
+      "at": "2026-11-24T15:08:04.236Z",
+      "elapsedMs": 180079,
+      "gapMs": 10002,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 18
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:08:04.330545456Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:08:04.238093Z"
+  },
+  {
+    "insertId": "6b05a85e0003b0e63fe05cde",
+    "jsonPayload": {
+      "at": "2026-11-24T15:08:14.240Z",
+      "elapsedMs": 190083,
+      "gapMs": 10004,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 19
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:08:14.319021418Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:08:14.241894Z"
+  },
+  {
+    "insertId": "6b05a8680003c952b184af6a",
+    "jsonPayload": {
+      "at": "2026-11-24T15:08:24.246Z",
+      "elapsedMs": 200089,
+      "gapMs": 10006,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 20
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:08:24.309114104Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:08:24.248146Z"
+  },
+  {
+    "insertId": "6b05a8720003e840f4a7123b",
+    "jsonPayload": {
+      "at": "2026-11-24T15:08:34.255Z",
+      "elapsedMs": 210098,
+      "gapMs": 10009,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 21
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:08:34.297931504Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:08:34.256064Z"
+  },
+  {
+    "insertId": "6b05a87c0003f1362fd96266",
+    "jsonPayload": {
+      "at": "2026-11-24T15:08:44.256Z",
+      "elapsedMs": 220099,
+      "gapMs": 10001,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 22
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:08:44.291387185Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:08:44.258358Z"
+  },
+  {
+    "insertId": "6b05a8860003fc5073b53152",
+    "jsonPayload": {
+      "at": "2026-11-24T15:08:54.260Z",
+      "elapsedMs": 230103,
+      "gapMs": 10004,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 23
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:08:54.282416908Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:08:54.261200Z"
+  },
+  {
+    "insertId": "6b05a890000408e6ee0b1c82",
+    "jsonPayload": {
+      "at": "2026-11-24T15:09:04.262Z",
+      "elapsedMs": 240105,
+      "gapMs": 10002,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 24
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:09:04.603249687Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:09:04.264422Z"
+  },
+  {
+    "insertId": "6b05a89a00042315106182a4",
+    "jsonPayload": {
+      "at": "2026-11-24T15:09:14.270Z",
+      "elapsedMs": 250113,
+      "gapMs": 10008,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 25
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:09:14.591615238Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:09:14.271125Z"
+  },
+  {
+    "insertId": "6b05a8a4000426da7a2dfe5b",
+    "jsonPayload": {
+      "at": "2026-11-24T15:09:24.270Z",
+      "elapsedMs": 260113,
+      "gapMs": 10000,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 26
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:09:24.582640976Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:09:24.272090Z"
+  },
+  {
+    "insertId": "6b05a8ae00043191c1e4f7b0",
+    "jsonPayload": {
+      "at": "2026-11-24T15:09:34.273Z",
+      "elapsedMs": 270116,
+      "gapMs": 10003,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 27
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:09:34.576652791Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:09:34.274833Z"
+  },
+  {
+    "insertId": "6b05a8b8000444ec8df839d0",
+    "jsonPayload": {
+      "at": "2026-11-24T15:09:44.278Z",
+      "elapsedMs": 280121,
+      "gapMs": 10005,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 28
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:09:44.565493336Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:09:44.279788Z"
+  },
+  {
+    "insertId": "6b05a8c200045b17ba16e020",
+    "jsonPayload": {
+      "at": "2026-11-24T15:09:54.284Z",
+      "elapsedMs": 290127,
+      "gapMs": 10006,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 29
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:09:54.553285162Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:09:54.285463Z"
+  },
+  {
+    "insertId": "6b05a8cc00026f70ae134f83",
+    "jsonPayload": {
+      "at": "2026-11-24T15:10:04.158Z",
+      "elapsedMs": 300000,
+      "gapMs": 9873,
+      "instance": "b96125ab",
+      "message": "tick",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 30
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:10:04.214086280Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:10:04.159600Z"
+  },
+  {
+    "insertId": "6b05a8cc00026f859c462157",
+    "jsonPayload": {
+      "at": "2026-11-24T15:10:04.158Z",
+      "elapsedMs": 300001,
+      "instance": "b96125ab",
+      "message": "work finished",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "ticks": 30
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:10:04.214086280Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:10:04.159621Z"
+  },
+  {
+    "insertId": "6b05a8cc00026f88671f6d2b",
+    "jsonPayload": {
+      "at": "2026-11-24T15:10:04.158Z",
+      "attempt": 0,
+      "instance": "b96125ab",
+      "message": "job finished",
+      "revision": "spike-long-work-job-2zblh",
+      "scanId": "m4-job-5min",
+      "service": "spike-long-work-job"
+    },
+    "labels": {
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:10:04.214086280Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:10:04.159624Z"
+  },
+  {
+    "insertId": "6b05a8cc0002fb16e348dcfc",
+    "labels": {
+      "container_name": "worker",
+      "instanceId": "00e8a408bd231fe10f4c7b7b5b858fe2d24cff4048b4a0f0d95e0df290c4a6cb5d47e8989742487af7c6fb84018ac962e0060eb7ccd2d04eef4a8cdf7cfdb9125d57281bd9c5af5066ca0b3752f8fb98d95c2f3d9f1311d3547259f3",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2026-11-24T15:10:04.199469852Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "textPayload": "Container called exit(0).",
+    "timestamp": "2026-11-24T15:10:04.195303Z"
+  },
+  {
+    "insertId": "-lcsb0be10zly",
+    "labels": {
+      "run.googleapis.com/execution_name": "spike-long-work-job-2zblh"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/cloudaudit.googleapis.com%2Fsystem_event",
+    "protoPayload": {
+      "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+      "methodName": "/Jobs.RunJob",
+      "resourceName": "namespaces/coherent-bay-515713-r7/executions/spike-long-work-job-2zblh",
+      "response": {
+        "@type": "type.googleapis.com/google.cloud.run.v1.Execution",
+        "apiVersion": "run.googleapis.com/v1",
+        "kind": "Execution",
+        "metadata": {
+          "annotations": {
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "589.0.0",
+            "run.googleapis.com/creator": "<owner's gcloud account>",
+            "run.googleapis.com/execution-environment": "gen2",
+            "run.googleapis.com/lastModifier": "<owner's gcloud account>",
+            "run.googleapis.com/operation-id": "e3ca1d26-58e3-4c8f-a1ba-8951919f94bb"
+          },
+          "creationTimestamp": "2026-11-24T15:04:44.532435Z",
+          "generation": 1,
+          "labels": {
+            "client.knative.dev/nonce": "gic_luf_poc",
+            "cloud.googleapis.com/location": "europe-west1",
+            "purpose": "spike-long-work",
+            "run.googleapis.com/job": "spike-long-work-job",
+            "run.googleapis.com/jobGeneration": "1",
+            "run.googleapis.com/jobResourceVersion": "1795531130698040",
+            "run.googleapis.com/jobUid": "bfc06648-685f-4af2-8a6a-8da702d5ea3d"
+          },
+          "name": "spike-long-work-job-2zblh",
+          "namespace": "642855677290",
+          "ownerReferences": [
+            {
+              "apiVersion": "serving.knative.dev/v1",
+              "blockOwnerDeletion": true,
+              "controller": true,
+              "kind": "Job",
+              "name": "spike-long-work-job",
+              "uid": "bfc06648-685f-4af2-8a6a-8da702d5ea3d"
+            }
+          ],
+          "resourceVersion": "AAZhBxsfY4k",
+          "selfLink": "/apis/run.googleapis.com/v1/namespaces/642855677290/executions/spike-long-work-job-2zblh",
+          "uid": "8fc64ad9-a5c1-4f01-bba0-3a1b49d7145e"
+        },
+        "spec": {
+          "parallelism": 1,
+          "taskCount": 1,
+          "template": {
+            "spec": {
+              "containers": [
+                {
+                  "args": ["job"],
+                  "env": [
+                    {
+                      "name": "SPIKE_SECRET",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "1",
+                          "name": "spike-long-work-secret"
+                        }
+                      }
+                    },
+                    {
+                      "name": "SCAN",
+                      "value": "{\"scanId\":\"m4-job-5min\",\"team\":\"spike-team\",\"seconds\":300}"
+                    }
+                  ],
+                  "image": "europe-west1-docker.pkg.dev/coherent-bay-515713-r7/spike-long-work/spike-long-work@sha256:401881a0348a356931e8668187e00f39af4390e7d0191571803d90b64c455f1b",
+                  "resources": {
+                    "limits": {
+                      "cpu": "1",
+                      "memory": "512Mi"
+                    }
+                  }
+                }
+              ],
+              "maxRetries": 1,
+              "sandboxes": {},
+              "serviceAccountName": "spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com",
+              "timeoutSeconds": "600"
+            }
+          }
+        },
+        "status": {
+          "completionTime": "2026-11-24T15:10:06.957008Z",
+          "conditions": [
+            {
+              "lastTransitionTime": "2026-11-24T15:10:06.957008Z",
+              "message": "Execution completed successfully in 5m20.65s.",
+              "status": "True",
+              "type": "Completed"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:04:45.442878Z",
+              "message": "Provisioned imported containers.",
+              "status": "True",
+              "type": "ResourcesAvailable"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:05:03.394873Z",
+              "message": "Started deployed execution in 17.95s.",
+              "status": "True",
+              "type": "Started"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:04:45.353354Z",
+              "message": "Imported container image.",
+              "status": "True",
+              "type": "ContainerReady"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:10:07.968465Z",
+              "message": "System will retry after 00:00 from lastTransitionTime for attempt 0.",
+              "reason": "ImmediateRetry",
+              "severity": "Info",
+              "status": "True",
+              "type": "Retry"
+            }
+          ],
+          "logUri": "https://console.cloud.google.com/logs/viewer?project=coherent-bay-515713-r7&advancedFilter=resource.type%3D%22cloud_run_job%22%0Aresource.labels.job_name%3D%22spike-long-work-job%22%0Aresource.labels.location%3D%22europe-west1%22%0Alabels.%22run.googleapis.com/execution_name%22%3D%22spike-long-work-job-2zblh%22",
+          "observedGeneration": 1,
+          "startTime": "2026-11-24T15:04:46.297926Z",
+          "succeededCount": 1
+        }
+      },
+      "serviceName": "run.googleapis.com",
+      "status": {
+        "message": "Execution spike-long-work-job-2zblh has completed successfully."
+      }
+    },
+    "receiveTimestamp": "2026-11-24T15:10:08.085390051Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:10:07.994347Z"
+  },
+  {
+    "insertId": "6b05a8ee000134c0907e9f49",
+    "jsonPayload": {
+      "at": "2026-11-24T15:10:38.054Z",
+      "attempt": 0,
+      "instance": "7f0736eb",
+      "message": "job started",
+      "processUptimeMs": 403,
+      "revision": "spike-long-work-job-twnh5",
+      "scanId": "m4-retry",
+      "secret": "secret found, length 48",
+      "service": "spike-long-work-job",
+      "taskIndex": 0,
+      "team": "spike-team"
+    },
+    "labels": {
+      "instanceId": "00e8a408bda32aa4e96c9c2aa331111e9752e9f9a6555c9977e912922be8cea8a316ad7dd4b9c3e47b5563ba0e05760008f89ac5ae0264280923784cfcc23f0270e322a9d137f72d123a92289e8351aec8b425fd2f98fc3ed6cda50a",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:10:38.082621355Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:10:38.079040Z"
+  },
+  {
+    "insertId": "6b05a8ee000134c9a2856a13",
+    "jsonPayload": {
+      "at": "2026-11-24T15:10:38.077Z",
+      "attempt": 0,
+      "instance": "7f0736eb",
+      "message": "job failing on purpose",
+      "revision": "spike-long-work-job-twnh5",
+      "scanId": "m4-retry",
+      "service": "spike-long-work-job"
+    },
+    "labels": {
+      "instanceId": "00e8a408bda32aa4e96c9c2aa331111e9752e9f9a6555c9977e912922be8cea8a316ad7dd4b9c3e47b5563ba0e05760008f89ac5ae0264280923784cfcc23f0270e322a9d137f72d123a92289e8351aec8b425fd2f98fc3ed6cda50a",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:10:38.082621355Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:10:38.079049Z"
+  },
+  {
+    "insertId": "6b05a8ee000219c8b7ed5d00",
+    "labels": {
+      "container_name": "worker",
+      "instanceId": "00e8a408bda32aa4e96c9c2aa331111e9752e9f9a6555c9977e912922be8cea8a316ad7dd4b9c3e47b5563ba0e05760008f89ac5ae0264280923784cfcc23f0270e322a9d137f72d123a92289e8351aec8b425fd2f98fc3ed6cda50a",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2026-11-24T15:10:38.144491705Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "WARNING",
+    "textPayload": "Container called exit(1).",
+    "timestamp": "2026-11-24T15:10:38.137631Z"
+  },
+  {
+    "insertId": "6b05a908000d9bae5c76db18",
+    "jsonPayload": {
+      "at": "2026-11-24T15:11:04.858Z",
+      "attempt": 1,
+      "instance": "d135f590",
+      "message": "job started",
+      "processUptimeMs": 444,
+      "revision": "spike-long-work-job-twnh5",
+      "scanId": "m4-retry",
+      "secret": "secret found, length 48",
+      "service": "spike-long-work-job",
+      "taskIndex": 0,
+      "team": "spike-team"
+    },
+    "labels": {
+      "instanceId": "00e8a408bdc3d1beb93208303ad2edf0ee2c36177551d6c85e14d2b299d480a37101fce098f8eae3544fe3cc9001ffab48eb9d99c51f24c291579794b3ae5fbbb50b6628e17dedb33b48acb6de207411b8884626473d030faa4a22",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "1",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:11:04.900359053Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:11:04.891822Z"
+  },
+  {
+    "insertId": "6b05a908000d9bb96430f67f",
+    "jsonPayload": {
+      "at": "2026-11-24T15:11:04.890Z",
+      "instance": "d135f590",
+      "message": "work started",
+      "revision": "spike-long-work-job-twnh5",
+      "scanId": "m4-retry",
+      "seconds": 10,
+      "service": "spike-long-work-job",
+      "team": "spike-team"
+    },
+    "labels": {
+      "instanceId": "00e8a408bdc3d1beb93208303ad2edf0ee2c36177551d6c85e14d2b299d480a37101fce098f8eae3544fe3cc9001ffab48eb9d99c51f24c291579794b3ae5fbbb50b6628e17dedb33b48acb6de207411b8884626473d030faa4a22",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "1",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:11:04.900359053Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:11:04.891833Z"
+  },
+  {
+    "insertId": "6b05a912000da893c37eba65",
+    "jsonPayload": {
+      "at": "2026-11-24T15:11:14.893Z",
+      "elapsedMs": 10003,
+      "gapMs": 10003,
+      "instance": "d135f590",
+      "message": "tick",
+      "revision": "spike-long-work-job-twnh5",
+      "scanId": "m4-retry",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "tick": 1
+    },
+    "labels": {
+      "instanceId": "00e8a408bdc3d1beb93208303ad2edf0ee2c36177551d6c85e14d2b299d480a37101fce098f8eae3544fe3cc9001ffab48eb9d99c51f24c291579794b3ae5fbbb50b6628e17dedb33b48acb6de207411b8884626473d030faa4a22",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "1",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:11:15.223451664Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:11:14.895123Z"
+  },
+  {
+    "insertId": "6b05a912000da89c61121276",
+    "jsonPayload": {
+      "at": "2026-11-24T15:11:14.893Z",
+      "elapsedMs": 10003,
+      "instance": "d135f590",
+      "message": "work finished",
+      "revision": "spike-long-work-job-twnh5",
+      "scanId": "m4-retry",
+      "service": "spike-long-work-job",
+      "team": "spike-team",
+      "ticks": 1
+    },
+    "labels": {
+      "instanceId": "00e8a408bdc3d1beb93208303ad2edf0ee2c36177551d6c85e14d2b299d480a37101fce098f8eae3544fe3cc9001ffab48eb9d99c51f24c291579794b3ae5fbbb50b6628e17dedb33b48acb6de207411b8884626473d030faa4a22",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "1",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:11:15.223451664Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:11:14.895132Z"
+  },
+  {
+    "insertId": "6b05a912000da8a021550d2d",
+    "jsonPayload": {
+      "at": "2026-11-24T15:11:14.893Z",
+      "attempt": 1,
+      "instance": "d135f590",
+      "message": "job finished",
+      "revision": "spike-long-work-job-twnh5",
+      "scanId": "m4-retry",
+      "service": "spike-long-work-job"
+    },
+    "labels": {
+      "instanceId": "00e8a408bdc3d1beb93208303ad2edf0ee2c36177551d6c85e14d2b299d480a37101fce098f8eae3544fe3cc9001ffab48eb9d99c51f24c291579794b3ae5fbbb50b6628e17dedb33b48acb6de207411b8884626473d030faa4a22",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "1",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:11:15.223451664Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:11:14.895136Z"
+  },
+  {
+    "insertId": "6b05a912000e9f92face123a",
+    "labels": {
+      "container_name": "worker",
+      "instanceId": "00e8a408bdc3d1beb93208303ad2edf0ee2c36177551d6c85e14d2b299d480a37101fce098f8eae3544fe3cc9001ffab48eb9d99c51f24c291579794b3ae5fbbb50b6628e17dedb33b48acb6de207411b8884626473d030faa4a22",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5",
+      "run.googleapis.com/task_attempt": "1",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2026-11-24T15:11:14.967093967Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "textPayload": "Container called exit(0).",
+    "timestamp": "2026-11-24T15:11:14.958308Z"
+  },
+  {
+    "insertId": "-q1e8gpe2f8ie",
+    "labels": {
+      "run.googleapis.com/execution_name": "spike-long-work-job-twnh5"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/cloudaudit.googleapis.com%2Fsystem_event",
+    "protoPayload": {
+      "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+      "methodName": "/Jobs.RunJob",
+      "resourceName": "namespaces/coherent-bay-515713-r7/executions/spike-long-work-job-twnh5",
+      "response": {
+        "@type": "type.googleapis.com/google.cloud.run.v1.Execution",
+        "apiVersion": "run.googleapis.com/v1",
+        "kind": "Execution",
+        "metadata": {
+          "annotations": {
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "589.0.0",
+            "run.googleapis.com/creator": "<owner's gcloud account>",
+            "run.googleapis.com/execution-environment": "gen2",
+            "run.googleapis.com/lastModifier": "<owner's gcloud account>",
+            "run.googleapis.com/operation-id": "d685075e-fcde-4d1e-b4d5-c7b2aefc2e68"
+          },
+          "creationTimestamp": "2026-11-24T15:10:10.400009Z",
+          "generation": 1,
+          "labels": {
+            "client.knative.dev/nonce": "gic_luf_poc",
+            "cloud.googleapis.com/location": "europe-west1",
+            "purpose": "spike-long-work",
+            "run.googleapis.com/job": "spike-long-work-job",
+            "run.googleapis.com/jobGeneration": "1",
+            "run.googleapis.com/jobResourceVersion": "1795533008027653",
+            "run.googleapis.com/jobUid": "bfc06648-685f-4af2-8a6a-8da702d5ea3d"
+          },
+          "name": "spike-long-work-job-twnh5",
+          "namespace": "642855677290",
+          "ownerReferences": [
+            {
+              "apiVersion": "serving.knative.dev/v1",
+              "blockOwnerDeletion": true,
+              "controller": true,
+              "kind": "Job",
+              "name": "spike-long-work-job",
+              "uid": "bfc06648-685f-4af2-8a6a-8da702d5ea3d"
+            }
+          ],
+          "resourceVersion": "AAZhBx9tzJU",
+          "selfLink": "/apis/run.googleapis.com/v1/namespaces/642855677290/executions/spike-long-work-job-twnh5",
+          "uid": "ea9e5fd9-a2c4-4d4b-9b6a-08331d67b78e"
+        },
+        "spec": {
+          "parallelism": 1,
+          "taskCount": 1,
+          "template": {
+            "spec": {
+              "containers": [
+                {
+                  "args": ["job"],
+                  "env": [
+                    {
+                      "name": "SPIKE_SECRET",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "1",
+                          "name": "spike-long-work-secret"
+                        }
+                      }
+                    },
+                    {
+                      "name": "SCAN",
+                      "value": "{\"scanId\":\"m4-retry\",\"team\":\"spike-team\",\"seconds\":10,\"failFirstAttempt\":true}"
+                    }
+                  ],
+                  "image": "europe-west1-docker.pkg.dev/coherent-bay-515713-r7/spike-long-work/spike-long-work@sha256:401881a0348a356931e8668187e00f39af4390e7d0191571803d90b64c455f1b",
+                  "resources": {
+                    "limits": {
+                      "cpu": "1",
+                      "memory": "512Mi"
+                    }
+                  }
+                }
+              ],
+              "maxRetries": 1,
+              "sandboxes": {},
+              "serviceAccountName": "spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com",
+              "timeoutSeconds": "600"
+            }
+          }
+        },
+        "status": {
+          "completionTime": "2026-11-24T15:11:18.565210Z",
+          "conditions": [
+            {
+              "lastTransitionTime": "2026-11-24T15:11:18.565210Z",
+              "message": "Execution completed successfully in 1m4.45s.",
+              "status": "True",
+              "type": "Completed"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:10:11.344524Z",
+              "message": "Provisioned imported containers.",
+              "status": "True",
+              "type": "ResourcesAvailable"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:10:37.377456Z",
+              "message": "Started deployed execution in 26.03s.",
+              "status": "True",
+              "type": "Started"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:10:11.263422Z",
+              "message": "Imported container image.",
+              "status": "True",
+              "type": "ContainerReady"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:11:20.217747Z",
+              "message": "System will retry after 00:00 from lastTransitionTime for attempt 0.",
+              "reason": "ImmediateRetry",
+              "severity": "Info",
+              "status": "True",
+              "type": "Retry"
+            }
+          ],
+          "logUri": "https://console.cloud.google.com/logs/viewer?project=coherent-bay-515713-r7&advancedFilter=resource.type%3D%22cloud_run_job%22%0Aresource.labels.job_name%3D%22spike-long-work-job%22%0Aresource.labels.location%3D%22europe-west1%22%0Alabels.%22run.googleapis.com/execution_name%22%3D%22spike-long-work-job-twnh5%22",
+          "observedGeneration": 1,
+          "retriedCount": 1,
+          "startTime": "2026-11-24T15:10:14.114220Z",
+          "succeededCount": 1
+        }
+      },
+      "serviceName": "run.googleapis.com",
+      "status": {
+        "message": "Execution spike-long-work-job-twnh5 has completed successfully."
+      }
+    },
+    "receiveTimestamp": "2026-11-24T15:11:20.526588709Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:11:20.233940Z"
+  },
+  {
+    "insertId": "6b05a928000897dbe8a9387b",
+    "jsonPayload": {
+      "at": "2026-11-24T15:11:36.540Z",
+      "attempt": 0,
+      "instance": "669e24a5",
+      "message": "job refused",
+      "reason": "Error: Scan refused: no Team",
+      "revision": "spike-long-work-job-cjdb4",
+      "service": "spike-long-work-job"
+    },
+    "labels": {
+      "instanceId": "00e8a408bd7f94dc9cd959346b07d3bcd82dd79f0ecbb8d9cd37d455c5864b54e8968570af6bdf5aa20b390ba5f8851397809645d12f29c9e681ba9b7edd88407f756cb90a2fc1adadf78bb0c48c236714e97911438ac0539a70fa",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-cjdb4",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:11:36.568560806Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:11:36.563163Z"
+  },
+  {
+    "insertId": "6b05a9280009864193beeaf7",
+    "labels": {
+      "container_name": "worker",
+      "instanceId": "00e8a408bd7f94dc9cd959346b07d3bcd82dd79f0ecbb8d9cd37d455c5864b54e8968570af6bdf5aa20b390ba5f8851397809645d12f29c9e681ba9b7edd88407f756cb90a2fc1adadf78bb0c48c236714e97911438ac0539a70fa",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-cjdb4",
+      "run.googleapis.com/task_attempt": "0",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2026-11-24T15:11:36.629683811Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "WARNING",
+    "textPayload": "Container called exit(2).",
+    "timestamp": "2026-11-24T15:11:36.624130Z"
+  },
+  {
+    "insertId": "6b05a946000cabab77f30b98",
+    "jsonPayload": {
+      "at": "2026-11-24T15:12:06.806Z",
+      "attempt": 1,
+      "instance": "2e257a46",
+      "message": "job refused",
+      "reason": "Error: Scan refused: no Team",
+      "revision": "spike-long-work-job-cjdb4",
+      "service": "spike-long-work-job"
+    },
+    "labels": {
+      "instanceId": "00e8a408bd5b13c440f0763190b8d37969dc31b1383541af3d9d01cfc54efcb944c031d31da64a97c7211b0470a339033b20c5e3854e4f150e15e452be44197be721f4f8d58ff65a646cd4276b8793a9704cba57756d90805e5dd327",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-cjdb4",
+      "run.googleapis.com/task_attempt": "1",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T15:12:06.834068965Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:12:06.830379Z"
+  },
+  {
+    "insertId": "6b05a946000d1fb0274b009e",
+    "labels": {
+      "container_name": "worker",
+      "instanceId": "00e8a408bd5b13c440f0763190b8d37969dc31b1383541af3d9d01cfc54efcb944c031d31da64a97c7211b0470a339033b20c5e3854e4f150e15e452be44197be721f4f8d58ff65a646cd4276b8793a9704cba57756d90805e5dd327",
+      "purpose": "spike-long-work",
+      "run.googleapis.com/execution_name": "spike-long-work-job-cjdb4",
+      "run.googleapis.com/task_attempt": "1",
+      "run.googleapis.com/task_index": "0"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2026-11-24T15:12:06.865242861Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "WARNING",
+    "textPayload": "Container called exit(2).",
+    "timestamp": "2026-11-24T15:12:06.860031Z"
+  },
+  {
+    "insertId": "o5mswke2dhz6",
+    "labels": {
+      "run.googleapis.com/execution_name": "spike-long-work-job-cjdb4"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/cloudaudit.googleapis.com%2Fsystem_event",
+    "protoPayload": {
+      "@type": "type.googleapis.com/google.cloud.audit.AuditLog",
+      "methodName": "/Jobs.RunJob",
+      "resourceName": "namespaces/coherent-bay-515713-r7/executions/spike-long-work-job-cjdb4",
+      "response": {
+        "@type": "type.googleapis.com/google.cloud.run.v1.Execution",
+        "apiVersion": "run.googleapis.com/v1",
+        "kind": "Execution",
+        "metadata": {
+          "annotations": {
+            "run.googleapis.com/client-name": "gcloud",
+            "run.googleapis.com/client-version": "589.0.0",
+            "run.googleapis.com/creator": "<owner's gcloud account>",
+            "run.googleapis.com/execution-environment": "gen2",
+            "run.googleapis.com/lastModifier": "<owner's gcloud account>",
+            "run.googleapis.com/operation-id": "22902ca4-4517-4a70-824c-4bd67133e526"
+          },
+          "creationTimestamp": "2026-11-24T15:11:22.162328Z",
+          "generation": 1,
+          "labels": {
+            "client.knative.dev/nonce": "gic_luf_poc",
+            "cloud.googleapis.com/location": "europe-west1",
+            "purpose": "spike-long-work",
+            "run.googleapis.com/job": "spike-long-work-job",
+            "run.googleapis.com/jobGeneration": "1",
+            "run.googleapis.com/jobResourceVersion": "1795533080256234",
+            "run.googleapis.com/jobUid": "bfc06648-685f-4af2-8a6a-8da702d5ea3d"
+          },
+          "name": "spike-long-work-job-cjdb4",
+          "namespace": "642855677290",
+          "ownerReferences": [
+            {
+              "apiVersion": "serving.knative.dev/v1",
+              "blockOwnerDeletion": true,
+              "controller": true,
+              "kind": "Job",
+              "name": "spike-long-work-job",
+              "uid": "bfc06648-685f-4af2-8a6a-8da702d5ea3d"
+            }
+          ],
+          "resourceVersion": "AAZhByKJBcg",
+          "selfLink": "/apis/run.googleapis.com/v1/namespaces/642855677290/executions/spike-long-work-job-cjdb4",
+          "uid": "9cb1c05a-c135-4c38-a4cd-d8924bd22178"
+        },
+        "spec": {
+          "parallelism": 1,
+          "taskCount": 1,
+          "template": {
+            "spec": {
+              "containers": [
+                {
+                  "args": ["job"],
+                  "env": [
+                    {
+                      "name": "SPIKE_SECRET",
+                      "valueFrom": {
+                        "secretKeyRef": {
+                          "key": "1",
+                          "name": "spike-long-work-secret"
+                        }
+                      }
+                    },
+                    {
+                      "name": "SCAN",
+                      "value": "{\"scanId\":\"m4-no-team\",\"seconds\":10}"
+                    }
+                  ],
+                  "image": "europe-west1-docker.pkg.dev/coherent-bay-515713-r7/spike-long-work/spike-long-work@sha256:401881a0348a356931e8668187e00f39af4390e7d0191571803d90b64c455f1b",
+                  "resources": {
+                    "limits": {
+                      "cpu": "1",
+                      "memory": "512Mi"
+                    }
+                  }
+                }
+              ],
+              "maxRetries": 1,
+              "sandboxes": {},
+              "serviceAccountName": "spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com",
+              "timeoutSeconds": "600"
+            }
+          }
+        },
+        "status": {
+          "completionTime": "2026-11-24T15:12:10.781772Z",
+          "conditions": [
+            {
+              "lastTransitionTime": "2026-11-24T15:12:10.781772Z",
+              "message": "Task spike-long-work-job-cjdb4-task0 failed with exit code: 2 and message: The container exited with an error.",
+              "reason": "NonZeroExitCode",
+              "status": "False",
+              "type": "Completed"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:11:23.084435Z",
+              "message": "Provisioned imported containers.",
+              "status": "True",
+              "type": "ResourcesAvailable"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:11:36.065457Z",
+              "message": "Started deployed execution in 12.98s.",
+              "status": "True",
+              "type": "Started"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:11:23.006011Z",
+              "message": "Imported container image.",
+              "status": "True",
+              "type": "ContainerReady"
+            },
+            {
+              "lastTransitionTime": "2026-11-24T15:12:12.332771Z",
+              "message": "System will retry after 00:00 from lastTransitionTime for attempt 0.",
+              "reason": "ImmediateRetry",
+              "severity": "Info",
+              "status": "True",
+              "type": "Retry"
+            }
+          ],
+          "failedCount": 1,
+          "logUri": "https://console.cloud.google.com/logs/viewer?project=coherent-bay-515713-r7&advancedFilter=resource.type%3D%22cloud_run_job%22%0Aresource.labels.job_name%3D%22spike-long-work-job%22%0Aresource.labels.location%3D%22europe-west1%22%0Alabels.%22run.googleapis.com/execution_name%22%3D%22spike-long-work-job-cjdb4%22",
+          "observedGeneration": 1,
+          "retriedCount": 1,
+          "startTime": "2026-11-24T15:11:26.132478Z"
+        }
+      },
+      "serviceName": "run.googleapis.com",
+      "status": {
+        "code": 10,
+        "message": "Execution spike-long-work-job-cjdb4 has failed to complete, 0/1 tasks were a success."
+      }
+    },
+    "receiveTimestamp": "2026-11-24T15:12:13.479718256Z",
+    "resource": {
+      "labels": {
+        "job_name": "spike-long-work-job",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_run_job"
+    },
+    "severity": "ERROR",
+    "timestamp": "2026-11-24T15:12:12.416660Z"
+  }
+]

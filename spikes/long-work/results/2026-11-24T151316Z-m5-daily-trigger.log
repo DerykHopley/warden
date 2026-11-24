@@ -1,0 +1,37 @@
+# m5-daily-trigger, started 2026-11-24T15:13:16Z, project coherent-bay-515713-r7, region europe-west1
+[15:13:16] Measurement 5: spike-long-work-daily, fired once by hand; it calls the Cloud Run Admin API to run spike-long-work-job.
+httpTarget:
+  oauthToken:
+    scope: https://www.googleapis.com/auth/cloud-platform
+    serviceAccountEmail: spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com
+  uri: https://run.googleapis.com/v2/projects/coherent-bay-515713-r7/locations/europe-west1/jobs/spike-long-work-job:run
+schedule: 0 4 * * *
+state: ENABLED
+timeZone: Etc/UTC
+[15:13:18] Waiting 90 seconds for the execution (20 seconds of work) and the log delay.
+[15:14:48] Executions of spike-long-work-job, newest first:
+NAME                       CREATION_TIMESTAMP           COMPLETION_TIME              SUCCEEDED_COUNT  FAILED_COUNT
+spike-long-work-job-rpwpx  2026-11-24T15:13:19.186929Z  2026-11-24T15:13:58.467716Z  1
+spike-long-work-job-cjdb4  2026-11-24T15:11:22.162328Z  2026-11-24T15:12:10.781772Z                   1
+spike-long-work-job-twnh5  2026-11-24T15:10:10.400009Z  2026-11-24T15:11:18.565210Z  1
+[15:14:50] Cloud Logging, scheduler (raw entries: 2026-11-24T151316Z-m5-daily-trigger-scheduler.json):
+┌────────────────────────────────┬──────────┬─────────┬──────┬──────┬────────┬────────┬──────┬────────┬───────┬──────┬─────────┬────────┬──────┬─────────┬──────┐
+│           TIMESTAMP            │ INSTANCE │ MESSAGE │ SCAN │ TICK │ GAP_MS │ IDLE_S │ UP_S │ ANSWER │ RETRY │ EXEC │ ATTEMPT │ SECRET │ HTTP │ LATENCY │ TEXT │
+├────────────────────────────────┼──────────┼─────────┼──────┼──────┼────────┼────────┼──────┼────────┼───────┼──────┼─────────┼────────┼──────┼─────────┼──────┤
+│ 2026-11-24T15:13:28.039927536Z │          │         │      │      │        │        │      │        │       │      │         │        │      │         │      │
+│ 2026-11-24T15:13:28.665220538Z │          │         │      │      │        │        │      │        │       │      │         │        │ 200  │         │      │
+└────────────────────────────────┴──────────┴─────────┴──────┴──────┴────────┴────────┴──────┴────────┴───────┴──────┴─────────┴────────┴──────┴─────────┴──────┘
+[15:14:52] Cloud Logging, job (raw entries: 2026-11-24T151316Z-m5-daily-trigger-job.json):
+┌─────────────────────────────┬──────────┬───────────────┬─────────────────┬──────┬────────┬────────┬──────┬────────┬───────┬──────┬─────────┬─────────────────────────┬──────┬─────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│          TIMESTAMP          │ INSTANCE │    MESSAGE    │       SCAN      │ TICK │ GAP_MS │ IDLE_S │ UP_S │ ANSWER │ RETRY │ EXEC │ ATTEMPT │          SECRET         │ HTTP │ LATENCY │                                                              TEXT                                                             │
+├─────────────────────────────┼──────────┼───────────────┼─────────────────┼──────┼────────┼────────┼──────┼────────┼───────┼──────┼─────────┼─────────────────────────┼──────┼─────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ 2026-11-24T15:13:35.201205Z │ 25e9f50f │ job started   │ m5-daily-expiry │      │        │        │      │        │       │      │ 0       │ secret found, length 48 │      │         │                                                                                                                               │
+│ 2026-11-24T15:13:35.201213Z │ 25e9f50f │ work started  │ m5-daily-expiry │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:13:45.203149Z │ 25e9f50f │ tick          │ m5-daily-expiry │ 1    │ 10001  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:13:55.206559Z │ 25e9f50f │ tick          │ m5-daily-expiry │ 2    │ 10004  │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:13:55.206567Z │ 25e9f50f │ work finished │ m5-daily-expiry │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:13:55.206571Z │ 25e9f50f │ job finished  │ m5-daily-expiry │      │        │        │      │        │       │      │ 0       │                         │      │         │                                                                                                                               │
+│ 2026-11-24T15:13:55.253235Z │          │               │                 │      │        │        │      │        │       │      │         │                         │      │         │ ['C', 'o', 'n', 't', 'a', 'i', 'n', 'e', 'r', ' ', 'c', 'a', 'l', 'l', 'e', 'd', ' ', 'e', 'x', 'i', 't', '(', '0', ')', '.'] │
+│ 2026-11-24T15:14:00.315723Z │          │               │                 │      │        │        │      │        │       │      │         │                         │      │         │                                                                                                                               │
+└─────────────────────────────┴──────────┴───────────────┴─────────────────┴──────┴────────┴────────┴──────┴────────┴───────┴──────┴─────────┴─────────────────────────┴──────┴─────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+[15:14:53] Log: spikes/long-work/results/2026-11-24T151316Z-m5-daily-trigger.log

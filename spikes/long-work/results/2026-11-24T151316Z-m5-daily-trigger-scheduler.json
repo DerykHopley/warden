@@ -1,0 +1,49 @@
+[
+  {
+    "insertId": "33zzbff88w4s1",
+    "jsonPayload": {
+      "@type": "type.googleapis.com/google.cloud.scheduler.logging.AttemptStarted",
+      "jobName": "projects/coherent-bay-515713-r7/locations/europe-west1/jobs/spike-long-work-daily",
+      "scheduledTime": "2026-11-24T15:13:19.094127Z",
+      "targetType": "HTTP",
+      "url": "https://run.googleapis.com/v2/projects/coherent-bay-515713-r7/locations/europe-west1/jobs/spike-long-work-job:run"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/cloudscheduler.googleapis.com%2Fexecutions",
+    "receiveTimestamp": "2026-11-24T15:13:28.039927536Z",
+    "resource": {
+      "labels": {
+        "job_id": "spike-long-work-daily",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_scheduler_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:13:28.039927536Z"
+  },
+  {
+    "httpRequest": {
+      "status": 200
+    },
+    "insertId": "autt32f7blw12",
+    "jsonPayload": {
+      "@type": "type.googleapis.com/google.cloud.scheduler.logging.AttemptFinished",
+      "debugInfo": "URL_CRAWLED. Original HTTP response code number = 200",
+      "jobName": "projects/coherent-bay-515713-r7/locations/europe-west1/jobs/spike-long-work-daily",
+      "targetType": "HTTP",
+      "url": "https://run.googleapis.com/v2/projects/coherent-bay-515713-r7/locations/europe-west1/jobs/spike-long-work-job:run"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/cloudscheduler.googleapis.com%2Fexecutions",
+    "receiveTimestamp": "2026-11-24T15:13:28.665220538Z",
+    "resource": {
+      "labels": {
+        "job_id": "spike-long-work-daily",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7"
+      },
+      "type": "cloud_scheduler_job"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T15:13:28.665220538Z"
+  }
+]

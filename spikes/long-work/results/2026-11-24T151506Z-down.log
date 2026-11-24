@@ -1,0 +1,33 @@
+# down, started 2026-11-24T15:15:06Z, project coherent-bay-515713-r7, region europe-west1
+Deleted job [spike-long-work-daily].
+[15:15:09] deleted scheduler job spike-long-work-daily
+Deleted queue [europe-west1/spike-long-work].
+[15:15:10] deleted queue spike-long-work
+Deleting [spike-long-work-job]...
+................done.
+Deleted job [spike-long-work-job].
+[15:15:14] deleted run job spike-long-work-job
+Deleting [spike-long-work-throttled]...
+.............done.
+Deleted service [spike-long-work-throttled].
+[15:15:18] deleted run service spike-long-work-throttled
+Deleting [spike-long-work-always]...
+..............done.
+Deleted service [spike-long-work-always].
+[15:15:22] deleted run service spike-long-work-always
+Deleting [spike-long-work-timeout]...
+..............done.
+Deleted service [spike-long-work-timeout].
+[15:15:26] deleted run service spike-long-work-timeout
+Delete request issued for: [spike-long-work]
+Waiting for operation [projects/coherent-bay-515713-r7/locations/europe-west1/operations/15f1d80d-ca11-4f92-bb07-e2da479b47d3] to complete...
+......done.
+Deleted repository [spike-long-work].
+[15:15:29] deleted repository spike-long-work
+Deleted secret [spike-long-work-secret].
+[15:15:32] deleted secret spike-long-work-secret
+deleted service account [spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com]
+[15:15:34] deleted service account spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com
+Listing items under project coherent-bay-515713-r7, location europe-west1.
+
+[15:15:38] Leftovers named spike-long-work: none

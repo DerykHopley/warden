@@ -1,0 +1,9 @@
+# leftover-check, started 2026-11-24T15:15:54Z, project coherent-bay-515713-r7, region europe-west1
+[15:15:55] gcloud run services list --region=europe-west1 --format=value(metadata.name): 0 named spike-long-work, 0 in all
+[15:15:56] gcloud run jobs list --region=europe-west1 --format=value(metadata.name): 0 named spike-long-work, 0 in all
+[15:15:56] gcloud tasks queues list --location=europe-west1 --format=value(name): 0 named spike-long-work, 0 in all
+[15:15:57] gcloud scheduler jobs list --location=europe-west1 --format=value(name): 0 named spike-long-work, 0 in all
+[15:15:57] gcloud secrets list --format=value(name): 0 named spike-long-work, 4 in all
+[15:15:58] gcloud artifacts repositories list --location=europe-west1 --format=value(name): 0 named spike-long-work, 0 in all
+[15:15:59] gcloud iam service-accounts list --format=value(email): 0 named spike-long-work, 1 in all
+[15:15:59] Nothing named spike-long-work is left.

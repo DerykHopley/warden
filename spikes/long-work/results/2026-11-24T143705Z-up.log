@@ -1,0 +1,132 @@
+# up, started 2026-11-24T14:37:05Z, project coherent-bay-515713-r7, region europe-west1
+[14:37:05] Checking the APIs the spike uses, before anything else
+[14:37:07] Checking nothing is left from an earlier run
+Listing items under project coherent-bay-515713-r7, location europe-west1.
+
+[14:37:12] gcloud: Google Cloud SDK 589.0.0; container tool: podman; image: europe-west1-docker.pkg.dev/coherent-bay-515713-r7/spike-long-work/spike-long-work:20261124-143711
+[14:37:12] 1. Service account spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com (no project-level roles: every grant below is on one spike resource)
+Created service account [spike-long-work].
+Service account email: spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com
+ERROR: (gcloud.iam.service-accounts.describe) NOT_FOUND: Service account projects/-/serviceAccounts/spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com does not exist. This command is authenticated as <owner's gcloud account> which is the active account specified by the [core/account] property.
+[14:37:14] not ready yet, retrying in 10 seconds (1 of 5)
+spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com
+[14:37:25] 2. Secret spike-long-work-secret: a random value, piped straight in, never printed
+Created version [1] of the secret [spike-long-work-secret].
+Updated IAM policy for secret [spike-long-work-secret].
+[14:37:29] 3. Artifact Registry repository spike-long-work, and the image built locally and pushed
+Create request issued for: [spike-long-work]
+Waiting for operation [projects/coherent-bay-515713-r7/locations/europe-west1/operations/1137b26a-92fd-4cd7-92d0-eb775a425532] to complete...
+.......................................................................................................................................done.
+Created repository [spike-long-work].
+STEP 1/8: FROM node:24-slim
+STEP 2/8: WORKDIR /app
+--> Using cache 36b01ce90c34a7da07f992592652c2f40e7b3cf5715b8a8642f5b0ffc25f0932
+--> 36b01ce90c34
+STEP 3/8: COPY package.json ./
+--> Using cache 2bea2e5d24887d7ca556ea6d4b958d55f81d0a716c8db497ba87d7e73ebba0c3
+--> 2bea2e5d2488
+STEP 4/8: COPY src/work.ts src/main.ts ./
+--> cbe6df4eb919
+STEP 5/8: USER node
+--> 3665a4b52ab8
+STEP 6/8: ENV PORT=8080
+--> 996bebd3ee42
+STEP 7/8: ENTRYPOINT ["node", "main.ts"]
+--> cad42bae27e6
+STEP 8/8: CMD ["serve"]
+COMMIT europe-west1-docker.pkg.dev/coherent-bay-515713-r7/spike-long-work/spike-long-work:20261124-143711
+--> 224bba8092dc
+Successfully tagged europe-west1-docker.pkg.dev/coherent-bay-515713-r7/spike-long-work/spike-long-work:20261124-143711
+224bba8092dc552732f436e5758685e91d7ef40e204348f04d6761060133d1ca
+Login Succeeded!
+Getting image source signatures
+Copying blob sha256:9e31f09af6d6091655a6a92970818690f5c6b3c5e47b0b483aae53f205b9d1a4
+Copying blob sha256:79bcef9c2df5526dc963107a5878aa25ea492e88ae626c8c2e615b394bb3a469
+Copying blob sha256:544f881af7a2a9f25338bb275a0f3b7e09b06ea587fb113aba521928e43121bb
+Copying blob sha256:7457f881541387c498d3638fc55b1f87c4a38dd415f216a57c642d077eef9feb
+Copying blob sha256:606229031e76a82c486df00d2565c45a89bb848a4df0fb315d9c4c47b3682530
+Copying blob sha256:59d0eb3a6df14e587188c0faaca8de211c50f837925550067e43fbe2ea044ba1
+Copying blob sha256:a3234cb89efddd3d341320b44d2f16f06437fc54f858bd1c5574ad83ee409af1
+Copying config sha256:224bba8092dc552732f436e5758685e91d7ef40e204348f04d6761060133d1ca
+Writing manifest to image destination
+Removed login credentials for europe-west1-docker.pkg.dev
+[14:38:18] 4. Three services, all private (--no-allow-unauthenticated), one instance at most
+Deploying container to Cloud Run service [spike-long-work-throttled] in project [coherent-bay-515713-r7] region [europe-west1]
+Deploying new service...
+Creating Revision........................................................................................................................done
+Routing traffic.....done
+Done.
+Service [spike-long-work-throttled] revision [spike-long-work-throttled-00001-n6z] has been deployed and is serving 100 percent of traffic.
+Service URL: https://spike-long-work-throttled-642855677290.europe-west1.run.app
+Proxy locally with: gcloud run services proxy spike-long-work-throttled --region europe-west1 --project coherent-bay-515713-r7
+Deploying container to Cloud Run service [spike-long-work-always] in project [coherent-bay-515713-r7] region [europe-west1]
+Deploying new service...
+Creating Revision......................................................................done
+Routing traffic.....done
+Done.
+Service [spike-long-work-always] revision [spike-long-work-always-00001-d7r] has been deployed and is serving 100 percent of traffic.
+Service URL: https://spike-long-work-always-642855677290.europe-west1.run.app
+Proxy locally with: gcloud run services proxy spike-long-work-always --region europe-west1 --project coherent-bay-515713-r7
+Deploying container to Cloud Run service [spike-long-work-timeout] in project [coherent-bay-515713-r7] region [europe-west1]
+Deploying new service...
+Creating Revision..........................................................done
+Routing traffic.....done
+Done.
+Service [spike-long-work-timeout] revision [spike-long-work-timeout-00001-lx4] has been deployed and is serving 100 percent of traffic.
+Service URL: https://spike-long-work-timeout-642855677290.europe-west1.run.app
+Proxy locally with: gcloud run services proxy spike-long-work-timeout --region europe-west1 --project coherent-bay-515713-r7
+Updated IAM policy for service [spike-long-work-throttled].
+[14:38:49] 5. Cloud Run Job spike-long-work-job: one task, one retry, no Scan until an execution passes one
+Creating Cloud Run job [spike-long-work-job] in project [coherent-bay-515713-r7] region [europe-west1]
+Creating job...
+Done.
+Job [spike-long-work-job] has successfully been created.
+
+To execute this job, use:
+gcloud run jobs execute spike-long-work-job
+Updated IAM policy for job [spike-long-work-job].
+[14:38:53] 6. Cloud Tasks queue spike-long-work: 3 attempts, 5 to 10 seconds apart, every attempt logged
+Updated IAM policy for serviceAccount [spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com].
+Created queue [europe-west1/spike-long-work].
+[14:38:57] 7. Cloud Scheduler job spike-long-work-daily: daily at 04:00 UTC, starts spike-long-work-job through the Cloud Run Admin API
+attemptDeadline: 180s
+httpTarget:
+  body: eyJvdmVycmlkZXMiOnsiY29udGFpbmVyT3ZlcnJpZGVzIjpbeyJlbnYiOlt7Im5hbWUiOiJTQ0FOIiwidmFsdWUiOiJ7XCJzY2FuSWRcIjpcIm01LWRhaWx5LWV4cGlyeVwiLFwidGVhbVwiOlwic3Bpa2UtdGVhbVwiLFwic2Vjb25kc1wiOjIwfSJ9XX1dfX0=
+  headers:
+    Content-Type: application/json
+    User-Agent: Google-Cloud-Scheduler
+  httpMethod: POST
+  oauthToken:
+    scope: https://www.googleapis.com/auth/cloud-platform
+    serviceAccountEmail: spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com
+  uri: https://run.googleapis.com/v2/projects/coherent-bay-515713-r7/locations/europe-west1/jobs/spike-long-work-job:run
+name: projects/coherent-bay-515713-r7/locations/europe-west1/jobs/spike-long-work-daily
+retryConfig:
+  maxBackoffDuration: 3600s
+  maxDoublings: 5
+  maxRetryDuration: 0s
+  minBackoffDuration: 5s
+schedule: 0 4 * * *
+scheduleTime: '2026-11-25T04:00:00Z'
+state: ENABLED
+status:
+  code: -1
+timeZone: Etc/UTC
+userUpdateTime: '2026-11-24T14:39:05.714225Z'
+[14:39:05] 8. Access check: no service answers without a Google identity
+[14:39:07] spike-long-work-throttled: 403 without a token, 200 with the owner's identity token (https://spike-long-work-throttled-4yxtzarx4q-ew.a.run.app)
+[14:39:08] spike-long-work-always: 403 without a token, 200 with the owner's identity token (https://spike-long-work-always-4yxtzarx4q-ew.a.run.app)
+[14:39:09] spike-long-work-timeout: 403 without a token, 200 with the owner's identity token (https://spike-long-work-timeout-4yxtzarx4q-ew.a.run.app)
+[14:39:09] Done. Every spike resource:
+service-account spike-long-work@coherent-bay-515713-r7.iam.gserviceaccount.com
+secret spike-long-work-secret
+Listing items under project coherent-bay-515713-r7, location europe-west1.
+
+repository spike-long-work
+run-service spike-long-work-always
+run-service spike-long-work-throttled
+run-service spike-long-work-timeout
+run-job spike-long-work-job
+queue spike-long-work
+scheduler-job spike-long-work-daily
+[14:39:14] Next: measure.sh, then down.sh. Log: spikes/long-work/results/2026-11-24T143705Z-up.log

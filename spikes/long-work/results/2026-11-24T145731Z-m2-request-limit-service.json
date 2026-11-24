@@ -1,0 +1,507 @@
+[
+  {
+    "httpRequest": {
+      "latency": "60.001557720s",
+      "protocol": "HTTP/1.1",
+      "remoteIp": "87.144.180.63",
+      "requestMethod": "POST",
+      "requestSize": "939",
+      "requestUrl": "https://spike-long-work-timeout-4yxtzarx4q-ew.a.run.app/inline",
+      "responseSize": "72",
+      "serverIp": "34.143.75.2",
+      "status": 504,
+      "userAgent": "curl/8.21.0"
+    },
+    "insertId": "6b05a6180007c2f6fb29b065",
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Frequests",
+    "receiveTimestamp": "2026-11-24T14:58:32.514253978Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "ERROR",
+    "spanId": "25f21f675f1e6354",
+    "textPayload": "The request has been terminated because it has reached the maximum request timeout. To change this limit, see https://cloud.google.com/run/docs/configuring/request-timeout",
+    "timestamp": "2026-11-24T14:57:32.172990Z",
+    "trace": "projects/coherent-bay-515713-r7/traces/fa0cc22098ec64c6e23a940f2c7daa14",
+    "traceSampled": true
+  },
+  {
+    "insertId": "6b05a5dc00031ae781774926",
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work",
+      "scaling_reason": "AUTOSCALING"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2026-11-24T14:57:32.210137783Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "textPayload": "Starting new instance. Reason: AUTOSCALING - Instance started due to configured scaling factors (e.g. CPU utilization, request throughput, etc.) or no existing capacity for current traffic.",
+    "timestamp": "2026-11-24T14:57:32.203495Z"
+  },
+  {
+    "insertId": "6b05a5dd0002057f5ba0c865",
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fvarlog%2Fsystem",
+    "receiveTimestamp": "2026-11-24T14:57:33.207876202Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "textPayload": "Default STARTUP TCP probe succeeded after 1 attempt for container \"spike-long-work-1\" on port 8080.",
+    "timestamp": "2026-11-24T14:57:33.132479Z"
+  },
+  {
+    "insertId": "6b05a5dd00022289128fd0b7",
+    "jsonPayload": {
+      "at": "2026-11-24T14:57:33.124Z",
+      "instance": "2aacb2a7",
+      "message": "instance started",
+      "mode": "serve",
+      "port": 8080,
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "secret": "secret found, length 48",
+      "service": "spike-long-work-timeout"
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:57:33.147295410Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:57:33.139913Z"
+  },
+  {
+    "insertId": "6b05a5dd000372ecfbdc4100",
+    "jsonPayload": {
+      "at": "2026-11-24T14:57:33.226Z",
+      "instance": "2aacb2a7",
+      "message": "work started",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "seconds": 90,
+      "service": "spike-long-work-timeout",
+      "team": "spike-team"
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:57:33.480919101Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:57:33.226028Z"
+  },
+  {
+    "insertId": "6b05a5e700037c847aa3cdb7",
+    "jsonPayload": {
+      "at": "2026-11-24T14:57:43.228Z",
+      "elapsedMs": 10002,
+      "gapMs": 10002,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 1
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:57:43.471397636Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:57:43.228484Z"
+  },
+  {
+    "insertId": "6b05a5f1000386d60cd3b7ef",
+    "jsonPayload": {
+      "at": "2026-11-24T14:57:53.231Z",
+      "elapsedMs": 20005,
+      "gapMs": 10003,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 2
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:57:53.460679606Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:57:53.231126Z"
+  },
+  {
+    "insertId": "6b05a5fb0003903ec25ecc82",
+    "jsonPayload": {
+      "at": "2026-11-24T14:58:03.233Z",
+      "elapsedMs": 30007,
+      "gapMs": 10002,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 3
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:58:03.457994924Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:58:03.233534Z"
+  },
+  {
+    "insertId": "6b05a6050003963584b40dd7",
+    "jsonPayload": {
+      "at": "2026-11-24T14:58:13.235Z",
+      "elapsedMs": 40009,
+      "gapMs": 10002,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 4
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:58:13.443958948Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:58:13.235061Z"
+  },
+  {
+    "insertId": "6b05a60f00039b87075e9771",
+    "jsonPayload": {
+      "at": "2026-11-24T14:58:23.236Z",
+      "elapsedMs": 50010,
+      "gapMs": 10001,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 5
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:58:23.432826798Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:58:23.236423Z"
+  },
+  {
+    "insertId": "6b05a619000474ae77d3c061",
+    "jsonPayload": {
+      "at": "2026-11-24T14:58:33.292Z",
+      "elapsedMs": 60066,
+      "gapMs": 10056,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 6
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:58:33.424383044Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:58:33.292014Z"
+  },
+  {
+    "insertId": "6b05a6230005fd29c91bb179",
+    "jsonPayload": {
+      "at": "2026-11-24T14:58:43.393Z",
+      "elapsedMs": 70167,
+      "gapMs": 10101,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 7
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:58:43.410872282Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:58:43.392489Z"
+  },
+  {
+    "insertId": "6b05a62d0006055072ff22f5",
+    "jsonPayload": {
+      "at": "2026-11-24T14:58:53.395Z",
+      "elapsedMs": 80169,
+      "gapMs": 10002,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 8
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:58:53.403960721Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:58:53.394576Z"
+  },
+  {
+    "insertId": "6b05a637000372e364bbe1f6",
+    "jsonPayload": {
+      "at": "2026-11-24T14:59:03.226Z",
+      "elapsedMs": 90000,
+      "gapMs": 9831,
+      "instance": "2aacb2a7",
+      "message": "tick",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "tick": 9
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:59:03.397894196Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:59:03.226019Z"
+  },
+  {
+    "insertId": "6b05a6370003734a78e340c9",
+    "jsonPayload": {
+      "at": "2026-11-24T14:59:03.227Z",
+      "elapsedMs": 90001,
+      "instance": "2aacb2a7",
+      "message": "work finished",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "scanId": "m2-inline-90s",
+      "service": "spike-long-work-timeout",
+      "team": "spike-team",
+      "ticks": 9
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:59:03.397894196Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:59:03.226122Z"
+  },
+  {
+    "insertId": "6b05a63700090944a336234d",
+    "jsonPayload": {
+      "at": "2026-11-24T14:59:03.592Z",
+      "instance": "2aacb2a7",
+      "message": "request done",
+      "method": "POST",
+      "ms": 90370,
+      "path": "/inline",
+      "revision": "spike-long-work-timeout-00001-lx4",
+      "service": "spike-long-work-timeout",
+      "status": 200
+    },
+    "labels": {
+      "instanceId": "00e8a408bdd58154dd6d50d819cba66a6c78766bf42046ea4ca47e15a40d9a471bad1cd3c20084273f8d3441652d8aa981edfcfd6428f78bfb6bf3c03b576a2184aeb530492b99770b432e1a086bc9c4eaef75fdb340b8201d",
+      "purpose": "spike-long-work"
+    },
+    "logName": "projects/coherent-bay-515713-r7/logs/run.googleapis.com%2Fstdout",
+    "receiveTimestamp": "2026-11-24T14:59:03.735378593Z",
+    "resource": {
+      "labels": {
+        "configuration_name": "spike-long-work-timeout",
+        "location": "europe-west1",
+        "project_id": "coherent-bay-515713-r7",
+        "revision_name": "spike-long-work-timeout-00001-lx4",
+        "service_name": "spike-long-work-timeout"
+      },
+      "type": "cloud_run_revision"
+    },
+    "severity": "INFO",
+    "timestamp": "2026-11-24T14:59:03.592196Z"
+  }
+]
