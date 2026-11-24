@@ -8,33 +8,52 @@ Keep this file short enough to read before each UI ticket: a component gets a ro
 
 ## Source and approval
 
-- **Identity from:** the owner's own idea (blank for now: the design step, `/prototype` of the main screen in 2 or 3 directions, fills in identity and tokens before `/rig:spec-open`; the walking skeleton puts the chosen tokens into the stylesheet)
+- **Identity from:** the owner's own idea, chosen by prototype on 2026-11-24 (direction E below). The prototype, all five directions, is on the branch `prototype/dashboard-directions` (`prototypes/dashboard/index.html`, open it in a browser).
 - **Visual changes approved by:** the owner. A ticket that needs a visual choice this file doesn't settle goes to them: a static choice with a screenshot of each option, side by side; an interactive one (a handle, drag, resize, focus, hover, motion, keyboard) as a "try this" step in the owner preview or the live app.
 
 ## Identity
 
-- **For:** {{who uses it, and where: on a phone between meetings, at a desk all day}}
-- **Feels:** {{three words, e.g. calm, quick, plain}}
-- **Not:** {{what it must not feel like, e.g. playful, corporate, dense}}
+- **For:** the person responsible for a small software business's security, often its founder or a lead developer, at a desk in short visits between building: weekly, or when something is flagged. Later, an assessor reading the evidence.
+- **Feels:** calm, exact, trustworthy.
+- **Not:** alarmist, cluttered, surveillance-like. No red-everywhere threat dashboard; no enterprise density at Quick; nothing that makes a developer feel watched (a flag means "not covered", not "you did wrong").
 
 ## Decisions
 
-What was chosen, usually after a prototype, and why. A prototype's answer lands here, and the prototype is thrown away.
-
 | Area | Decision | Why | Rejected |
 |---|---|---|---|
-| {{Overall look}} | {{…}} | {{…}} | {{the options not taken, so they aren't proposed again}} |
+| Overall look | **E, "combined, friendlier"**: A's quiet document look (paper background, serif headings, one ink-blue accent), made about 15% friendlier (rounded corners, soft shadows, tinted severity pills, plain-language lines) | Calm and formal enough for an audit, warm enough for a founder at Quick | **A Quiet ledger** (clean, but too bare); **B Calm console** (dense dark developer tool; kept its detail panel); **C Friendly guide** (too playful; kept its cards); **D Combined** (right structure, a little cold) |
+| Main screen | **Findings**: a one-line summary, the top 5 as cards, then the full table with filters | A developer's question is "what do I fix?"; cards make the first five obvious in a short visit | Dashboard of charts; cards for everything |
+| The journey | Quick → Standard → Audit-ready lives on **Overview**, with the trend and "Are we ready for the audit?". Findings shows the Level as one header line linking to it | The journey means a lot to a manager or security officer and nothing to a developer | A journey strip on every page (C) |
+| Side panel | **One panel, "Ask Warden"**: closed (a button), floating, or pinned beside the page with a draggable divider. The chat fills its height; a **detail card** for the focused item (a Finding, or a Control on Overview) slots in above the chat, in its own tint, with its own ✕ | Deep-dive and conversation share one context; pinning suits a developer digging in, closed suits a glance. Follows Patch's bubble-to-pinned chat | Always-open panel (B, D: empty space on Overview); separate detail drawer and chat bubble |
+| Chat context | The chat gets the page's view (page, filters) and its focus (the item in the detail card) with every message. A **context line** above the input says what "this" means: "Talking about: F-103 · view: Findings, Open" | No guessing what the chat refers to; view changes act at once, data changes come back as a Proposal | Chat with no page context |
+| Roles | **Everyone in a Team sees every page.** A person's role only picks the page that opens first: Member → Findings; Lead and Admin → Overview | In a small business, hiding Findings gets in the way; tailored pages can come later | Role-tailored dashboards (for now) |
+| Width | Content grows to about 1480px, centred; with the panel pinned, the page uses everything left of it | Widescreen screens shouldn't waste half the width | Fixed 1040px column |
 
 ## Tokens
 
+Each token is defined in light and dark. Starting values are in the prototype's `[data-variant="E"]` blocks; the walking skeleton copies them into the stylesheet.
+
 | Token | Value lives in | Use for | Not for |
 |---|---|---|---|
-| `--bg` | `:root` | page background | |
+| `--bg` | `:root` | page background (paper) | |
+| `--surface` | `:root` | cards, panel, table background | |
 | `--fg` | `:root` | body text | |
-| `--accent` | `:root` | the one main action per screen, links | decoration |
-| {{…}} | | | |
+| `--muted` | `:root` | secondary text, metadata, labels | body text |
+| `--line` | `:root` | borders, dividers, table rules | |
+| `--chip` | `:root` | selected row, user chat message, quiet fills | |
+| `--accent` | `:root` | the one main action per screen, links, selected card border, pinned state | decoration, severity |
+| `--accent-fg` | `:root` | text on `--accent` | |
+| `--sev-crit`, `--sev-high`, `--sev-med`, `--sev-low` | `:root` | severity text, always with its word | backgrounds, anything not a severity |
+| `--tint-crit`, `--tint-high`, `--tint-med`, `--tint-low` | `:root` | severity pill backgrounds, behind the matching `--sev-*` | rows, cards |
+| `--focus-bg`, `--focus-line` | `:root` | the detail card: the item the chat is talking about | anything else |
+| `--ok` | `:root` | Fixed, confirmed | |
+| `--font-head` | `:root` | page and section headings (serif) | body, tables |
+| `--font-body` | `:root` | everything else (sans) | |
+| `--font-mono` | `:root` | Rule ids, Finding ids, evidence, the view path | prose |
+| `--radius` | `:root` | cards, panel, buttons, inputs (10px; pills are fully round) | |
+| `--shadow` | `:root` | cards and the panel only | text, tables |
 
-Type, spacing, radius, shadow and motion get rows here once the CSS names them as tokens. Dark mode redefines the same tokens; it never adds new ones.
+Dark mode redefines the same tokens; it never adds new ones.
 
 **Checklist:** every colour is a token (`scripts/design-lint.py` passes); each token used in light is defined in dark.
 
@@ -42,36 +61,48 @@ Type, spacing, radius, shadow and motion get rows here once the CSS names them a
 
 | Width | What changes |
 |---|---|
-| under {{640}}px | {{one column; the main action stays in reach of a thumb}} |
-| {{640–1024}}px | {{…}} |
-| over {{1024}}px | {{…}} |
+| under 640px | One column. The top 5 stack. The table shows severity, title and status only. The panel opens full screen; "pinned" means full screen |
+| 640–1100px | Cards wrap to two or three per row. The panel floats over the page; pinning is offered from 1100px |
+| over 1100px | Five cards in a row. The panel can be pinned beside the page (320–680px wide, default 400px). Content grows to about 1480px, centred |
 
-**Checklist:** each changed screen checked at {{the widths above}}; nothing scrolls sideways.
+**Checklist:** each changed screen checked at 390px, 1024px and 1600px; nothing scrolls sideways.
 
 ## Motion
 
 | What moves | How | With reduced motion |
 |---|---|---|
-| {{cards on load}} | {{fade up, 200ms}} | {{appear without moving}} |
+| Panel opening (floating) | slides in from the right, 150ms | appears without moving |
+| Detail card appearing | fades in, 120ms | appears |
+| Filter or view change | none: the table swaps at once | none |
 
 **Checklist:** the motion listed for a component ships with it; `prefers-reduced-motion` is honoured.
 
 ## Components
 
-One row per component, with the states it must show. A state not listed here doesn't exist yet: adding one is a design choice.
-
 | Component | States |
 |---|---|
-| {{Button}} | default, hover, focus, disabled, busy |
+| Button | default, hover, focus, disabled, busy |
+| Severity pill | Critical, High, Medium, Low (word always shown) |
+| Finding card (top 5) | default, hover, focus, selected (accent border) |
+| Findings table row | default, hover, focus, selected; Unconfirmed fix flag |
+| Filter tabs (status, severity, module) | default, selected, focus; the view path shown at the right |
+| Level header line | current Level, link to Overview |
+| Journey card (Overview) | done, current (accent border), not started; progress bar and next step |
+| Audit Control row (Overview) | default, hover, selected |
+| Ask Warden panel | closed (button with message count), floating, pinned; divider: default, hover, focus, dragging |
+| Detail card | Finding, Control, cleared (✕) |
+| Context line | with focus ("F-103 · view …"), without focus ("view …") |
+| Chat message | user, Warden, Proposal (approve or reject), streaming |
 
 **Checklist:** every state in the row is reachable and looks as described, in light and dark.
 
 ## Accessibility floor
 
-- Text contrast at least 4.5:1 (3:1 for large text and icons), in light and dark.
+- Text contrast at least 4.5:1 (3:1 for large text and icons), in light and dark. Checked for E on 2026-11-24: every text pair passes; the two severity colours that failed in the prototype (light High on its tint, Low in both themes) were darkened before recording.
 - A visible focus ring on everything that takes focus.
 - Touch targets at least 44 by 44px.
-- Colour is never the only cue: a label, icon or shape goes with it.
+- Colour is never the only cue: a label, icon or shape goes with it. Severity always shows its word.
+- The divider is a focusable separator: ← and → resize it in 24px steps. Esc closes a floating panel.
 
 **Checklist:** contrast checked for each new colour pair, in both themes; keyboard reaches and leaves every new control.
 
