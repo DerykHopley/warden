@@ -1,24 +1,20 @@
 // Story 8: a Finding's history can't be edited, by the app or by the tables' owner (threat D6). warden_app has no
 // update, delete or truncate grant on it, so Postgres refuses those first; the owner, warden_migrate, has every grant,
-// and the append-only trigger refuses it.
+// and the append-only trigger refuses it. It runs on a database of its own: the owner's truncate locks the table
+// against every other file writing history on the suite's shared database.
 import { randomUUID } from "node:crypto";
 import { sql } from "kysely";
-import type pg from "pg";
-import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { HistoryActorKind } from "../src/schema.ts";
-import { createWithTeam, type WithTeam } from "../src/with-team.ts";
-import { poolAs, type DatabaseRole } from "./databases.ts";
+import type { WithTeam } from "../src/with-team.ts";
+import { ownDatabase } from "./databases.ts";
 
 const team = `org_history_${randomUUID()}`;
-const pools: pg.Pool[] = [];
-const withTeamAs = {} as Record<"warden_app" | "warden_migrate", WithTeam>;
+let withTeamAs: Record<"warden_app" | "warden_migrate", WithTeam>;
+let end: (() => Promise<void>) | undefined;
 
 beforeAll(async () => {
-  for (const role of ["warden_app", "warden_migrate"] as const satisfies DatabaseRole[]) {
-    const pool = poolAs(role, inject("testDatabase"));
-    pools.push(pool);
-    withTeamAs[role] = createWithTeam(pool);
-  }
+  ({ withTeamAs, end } = await ownDatabase(["warden_app", "warden_migrate"]));
   await withTeamAs.warden_app(team, async (tx) => {
     await tx.insertInto("teams").values({ id: team }).execute();
     await tx
@@ -60,11 +56,9 @@ beforeAll(async () => {
       })
       .execute();
   });
-});
+}, 30_000);
 
-afterAll(async () => {
-  for (const pool of pools) await pool.end();
-});
+afterAll(() => end?.(), 30_000);
 
 const rows = () =>
   withTeamAs.warden_app(team, (tx) =>

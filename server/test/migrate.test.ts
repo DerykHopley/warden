@@ -1,16 +1,22 @@
 // The migration runner: file-name order, nothing new on a second run, a failing file, the wrong user, no database, an
 // unknown role set, and another role set's roles.
-// Each case gets a fresh database; the grants case uses the suite's migrated one. Cases that assert the exit code or
-// the output run it as its own process; the rest call `migrate` directly.
+// Each case gets a fresh database; the grants cases share a migrated one of their own. Cases that assert the exit code
+// or the output run it as its own process; the rest call `migrate` directly.
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, inject, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createPool, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { MIGRATIONS_FOLDER, migrate } from "../src/migrate.ts";
-import { createTestDatabase, poolAs, runInServer, testName } from "./databases.ts";
+import {
+  createMigratedTestDatabase,
+  createTestDatabase,
+  poolAs,
+  runInServer,
+  testName,
+} from "./databases.ts";
 import { closedPort } from "./ports.ts";
 
 const silent = createLogger(() => {});
@@ -208,7 +214,13 @@ describe("the migration runner for another role set", () => {
 });
 
 describe("the first migration's grants", () => {
-  const database = inject("testDatabase");
+  /** A migrated database of the describe's own: the table made and dropped here stays off the suite's shared one. */
+  let database: string;
+  let drop: () => Promise<unknown>;
+  beforeAll(async () => {
+    ({ name: database, drop } = await createMigratedTestDatabase());
+  }, 30_000);
+  afterAll(() => drop(), 30_000);
 
   async function laterTable() {
     const owner = poolAs("warden_migrate", database);
