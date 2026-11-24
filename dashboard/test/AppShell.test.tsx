@@ -21,6 +21,62 @@ const header = () => within(screen.getByRole("banner"));
 const me = (team: string | null, role: string | null) =>
   json(200, { userId: "user_1", team, role });
 
+describe("the landing page by Role", () => {
+  it.each(["member", "lead", "admin"])(
+    "at /, takes a %s to Findings, with the header's links Findings then People",
+    async (role) => {
+      clerk.auth.orgId = "org_a";
+      serve({ me: () => me("org_a", role), findings: () => json(200, { findings: [] }) });
+      const entries = history.length;
+      render(<App />);
+
+      expect(
+        await screen.findByText("No Findings yet: they appear after the first Scan."),
+      ).toBeInTheDocument();
+      expect(location.pathname).toBe("/findings");
+      expect(history.length).toBe(entries);
+      const links = header().getAllByRole("link");
+      expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+        ["Findings", "/findings"],
+        ["People", "/people"],
+      ]);
+      expect(header().getByRole("link", { name: "Findings" })).toHaveAttribute(
+        "aria-current",
+        "page",
+      );
+      expect(header().getByRole("link", { name: "People" })).not.toHaveAttribute("aria-current");
+    },
+  );
+
+  it("at /, shows the shell's waiting line and no page while /api/me hasn't answered", async () => {
+    clerk.auth.orgId = "org_a";
+    const late = deferred<Response>();
+    serve({ me: () => late.promise, findings: () => json(200, { findings: [] }) });
+    render(<App />);
+
+    expect(screen.getByText("Checking your session with Warden's server…")).toBeInTheDocument();
+    await vi.waitFor(() => expect(callsTo("/api/me")).toHaveLength(1));
+    expect(callsTo("/api/findings")).toHaveLength(0);
+    expect(location.pathname).toBe("/");
+
+    late.resolve(me("org_a", "member"));
+    await vi.waitFor(() => expect(location.pathname).toBe("/findings"));
+  });
+
+  it("keeps a page the address names: /people stays People", async () => {
+    window.history.replaceState(null, "", "/people");
+    clerk.auth.orgId = "org_a";
+    serve({ me: () => me("org_a", "member"), members: () => json(200, { members: [] }) });
+    render(<App />);
+
+    expect(
+      await screen.findByText("No one in this Team has opened Warden yet."),
+    ).toBeInTheDocument();
+    expect(location.pathname).toBe("/people");
+    expect(header().getByRole("link", { name: "People" })).toHaveAttribute("aria-current", "page");
+  });
+});
+
 describe("AppShell", () => {
   it("shows the Team's name, the Role as a word, the Organization switcher and Sign out", async () => {
     clerk.auth.orgId = "org_a";
@@ -52,6 +108,7 @@ describe("AppShell", () => {
   });
 
   it("on an Organization switch, asks again for the person's Role and the Team's people", async () => {
+    window.history.replaceState(null, "", "/people");
     clerk.auth.orgId = "org_a";
     serve({ me: () => me("org_a", "admin"), members: () => json(200, { members: [] }) });
     const { rerender } = render(<App />);

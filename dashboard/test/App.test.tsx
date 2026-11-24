@@ -1,5 +1,5 @@
 // The dashboard's sign-in states, with Clerk's React hooks stubbed and Warden's server faked.
-import { render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.tsx";
@@ -30,6 +30,53 @@ function signOut() {
 
 const header = () => within(screen.getByRole("banner"));
 
+describe("while Clerk loads", () => {
+  const NOTICE = "Sign-in couldn't load. An ad blocker or a lost connection can stop it.";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    clerk.auth.isLoaded = false;
+    clerk.status = "loading";
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("shows Loading… for 10 seconds, then the notice with Try again, which reloads the page", () => {
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    render(<App />);
+
+    act(() => vi.advanceTimersByTime(9_999));
+    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.getByText(NOTICE)).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it("shows the notice at once when Clerk reports that it failed to load", () => {
+    clerk.status = "error";
+    render(<App />);
+    expect(screen.getByText(NOTICE)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+  });
+
+  it("shows the app, not the notice, once Clerk loads in time", () => {
+    const { rerender } = render(<App />);
+    act(() => vi.advanceTimersByTime(5_000));
+    clerk.auth.isLoaded = true;
+    clerk.status = "ready";
+    rerender(<App />);
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(screen.getByText("Clerk sign-in")).toBeInTheDocument();
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
+  });
+});
+
 describe("App", () => {
   it("shows Clerk's sign-in when signed out", () => {
     render(<App />);
@@ -41,7 +88,7 @@ describe("App", () => {
     signIn();
     serve({
       me: () => json(200, { userId: "user_1", team: "org_1", role: "admin" }),
-      members: () => json(200, { members: [] }),
+      findings: () => json(200, { findings: [] }),
     });
     render(<App />);
 
@@ -111,7 +158,7 @@ describe("App", () => {
         if (answered === 1) throw new TypeError("Failed to fetch");
         return json(200, { userId: "user_1", team: "org_1", role: "member" });
       },
-      members: () => json(200, { members: [] }),
+      findings: () => json(200, { findings: [] }),
     });
     render(<App />);
 

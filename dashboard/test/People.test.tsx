@@ -257,6 +257,7 @@ describe("People in the app", () => {
   const header = () => within(screen.getByRole("banner"));
 
   function start(role: Role, routes: Routes = {}) {
+    window.history.replaceState(null, "", "/people");
     serve({
       me: () => json(200, { userId: "user_1", team: "org_a", role }),
       members: () => json(200, members({ user_1: role })),
