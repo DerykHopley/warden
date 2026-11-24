@@ -5,7 +5,9 @@
 # The server runs its TypeScript directly on Node 24 (type stripping), so only the dashboard has a build step.
 
 FROM node:24-slim AS base
-RUN npm install --global pnpm@10.34.9
+# Corepack runs the pnpm version package.json's packageManager names, so there is one pin.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable pnpm
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY contracts/package.json contracts/

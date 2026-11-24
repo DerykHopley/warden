@@ -9,5 +9,6 @@ if ! command -v pnpm >/dev/null 2>&1; then
 fi
 
 pnpm lint
+pnpm format:check
 pnpm typecheck
 pnpm design-lint

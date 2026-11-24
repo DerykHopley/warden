@@ -11,7 +11,7 @@ Sign-in is Clerk; the database is Postgres 17 with pgvector.
 
 ## Local setup
 
-You need Node 24, pnpm 10 (`npm install --global pnpm@10`), Docker or Podman with compose, `direnv` and
+You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json` names), Docker or Podman with compose, `direnv` and
 `secret-tool`.
 
 1. Put the Clerk keys in the keyring (once):
@@ -41,12 +41,14 @@ to `main`:
 |---|---|
 | Install | `pnpm install --frozen-lockfile` |
 | eslint | `pnpm lint` |
+| prettier | `pnpm format:check` (`pnpm format` fixes it) |
 | `tsc --noEmit`, every package | `pnpm typecheck` |
 | vitest, every package | `pnpm test` (the server's tests need the compose database) |
 | Design lint | `pnpm design-lint` |
 | Image build | `docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY=<key> .` |
 
-The pre-push hook (`.githooks/pre-push`) runs `pnpm lint`, `pnpm typecheck` and `pnpm design-lint`.
+The pre-push hook (`.githooks/pre-push`) runs `pnpm lint`, `pnpm format:check`, `pnpm typecheck` and
+`pnpm design-lint`.
 
 ## The image
 

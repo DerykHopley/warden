@@ -6,9 +6,10 @@ on:
   push:
     branches: [main]
 
+# A newer push to a PR replaces its older run; every push to main runs to the end.
 concurrency:
   group: fast-lane-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -47,6 +48,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: eslint
         run: pnpm lint
+      - name: prettier --check
+        run: pnpm format:check
       - name: tsc --noEmit
         run: pnpm typecheck
       - name: vitest (contracts)

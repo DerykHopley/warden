@@ -51,7 +51,6 @@ describe("GET /api/health", () => {
     expect(elapsed).toBeGreaterThanOrEqual(1900);
     expect(elapsed).toBeLessThan(2500);
   });
-
 });
 
 describe("createHealthCheck", () => {

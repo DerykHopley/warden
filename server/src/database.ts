@@ -21,7 +21,10 @@ export function createPool(logger: Logger, overrides: pg.PoolConfig = {}): pg.Po
 }
 
 type Queryable = {
-  query: (query: { text: string; query_timeout: number }) => Promise<{ rows: { vector?: unknown }[] }>;
+  query: (query: {
+    text: string;
+    query_timeout: number;
+  }) => Promise<{ rows: { vector?: unknown }[] }>;
 };
 
 const unreachable: HealthBody = {
