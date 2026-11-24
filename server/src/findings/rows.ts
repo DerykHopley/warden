@@ -61,7 +61,4 @@ export function fromRow(row: FindingRow): Finding {
   });
 }
 
-/** An Asset as one string, for lookups: TypeScript has no value equality (ADR 0005). */
-export const assetKey = (asset: Asset) => `${asset.kind}:${asset.ref}`;
-
 export const sameAsset = (a: Asset, b: Asset) => a.kind === b.kind && a.ref === b.ref;

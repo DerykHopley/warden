@@ -1,10 +1,22 @@
 // The Kysely table types for what the migrations in server/migrations make. Every table here is Team-owned and kept
-// apart by row-level security (ADR 0006); `findUnprotectedTables` checks that on the real schema.
+// apart by row-level security (ADR 0006); `findUnprotectedTables` checks that on the real schema. The enum columns
+// carry the contracts' types, which the migrations' check constraints match.
 import type { ColumnType, Generated, JSONColumnType } from "kysely";
-import type { Control, Evidence, Location } from "@warden/contracts";
+import type {
+  AssetKind,
+  Control,
+  Evidence,
+  Location,
+  Module,
+  Severity,
+  Status,
+} from "@warden/contracts";
 
 /** A jsonb column written as a JSON string and read back parsed. */
 type Json<T extends object> = JSONColumnType<T, string, string>;
+
+/** Who caused a history row, for now: a Scan or a Spot run. */
+export type RunKind = "scan" | "spot_run";
 
 export interface Database {
   /** One row per Team, keyed by its Clerk Organization id; every later Team-owned table points at it. */
@@ -17,17 +29,17 @@ export interface Database {
   findings: {
     team_id: string;
     id: string;
-    asset_kind: string;
+    asset_kind: AssetKind;
     asset_ref: string;
-    module: string;
+    module: Module;
     rule_id: string;
     fingerprint: string;
     location: Json<Location>;
-    severity: string;
+    severity: Severity;
     title: string;
     evidence: Json<Evidence>;
     control: JSONColumnType<Control | null, string | null, string | null>;
-    status: string;
+    status: Status;
     unconfirmed_fix: JSONColumnType<{ candidates: string[] } | null, string | null, string | null>;
     accepted_reason: string | null;
     accepted_until: ColumnType<Date | null, string | null, string | null>;
@@ -40,8 +52,8 @@ export interface Database {
   scans: {
     team_id: string;
     id: string;
-    kind: "scan" | "spot_run";
-    module: string;
+    kind: RunKind;
+    module: Module;
     started_at: ColumnType<Date, string, string>;
     applied_at: Generated<Date>;
   };
@@ -50,7 +62,7 @@ export interface Database {
   scan_coverage: {
     team_id: string;
     scan_id: string;
-    asset_kind: string;
+    asset_kind: AssetKind;
     asset_ref: string;
     rule_id: string;
   };
@@ -61,11 +73,11 @@ export interface Database {
     id: Generated<string>;
     finding_id: string;
     at: Generated<Date>;
-    status_before: string | null;
-    status_after: string;
-    severity_before: string | null;
-    severity_after: string;
-    actor_kind: "scan" | "spot_run";
+    status_before: Status | null;
+    status_after: Status;
+    severity_before: Severity | null;
+    severity_after: Severity;
+    actor_kind: RunKind;
     actor_id: string;
     reason: string;
   };

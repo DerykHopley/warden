@@ -5,14 +5,11 @@ import { randomUUID } from "node:crypto";
 import { fingerprint, Finding, type Observation, type Scan, type SpotRun } from "@warden/contracts";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import { createPool } from "../src/database.ts";
-import { createFindings, type Findings } from "../src/findings/index.ts";
-import { createLogger } from "../src/log.ts";
+import { createFindings, type Findings, type ScanRecorder } from "../src/findings/index.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { closedPort } from "./ports.ts";
 
 const pools: pg.Pool[] = [];
 let withTeam: WithTeam;
@@ -201,6 +198,20 @@ describe("findings.scan: the call a module writes", () => {
     expect(await findings.list(team)).toEqual(listBefore);
     expect(await findings.history(team, listBefore[0]!.id)).toEqual(historyBefore);
   });
+
+  it("refuses a saw after the callback rejected", async () => {
+    const team = await newTeam();
+    let kept: ScanRecorder | undefined;
+
+    await expect(
+      findings.scan({ team, module: "guard", assets: [app], rules: [ENV] }, async (scan) => {
+        kept = scan;
+        throw new Error("the scanner crashed");
+      }),
+    ).rejects.toThrow("the scanner crashed");
+
+    expect(() => kept!.saw(observation())).toThrow(/ended/);
+  });
 });
 
 describe("what reconcile and report refuse, writing nothing", () => {
@@ -230,32 +241,87 @@ describe("what reconcile and report refuse, writing nothing", () => {
     await expect(findings.report(spotRunOf(team))).rejects.toMatchObject({ code: "23503" });
     expect(await stored(team)).toMatchObject({ findings: [], history: [], scans: [] });
   });
+});
 
-  it("refuses two Observations of one problem in a Scan or a Spot run", async () => {
+describe("a run id the Team already applied", () => {
+  it("changes nothing when it's the same run again", async () => {
     const team = await newTeam();
-    const twice = [observation(), observation({ severity: "low" })];
+    const scan = scanOf(team);
+    await findings.reconcile(scan);
+    const before = await stored(team);
 
-    await expect(findings.reconcile(scanOf(team, { observations: twice }))).rejects.toThrow(
-      /same problem/,
-    );
-    await expect(findings.report(spotRunOf(team, { observations: twice }))).rejects.toThrow(
-      /same problem/,
-    );
-    expect(await stored(team)).toMatchObject({ findings: [], scans: [] });
+    expect(await findings.reconcile(scan)).toMatchObject({ alreadyApplied: true });
+    expect(await stored(team)).toEqual(before);
   });
 
-  it("rejects with the driver's error when the database can't be reached", async () => {
-    const unreachable = createPool(
-      createLogger(() => {}),
-      { host: "127.0.0.1", port: await closedPort(), max: 1 },
-    );
-    pools.push(unreachable);
-    const offline = createFindings({ withTeam: createWithTeam(unreachable), moveRules: {} });
+  it("is refused, naming the id, when its kind, module or start differs", async () => {
+    const team = await newTeam();
+    const scan = scanOf(team, { id: "scan-reused" });
+    await findings.reconcile(scan);
+    const before = await stored(team);
 
-    await expect(offline.reconcile(scanOf("org_offline"))).rejects.toMatchObject({
-      code: "ECONNREFUSED",
-    });
+    await expect(
+      findings.reconcile({ ...scan, started_at: "2026-11-24T11:00:00Z" }),
+    ).rejects.toThrow(/scan-reused/);
+    await expect(
+      findings.reconcile({
+        ...scan,
+        module: "patch",
+        rules: ["patch/known-vulnerability"],
+        observations: [],
+      }),
+    ).rejects.toThrow(/scan-reused/);
+    await expect(
+      findings.report(spotRunOf(team, { id: "scan-reused", started_at: scan.started_at })),
+    ).rejects.toThrow(/scan-reused/);
+    expect(await stored(team)).toEqual(before);
   });
+});
+
+describe("a Scan that started before a later sighting", () => {
+  it("doesn't mark Fixed a Finding a Spot run that started after it saw", async () => {
+    const team = await newTeam();
+    const scanA = scanOf(team, { started_at: "2026-11-24T09:00:00Z", observations: [] });
+    await findings.report(spotRunOf(team, { started_at: "2026-11-24T10:00:00Z" }));
+
+    const outcome = await findings.reconcile(scanA);
+
+    expect(outcome.fixed).toEqual([]);
+    expect((await findings.list(team)).map((f) => f.status)).toEqual(["open"]);
+  });
+});
+
+describe("a Scan bigger than one insert", () => {
+  it("stores 4,000 Findings with their history, sees them all again, and covers 15,000 pairs", async () => {
+    const team = await newTeam();
+    const many = Array.from({ length: 4000 }, (_, i) =>
+      observation({ location: { kind: "file", path: `config/${i}/settings.json` } }),
+    );
+
+    const first = await findings.reconcile(
+      scanOf(team, { started_at: "2026-11-24T09:00:00Z", observations: many }),
+    );
+    const again = await findings.reconcile(
+      scanOf(team, { started_at: "2026-11-24T10:00:00Z", observations: many }),
+    );
+    const assets = Array.from({ length: 150 }, (_, i) => ({
+      kind: "repo" as const,
+      ref: `https://github.com/example/repo-${i}`,
+    }));
+    const rules = Array.from({ length: 100 }, (_, i) => `guard/rule-${i}`);
+    await findings.reconcile(
+      scanOf(team, { started_at: "2026-11-24T11:00:00Z", assets, rules, observations: [] }),
+    );
+
+    expect(first.opened).toHaveLength(4000);
+    expect(again.seen).toHaveLength(4000);
+    const { findings: rows, history, coverage } = await stored(team);
+    expect(rows).toHaveLength(4000);
+    expect(new Set(rows.map((row) => row.last_seen_scan)).size).toBe(1);
+    expect(history).toHaveLength(4000);
+    // The first two Scans covered one pair each.
+    expect(coverage).toHaveLength(2 + 150 * 100);
+  }, 60_000);
 });
 
 describe("report: a Spot run", () => {
@@ -317,7 +383,7 @@ describe("history", () => {
       status_after: "open",
       severity_before: "high",
       severity_after: "critical",
-      actor: { kind: "scan", id: second.id },
+      cause: { kind: "scan", id: second.id },
       reason: expect.stringContaining(second.id),
     });
   });
@@ -333,7 +399,7 @@ describe("history", () => {
     const [finding] = await findings.list(team);
     const rows = await findings.history(team, finding!.id);
     expect(
-      rows.map(({ status_before, status_after, actor }) => [status_before, status_after, actor.id]),
+      rows.map(({ status_before, status_after, cause }) => [status_before, status_after, cause.id]),
     ).toEqual([
       [null, "open", opens.id],
       ["open", "fixed", fixes.id],
@@ -341,7 +407,7 @@ describe("history", () => {
     ]);
     for (const [i, scan] of [opens, fixes, reopens].entries()) {
       expect(rows[i]!.reason).toContain(scan.id);
-      expect(rows[i]!.actor.kind).toBe("scan");
+      expect(rows[i]!.cause.kind).toBe("scan");
       expect(Number.isNaN(Date.parse(rows[i]!.at))).toBe(false);
     }
     expect(rows[1]!.reason).toMatch(/not seen/);

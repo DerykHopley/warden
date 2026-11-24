@@ -102,7 +102,7 @@
                     "type": "string",
                     "minLength": 1,
                     "maxLength": 2000,
-                    "pattern": "\\S"
+                    "pattern": "[^\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
                   },
                   "until": {
                     "type": "string",
@@ -166,7 +166,12 @@
               "fingerprint": { "type": "string", "minLength": 1, "maxLength": 4000 },
               "location": { "$ref": "#/$defs/Location" },
               "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-              "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "pattern": "[^\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
+              },
               "evidence": { "$ref": "#/$defs/Evidence" },
               "control": {
                 "readOnly": true,
@@ -220,7 +225,12 @@
               },
               "accepted_reason": {
                 "anyOf": [
-                  { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "pattern": "[^\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
+                  },
                   { "type": "null" }
                 ]
               },
@@ -288,7 +298,12 @@
         "fingerprint": { "type": "string", "minLength": 1, "maxLength": 4000 },
         "location": { "$ref": "#/$defs/Location" },
         "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "[^\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
+        },
         "evidence": { "$ref": "#/$defs/Evidence" },
         "control": {
           "readOnly": true,
@@ -322,7 +337,12 @@
         },
         "accepted_reason": {
           "anyOf": [
-            { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000,
+              "pattern": "[^\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
+            },
             { "type": "null" }
           ]
         },
@@ -545,7 +565,12 @@
         },
         "location": { "$ref": "#/$defs/Location" },
         "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "pattern": "[^\\u0009-\\u000D\\u0020\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]"
+        },
         "evidence": { "$ref": "#/$defs/Evidence" }
       },
       "required": ["asset", "rule_id", "location", "severity", "title", "evidence"],

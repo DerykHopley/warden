@@ -3,6 +3,7 @@
 // comes in through `createFindings`, wired by the start-up file.
 import { randomUUID } from "node:crypto";
 import {
+  assetKey,
   Observation,
   problemKey,
   Scan,
@@ -14,9 +15,10 @@ import {
   type Severity,
   type Status,
 } from "@warden/contracts";
+import type { RunKind } from "../schema.ts";
 import type { WithTeam } from "../with-team.ts";
 import { applyRun, type MoveRule, type ReconcileOutcome } from "./reconcile.ts";
-import { assetKey, fromRow, isoDateTime } from "./rows.ts";
+import { fromRow, isoDateTime } from "./rows.ts";
 
 export type { MoveRule, ReconcileOutcome } from "./reconcile.ts";
 export { sameAsset } from "./rows.ts";
@@ -29,8 +31,11 @@ export interface HistoryEntry {
   status_after: Status;
   severity_before: Severity | null;
   severity_after: Severity;
-  /** Who caused it: for now, the Scan or Spot run. */
-  actor: { kind: "scan" | "spot_run"; id: string };
+  /**
+   * What caused it: for now, the Scan or Spot run. Not an Actor, which the glossary keeps for a person or an agent;
+   * slice 8 adds those.
+   */
+  cause: { kind: RunKind; id: string };
   reason: string;
 }
 
@@ -103,7 +108,7 @@ export function createFindings({
       const reported = new Map<string, number>();
       let open = true;
 
-      await work({
+      const recorder: ScanRecorder = {
         saw(value) {
           if (!open) throw new Error("saw: this Scan has ended");
           const observation = Observation.parse(value);
@@ -124,8 +129,13 @@ export function createFindings({
           reported.set(key, observations.length);
           observations.push(observation);
         },
-      });
-      open = false;
+      };
+      try {
+        await work(recorder);
+      } finally {
+        // Returned or thrown, the Scan has ended: a recorder kept past it refuses what it's handed.
+        open = false;
+      }
       return reconcile({ id, team, module, started_at, assets, rules, observations });
     },
 
@@ -145,11 +155,11 @@ export function createFindings({
           .execute();
         return rows.map((row) => ({
           at: isoDateTime(row.at),
-          status_before: row.status_before as Status | null,
-          status_after: row.status_after as Status,
-          severity_before: row.severity_before as Severity | null,
-          severity_after: row.severity_after as Severity,
-          actor: { kind: row.actor_kind, id: row.actor_id },
+          status_before: row.status_before,
+          status_after: row.status_after,
+          severity_before: row.severity_before,
+          severity_after: row.severity_after,
+          cause: { kind: row.actor_kind, id: row.actor_id },
           reason: row.reason,
         }));
       });

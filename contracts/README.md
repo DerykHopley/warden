@@ -140,8 +140,11 @@ A unit test checks this example against `agentEventsHash()`.
 - **What a Scan covered, once each:** a `Scan` refuses the same Asset (same `kind` and `ref`) twice in `assets`,
   and the same Rule id twice in `rules`, on the second one's index.
 - **No text of only whitespace:** a `title` (on a Finding, an Observation and an expected Finding), a Finding's
-  `accepted_reason` and a decision step's `reason` hold at least one character that isn't whitespace. This is the
-  pattern `\S`, so the JSON Schema carries it.
+  `accepted_reason` and a decision step's `reason` hold at least one character that isn't whitespace. Whitespace
+  here is exactly these code points (JavaScript's `\s`): U+0009 to U+000D, U+0020, U+00A0, U+1680, U+2000 to
+  U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF. The JSON Schema carries the rule as a pattern that
+  names them as `\u` escapes (see `json-schema/Observation.json`), not as `\S`,
+  whose meaning differs between regex engines (Rust's leaves out U+FEFF).
 
 ## The reconcile cases
 

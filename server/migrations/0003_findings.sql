@@ -108,8 +108,9 @@ create policy finding_history_own_team on finding_history for all
   using (team_id = current_setting('warden.team_id', true))
   with check (team_id = current_setting('warden.team_id', true));
 
--- Append-only from every role, warden_migrate (the owner) included. Team deletion, when it's planned, needs one
--- marked way past this (see docs/data.md).
+-- The trigger refuses every role's update, delete and truncate, warden_migrate's included. warden_migrate owns the
+-- table, though, so it could disable or drop the trigger: that residual risk is held by whoever holds the migration
+-- credentials (threat D6). Team deletion, when it's planned, needs one marked way past this (see docs/data.md).
 create function finding_history_append_only() returns trigger
   language plpgsql as $$
 begin

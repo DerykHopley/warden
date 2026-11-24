@@ -107,6 +107,51 @@ describe("ReconcileCase", () => {
       });
       expect(ReconcileCase.safeParse(onApi).success).toBe(true);
     });
+
+    describe("after a mark_moved, which moves the old Finding to the new problem", () => {
+      /** Opens "old" at P1, "moved" at P2, merges "moved" into "old" (now at P2), then `last` labels "back". */
+      const movedThen = (last: Record<string, unknown>) => ({
+        ...validCase(),
+        given: { now: "2026-11-24T08:00:00Z", findings: [] },
+        steps: [
+          { step: "scan", scan: scan({ id: "scan-1" }), labels: { old: 0 } },
+          {
+            step: "scan",
+            scan: scan({ id: "scan-2", observations: [moved] }),
+            labels: { moved: 0 },
+          },
+          {
+            step: "decision",
+            decision: "mark_moved",
+            finding: { new: "old" },
+            candidate: { new: "moved" },
+            actor: lead,
+            reason: "The permission moved to the local settings file",
+          },
+          last,
+        ],
+        expect: [{ new: "old" }, { new: "moved" }, { new: "back" }],
+      });
+
+      it("frees the old Fingerprint: a later label on it loads", () => {
+        const value = movedThen({
+          step: "scan",
+          scan: scan({ id: "scan-3", observations: [observation()] }),
+          labels: { back: 0 },
+        });
+        const result = ReconcileCase.safeParse(value);
+        expect(result.success, JSON.stringify(result.error?.issues)).toBe(true);
+      });
+
+      it("still refuses a label on the new problem, which the old Finding now holds", () => {
+        const value = movedThen({
+          step: "scan",
+          scan: scan({ id: "scan-3", observations: [movedAgain] }),
+          labels: { back: 0 },
+        });
+        expectIssueAt(ReconcileCase, value, ["steps", 3, "labels", "back"], /"old"/);
+      });
+    });
   });
 
   it("refuses a reference to a label no earlier step created", () => {
