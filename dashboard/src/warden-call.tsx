@@ -1,6 +1,6 @@
 // A page's call to Warden's server, kept as React state, and the notice for the answers every call shares.
 import { useCallback, useEffect, useState } from "react";
-import { tryAgainIn } from "./api.ts";
+import { TEAM_NOT_OPENED, tryAgainIn } from "./api.ts";
 
 export type WardenCall<T> = {
   result: T | "loading";
@@ -67,6 +67,26 @@ export function CallRefused(props: {
     return (
       <p className="notice" role="alert">
         {tryAgainIn(props.result.retryAfter ?? null)}
+      </p>
+    );
+  }
+  return null;
+}
+
+/** What a Team's call shows when the session has no Team (403) or the Team's Admin hasn't opened Warden (409); else
+ * nothing. */
+export function TeamRefused(props: { result: { kind: string } }) {
+  if (props.result.kind === "no-team") {
+    return (
+      <p className="notice" role="alert">
+        Choose a Team first, from the switcher above.
+      </p>
+    );
+  }
+  if (props.result.kind === "team-not-opened") {
+    return (
+      <p className="notice" role="alert">
+        {TEAM_NOT_OPENED}
       </p>
     );
   }

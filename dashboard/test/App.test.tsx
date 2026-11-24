@@ -88,7 +88,7 @@ describe("App", () => {
     signIn();
     serve({
       me: () => json(200, { userId: "user_1", team: "org_1", role: "admin" }),
-      findings: () => json(200, { findings: [] }),
+      findings: () => json(200, { team: "org_1", findings: [] }),
     });
     render(<App />);
 
@@ -158,7 +158,7 @@ describe("App", () => {
         if (answered === 1) throw new TypeError("Failed to fetch");
         return json(200, { userId: "user_1", team: "org_1", role: "member" });
       },
-      findings: () => json(200, { findings: [] }),
+      findings: () => json(200, { team: "org_1", findings: [] }),
     });
     render(<App />);
 

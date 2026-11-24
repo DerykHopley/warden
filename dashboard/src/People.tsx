@@ -2,11 +2,11 @@
 import { useOrganization } from "@clerk/react";
 import { Role, type TeamMember } from "@warden/contracts";
 import { useCallback, useState } from "react";
-import { TEAM_NOT_OPENED, tryAgainIn } from "./api.ts";
+import { tryAgainIn } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import { changeMemberRole, fetchMembers, type MembersResult } from "./members.ts";
 import { ROLE_WORDS } from "./roles.ts";
-import { CallRefused, useWardenCall } from "./warden-call.tsx";
+import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 /** One row's change in flight (the Role chosen) or the message its last change left. */
 type RowState = { pending?: Role; message?: string };
@@ -88,16 +88,7 @@ export function PeoplePage({ getToken, me, onSessionEnded, refreshMe }: PageProp
       )}
       {list.result === "loading" && <p className="muted">Loading the Team's people…</p>}
       {list.result !== "loading" && <CallRefused result={list.result} onRetry={list.retry} />}
-      {list.result !== "loading" && list.result.kind === "no-team" && (
-        <p className="notice" role="alert">
-          Choose a Team first, from the switcher above.
-        </p>
-      )}
-      {list.result !== "loading" && list.result.kind === "team-not-opened" && (
-        <p className="notice" role="alert">
-          {TEAM_NOT_OPENED}
-        </p>
-      )}
+      {list.result !== "loading" && <TeamRefused result={list.result} />}
       {members?.length === 0 && <p className="muted">No one in this Team has opened Warden yet.</p>}
       {members !== null && members.length > 0 && (
         <table className={me.role === "admin" ? "people with-picker" : "people"}>

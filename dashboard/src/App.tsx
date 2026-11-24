@@ -1,13 +1,13 @@
 import { ClerkFailed, OrganizationSwitcher, SignIn, useAuth, useOrganization } from "@clerk/react";
 import type { Role } from "@warden/contracts";
 import { useCallback, useEffect, useState, type ComponentType } from "react";
-import { TEAM_NOT_OPENED, type GetToken } from "./api.ts";
+import { askAboutTeam, type GetToken } from "./api.ts";
 import { FindingsPage } from "./Findings.tsx";
 import { landingPage } from "./landing.ts";
 import { fetchMe, type MeResult } from "./me.ts";
 import { PeoplePage } from "./People.tsx";
 import { ROLE_WORDS } from "./roles.ts";
-import { CallRefused, useWardenCall } from "./warden-call.tsx";
+import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 export function App() {
   const { isLoaded, isSignedIn, sessionId, signOut } = useAuth();
@@ -56,7 +56,7 @@ function WaitingForClerk() {
   return (
     <>
       <ClerkFailed>
-        <Reports onMount={onFailed} />
+        <CallOnMount onMount={onFailed} />
       </ClerkFailed>
       {failed ? <ClerkLoadFailed /> : <Notice text="Loading…" />}
     </>
@@ -64,7 +64,7 @@ function WaitingForClerk() {
 }
 
 /** Renders nothing; calls `onMount` once it mounts, so a parent learns that a wrapper rendered its children. */
-function Reports({ onMount }: { onMount: () => void }) {
+function CallOnMount({ onMount }: { onMount: () => void }) {
   useEffect(onMount, [onMount]);
   return null;
 }
@@ -95,8 +95,8 @@ function SignInPage({ sessionEnded }: { sessionEnded: boolean }) {
 /** What the shell gives each page. */
 export type PageProps = {
   getToken: GetToken;
-  /** The person signed in, and their Role in this Team as /api/me last answered it. */
-  me: { userId: string; role: Role | null };
+  /** The person signed in, and their Team (the active one) and Role in it, as /api/me last answered them. */
+  me: { userId: string; team: string | null; role: Role | null };
   onSessionEnded: () => void;
   /** Ask /api/me again, after a change that may have moved the person's own Role. */
   refreshMe: () => void;
@@ -119,28 +119,22 @@ const pageAt = (path: string) => PAGES.find((page) => page.path === path);
 // "Personal account" is never a choice: Warden works only inside a Team.
 const switcher = <OrganizationSwitcher hidePersonal />;
 
-/** How often, and how far apart, /api/me is asked again when it answers about another Team than the active one. */
-const TEAM_MISMATCH_RETRIES = 3;
-const TEAM_MISMATCH_DELAY_MS = 250;
-
 function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) {
   const { getToken, orgId: activeOrg } = useAuth();
   const orgId = activeOrg ?? null;
   const { organization } = useOrganization();
   const { onSessionEnded } = props;
 
-  // A new active Organization is a new call: the last Team's answer goes at once, and a late one is dropped.
-  // Clerk can still hand out a token for the Organization just left, so an answer about another Team is asked again
-  // a few times, then counts as not answering. The Team's name and Role never show beside another Team's.
+  // A new active Organization is a new call: the last Team's answer goes at once, and a late one is dropped. An
+  // answer about another Team is asked again (askAboutTeam): the Team's name and Role never show beside another's.
   const askMe = useCallback(
-    async (signal: AbortSignal): Promise<MeResult> => {
-      for (let tries = 1; ; tries++) {
-        const result = await fetchMe(() => getToken());
-        if (result.kind !== "signed-in" || result.team === orgId) return result;
-        if (tries > TEAM_MISMATCH_RETRIES || signal.aborted) return { kind: "not-answering" };
-        await new Promise((resolve) => setTimeout(resolve, TEAM_MISMATCH_DELAY_MS));
-      }
-    },
+    (signal: AbortSignal): Promise<MeResult> =>
+      askAboutTeam(
+        () => fetchMe(() => getToken()),
+        (result) => (result.kind === "signed-in" ? result.team : undefined),
+        orgId,
+        signal,
+      ),
     [getToken, orgId],
   );
   const me = useWardenCall(askMe, onSessionEnded);
@@ -196,11 +190,7 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
           <p className="muted">Checking your session with Warden's server…</p>
         )}
         {me.result !== "loading" && <CallRefused result={me.result} onRetry={me.retry} />}
-        {me.result !== "loading" && me.result.kind === "team-not-opened" && (
-          <p className="notice" role="alert">
-            {TEAM_NOT_OPENED}
-          </p>
-        )}
+        {me.result !== "loading" && <TeamRefused result={me.result} />}
         {noTeam && (
           <div className="card">
             <p>Create a Team, or choose one you've been invited to</p>

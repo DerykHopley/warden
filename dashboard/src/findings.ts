@@ -3,7 +3,8 @@ import { FindingsBody, Severity, type Finding, type FindingsView } from "@warden
 import { callWarden, parsed, type GetToken, type Refused } from "./api.ts";
 
 export type FindingsResult =
-  | { kind: "findings"; findings: Finding[] }
+  /** Every Finding of `team`, the Team the server answered about. */
+  | { kind: "findings"; team: string; findings: Finding[] }
   /** 403: the session has no Team (its active Organization went away). */
   | { kind: "no-team" }
   /** 409: the Team's Admin hasn't opened Warden yet. */
@@ -21,11 +22,11 @@ export async function fetchFindings(getToken: GetToken): Promise<FindingsResult>
 
 const severityRank = (severity: Severity) => Severity.options.indexOf(severity);
 
-/** Most urgent first: Critical, High, Medium, Low, then by title, then by id. */
-export function byUrgency(a: Finding, b: Finding): number {
+/** Most urgent first: Critical, High, Medium, Low, then by title (ignoring case and accents), then by id. */
+function byUrgency(a: Finding, b: Finding): number {
   return (
     severityRank(a.severity) - severityRank(b.severity) ||
-    a.title.localeCompare(b.title) ||
+    a.title.localeCompare(b.title, "en", { sensitivity: "base" }) ||
     (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
   );
 }

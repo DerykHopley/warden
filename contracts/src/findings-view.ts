@@ -3,8 +3,11 @@
 import { z } from "zod";
 import { Finding, Id, Module, Severity, Status } from "./finding.ts";
 
-/** `GET /api/findings`: every Finding of the session's Team. The page filters them; the server doesn't. */
-export const FindingsBody = z.object({ findings: z.array(Finding) });
+/**
+ * `GET /api/findings`: every Finding of the session's Team, and that Team's id, so the page can tell an answer about a
+ * Team the person just switched away from. The page filters them; the server doesn't.
+ */
+export const FindingsBody = z.object({ team: Id, findings: z.array(Finding) });
 export type FindingsBody = z.infer<typeof FindingsBody>;
 
 const ALL = "all";

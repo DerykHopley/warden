@@ -81,11 +81,16 @@ describe("findingsViewPath", () => {
 });
 
 describe("FindingsBody", () => {
-  it("holds a list of Finding v1", () => {
-    expect(FindingsBody.parse({ findings: [finding()] }).findings).toHaveLength(1);
-    expect(FindingsBody.safeParse({ findings: [{ ...finding(), status: "gone" }] }).success).toBe(
-      false,
-    );
-    expect(FindingsBody.safeParse({}).success).toBe(false);
+  it("names the Team it answers about, and holds a list of Finding v1", () => {
+    expect(FindingsBody.parse({ team: "team-a", findings: [finding()] })).toEqual({
+      team: "team-a",
+      findings: [finding()],
+    });
+    expect(
+      FindingsBody.safeParse({ team: "team-a", findings: [{ ...finding(), status: "gone" }] })
+        .success,
+    ).toBe(false);
+    expect(FindingsBody.safeParse({ findings: [finding()] }).success).toBe(false);
+    expect(FindingsBody.safeParse({ team: "team-a" }).success).toBe(false);
   });
 });

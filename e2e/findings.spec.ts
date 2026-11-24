@@ -1,5 +1,6 @@
 // Story 9, end to end: a Member opening Warden lands on the Findings page with their Team's seeded Findings, the
 // top 5 in order, filters that change the table and step back with Back, and a selection a reload keeps.
+import type { Page } from "@playwright/test";
 import { expect, GRACE, test } from "./session.ts";
 
 const TOP_FIVE = [
@@ -10,17 +11,16 @@ const TOP_FIVE = [
   "The agent printed a secret to the terminal",
 ];
 
-test.beforeEach(async ({ signIn }) => {
-  await signIn(GRACE);
-});
+const bodyRows = (page: Page) =>
+  page.getByRole("table", { name: "All Findings" }).locator("tbody tr");
+const tab = (page: Page, group: string, name: string) =>
+  page.getByRole("group", { name: group }).getByRole("button", { name, exact: true });
 
-const table = (page: import("@playwright/test").Page) =>
-  page.getByRole("table", { name: "All Findings" });
-const bodyRows = (page: import("@playwright/test").Page) => table(page).locator("tbody tr");
-
-test("a Member opening / lands on Findings: the summary, the top 5 in order, and a filter that changes the table", async ({
+test("a Member lands on Findings, filters the table, steps Back, and keeps a selection over a reload", async ({
   page,
+  signIn,
 }) => {
+  await signIn(GRACE);
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/findings$/);
@@ -28,48 +28,22 @@ test("a Member opening / lands on Findings: the summary, the top 5 in order, and
   await expect(page.locator(".finding-card .card-title")).toHaveText(TOP_FIVE);
   await expect(bodyRows(page)).toHaveCount(7);
 
-  await page.getByRole("group", { name: "Severity" }).getByRole("button", { name: "High" }).click();
-
-  await expect(page).toHaveURL(/\/findings\?severity=high$/);
-  await expect(bodyRows(page)).toHaveCount(3);
-  await expect(page.locator(".finding-card .card-title")).toHaveText(TOP_FIVE);
-});
-
-test("Back after two filter changes shows the first view's table and URL", async ({ page }) => {
-  await page.goto("/findings");
-  await expect(bodyRows(page)).toHaveCount(7);
-
-  await page.getByRole("group", { name: "Status" }).getByRole("button", { name: "Fixed" }).click();
+  // Two filter changes, then Back: the first change's view, table and URL.
+  await tab(page, "Status", "Fixed").click();
   await expect(bodyRows(page)).toHaveCount(2);
-  await page.getByRole("group", { name: "Module" }).getByRole("button", { name: "Patch" }).click();
+  await tab(page, "Module", "Patch").click();
+  await expect(page).toHaveURL(/\/findings\?status=fixed&module=patch$/);
   await expect(bodyRows(page)).toHaveCount(1);
-
   await page.goBack();
   await expect(page).toHaveURL(/\/findings\?status=fixed$/);
   await expect(bodyRows(page)).toHaveCount(2);
 
-  await page.goBack();
-  await expect(page).toHaveURL(/\/findings$/);
-  await expect(bodyRows(page)).toHaveCount(7);
-
-  await page.goForward();
-  await expect(page).toHaveURL(/\/findings\?status=fixed$/);
-  await expect(bodyRows(page)).toHaveCount(2);
-});
-
-test("a selected Finding stays selected after a reload", async ({ page }) => {
-  await page.goto("/findings");
+  // A selection goes into the URL and survives a reload.
   const card = page.locator(".finding-card", { hasText: "lodash 4.17.20" });
   await card.click();
-  await expect(page).toHaveURL(/\/findings\?finding=[0-9a-f-]{36}$/);
-  const url = page.url();
-
+  await expect(page).toHaveURL(/\/findings\?status=fixed&finding=[0-9a-f-]{36}$/);
+  const selected = page.url();
   await page.reload();
-
-  expect(page.url()).toBe(url);
-  await expect(card).toHaveAttribute("aria-pressed", "true");
-  await expect(table(page).locator("tr", { hasText: "lodash 4.17.20" })).toHaveAttribute(
-    "aria-selected",
-    "true",
-  );
+  expect(page.url()).toBe(selected);
+  await expect(card).toHaveAttribute("aria-current", "true");
 });

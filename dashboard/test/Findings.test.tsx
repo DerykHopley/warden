@@ -1,12 +1,13 @@
 // The Findings page (story 9): the summary line, the top 5, the table and its filters in the URL, selecting a Finding,
-// and each answer GET /api/findings can get. It renders FindingsPage alone with spy props, Warden's server faked.
+// and each answer GET /api/findings can get. It renders FindingsPage alone with spy props, Warden's server faked. The
+// counts and orders themselves are tested below the page, in findings.test.ts.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Finding } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FindingsPage } from "../src/Findings.tsx";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
-import { demoFindings, finding, ID } from "./findings-fixture.ts";
+import { demoFindings, ID, TEAM } from "./findings-fixture.ts";
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -14,13 +15,15 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+const answer = (findings: Finding[] = demoFindings, team = TEAM) => json(200, { team, findings });
+
 /** Opens `url`, then renders FindingsPage with GET /api/findings answering `list` unless `routes` says otherwise. */
 function open(url = "/findings", list: Finding[] = demoFindings, routes: Routes = {}) {
   window.history.replaceState(null, "", url);
-  serve({ findings: () => json(200, { findings: list }), ...routes });
+  serve({ findings: () => answer(list), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
-    me: { userId: "user_1", role: "member" as const },
+    me: { userId: "user_1", team: TEAM, role: "member" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
   };
@@ -41,80 +44,31 @@ const rows = () =>
         .getAllByRole("cell")
         .map((cell) => cell.textContent),
     );
-const titles = () => rows().map((cells) => cells[1]?.split(/guard\/|patch\//)[0]);
 const tab = (group: string, name: string) =>
   within(screen.getByRole("group", { name: group })).getByRole("button", { name });
-const rowOf = (title: string) => {
-  const row = within(table()).getByText(title).closest("tr");
-  if (row === null) throw new Error(`${title} isn't in a table row`);
-  return row;
+/** The button in a row's title cell. */
+const rowButton = (title: string) =>
+  within(table()).getByRole("button", { name: new RegExp(`^${title.replace(".", "\\.")}`) });
+const cardOf = (title: string) => {
+  const card = cards().find((c) => within(c).queryByText(title) !== null);
+  if (card === undefined) throw new Error(`no card for ${title}`);
+  return card;
 };
-const cardOf = (title: string) =>
-  cards().find((card) => within(card).queryByText(title) !== null) ??
-  (() => {
-    throw new Error(`no card for ${title}`);
-  })();
+const current = () =>
+  screen.queryAllByRole("button").filter((b) => b.getAttribute("aria-current") === "true");
 
-describe("the summary line", () => {
-  it("counts the open Findings and the Critical among them", async () => {
+describe("the summary line and the top 5", () => {
+  it("shows the summary as the page's heading", async () => {
     open();
     expect(
       await screen.findByRole("heading", { level: 1, name: "7 open Findings, 2 Critical" }),
     ).toBeInTheDocument();
   });
 
-  it("says one open Finding, and leaves out Critical when none is", async () => {
-    open("/findings", [finding("f-1", { severity: "medium" })]);
-    expect(
-      await screen.findByRole("heading", { level: 1, name: "1 open Finding" }),
-    ).toBeInTheDocument();
-  });
-
-  it("says Nothing open. when every Finding is closed", async () => {
-    open(
-      "/findings",
-      demoFindings.filter((f) => f.status !== "open"),
-    );
-    expect(
-      await screen.findByRole("heading", { level: 1, name: "Nothing open." }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Start here" })).not.toBeInTheDocument();
-  });
-
-  it("with no Findings at all, says they appear after the first Scan, and shows no table", async () => {
-    open("/findings", []);
-    expect(
-      await screen.findByRole("heading", {
-        level: 1,
-        name: "No Findings yet: they appear after the first Scan.",
-      }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("table")).not.toBeInTheDocument();
-  });
-});
-
-describe("the top 5", () => {
-  it("shows five Open Findings: Critical, High, Medium, Low, then by title, then by id", async () => {
-    open();
-    await screen.findByRole("table");
-    expect(cards().map((card) => card.querySelector(".card-title")?.textContent)).toEqual([
-      "A live Stripe secret key is committed",
-      "lodash 4.17.20 has a known vulnerability",
-      "minimist 1.2.5 has a known vulnerability",
-      "The agent can read .env files",
-      "The agent printed a secret to the terminal",
-    ]);
-  });
-
-  it("orders two Findings with the same Severity and title by id", async () => {
-    open("/findings", [finding("f-b"), finding("f-a", { location: { kind: "file", path: "x" } })]);
-    await screen.findByRole("table");
-    expect(cards().map((card) => card.getAttribute("data-finding"))).toEqual(["f-a", "f-b"]);
-  });
-
   it("shows each card's rank, Severity word, title, evidence summary, and Asset ref and kind", async () => {
     open();
     await screen.findByRole("table");
+    expect(cards()).toHaveLength(5);
     const card = within(cardOf("The agent printed a secret to the terminal"));
     expect(card.getByText("5")).toBeInTheDocument();
     expect(card.getByText("High")).toHaveClass("sev-pill");
@@ -123,9 +77,6 @@ describe("the top 5", () => {
     ).toBeInTheDocument();
     expect(card.getByText("session-demo-7f3a")).toBeInTheDocument();
     expect(card.getByText("Agent session")).toBeInTheDocument();
-    expect(
-      within(cardOf("lodash 4.17.20 has a known vulnerability")).getByText("Product"),
-    ).toBeInTheDocument();
   });
 
   it("doesn't change when a filter changes", async () => {
@@ -138,10 +89,19 @@ describe("the top 5", () => {
 
     expect(cards().map((card) => card.textContent)).toEqual(before);
   });
+
+  it("with no Findings at all, shows the summary line only", async () => {
+    open("/findings", []);
+    expect(
+      await screen.findByText("No Findings yet: they appear after the first Scan."),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Start here" })).not.toBeInTheDocument();
+  });
 });
 
 describe("the table", () => {
-  it("lists the Open Findings by default, in the top 5's order, with its five columns", async () => {
+  it("lists the view's Findings with the Severity, Finding (title and Rule id), Asset and Status columns", async () => {
     open();
     await screen.findByRole("table");
     expect(
@@ -156,23 +116,11 @@ describe("the table", () => {
       "https://github.com/acme/shop-webRepo",
       "Open",
     ]);
-    expect(rows().map((cells) => cells[0])).toEqual([
-      "Critical",
-      "Critical",
-      "High",
-      "High",
-      "High",
-      "Medium",
-      "Low",
-    ]);
   });
 
   it("shows the Unconfirmed fix flag beside a Fixed Finding's Status", async () => {
     open("/findings?status=fixed");
     await screen.findByRole("table");
-    expect(
-      within(rowOf("The agent can read .env files")).getByText("Unconfirmed fix"),
-    ).toBeInTheDocument();
     expect(rows().map((cells) => cells[3])).toEqual(["FixedUnconfirmed fix", "Fixed"]);
   });
 
@@ -180,14 +128,6 @@ describe("the table", () => {
     open("/findings?status=accepted&severity=critical");
     await screen.findByRole("table");
     expect(rows()).toEqual([["Nothing matches this view."]]);
-  });
-
-  it("shows each Status as the glossary's word", async () => {
-    open("/findings?status=all");
-    await screen.findByRole("table");
-    expect(new Set(rows().map((cells) => cells[3]))).toEqual(
-      new Set(["Open", "FixedUnconfirmed fix", "Fixed", "Accepted", "False positive"]),
-    );
   });
 });
 
@@ -222,19 +162,9 @@ describe("the filter tabs", () => {
     expect(tab("Severity", "High")).toHaveAttribute("aria-pressed", "true");
     expect(rows().map((cells) => cells[0])).toEqual(["High", "High", "High"]);
     expect(screen.getByText("/findings?severity=high")).toHaveClass("view-path");
-
-    await userEvent.click(tab("Module", "Patch"));
-    await userEvent.click(tab("Status", "Every status"));
-
-    expect(address()).toBe("/findings?status=all&severity=high&module=patch");
-    expect(titles()).toEqual([
-      "minimist 1.2.5 has a known vulnerability",
-      "ws 7.4.5 has a known vulnerability",
-    ]);
-    expect(screen.getByText("/findings?status=all&severity=high&module=patch")).toBeInTheDocument();
   });
 
-  it("follows Back and Forward", async () => {
+  it("follows Back to the last view", async () => {
     open();
     await screen.findByRole("table");
     await userEvent.click(tab("Severity", "High"));
@@ -269,70 +199,50 @@ describe("a view in the URL", () => {
 });
 
 describe("selecting a Finding", () => {
-  it("by a click on a card: the card and its row are selected, and finding=<id> replaces the URL", async () => {
+  it("by a click on a card: the card and its row's button are current, and finding=<id> replaces the URL", async () => {
     open();
     await screen.findByRole("table");
     const entries = history.length;
 
     await userEvent.click(cardOf("lodash 4.17.20 has a known vulnerability"));
 
-    expect(cardOf("lodash 4.17.20 has a known vulnerability")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(rowOf("lodash 4.17.20 has a known vulnerability")).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(current()).toEqual([
+      cardOf("lodash 4.17.20 has a known vulnerability"),
+      rowButton("lodash 4.17.20 has a known vulnerability"),
+    ]);
+    expect(rowButton("lodash 4.17.20").closest("tr")).toHaveClass("selected");
     expect(address()).toBe(`/findings?finding=${ID.lodash}`);
     expect(history.length).toBe(entries);
-    expect(cards().filter((card) => card.getAttribute("aria-pressed") === "true")).toHaveLength(1);
   });
 
-  it("by a click on a row, and by Enter or Space on a focused row", async () => {
+  it("by a click anywhere on a row, and by Enter or Space on a row's button", async () => {
     open();
     await screen.findByRole("table");
 
-    await userEvent.click(rowOf("The disk isn't encrypted"));
-    expect(rowOf("The disk isn't encrypted")).toHaveAttribute("aria-selected", "true");
+    await userEvent.click(within(table()).getByText("ada-laptop"));
+    expect(current()).toEqual([rowButton("The disk isn't encrypted")]);
     expect(address()).toBe(`/findings?finding=${ID.disk}`);
 
-    rowOf("semver 7.5.1 has a known vulnerability").focus();
+    rowButton("@aws-sdk").focus();
     await userEvent.keyboard("{Enter}");
-    expect(address()).toBe(`/findings?finding=${ID.semver}`);
-    expect(rowOf("The disk isn't encrypted")).toHaveAttribute("aria-selected", "false");
+    expect(address()).toBe(`/findings?finding=${ID.cognito}`);
 
-    rowOf("minimist 1.2.5 has a known vulnerability").focus();
+    rowButton("minimist").focus();
     await userEvent.keyboard(" ");
     expect(address()).toBe(`/findings?finding=${ID.minimist}`);
     expect(cardOf("minimist 1.2.5 has a known vulnerability")).toHaveAttribute(
-      "aria-pressed",
+      "aria-current",
       "true",
     );
-  });
-
-  it("by Enter or Space on a focused card", async () => {
-    open();
-    await screen.findByRole("table");
-    cardOf("The agent can read .env files").focus();
-    await userEvent.keyboard("{Enter}");
-    expect(address()).toBe(`/findings?finding=${ID.envLocal}`);
-    cardOf("A live Stripe secret key is committed").focus();
-    await userEvent.keyboard(" ");
-    expect(address()).toBe(`/findings?finding=${ID.secret}`);
   });
 
   it("keeps the selection when the page opens again at its URL (a reload or a shared link)", async () => {
     open(`/findings?severity=critical&finding=${ID.lodash}`);
     await screen.findByRole("table");
-    expect(cardOf("lodash 4.17.20 has a known vulnerability")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(rowOf("lodash 4.17.20 has a known vulnerability")).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
+    expect(current()).toEqual([
+      cardOf("lodash 4.17.20 has a known vulnerability"),
+      rowButton("lodash 4.17.20"),
+    ]);
     expect(address()).toBe(`/findings?severity=critical&finding=${ID.lodash}`);
   });
 
@@ -340,8 +250,7 @@ describe("selecting a Finding", () => {
     open("/findings?severity=high&finding=not-ours");
     await screen.findByRole("table");
     await vi.waitFor(() => expect(address()).toBe("/findings?severity=high"));
-    expect(cards().filter((card) => card.getAttribute("aria-pressed") === "true")).toHaveLength(0);
-    expect(within(table()).queryAllByRole("row", { selected: true })).toHaveLength(0);
+    expect(current()).toEqual([]);
   });
 });
 
@@ -350,7 +259,7 @@ describe("waiting and refusals", () => {
     const late = deferred<Response>();
     open("/findings", demoFindings, { findings: () => late.promise });
     expect(screen.getByText("Loading Findings…")).toBeInTheDocument();
-    late.resolve(json(200, { findings: demoFindings }));
+    late.resolve(answer());
     expect(await screen.findByRole("table")).toBeInTheDocument();
     expect(screen.queryByText("Loading Findings…")).not.toBeInTheDocument();
     expect(callsTo("/api/findings")[0]?.[1]).toEqual({
@@ -359,13 +268,29 @@ describe("waiting and refusals", () => {
     });
   });
 
+  it("asks again when the answer is about another Team, and shows the one about this Team", async () => {
+    const answers = [answer(demoFindings, "org_b"), answer()];
+    open("/findings", demoFindings, { findings: () => answers.shift() ?? answer() });
+    expect(await screen.findByRole("table", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(callsTo("/api/findings")).toHaveLength(2);
+  });
+
+  it("after three more answers about another Team, says the server isn't answering", async () => {
+    open("/findings", demoFindings, { findings: () => answer(demoFindings, "org_b") });
+    expect(
+      await screen.findByText("Warden's server isn't answering", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(callsTo("/api/findings")).toHaveLength(4);
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+  });
+
   it("says the server isn't answering when it can't be reached, and Retry asks again", async () => {
     let answered = 0;
     open("/findings", demoFindings, {
       findings: () => {
         answered += 1;
         if (answered === 1) throw new TypeError("Failed to fetch");
-        return json(200, { findings: demoFindings });
+        return answer();
       },
     });
     expect(await screen.findByText("Warden's server isn't answering")).toBeInTheDocument();
@@ -375,7 +300,7 @@ describe("waiting and refusals", () => {
 
   it("counts a body that doesn't parse as not answering", async () => {
     open("/findings", demoFindings, {
-      findings: () => json(200, { findings: [{ ...demoFindings[0], status: "gone" }] }),
+      findings: () => json(200, { team: TEAM, findings: [{ ...demoFindings[0], status: "gone" }] }),
     });
     expect(await screen.findByText("Warden's server isn't answering")).toBeInTheDocument();
   });

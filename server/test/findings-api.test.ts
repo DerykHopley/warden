@@ -83,6 +83,7 @@ describe("GET /api/findings", () => {
 
     expect(status).toBe(200);
     const parsed = FindingsBody.parse(body);
+    expect(parsed.team).toBe(team);
     expect(parsed.findings).toEqual(await findings.list(team));
     expect(parsed.findings).toHaveLength(2);
   });
@@ -106,7 +107,7 @@ describe("GET /api/findings", () => {
     const { status, body } = await getFindings(await as("user_member", activeOrganization(team)));
 
     expect(status).toBe(200);
-    expect(body).toEqual({ findings: [] });
+    expect(body).toEqual({ team, findings: [] });
   });
 
   it("answers 401 with no session", async () => {

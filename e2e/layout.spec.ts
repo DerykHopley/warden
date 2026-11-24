@@ -39,17 +39,49 @@ for (const scheme of SCHEMES) {
   for (const width of WIDTHS) {
     test(`at ${width}px in ${scheme}, nothing scrolls sideways`, async ({ page }) => {
       await openAt(page, width, scheme);
+      // The seed's longest title has a 41-character package name with no space in it.
+      await expect(
+        page.locator(".findings-table", { hasText: "@aws-sdk/client-cognito-identity-provider" }),
+      ).toBeVisible();
       const { scrollWidth, clientWidth } = await page.evaluate(() => ({
         scrollWidth: document.documentElement.scrollWidth,
         clientWidth: document.documentElement.clientWidth,
       }));
       expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
-      // The page follows the colour scheme: the dark tokens apply in dark.
-      const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
-      expect(background).toBe(scheme === "light" ? "rgb(247, 245, 240)" : "rgb(29, 28, 26)");
+      // The page follows the colour scheme: the body wears that scheme's --bg.
+      const colours = await page.evaluate(() => {
+        const probe = document.createElement("div");
+        probe.style.background = "var(--bg)";
+        document.body.append(probe);
+        const bg = getComputedStyle(probe).backgroundColor;
+        probe.remove();
+        return {
+          bg,
+          body: getComputedStyle(document.body).backgroundColor,
+          dark: matchMedia("(prefers-color-scheme: dark)").matches,
+        };
+      });
+      expect(colours.body).toBe(colours.bg);
+      expect(colours.dark).toBe(scheme === "dark");
     });
   }
 }
+
+test("at 390px, a title holding a 60-character word with no break in it still doesn't scroll sideways", async ({
+  page,
+}) => {
+  await openAt(page, 390, "light");
+  // No hyphen, slash or space: nothing the browser would break at on its own.
+  await page
+    .locator(".findings-table .finding-title")
+    .first()
+    .evaluate((title) => (title.textContent = `${"Unbroken".repeat(7)}Name`));
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+});
 
 test("under 640px: the cards stack in one column, and the table shows Severity, Finding and Status", async ({
   page,

@@ -3,8 +3,8 @@
 // URL: a filter pushes a history entry, so Back and Forward step through views; selecting a Finding replaces the
 // entry, so a reload or a shared link selects it again.
 import { FindingsView, findingsViewPath, Module, Severity, type Finding } from "@warden/contracts";
-import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
-import { TEAM_NOT_OPENED } from "./api.ts";
+import { useCallback, useEffect, useState } from "react";
+import { askAboutTeam } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import {
   ASSET_KIND_WORDS,
@@ -21,7 +21,7 @@ import {
   topFive,
   type FindingsResult,
 } from "./findings.ts";
-import { CallRefused, useWardenCall } from "./warden-call.tsx";
+import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 /** The view the address bar's query names; a value it doesn't know reads as that field's default. */
 const viewInAddress = () =>
@@ -48,8 +48,18 @@ const MODULE_CHOICES: Choice<FindingsView["module"]>[] = [
   ...Module.options.map((value) => ({ value, label: MODULE_WORDS[value] })),
 ];
 
-export function FindingsPage({ getToken, onSessionEnded }: PageProps) {
-  const listFindings = useCallback(() => fetchFindings(getToken), [getToken]);
+export function FindingsPage({ getToken, me, onSessionEnded }: PageProps) {
+  // An answer about a Team the person just switched away from is asked again, then counts as not answering.
+  const listFindings = useCallback(
+    (signal: AbortSignal) =>
+      askAboutTeam(
+        () => fetchFindings(getToken),
+        (result) => (result.kind === "findings" ? result.team : undefined),
+        me.team,
+        signal,
+      ),
+    [getToken, me.team],
+  );
   const list = useWardenCall<FindingsResult>(listFindings, onSessionEnded);
   const [view, setView] = useState(viewInAddress);
 
@@ -88,16 +98,7 @@ export function FindingsPage({ getToken, onSessionEnded }: PageProps) {
     <>
       {list.result === "loading" && <p className="muted">Loading Findings…</p>}
       {list.result !== "loading" && <CallRefused result={list.result} onRetry={list.retry} />}
-      {list.result !== "loading" && list.result.kind === "no-team" && (
-        <p className="notice" role="alert">
-          Choose a Team first, from the switcher above.
-        </p>
-      )}
-      {list.result !== "loading" && list.result.kind === "team-not-opened" && (
-        <p className="notice" role="alert">
-          {TEAM_NOT_OPENED}
-        </p>
-      )}
+      {list.result !== "loading" && <TeamRefused result={list.result} />}
       {findings !== null && (
         <>
           <h1 className="summary-line">{summaryLine(findings)}</h1>
@@ -158,12 +159,12 @@ function TopFive(props: {
       <ol className="top-five" aria-labelledby="start-here">
         {props.findings.map((finding, i) => (
           <li key={finding.id}>
-            {/* A button: Enter and Space select it as a click does. */}
+            {/* A button: Enter and Space select it as a click does. Selected, it's the page's current Finding. */}
             <button
               type="button"
               className="finding-card"
               data-finding={finding.id}
-              aria-pressed={finding.id === props.focused}
+              aria-current={finding.id === props.focused ? "true" : undefined}
               onClick={() => props.onSelect(finding.id)}
             >
               <span className="card-top">
@@ -213,12 +214,6 @@ function FindingsTable(props: {
   focused: string | undefined;
   onSelect: (id: string) => void;
 }) {
-  const onKeyDown = (id: string) => (event: KeyboardEvent) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      props.onSelect(id);
-    }
-  };
   return (
     <table className="findings-table" aria-labelledby="all-findings">
       <thead>
@@ -240,27 +235,33 @@ function FindingsTable(props: {
           </tr>
         )}
         {props.findings.map((finding) => (
+          // A click anywhere on the row selects it; the keyboard and screen readers use the button in its title cell.
           <tr
             key={finding.id}
-            tabIndex={0}
-            aria-selected={finding.id === props.focused}
+            className={finding.id === props.focused ? "selected" : undefined}
             onClick={() => props.onSelect(finding.id)}
-            onKeyDown={onKeyDown(finding.id)}
           >
-            <td>
+            <td className="narrow">
               <SeverityPill finding={finding} />
             </td>
             <td>
-              <span className="finding-title">{finding.title}</span>
-              <code className="rule-id">
-                {finding.rule_id} · {shortId(finding.id)}
-              </code>
+              <button
+                type="button"
+                className="finding-link"
+                aria-current={finding.id === props.focused ? "true" : undefined}
+                onClick={() => props.onSelect(finding.id)}
+              >
+                <span className="finding-title">{finding.title}</span>
+                <code className="rule-id">
+                  {finding.rule_id} · {shortId(finding.id)}
+                </code>
+              </button>
             </td>
             <td className="asset-col">
               <span className="asset-ref">{finding.asset.ref}</span>
               <span className="asset-kind">{ASSET_KIND_WORDS[finding.asset.kind]}</span>
             </td>
-            <td>
+            <td className="narrow">
               {STATUS_WORDS[finding.status]}
               {finding.status === "fixed" && finding.unconfirmed_fix !== null && (
                 <span className="flag">{UNCONFIRMED_FIX}</span>

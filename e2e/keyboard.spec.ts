@@ -1,5 +1,6 @@
-// docs/design.md, Accessibility floor, on the Findings page: the keyboard reaches each card, filter tab and row in
-// order and leaves them, focus shows a visible ring, and touch targets are at least 44 by 44px at phone width.
+// docs/design.md, Accessibility floor, on the Findings page: the keyboard reaches each card, filter tab and row (the
+// button in its title cell) in order and leaves them, focus shows a visible ring, and touch targets are at least 44 by
+// 44px at phone width.
 import type { Locator, Page } from "@playwright/test";
 import { expect, GRACE, test } from "./session.ts";
 
@@ -23,7 +24,9 @@ const focused = (page: Page) =>
     if (el.classList.contains("filter-tab")) {
       return `tab:${el.closest("[role=group]")?.getAttribute("aria-label")}:${el.textContent}`;
     }
-    if (el.tagName === "TR") return `row:${el.querySelector(".finding-title")?.textContent}`;
+    if (el.classList.contains("finding-link")) {
+      return `row:${el.querySelector(".finding-title")?.textContent}`;
+    }
     return `${el.tagName.toLowerCase()}:${el.textContent}`;
   });
 
@@ -69,7 +72,7 @@ test("a focused card, filter tab and row each show a visible ring", async ({ pag
   for (const target of [
     page.locator(".finding-card").first(),
     page.locator(".filter-tab").nth(2),
-    page.locator(".findings-table tbody tr").nth(1),
+    page.locator(".findings-table .finding-link").nth(1),
   ]) {
     const { style, width } = await ring(target);
     expect(style).toBe("solid");
@@ -82,7 +85,7 @@ test("at 390px, every card, filter tab, row and page link is at least 44 by 44px
 }) => {
   await open(page, 390);
   const targets = page.locator(
-    ".finding-card, .filter-tab, .findings-table tbody tr, .page-links a, .app-header button",
+    ".finding-card, .filter-tab, .findings-table .finding-link, .page-links a, .app-header button",
   );
   const sizes = await targets.evaluateAll((all) =>
     all.map((el) => {

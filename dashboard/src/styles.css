@@ -364,8 +364,8 @@ button[aria-busy="true"],
   min-width: 0;
 }
 
-/* A card is a button: Enter and Space select it. Selected: the accent border, drawn a second pixel thick with a ring
-   so the card doesn't shift. */
+/* A card is a button: Enter and Space select it. Selected (aria-current): the accent border, drawn a second pixel
+   thick with a ring so the card doesn't shift. */
 .finding-card {
   display: flex;
   flex-direction: column;
@@ -388,7 +388,7 @@ button[aria-busy="true"],
   background: var(--chip);
 }
 
-.finding-card[aria-pressed="true"] {
+.finding-card[aria-current="true"] {
   border-color: var(--accent);
   box-shadow:
     0 0 0 1px var(--accent),
@@ -498,8 +498,8 @@ button[aria-busy="true"],
   overflow-wrap: anywhere;
 }
 
-/* The table: every Finding in the view. A row is selected by click, Enter or Space. Under 640px it shows Severity,
-   Finding and Status only. */
+/* The table: every Finding in the view. A click on a row, or the button in its title cell (Enter or Space), selects
+   it. Under 640px it shows Severity, Finding and Status only. */
 .findings-table {
   width: 100%;
   border-collapse: separate;
@@ -515,10 +515,17 @@ button[aria-busy="true"],
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--line);
-  overflow-wrap: break-word;
 }
 
-/* Long strings with no spaces (a Rule id, a URL) may break anywhere; titles break between words only. */
+/* Severity and Status take only the width their words need, so the Finding column gets the rest. */
+.findings-table .narrow {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* Titles, Rule ids and Asset refs may break anywhere: a long word with no space (a package name, a URL) wraps
+   rather than pushing the page sideways. */
+.findings-table .finding-title,
 .findings-table .rule-id,
 .findings-table .asset-ref {
   overflow-wrap: anywhere;
@@ -534,23 +541,30 @@ button[aria-busy="true"],
   font-weight: 600;
 }
 
-.findings-table tbody tr[tabindex] {
+.findings-table tbody tr:has(.finding-link) {
   cursor: pointer;
 }
 
-.findings-table tbody tr[tabindex]:hover {
+.findings-table tbody tr:has(.finding-link):hover {
   background: var(--chip);
 }
 
-.findings-table tbody tr:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: -3px;
-}
-
-/* Selected: the quiet fill and an accent bar at its start, so it isn't told by the fill alone. */
-.findings-table tbody tr[aria-selected="true"] {
+/* Selected: the quiet fill and an accent bar at its start; the title's button says so (aria-current). */
+.findings-table tbody tr.selected {
   background: var(--chip);
   box-shadow: inset 4px 0 0 var(--accent);
+}
+
+/* The title cell's button: the title and the Rule id, as text; it takes focus and selects the row. */
+.finding-link {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  color: var(--fg);
+  text-align: left;
+  background: none;
+  border: 0;
 }
 
 .finding-title {

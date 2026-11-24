@@ -26,7 +26,10 @@ describe("the landing page by Role", () => {
     "at /, takes a %s to Findings, with the header's links Findings then People",
     async (role) => {
       clerk.auth.orgId = "org_a";
-      serve({ me: () => me("org_a", role), findings: () => json(200, { findings: [] }) });
+      serve({
+        me: () => me("org_a", role),
+        findings: () => json(200, { team: "org_a", findings: [] }),
+      });
       const entries = history.length;
       render(<App />);
 
@@ -51,7 +54,7 @@ describe("the landing page by Role", () => {
   it("at /, shows the shell's waiting line and no page while /api/me hasn't answered", async () => {
     clerk.auth.orgId = "org_a";
     const late = deferred<Response>();
-    serve({ me: () => late.promise, findings: () => json(200, { findings: [] }) });
+    serve({ me: () => late.promise, findings: () => json(200, { team: "org_a", findings: [] }) });
     render(<App />);
 
     expect(screen.getByText("Checking your session with Warden's server…")).toBeInTheDocument();

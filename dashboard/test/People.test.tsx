@@ -62,7 +62,7 @@ function renderPeople(role: Role, routes: Routes = {}) {
   serve({ members: () => json(200, members({ user_1: role })), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
-    me: { userId: "user_1", role },
+    me: { userId: "user_1", team: "org_a", role },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
   };
