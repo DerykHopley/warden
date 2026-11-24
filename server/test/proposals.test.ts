@@ -198,6 +198,77 @@ describe("approving a Proposal the decision would now refuse", () => {
   });
 });
 
+/**
+ * Findings whose transaction begins, then waits for `release` before its work: one that began first and writes later,
+ * as a transaction waiting on the Team's lock does. `begun` resolves once its transaction has begun in Postgres.
+ */
+function heldFindings() {
+  let begin!: () => void;
+  let release!: () => void;
+  const begun = new Promise<void>((resolve) => (begin = resolve));
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const held: WithTeam = (team, work) =>
+    withTeam(team, async (tx) => {
+      begin();
+      await released;
+      return work(tx);
+    });
+  return { findings: createFindings({ withTeam: held, moveRules: {} }), begun, release };
+}
+
+describe("approving, when a transaction began before the other but wrote after it", () => {
+  it("refuses a Proposal asked while a Lead's decision waited to write, and the Proposal stays pending", async () => {
+    const { team, finding } = await teamWithFinding();
+    const held = heldFindings();
+    const accepting = held.findings.accept(team, finding.id, {
+      actor: lead,
+      reason: "Next sprint",
+      until: nextWeek(),
+    });
+    await held.begun;
+    const proposed = await findings.propose(team, finding.id, {
+      requester: member,
+      decision: "mark_false_positive",
+      reason: "The file is a test fixture",
+    });
+    held.release();
+    await accepting;
+    const before = await stored(team);
+
+    await expect(findings.approveProposal(team, proposed.id, { actor: lead })).rejects.toThrow(
+      /changed since the Proposal was asked/,
+    );
+
+    expect(await stored(team)).toEqual(before);
+    expect(before.findings).toMatchObject([{ status: "accepted" }]);
+    expect(before.proposals).toMatchObject([{ id: proposed.id, state: "pending" }]);
+  });
+
+  it("approves a Proposal whose transaction began before a Lead's decision but wrote after it", async () => {
+    const { team, finding } = await teamWithFinding();
+    const held = heldFindings();
+    const proposing = held.findings.propose(team, finding.id, {
+      requester: member,
+      decision: "mark_false_positive",
+      reason: "The file is a test fixture",
+    });
+    await held.begun;
+    await findings.accept(team, finding.id, {
+      actor: lead,
+      reason: "Next sprint",
+      until: nextWeek(),
+    });
+    held.release();
+    const proposed = await proposing;
+
+    await expect(
+      findings.approveProposal(team, proposed.id, { actor: lead }),
+    ).resolves.toMatchObject({ state: "approved" });
+
+    expect((await findings.list(team))[0]).toMatchObject({ status: "false_positive" });
+  });
+});
+
 describe("proposing", () => {
   it("an accept stores its until, changes no Finding, and writes no history", async () => {
     const { team, finding } = await teamWithFinding();

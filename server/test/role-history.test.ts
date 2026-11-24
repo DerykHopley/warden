@@ -1,23 +1,22 @@
 // The two tables 0004_team_members makes (ADR 0008): each person's Role in a Team, and the append-only history of
 // every Role change. The history can't be edited, by the app or by the tables' owner (threat D6): warden_app has no
-// update, delete or truncate grant on it, and the append-only trigger refuses the owner, warden_migrate.
+// update, delete or truncate grant on it, and the append-only trigger refuses the owner, warden_migrate. It runs on a
+// database of its own: the owner's truncate locks role_history against every other file changing Roles on the suite's
+// shared database.
 import { randomUUID } from "node:crypto";
 import { sql } from "kysely";
 import type pg from "pg";
-import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import { createWithTeam, type WithTeam } from "../src/with-team.ts";
-import { poolAs, type DatabaseRole } from "./databases.ts";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { WithTeam } from "../src/with-team.ts";
+import { ownDatabase } from "./databases.ts";
 
 const team = `org_roles_${randomUUID()}`;
-const pools: pg.Pool[] = [];
-const withTeamAs = {} as Record<"warden_app" | "warden_migrate", WithTeam>;
+let pools: Record<"warden_app" | "warden_migrate", pg.Pool>;
+let withTeamAs: Record<"warden_app" | "warden_migrate", WithTeam>;
+let end: (() => Promise<void>) | undefined;
 
 beforeAll(async () => {
-  for (const role of ["warden_app", "warden_migrate"] as const satisfies DatabaseRole[]) {
-    const pool = poolAs(role, inject("testDatabase"));
-    pools.push(pool);
-    withTeamAs[role] = createWithTeam(pool);
-  }
+  ({ pools, withTeamAs, end } = await ownDatabase(["warden_app", "warden_migrate"]));
   await withTeamAs.warden_app(team, async (tx) => {
     await tx.insertInto("teams").values({ id: team }).execute();
     await tx
@@ -36,15 +35,13 @@ beforeAll(async () => {
       })
       .execute();
   });
-});
+}, 30_000);
 
-afterAll(async () => {
-  for (const pool of pools) await pool.end();
-});
+afterAll(() => end?.(), 30_000);
 
 describe("0004_team_members", () => {
   it("makes team_members and role_history with the approved columns", async () => {
-    const { rows } = await pools[0]!.query<{
+    const { rows } = await pools.warden_app.query<{
       table_name: string;
       column_name: string;
       data_type: string;
@@ -92,7 +89,11 @@ describe("0004_team_members", () => {
   });
 
   it("keys each table by the Team, and points both at teams", async () => {
-    const { rows } = await pools[0]!.query<{ table: string; kind: string; definition: string }>(`
+    const { rows } = await pools.warden_app.query<{
+      table: string;
+      kind: string;
+      definition: string;
+    }>(`
       select conrelid::regclass::text as table, contype as kind, pg_get_constraintdef(oid) as definition
         from pg_constraint
        where conrelid in ('team_members'::regclass, 'role_history'::regclass) and contype in ('p', 'f')
