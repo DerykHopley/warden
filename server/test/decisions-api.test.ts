@@ -238,7 +238,7 @@ describe("story 4: a Lead's decisions", () => {
 
     expect(refused).toEqual({
       status: 409,
-      body: { error: expect.stringMatching(/reopen refused: the Finding is open/) },
+      body: { error: "This Finding is Open already." },
     });
     expect(await stored(team)).toEqual(before);
   });
