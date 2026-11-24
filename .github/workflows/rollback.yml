@@ -1,0 +1,70 @@
+name: Rollback
+
+# A rollback (README.md, "Releasing"), by hand from main only: scripts/cloud-run-rollback.sh moves all of warden's
+# traffic to the revision given, or with none to the newest release before the serving one, points the daily Job at
+# that revision's image, and checks /api/health. The database keeps its newer schema.
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: The revision to roll back to (warden-rel-…); empty for the release before the serving one
+        required: false
+        type: string
+
+# Shares the release's group, so a rollback never runs beside a release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  not-configured:
+    name: Rollback not configured
+    if: vars.GCP_PROJECT_ID == '' || vars.GCP_DEPLOY_SA == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Name the missing repository variables
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          missing=()
+          [ -n "$GCP_PROJECT_ID" ] || missing+=(GCP_PROJECT_ID)
+          [ -n "$GCP_DEPLOY_SA" ] || missing+=(GCP_DEPLOY_SA)
+          echo "::notice title=Rollback skipped::Set the repository variables ${missing[*]} to roll back (README.md, Setting up Google Cloud)."
+
+  rollback:
+    name: Roll back
+    if: vars.GCP_PROJECT_ID != '' && vars.GCP_DEPLOY_SA != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The only job that may ask GitHub for an OIDC token, which Workload Identity Federation trades for
+    # warden-deploy's credentials.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Workload Identity Federation gives main's tokens only; this says so plainly for a dispatch from elsewhere.
+      - name: Roll back from main only
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Roll back from main only, not $GITHUB_REF"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - name: Sign in to Google Cloud (Workload Identity Federation, no key)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Move the traffic and the daily Job's image back, then check /api/health
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REVISION: ${{ inputs.revision }}
+        # The input goes in as an environment variable, never into the script's text, and the script checks it is a
+        # revision name before any gcloud call.
+        run: scripts/cloud-run-rollback.sh ${REVISION:+"$REVISION"}

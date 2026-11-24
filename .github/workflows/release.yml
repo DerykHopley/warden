@@ -1,0 +1,85 @@
+name: Release
+
+# A release (README.md, "Releasing"): every push to main, or by hand from main. The full lane runs first; only when
+# it passes does the deploy job build the image, push it to the warden repository and run
+# scripts/cloud-run-deploy.sh <image> release: migrate, a tagged revision with no traffic, its health gate, then all
+# of the traffic and the daily Job's image.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One release or rollback at a time, and none cancelled halfway through a migration or a traffic move. GitHub keeps
+# one waiting run per group: a newer push replaces an older one still waiting, which is fine, as it holds that code.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  full-lane:
+    name: Full lane
+    uses: ./.github/workflows/full-lane.yml
+
+  # Without the two variables the deploy can't sign in, so it's skipped and the run stays green.
+  not-configured:
+    name: Release not configured
+    if: vars.GCP_PROJECT_ID == '' || vars.GCP_DEPLOY_SA == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Name the missing repository variables
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+        run: |
+          missing=()
+          [ -n "$GCP_PROJECT_ID" ] || missing+=(GCP_PROJECT_ID)
+          [ -n "$GCP_DEPLOY_SA" ] || missing+=(GCP_DEPLOY_SA)
+          echo "::notice title=Release skipped::Set the repository variables ${missing[*]} to release (README.md, Setting up Google Cloud)."
+
+  deploy:
+    name: Deploy the release
+    needs: full-lane
+    if: vars.GCP_PROJECT_ID != '' && vars.GCP_DEPLOY_SA != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The only job that may ask GitHub for an OIDC token, which Workload Identity Federation trades for
+    # warden-deploy's credentials.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      IMAGE: europe-west1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/warden/warden:${{ github.sha }}
+    steps:
+      # Workload Identity Federation gives main's tokens only; this says so plainly for a dispatch from elsewhere.
+      - name: Releases go from main only
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Release from main only, not $GITHUB_REF"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      # Built before signing in, so auth's credentials file never reaches the build context.
+      - name: Build the image
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+        run: docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY --tag "$IMAGE" .
+      - name: Sign in to Google Cloud (Workload Identity Federation, no key)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Push the image to warden
+        run: |
+          gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
+          docker push "$IMAGE"
+      - name: Migrate, deploy a tagged revision, health gate, traffic, the daily Job's image
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+        run: scripts/cloud-run-deploy.sh "$IMAGE" release
