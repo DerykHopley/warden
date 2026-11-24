@@ -14,30 +14,53 @@ const PATTERNS: [RegExp, string][] = [
   [/([?&][^=&#\s?]+=)[^&#\s"']*/g, `$1${MASK}`],
 ];
 
-export function redactString(text: string): string {
+/** A system error's fields worth logging (a refused connection's code, address and port). Anything else an error
+ * carries, such as a client's config, is left out. */
+const ERROR_FIELDS = ["code", "errno", "syscall", "address", "port"] as const;
+
+function redactString(text: string): string {
   return PATTERNS.reduce((out, [pattern, replacement]) => out.replace(pattern, replacement), text);
 }
 
-/** A copy of `value` safe to log: strings masked, secret headers dropped, errors reduced to name, message and stack. */
-export function redact(value: unknown, seen = new WeakSet<object>()): unknown {
+/**
+ * A copy of `value` safe to log: strings masked, secret headers dropped, errors reduced to their name, message,
+ * stack, system fields, cause and inner errors. `ancestors` holds the objects above this one, so only a real cycle
+ * is cut; an object that appears twice is read both times.
+ */
+export function redact(value: unknown, ancestors = new Set<object>()): unknown {
   if (typeof value === "string") return redactString(value);
   if (value === null || typeof value !== "object") return value;
-  if (seen.has(value)) return "[circular]";
-  seen.add(value);
-  if (value instanceof Error) {
-    const error: Record<string, unknown> = {
-      name: value.name,
-      message: redactString(value.message),
-      stack: value.stack === undefined ? undefined : redactString(value.stack),
-    };
-    if (value.cause !== undefined) error.cause = redact(value.cause, seen);
-    return error;
+  if (ancestors.has(value)) return "[circular]";
+  ancestors.add(value);
+  try {
+    return value instanceof Error ? redactError(value, ancestors) : redactObject(value, ancestors);
+  } finally {
+    ancestors.delete(value);
   }
-  if (Array.isArray(value)) return value.map((item) => redact(item, seen));
+}
+
+function redactError(error: Error, ancestors: Set<object>): Record<string, unknown> {
+  const out: Record<string, unknown> = {
+    name: error.name,
+    message: redactString(error.message),
+    stack: error.stack === undefined ? undefined : redactString(error.stack),
+  };
+  const fields = error as Error & Partial<Record<(typeof ERROR_FIELDS)[number], unknown>>;
+  for (const field of ERROR_FIELDS) {
+    const item = fields[field];
+    if (typeof item === "string" || typeof item === "number") out[field] = redact(item, ancestors);
+  }
+  if (error.cause !== undefined) out.cause = redact(error.cause, ancestors);
+  if (error instanceof AggregateError) out.errors = redact(error.errors, ancestors);
+  return out;
+}
+
+function redactObject(value: object, ancestors: Set<object>): unknown {
+  if (Array.isArray(value)) return value.map((item) => redact(item, ancestors));
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [
       key,
-      SECRET_KEYS.has(key.toLowerCase()) ? "[redacted]" : redact(item, seen),
+      SECRET_KEYS.has(key.toLowerCase()) ? "[redacted]" : redact(item, ancestors),
     ]),
   );
 }

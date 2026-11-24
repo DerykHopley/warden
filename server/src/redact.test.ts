@@ -70,6 +70,45 @@ describe("redact", () => {
     expect(out.stack).toContain("redact.test.ts");
   });
 
+  it("keeps a system error's code, errno, syscall, address and port, strings still masked", () => {
+    const error = Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      errno: -111,
+      syscall: "connect",
+      address: "postgres://u:hunter2@10.0.0.5/db",
+      port: 5432,
+      config: { password: "not-kept" },
+    });
+    expect(redact(error)).toMatchObject({
+      code: "ECONNREFUSED",
+      errno: -111,
+      syscall: "connect",
+      address: "postgres://u:***@10.0.0.5/db",
+      port: 5432,
+    });
+    expect(text(error)).not.toContain("not-kept");
+  });
+
+  it("reads every error inside an AggregateError, masked", () => {
+    const error = new AggregateError(
+      [new Error(`first with ${clerkTest}`), new Error("second")],
+      "all failed",
+    );
+    const out = redact(error) as { errors: { message: string }[] };
+    expect(out.errors.map((e) => e.message)).toEqual(["first with sk_test_***", "second"]);
+  });
+
+  it("reads an object that appears twice in full, and marks only a real cycle", () => {
+    const shared = { url: "/x?token=abc" };
+    const cyclic: Record<string, unknown> = { name: "loop" };
+    cyclic.self = cyclic;
+    expect(redact({ a: shared, b: shared, cyclic })).toEqual({
+      a: { url: "/x?token=***" },
+      b: { url: "/x?token=***" },
+      cyclic: { name: "loop", self: "[circular]" },
+    });
+  });
+
   it("leaves numbers, booleans and null alone", () => {
     expect(redact({ n: 1, b: true, z: null })).toEqual({ n: 1, b: true, z: null });
   });

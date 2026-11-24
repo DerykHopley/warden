@@ -52,9 +52,21 @@ describe("GET /api/health", () => {
     expect(elapsed).toBeLessThan(2500);
   });
 
-  it("answers 503 naming vector when the extension isn't available", async () => {
+});
+
+describe("createHealthCheck", () => {
+  it("reports vector missing when Postgres doesn't offer the extension", async () => {
     const pool = { query: async () => ({ rows: [{ vector: false }] }) };
     const body = await createHealthCheck(pool, logger)();
     expect(body).toEqual({ status: "unavailable", database: "ok", vector: "missing" });
+  });
+});
+
+describe("createPool", () => {
+  it("lets a query run past the health check's 2 seconds", async () => {
+    const pool = createPool(logger);
+    cleanups.push(() => pool.end());
+    const { rows } = await pool.query("select pg_sleep(2.2), 1 as done");
+    expect(rows[0]).toMatchObject({ done: 1 });
   });
 });

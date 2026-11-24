@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { FRONTEND_API_HOST, testPublishableKey as publishableKey } from "../test/helpers.ts";
 import { ConfigError, loadConfig } from "./config.ts";
-
-const publishableKey = `pk_test_${Buffer.from("warden-test.clerk.accounts.dev$").toString("base64")}`;
 
 const env = {
   CLERK_SECRET_KEY: "clerk-secret-value",
@@ -26,7 +25,7 @@ describe("loadConfig", () => {
   });
 
   it("finds Clerk's Frontend API host in the publishable key", () => {
-    expect(loadConfig(env).clerk.frontendApiHost).toBe("warden-test.clerk.accounts.dev");
+    expect(loadConfig(env).clerk.frontendApiHost).toBe(FRONTEND_API_HOST);
   });
 
   it("names every missing required variable, empty counting as missing, and no value", () => {

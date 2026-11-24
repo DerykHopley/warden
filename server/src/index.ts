@@ -7,6 +7,7 @@ import { createClerkVerifier } from "./auth.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { createHealthCheck, createPool } from "./database.ts";
 import { createLogger } from "./log.ts";
+import { createShutdown } from "./shutdown.ts";
 
 const logger = createLogger();
 
@@ -33,10 +34,11 @@ const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   logger.info("listening", { port });
 });
 
-// Cloud Run sends SIGTERM before stopping an instance.
-for (const signal of ["SIGTERM", "SIGINT"] as const) {
-  process.on(signal, () => {
-    logger.info("shutting down", { signal });
-    server.close(() => void pool.end().then(() => process.exit(0)));
-  });
-}
+const shutdown = createShutdown({
+  close: (done) => server.close(() => done()),
+  end: () => pool.end(),
+  exit: (code) => process.exit(code),
+  logger,
+});
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);

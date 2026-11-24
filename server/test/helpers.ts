@@ -10,6 +10,9 @@ import { createLogger } from "../src/log.ts";
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
 
+/** A publishable key naming FRONTEND_API_HOST, as Clerk encodes it: base64 of `<host>$`. */
+export const testPublishableKey = `pk_test_${Buffer.from(`${FRONTEND_API_HOST}$`).toString("base64")}`;
+
 /** A signing key and its PEM public key, as Clerk's dashboard shows it for networkless verification. */
 export async function testKey() {
   const { privateKey, publicKey } = await generateKeyPair("RS256");

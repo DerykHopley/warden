@@ -2,7 +2,7 @@
 // (https://clerk.com/docs/guides/secure/best-practices/csp-headers) and nothing else outside 'self'.
 import type { MiddlewareHandler } from "hono";
 
-export function contentSecurityPolicy(frontendApiHost: string): string {
+function contentSecurityPolicy(frontendApiHost: string): string {
   const clerk = `https://${frontendApiHost}`;
   return [
     "default-src 'self'",

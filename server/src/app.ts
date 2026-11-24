@@ -52,8 +52,13 @@ export function createApp(deps: AppDeps): Hono {
 
   if (deps.dashboardDir !== undefined) {
     app.use(serveStatic({ root: deps.dashboardDir }));
-    // Any other page is a dashboard route: the dashboard's index.html handles it.
-    app.get(serveStatic({ root: deps.dashboardDir, path: "index.html" }));
+    // Any other page is a dashboard route, which the dashboard's index.html handles. A missing asset or any path
+    // with a file extension is a missing file: it stays a 404, not the page.
+    const indexHtml = serveStatic({ root: deps.dashboardDir, path: "index.html" });
+    app.get(async (c, next) => {
+      if (c.req.path.startsWith("/assets/") || /\.[^/]+$/.test(c.req.path)) return next();
+      return indexHtml(c, next);
+    });
   }
 
   app.notFound((c) => c.json({ error: "Not found" }, 404));
