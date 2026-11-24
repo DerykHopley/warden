@@ -144,6 +144,13 @@ describe("security headers", () => {
     );
     expect(csp).toMatch(/default-src 'self'/);
   });
+
+  it("allow data: images, which Clerk's sign-in shows", async () => {
+    const { app } = testApp({ publicPem });
+    const csp = (await app.request("/")).headers.get("content-security-policy") ?? "";
+    const imgSrc = csp.split("; ").filter((directive) => directive.startsWith("img-src "));
+    expect(imgSrc).toEqual(["img-src 'self' https://img.clerk.com data:"]);
+  });
 });
 
 describe("the dashboard's files", () => {
