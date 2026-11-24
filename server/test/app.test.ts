@@ -21,8 +21,25 @@ describe("GET /api/me", () => {
     expect(await res.json()).toEqual({ userId: "user_abc", team: null, role: null });
   });
 
+  it.each(["bearer", "BEARER", "beaRer"])(
+    "reads the auth scheme in any case: %s signs in as Bearer does",
+    async (scheme) => {
+      const { app } = testApp({ publicPem });
+      const token = await sessionToken(key, "user_abc");
+      const res = await app.request("/api/me", {
+        headers: { Authorization: `${scheme} ${token}` },
+      });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ userId: "user_abc", team: null, role: null });
+    },
+  );
+
   it.each([
     ["no token", async () => ({})],
+    [
+      "a valid token under another scheme",
+      async () => ({ headers: { Authorization: `Basic ${await sessionToken(key, "user_abc")}` } }),
+    ],
     ["an expired token", async () => bearer(await sessionToken(key, "user_abc", -60))],
     ["a token signed by another key", async () => bearer(await sessionToken(otherKey, "user_abc"))],
     [

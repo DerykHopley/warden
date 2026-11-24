@@ -7,6 +7,7 @@ import type { CryptoKey } from "jose";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { Hono } from "hono";
 import type { AppEnv } from "../src/app.ts";
+import type { ClerkAnswer, MembershipRoleChange } from "../src/members.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
@@ -138,6 +139,76 @@ describe("an invited person's first visit", () => {
         actor_id: "user_invited",
       },
     ]);
+  });
+
+  it.each([
+    ["sets their Clerk role to org:member", async (): Promise<ClerkAnswer> => "set", false],
+    [
+      "still lets them in when Clerk refuses, and logs it",
+      async (): Promise<ClerkAnswer> => {
+        throw new Error("Clerk is down");
+      },
+      true,
+    ],
+  ] as const)(
+    "of someone Clerk calls org:admin %s, as a Warden Member isn't Clerk's org:admin",
+    async (_name, then, logged) => {
+      const team = newTeam();
+      await me("user_founder", team, "admin");
+      const calls: MembershipRoleChange[] = [];
+      const { app: syncing, lines } = testApp({
+        publicPem,
+        withTeam,
+        clerkOrganizations: {
+          setMembershipRole: async (change) => {
+            calls.push(change);
+            return then();
+          },
+        },
+      });
+      const token = await sessionToken(
+        key,
+        "user_clerk_admin",
+        60,
+        activeOrganization(team, "admin"),
+      );
+      const open = () =>
+        syncing.request("/api/me", { headers: { Authorization: `Bearer ${token}` } });
+
+      const res = await open();
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ userId: "user_clerk_admin", team, role: "member" });
+      expect(calls).toEqual([
+        { organizationId: team, userId: "user_clerk_admin", role: "org:member" },
+      ]);
+      expect(lines.some((line) => line.includes("Clerk is down"))).toBe(logged);
+      // Only on joining: a second visit doesn't call Clerk.
+      expect((await open()).status).toBe(200);
+      expect(calls).toHaveLength(1);
+    },
+  );
+
+  it("of someone Clerk calls org:member doesn't call Clerk", async () => {
+    const team = newTeam();
+    await me("user_founder", team, "admin");
+    const calls: MembershipRoleChange[] = [];
+    const { app: syncing } = testApp({
+      publicPem,
+      withTeam,
+      clerkOrganizations: {
+        setMembershipRole: async (change) => {
+          calls.push(change);
+          return "set";
+        },
+      },
+    });
+    const token = await sessionToken(key, "user_plain", 60, activeOrganization(team, "member"));
+
+    expect(
+      (await syncing.request("/api/me", { headers: { Authorization: `Bearer ${token}` } })).status,
+    ).toBe(200);
+    expect(calls).toEqual([]);
   });
 
   it("answers the Role Warden stored, not the token's", async () => {
