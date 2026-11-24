@@ -133,6 +133,15 @@ A unit test checks this example against `agentEventsHash()`.
   Scan's module's. A Scan may not cover an `agent_session` Asset: an Agent session is never rescanned.
 - **`SpotRun`:** what `report(...)` takes: `id`, `team`, `module`, `started_at`, `observations`, and no `assets` or
   `rules`, since a Spot run covers nothing and never marks a Finding Fixed. Its Observations may be on any Asset.
+- **One problem, once:** a `Scan` or `SpotRun` refuses two Observations with the same Asset (`kind` and `ref`) and
+  the same Fingerprint, even with a different `line`, `version`, severity or evidence. The issue is on the second
+  one's index and names the first. It is one problem, so the module reports it once, and reconcile never has to pick
+  which report wins.
+- **What a Scan covered, once each:** a `Scan` refuses the same Asset (same `kind` and `ref`) twice in `assets`,
+  and the same Rule id twice in `rules`, on the second one's index.
+- **No text of only whitespace:** a `title` (on a Finding, an Observation and an expected Finding), a Finding's
+  `accepted_reason` and a decision step's `reason` hold at least one character that isn't whitespace. This is the
+  pattern `\S`, so the JSON Schema carries it.
 
 ## The reconcile cases
 
@@ -171,7 +180,8 @@ hold among the fields an expectation gives (a Rule of its module, the Location a
 the lifecycle fields against `status`); a rule whose fields are left out isn't checked.
 
 A label names one new Finding, so a step gives each Observation at most one label, and a `mark_moved` never names
-the same Finding as both `finding` and `candidate`.
+the same Finding as both `finding` and `candidate`. One problem opens at most one Finding, so a case refuses two
+labels, in any steps, on Observations with the same Asset, module and Fingerprint.
 
 ## JSON Schema
 

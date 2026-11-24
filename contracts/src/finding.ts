@@ -23,7 +23,14 @@ export type Status = z.infer<typeof Status>;
 /** An id Warden or a module gave: a Finding, a Team, a Scan or a Spot run. */
 export const Id = z.string().min(1).max(200);
 
-export const Title = z.string().min(1).max(200);
+/** Text a person reads: at least one character that isn't whitespace. A pattern, so the JSON Schema carries it. */
+export const NOT_BLANK = /\S/;
+const NOT_BLANK_MESSAGE = "holds at least one character that isn't whitespace";
+
+/** Free text a person reads, of at most `max` characters, never only whitespace. */
+export const Text = (max: number) => z.string().min(1).max(max).regex(NOT_BLANK, NOT_BLANK_MESSAGE);
+
+export const Title = Text(200);
 
 /** An ISO 8601 date-time, with `Z` or an offset. */
 export const DateTime = z.iso.datetime({ offset: true });
@@ -279,7 +286,7 @@ export const FindingFields = z.strictObject({
   // Lifecycle
   status: Status,
   unconfirmed_fix: UnconfirmedFix.nullable(),
-  accepted_reason: z.string().min(1).max(2000).nullable(),
+  accepted_reason: Text(2000).nullable(),
   accepted_until: DateTime.nullable(),
   /** The id of the Scan or Spot run that first saw it. */
   first_seen_scan: Id,
@@ -400,6 +407,55 @@ export type Observation = z.infer<typeof Observation>;
 
 const assetKey = (asset: Asset) => `${asset.kind}:${asset.ref}`;
 
+/** One problem: an Asset and a Fingerprint. A run reports each problem once (the README's "one problem, once"). */
+export const problemKey = (observation: Pick<Observation, "asset" | "rule_id" | "location">) =>
+  JSON.stringify([
+    observation.asset.kind,
+    observation.asset.ref,
+    fingerprint(observation.rule_id, observation.location),
+  ]);
+
+/** Refuses a second Observation of a problem an earlier one in the same run reported, naming the first. */
+function refuseSameProblemTwice(observations: readonly Observation[], ctx: z.RefinementCtx): void {
+  const first = new Map<string, number>();
+  observations.forEach((observation, i) => {
+    const key = problemKey(observation);
+    const earlier = first.get(key);
+    if (earlier !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["observations", i],
+        message: `the same problem (Asset and Fingerprint) as observations[${earlier}]: a run reports each problem once`,
+      });
+    } else {
+      first.set(key, i);
+    }
+  });
+}
+
+/** Refuses an item equal (by `key`) to an earlier one, on the later one's index. */
+function refuseRepeats<T>(
+  items: readonly T[],
+  key: (item: T) => string,
+  field: string,
+  what: string,
+  ctx: z.RefinementCtx,
+): void {
+  const seen = new Map<string, number>();
+  items.forEach((item, i) => {
+    const earlier = seen.get(key(item));
+    if (earlier !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: [field, i],
+        message: `the same ${what} as ${field}[${earlier}]: each is listed once`,
+      });
+    } else {
+      seen.set(key(item), i);
+    }
+  });
+}
+
 /** What `reconcile(scan)` takes: what one Scan covered and what it saw. */
 export const Scan = z
   .strictObject({
@@ -432,6 +488,9 @@ export const Scan = z
         });
       }
     });
+    refuseRepeats(scan.assets, assetKey, "assets", "Asset", ctx);
+    refuseRepeats(scan.rules, (rule) => rule, "rules", "Rule", ctx);
+    refuseSameProblemTwice(scan.observations, ctx);
     const covered = new Set(scan.assets.map(assetKey));
     scan.observations.forEach((observation, i) => {
       if (!covered.has(assetKey(observation.asset))) {
@@ -467,6 +526,7 @@ export const SpotRun = z
     observations: z.array(Observation),
   })
   .superRefine((run, ctx) => {
+    refuseSameProblemTwice(run.observations, ctx);
     run.observations.forEach((observation, i) => {
       if (!ruleBelongsTo(run.module, observation.rule_id)) {
         ctx.addIssue({

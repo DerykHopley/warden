@@ -19,7 +19,7 @@
         "fingerprint": { "type": "string", "minLength": 1, "maxLength": 4000 },
         "location": { "$ref": "#/$defs/Location" },
         "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
         "evidence": { "$ref": "#/$defs/Evidence" },
         "control": {
           "readOnly": true,
@@ -52,7 +52,10 @@
           ]
         },
         "accepted_reason": {
-          "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 2000 }, { "type": "null" }]
+          "anyOf": [
+            { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+            { "type": "null" }
+          ]
         },
         "accepted_until": {
           "anyOf": [

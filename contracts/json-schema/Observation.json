@@ -13,7 +13,7 @@
         },
         "location": { "$ref": "#/$defs/Location" },
         "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
         "evidence": { "$ref": "#/$defs/Evidence" }
       },
       "required": ["asset", "rule_id", "location", "severity", "title", "evidence"],

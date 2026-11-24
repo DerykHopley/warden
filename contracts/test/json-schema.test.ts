@@ -59,6 +59,28 @@ describe("the committed JSON Schema files", () => {
       expect(passes(mask, "A*K*I*A*B")).toBe(false);
     });
 
+    it("refuses a title, an accepted_reason and a decision's reason of only whitespace", async () => {
+      const rendered = await renderJsonSchemas();
+      const finding = JSON.parse(rendered.get("Finding.json")!).$defs.Finding.properties;
+      const observation = JSON.parse(rendered.get("Observation.json")!).$defs.Observation
+        .properties;
+      const reconcileCase = JSON.parse(rendered.get("ReconcileCase.json")!);
+      const decision = (
+        reconcileCase.$defs.ReconcileCase.properties.steps.items.oneOf as {
+          properties: Record<string, StringSchema & { const?: string }>;
+        }[]
+      ).find((step) => step.properties.reason)!.properties;
+      const acceptedReason = (finding.accepted_reason.anyOf as StringSchema[]).find(
+        (part) => (part as { type?: string }).type === "string",
+      )!;
+      for (const schema of [finding.title, observation.title, acceptedReason, decision.reason]) {
+        for (const blank of [" ", "\t", "\n", " \t\r\n "]) {
+          expect(passes(schema, blank), JSON.stringify(blank)).toBe(false);
+        }
+        expect(passes(schema, " x ")).toBe(true);
+      }
+    });
+
     it("refuses an absolute path and the other spellings the zod schema refuses", async () => {
       const file = JSON.parse((await renderJsonSchemas()).get("Finding.json")!);
       const fileLocation = (

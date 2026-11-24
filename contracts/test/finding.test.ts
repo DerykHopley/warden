@@ -39,6 +39,10 @@ describe("Finding", () => {
     expect(Finding.safeParse(finding({ location: noLine })).success).toBe(true);
   });
 
+  it.each([" ", "\t", "\n", " \t\r\n "])("refuses a title of only whitespace (%j)", (title) => {
+    expectRefused(Finding, finding({ title }), "title");
+  });
+
   it("refuses an unknown Asset kind", () => {
     expectRefused(Finding, finding({ asset: { kind: "container", ref: "web" } }), "kind");
   });
@@ -160,6 +164,13 @@ describe("Finding", () => {
         "accepted_until",
       );
     });
+
+    it.each([" ", "\t", "\n", " \t\r\n "])(
+      "refuses an accepted_reason of only whitespace (%j)",
+      (accepted_reason) => {
+        expectRefused(Finding, finding({ ...accepted, accepted_reason }), "accepted_reason");
+      },
+    );
 
     it("refuses accepted_reason or accepted_until on a Finding that isn't Accepted", () => {
       for (const status of ["open", "fixed", "false_positive"]) {

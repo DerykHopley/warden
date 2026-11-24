@@ -98,7 +98,12 @@
                     "required": ["kind", "id"],
                     "additionalProperties": false
                   },
-                  "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+                  "reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2000,
+                    "pattern": "\\S"
+                  },
                   "until": {
                     "type": "string",
                     "format": "date-time",
@@ -161,7 +166,7 @@
               "fingerprint": { "type": "string", "minLength": 1, "maxLength": 4000 },
               "location": { "$ref": "#/$defs/Location" },
               "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-              "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
               "evidence": { "$ref": "#/$defs/Evidence" },
               "control": {
                 "readOnly": true,
@@ -215,7 +220,7 @@
               },
               "accepted_reason": {
                 "anyOf": [
-                  { "type": "string", "minLength": 1, "maxLength": 2000 },
+                  { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
                   { "type": "null" }
                 ]
               },
@@ -283,7 +288,7 @@
         "fingerprint": { "type": "string", "minLength": 1, "maxLength": 4000 },
         "location": { "$ref": "#/$defs/Location" },
         "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
         "evidence": { "$ref": "#/$defs/Evidence" },
         "control": {
           "readOnly": true,
@@ -316,7 +321,10 @@
           ]
         },
         "accepted_reason": {
-          "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 2000 }, { "type": "null" }]
+          "anyOf": [
+            { "type": "string", "minLength": 1, "maxLength": 2000, "pattern": "\\S" },
+            { "type": "null" }
+          ]
         },
         "accepted_until": {
           "anyOf": [
@@ -537,7 +545,7 @@
         },
         "location": { "$ref": "#/$defs/Location" },
         "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
-        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "\\S" },
         "evidence": { "$ref": "#/$defs/Evidence" }
       },
       "required": ["asset", "rule_id", "location", "severity", "title", "evidence"],
