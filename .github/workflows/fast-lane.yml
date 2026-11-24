@@ -54,6 +54,20 @@ jobs:
         run: pnpm typecheck
       - name: vitest (contracts)
         run: pnpm --filter @warden/contracts test
+      - name: Turn off fsync on the test Postgres
+        # Every create and drop database forces a checkpoint; with fsync on, one took over 4 s and the tests that make
+        # databases queued behind it. This Postgres only lives for the job, so durability buys nothing. A service
+        # container can't take a command, and fsync reloads without a restart, so ALTER SYSTEM and a reload set it.
+        # The reload is asynchronous: the check waits up to 5 s for new sessions to see it, then fails the job.
+        run: |
+          psql() { docker exec ${{ job.services.postgres.id }} psql -U warden -d warden -v ON_ERROR_STOP=1 "$@"; }
+          psql -c "alter system set fsync = off" -c "select pg_reload_conf()"
+          for attempt in $(seq 1 10); do
+            [ "$(psql -tAc 'show fsync')" = off ] && exit 0
+            sleep 0.5
+          done
+          echo "fsync is still on after the reload" >&2
+          exit 1
       - name: vitest (server, against Postgres 17 with pgvector)
         run: pnpm --filter @warden/server test
       - name: vitest (dashboard)
