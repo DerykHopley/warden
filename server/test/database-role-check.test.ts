@@ -91,6 +91,41 @@ describe("checkDatabaseRole", () => {
   });
 });
 
+// As on Cloud SQL, where the admin role is made without BYPASSRLS: refused by its name. Under test names, as the
+// suite's warden_admin has BYPASSRLS and roles belong to the whole Postgres server.
+describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
+  const names = { migrate: "warden_migrate", admin: `${base}_admin` };
+  const admin = names.admin;
+  const member = `${base}_admin_member`;
+  beforeAll(async () => {
+    await superuser.query(`create role ${admin} login nobypassrls`);
+    await superuser.query(`create role ${member} login in role ${admin}`);
+  });
+  afterAll(async () => {
+    for (const role of [member, admin]) await superuser.query(`drop role if exists ${role}`);
+  });
+
+  async function checkNamed(role: string) {
+    const pool = createPool(silent, { user: role, database, max: 1 });
+    try {
+      return await checkDatabaseRole(pool, { names });
+    } finally {
+      await pool.end();
+    }
+  }
+
+  it("refuses the admin role by name", async () => {
+    expect(await checkNamed(admin)).toEqual({ role: admin, reason: `${admin} is the admin role` });
+  });
+
+  it("refuses a role that can become the admin role, naming it", async () => {
+    expect(await checkNamed(member)).toEqual({
+      role: member,
+      reason: `${member} can become ${admin}, which is the admin role`,
+    });
+  });
+});
+
 describe("guardDatabaseRole", () => {
   it("throws when the check doesn't answer in time, so the connection is closed", async () => {
     const refuse = vi.fn();
