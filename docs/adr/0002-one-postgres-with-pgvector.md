@@ -4,7 +4,8 @@ Warden keeps all its data in one Postgres database (its own Cloud SQL instance),
 Patch used ChromaDB, but only in its `rag/` search; Vouch already used Postgres and the LangGraph Postgres
 checkpointer. One database means one backup, one access model per Team, and joins between Findings, Verdicts and
 evidence. Agent traces stay in Langfuse Cloud; evidence for a flagged Agent session is copied into Postgres, since
-Langfuse's free tier keeps data only for a limited time. Large files stay in Cloud Storage.
+Langfuse's free tier keeps data only for a limited time. (Superseded in part by ADR 0007: Agent events now reach
+Warden through its own hook, not Langfuse.) Large files stay in Cloud Storage.
 
 ## Considered Options
 

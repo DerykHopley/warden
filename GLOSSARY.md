@@ -33,7 +33,7 @@ Scan's result for that Asset and Rule is dropped. The rest of it still counts.
 _Avoid_: check, audit
 
 **Spot run**:
-A run outside the Baseline, such as one Rule on demand, or the trace judge over Agent sessions. It can open
+A run outside the Baseline, such as one Rule on demand, or the Judge over Agent sessions. It can open
 Findings but never marks one Fixed.
 _Avoid_: check run, ad-hoc scan
 
@@ -134,33 +134,56 @@ _Avoid_: ruleset, policy (for this)
 **Policy**:
 A team's own written security rules, held in Vouch. A Policy shapes the Baseline at Audit-ready.
 
+**Catalogue**:
+A published, versioned set of Controls, such as VDA ISA2027 or ISO 27001:2022. A Team chooses the Catalogues it's
+assessed against. Verdicts and Gaps are per Catalogue.
+_Avoid_: standard, framework (for this)
+
 **Control**:
-A requirement in a compliance standard (ISO 27001, TISAX). A Finding names one only once Vouch maps it.
+A requirement in one Catalogue, such as ISA2027 1.3.3. A Finding names one only once Vouch maps it. Controls in
+different Catalogues, or different versions of one, aren't linked.
 
 **Agent session**:
-One run of an AI coding agent. It's the Asset when the judge flags agent behaviour. Its trace is the evidence.
-It never changes, so its Findings are never Fixed: they end as Accepted or False positive.
+One run of an AI coding agent, made of Agent events. It's the Asset when the Judge flags agent behaviour; the
+masked Agent events the Judge relied on are the evidence. It never changes, so its Findings are never Fixed: they
+end as Accepted or False positive. Every session leaves a record, judged or not, after its events are dropped. It
+names its Team and a pseudonymous developer, not a person, unless the Team turns names on.
 _Avoid_: trace (as the Asset)
+
+**Agent event**:
+One thing an agent did in an Agent session, such as a prompt, a tool call or its result, as Warden receives it.
+Kept only until the session is judged, and never longer than a few days.
+_Avoid_: trace, span, log
+
+**Judge**:
+The model that reads an Agent session's events and flags behaviour against the Baseline. A Judge run is a Spot run.
+_Avoid_: trace judge, LLM judge
 
 ## Levels
 
 **Level**:
-How much of Warden a team uses: Quick, Standard or Audit-ready. Each Level adds to the one before. A Team's
-Level is read from what it has set up, never set by hand, and it unlocks nothing.
+How much of Warden a team uses: Quick, Standard or Audit-ready. Each Level adds to the one before, and follows the
+business's phase, from its first safeguards to its first audit. A Team's Level is read from what it has set up,
+never set by hand, and it unlocks nothing.
 _Avoid_: mode, tier, plan
 
 **Quick**:
-The first Level: a repo scan against the default baseline, a top-5 fix list and one-click fix PRs. No decisions
-needed up front.
+The first Level: a repo scan against the Default Pack and a top-5 fix list. No decisions up front. A Team that
+grants write access gets one-click Fix PRs.
+
+**Fix PR**:
+A pull request Warden opens to fix a Finding. It needs the Team's write grant, and a person merges it.
 
 **Standard**:
-The second Level: adds the dashboard and the trace judge.
+The second Level: adds the dashboard, the agent hook and the Judge.
 
 **Audit-ready**:
 The third Level: adds a baseline taken from Vouch's policy, and sends evidence into Vouch.
 
 **Privacy tier**:
-How much of an agent session's content Guard may read and send to a model, from metadata only upwards.
+How much of an Agent session's content the hook sends to Warden: Metadata (tool names and outcomes), Details (adds
+commands, file paths and URLs) or Content (adds tool output and prompts). Set per Team; Details by default. Warden
+redacts what arrives, whatever the tier.
 _Avoid_: Level (for this)
 
 ## Testing
