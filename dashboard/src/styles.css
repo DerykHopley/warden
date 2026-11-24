@@ -87,6 +87,10 @@ body {
   box-shadow: var(--shadow);
 }
 
+.card > :first-child {
+  margin-top: 0;
+}
+
 h1 {
   margin: 0 0 16px;
   font-family: var(--font-head);
@@ -159,4 +163,168 @@ button:disabled {
 button[aria-busy="true"] {
   cursor: progress;
   opacity: 0.75;
+}
+
+/* The app header: Warden, the Team and Role, the page links, the Organization switcher and Sign out. Its content
+   lines up with the page's 1480px column and wraps onto a second line on a phone. */
+.app-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.app-header-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 8px 16px;
+}
+
+.brand {
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+.team {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-name {
+  font-weight: 600;
+}
+
+/* The Role is a word in a quiet pill, never a colour alone. */
+.role {
+  padding: 2px 10px;
+  background: var(--chip);
+  border-radius: 999px;
+  font-size: 0.875rem;
+}
+
+.page-links {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.page-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--fg);
+  text-decoration: none;
+  border-radius: var(--radius);
+}
+
+.page-links a:hover {
+  background: var(--chip);
+}
+
+/* The current page: accent, bold and underlined, so it isn't told by colour alone. */
+.page-links a[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
+}
+
+.page-links a:focus-visible,
+select:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.switcher {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+/* People: one row per person. Under 640px a row shows the name and Role only. */
+.people {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.people th,
+.people td {
+  padding: 12px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.people tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.people th {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+/* With pickers, the name and date line up with the middle of the 44px select on the row's first line. */
+.people.with-picker td:not(.role-cell) {
+  padding-top: 22px;
+}
+
+/* A long email or user id wraps rather than pushing the page sideways. */
+.people td:first-child {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 639px) {
+  .people .joined {
+    display: none;
+  }
+}
+
+/* The Role picker: the Button's states, on a select. */
+select {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+select:hover:enabled {
+  background: var(--chip);
+}
+
+select:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+select[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+/* A row's message after a change it couldn't make: words in a quiet box, under the Role. */
+.row-message {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--chip);
+  border-radius: var(--radius);
 }
