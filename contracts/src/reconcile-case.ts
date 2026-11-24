@@ -2,25 +2,20 @@
 // exist after. Slice 7's runner applies them to `reconcile`; the README states the format.
 import { z } from "zod";
 import {
-  Asset,
-  Control,
+  checkFindingFields,
   contractsRegistry,
   DateTime,
-  Evidence,
   Finding,
-  Location,
-  Module,
-  RuleId,
+  FindingFields,
+  Id,
   Scan,
-  Severity,
   SpotRun,
-  Status,
 } from "./finding.ts";
 
 /** Who made a change: a person or an agent. */
 export const Actor = z.strictObject({
   kind: z.enum(["person", "agent"]),
-  id: z.string().min(1).max(200),
+  id: Id,
 });
 export type Actor = z.infer<typeof Actor>;
 
@@ -30,11 +25,10 @@ const Label = z
   .regex(/^[a-z][a-z0-9_-]{0,63}$/, "a label is lower-case letters, digits, - and _");
 
 /** A Finding in a case: `{ id }` for one in `given`, `{ new: label }` for one a step created. */
-export const FindingRef = z.union([
-  z.strictObject({ id: z.string().min(1) }),
-  z.strictObject({ new: Label }),
-]);
+export const FindingRef = z.union([z.strictObject({ id: Id }), z.strictObject({ new: Label })]);
 export type FindingRef = z.infer<typeof FindingRef>;
+
+const sameRef = (a: FindingRef, b: FindingRef) => JSON.stringify(a) === JSON.stringify(b);
 
 /** Each label names the new Finding the Observation at that index opens. */
 const Labels = z.record(Label, z.int().min(0));
@@ -80,6 +74,13 @@ const DecisionStep = z
         message: "candidate is given exactly on a mark_moved",
       });
     }
+    if (step.candidate && sameRef(step.candidate, step.finding)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["candidate"],
+        message: "a Finding is merged into another Finding, never itself",
+      });
+    }
   });
 
 /** The daily job that reopens Accepted Findings whose expiry has passed. */
@@ -93,35 +94,39 @@ export const ReconcileStep = z.discriminatedUnion("step", [
 ]);
 export type ReconcileStep = z.infer<typeof ReconcileStep>;
 
-/** One Finding after the steps: a ref (`id` or `new`) plus only the fields the case checks. */
-export const ExpectedFinding = z
-  .strictObject({
-    id: z.string().min(1).optional(),
+/**
+ * One Finding after the steps: a ref (`id` or `new`) plus only the fields the case checks, each as a Finding has
+ * it, and held to the Finding rules among the fields given.
+ */
+export const ExpectedFinding = FindingFields.partial()
+  .extend({
     new: Label.optional(),
-    team: z.string().min(1).optional(),
-    asset: Asset.optional(),
-    module: Module.optional(),
-    rule_id: RuleId.optional(),
-    fingerprint: z.string().min(1).optional(),
-    location: Location.optional(),
-    severity: Severity.optional(),
-    title: z.string().min(1).optional(),
-    evidence: Evidence.optional(),
-    control: Control.optional(),
-    status: Status.optional(),
     /** Its candidates are refs, since new Findings' ids aren't known in advance. */
     unconfirmed_fix: z
       .strictObject({ candidates: z.array(FindingRef).min(1) })
       .nullable()
       .optional(),
-    accepted_reason: z.string().min(1).nullable().optional(),
-    accepted_until: DateTime.nullable().optional(),
-    first_seen_scan: z.string().min(1).optional(),
-    last_seen_scan: z.string().min(1).optional(),
     moved_to: FindingRef.nullable().optional(),
   })
-  .refine((expected) => (expected.id === undefined) !== (expected.new === undefined), {
-    message: "an expected Finding is named by exactly one of id (from given) or new (a label)",
+  .superRefine((expected, ctx) => {
+    if ((expected.id === undefined) === (expected.new === undefined)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [],
+        message: "an expected Finding is named by exactly one of id (from given) or new (a label)",
+      });
+      return;
+    }
+    checkFindingFields(expected, ctx);
+    const self: FindingRef =
+      expected.id !== undefined ? { id: expected.id } : { new: expected.new! };
+    if (expected.moved_to && sameRef(expected.moved_to, self)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["moved_to"],
+        message: "a Finding is merged into another Finding, never itself",
+      });
+    }
   });
 export type ExpectedFinding = z.infer<typeof ExpectedFinding>;
 
@@ -170,6 +175,7 @@ export const ReconcileCase = z
       if (step.step === "scan" || step.step === "spot_run") {
         const observations =
           step.step === "scan" ? step.scan.observations : step.spot_run.observations;
+        const labelled = new Map<number, string>();
         for (const [label, index] of Object.entries(step.labels ?? {})) {
           const path = ["steps", i, "labels", label];
           if (labels.has(label))
@@ -185,6 +191,15 @@ export const ReconcileCase = z
               message: `the step has no Observation at index ${index}`,
             });
           }
+          const other = labelled.get(index);
+          if (other !== undefined) {
+            ctx.addIssue({
+              code: "custom",
+              path,
+              message: `the Observation at index ${index} already has the label "${other}"`,
+            });
+          }
+          labelled.set(index, label);
           labels.add(label);
         }
       }

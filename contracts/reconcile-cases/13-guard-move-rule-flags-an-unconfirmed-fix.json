@@ -1,6 +1,6 @@
 {
   "name": "Guard's move rule: the same Rule on the same Asset at another path makes an Unconfirmed fix",
-  "rule": "Each module says what \"may have moved\" means: for Guard, the same Rule on the same Asset; for Patch, the same CVE under a different package or version.",
+  "rule": "Each module says what \"may have moved\" means: for Guard, the same Rule on the same Asset; for Patch, the same CVE under a different package.",
   "given": {
     "now": "2026-11-24T08:00:00Z",
     "findings": [

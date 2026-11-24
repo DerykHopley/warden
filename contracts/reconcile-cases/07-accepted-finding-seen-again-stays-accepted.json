@@ -1,6 +1,6 @@
 {
   "name": "An Accepted Finding that a Scan sees again stays Accepted",
-  "rule": "A person has accepted the risk, with a reason and an expiry date.",
+  "rule": "An Accepted Finding a Scan sees again stays Accepted until its expiry.",
   "given": {
     "now": "2026-11-24T08:00:00Z",
     "findings": [

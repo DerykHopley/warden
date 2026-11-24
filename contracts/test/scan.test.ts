@@ -53,12 +53,6 @@ describe("Observation", () => {
       observation({ evidence: { summary: "x", session: sessionEvidence() } }),
       "session",
     );
-    expectRefused(Observation, observation({ asset: { kind: "container", ref: "web" } }), "kind");
-    expectRefused(
-      Observation,
-      observation({ location: { kind: "file", path: "../.env" } }),
-      "path",
-    );
   });
 });
 

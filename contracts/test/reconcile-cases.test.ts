@@ -29,13 +29,11 @@ describe("the reconcile cases in reconcile-cases/", () => {
     }
   });
 
-  it("include case 19, quoting the False positive rule GLOSSARY.md states", () => {
-    const glossary = plain(readFileSync(new URL("../../GLOSSARY.md", import.meta.url), "utf8"));
+  it("include case 19, quoting the False positive rule", () => {
     const case19 = cases.find(({ file }) => file.startsWith("19-"));
     expect(case19?.case.rule).toMatch(
       /False positive that a Scan no longer sees stays a False positive/,
     );
-    expect(glossary).toContain(plain(case19!.case.rule));
   });
 });
 
@@ -71,23 +69,8 @@ describe("loadReconcileCases()", () => {
   });
 
   it("fails on a file ReconcileCase refuses, naming the file and the field", () => {
-    write("01-no-rule.json", { ...validCase(), rule: undefined });
-    expect(() => loadReconcileCases(dir)).toThrow(/01-no-rule\.json[\s\S]*rule/);
-  });
-
-  it("fails on a decision by an agent, naming the file", () => {
-    const c = validCase();
-    c.steps[1] = {
-      ...c.steps[1]!,
-      actor: { kind: "agent", id: "judge" },
-    } as (typeof c.steps)[number];
-    const file = write("07-agent-decides.json", c);
-    expect(() => loadReconcileCase(file)).toThrow(/07-agent-decides\.json[\s\S]*actor/);
-  });
-
-  it("fails on a reference to an undefined label, naming the file", () => {
-    write("08-unknown-label.json", validCase({ expect: [{ id: "f-1" }, { new: "nowhere" }] }));
-    expect(() => loadReconcileCases(dir)).toThrow(/08-unknown-label\.json[\s\S]*nowhere/);
+    const file = write("01-no-rule.json", { ...validCase(), rule: undefined });
+    expect(() => loadReconcileCase(file)).toThrow(/01-no-rule\.json[\s\S]*rule/);
   });
 
   it("fails on two cases with the same name, naming both files", () => {

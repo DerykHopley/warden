@@ -11,11 +11,11 @@ a Status. People change a Status only through named decisions, and agents only t
   throws, nothing is written. A scanner never mentions Status, Fingerprint or history.
 - **Underneath, a Scan is a plain value.** `reconcile(scan) → outcome`: one Scan in, one result out, and a retried
   Scan changes nothing. A background job can queue a Scan and hand it over whole.
-- **Spot runs use `report(...)`.** A Spot run (one Rule on demand, or the trace judge over Agent sessions) opens or
+- **Spot runs use `report(...)`.** A Spot run (one Rule on demand, or the Judge over Agent sessions) opens or
   updates Findings and never marks one Fixed. An Agent session never changes, so its Findings are never Fixed:
   they leave Open only as Accepted or False positive.
 - **Each module gives its "may have moved" rule.** Guard: same Rule on the same Asset. Patch: same CVE under a
-  different package or version.
+  different package.
 - **People decide through named calls** (accept, mark false positive, confirm fix, mark moved, reopen), each
   needing an Actor who is a person.
 - **The Finding format is a shared zod schema** (ADR 0004) and Findings come back read-only.

@@ -99,6 +99,46 @@ describe("Finding", () => {
     expect(Finding.safeParse(value).success).toBe(true);
   });
 
+  // One file, one Fingerprint: a path has a single spelling, so no two spellings name the same file.
+  it("refuses a backslash, a . part, an empty part or a trailing slash", () => {
+    for (const path of [
+      "config\\settings.json",
+      "./settings.json",
+      "config/./settings.json",
+      "config/.",
+      "config//settings.json",
+      "config/",
+    ]) {
+      expectRefused(Finding, finding({ location: { kind: "file", path } }), "path");
+    }
+  });
+
+  it("treats a drive letter as absolute only when a separator follows", () => {
+    const location = { kind: "file", path: "C:notes.txt" };
+    const value = finding({ location, fingerprint: "guard/agent-can-read-env|file:C:notes.txt" });
+    expect(Finding.safeParse(value).success).toBe(true);
+    expectRefused(Finding, finding({ location: { kind: "file", path: "c:/notes.txt" } }), "path");
+  });
+
+  it("refuses a | in a package, vulnerability or setting name, which the Fingerprint uses", () => {
+    const patch = findingOfEachAssetKind.product;
+    expectRefused(
+      Finding,
+      { ...patch, location: { ...dependencyLocation, package: "lodash|x" } },
+      "package",
+    );
+    expectRefused(
+      Finding,
+      { ...patch, location: { ...dependencyLocation, vulnerability: "CVE-2021-23337|x" } },
+      "vulnerability",
+    );
+    expectRefused(
+      Finding,
+      { ...findingOfEachAssetKind.device, location: { kind: "setting", name: "disk|encryption" } },
+      "name",
+    );
+  });
+
   describe("lifecycle fields", () => {
     const accepted = {
       status: "accepted",
@@ -156,6 +196,15 @@ describe("Finding", () => {
     it("refuses an unknown Status", () => {
       expectRefused(Finding, finding({ status: "resolved" }), "status");
     });
+
+    it("keeps moved_to only on a Fixed Finding, pointing at another Finding", () => {
+      expect(Finding.safeParse(finding({ status: "fixed", moved_to: "f-old" })).success).toBe(true);
+      for (const status of ["open", "false_positive"]) {
+        expectRefused(Finding, finding({ status, moved_to: "f-old" }), "moved_to");
+      }
+      expectRefused(Finding, finding({ ...accepted, moved_to: "f-old" }), "moved_to");
+      expectRefused(Finding, finding({ status: "fixed", moved_to: "f-1" }), "moved_to");
+    });
   });
 
   it("keeps session evidence only on an Agent session Finding", () => {
@@ -177,13 +226,27 @@ describe("Finding", () => {
     }
   });
 
-  it("comes back read-only", () => {
-    const parsed = Finding.parse(finding());
+  it("comes back read-only, all the way down", () => {
+    const parsed = Finding.parse(findingOfEachAssetKind.agent_session);
     expect(Object.isFrozen(parsed)).toBe(true);
-    // Never called: the assignment only has to fail `pnpm typecheck`.
+    expect(Object.isFrozen(parsed.asset)).toBe(true);
+    expect(Object.isFrozen(parsed.location)).toBe(true);
+    expect(Object.isFrozen(parsed.evidence)).toBe(true);
+    expect(Object.isFrozen(parsed.evidence.session)).toBe(true);
+    expect(Object.isFrozen(parsed.evidence.session?.events)).toBe(true);
+    expect(Object.isFrozen(parsed.evidence.session?.events[0])).toBe(true);
+    const fixed = Finding.parse(
+      finding({ status: "fixed", unconfirmed_fix: { candidates: ["f-2"] } }),
+    );
+    expect(Object.isFrozen(fixed.unconfirmed_fix?.candidates)).toBe(true);
+    // Never called: the assignments only have to fail `pnpm typecheck`.
     const assign = (value: Finding) => {
       // @ts-expect-error a Finding is read-only (ADR 0005)
       value.status = "fixed";
+      // @ts-expect-error so is its Asset
+      value.asset.ref = "elsewhere";
+      // @ts-expect-error and its kept events
+      value.evidence.session?.events.push(value.evidence.session.events[0]!);
     };
     expect(assign).toBeTypeOf("function");
   });

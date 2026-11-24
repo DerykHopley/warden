@@ -1,6 +1,6 @@
 {
   "name": "A Spot run that sees a Fixed Finding reopens it with its old id",
-  "rule": "A Spot run (one Rule on demand, or the trace judge over Agent sessions) opens or updates Findings and never marks one Fixed.",
+  "rule": "It can open Findings but never marks one Fixed.",
   "given": {
     "now": "2026-11-24T08:00:00Z",
     "findings": [

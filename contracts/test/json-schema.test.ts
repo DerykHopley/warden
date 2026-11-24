@@ -37,4 +37,54 @@ describe("the committed JSON Schema files", () => {
     expect(file.$defs.Finding.required).toContain("fingerprint");
     expect(file.$defs.Location.oneOf).toHaveLength(4);
   });
+
+  // A reader without zod (the Rust app) gets the mask and path rules from the patterns alone.
+  describe("publish the mask and path rules as patterns", () => {
+    type StringSchema = { pattern?: string; allOf?: { pattern?: string }[] };
+    /** Whether a string passes every pattern the schema publishes, as a JSON Schema validator reads them. */
+    const passes = (schema: StringSchema, value: string) => {
+      const patterns = [schema.pattern, ...(schema.allOf ?? []).map((part) => part.pattern)];
+      return patterns.every(
+        (pattern) => pattern === undefined || new RegExp(pattern, "u").test(value),
+      );
+    };
+
+    it("refuses an unmasked secret, and a mask showing 5 characters", async () => {
+      const file = JSON.parse((await renderJsonSchemas()).get("Finding.json")!);
+      const mask = file.$defs.SecretEvidence.properties.mask as StringSchema;
+      expect(passes(mask, "AKIA****************")).toBe(true);
+      expect(passes(mask, "****")).toBe(true);
+      expect(passes(mask, "AKIAABCDEFGHIJKLMNOP")).toBe(false);
+      expect(passes(mask, "AKIAB***")).toBe(false);
+      expect(passes(mask, "A*K*I*A*B")).toBe(false);
+    });
+
+    it("refuses an absolute path and the other spellings the zod schema refuses", async () => {
+      const file = JSON.parse((await renderJsonSchemas()).get("Finding.json")!);
+      const fileLocation = (
+        file.$defs.Location.oneOf as { properties: Record<string, StringSchema> }[]
+      )
+        .map((variant) => variant.properties)
+        .find((properties) => properties.path)!;
+      for (const ok of [".claude/settings.json", "config/..hidden/.env..bak", "C:notes.txt", "a"]) {
+        expect(passes(fileLocation.path!, ok), ok).toBe(true);
+      }
+      for (const bad of [
+        "/etc/passwd",
+        "C:/Users/dev/.env",
+        "c:\\Users",
+        "../outside",
+        "a/../b",
+        "./a",
+        "a/./b",
+        "a//b",
+        "a/",
+        "a\\b",
+        "..",
+        ".",
+      ]) {
+        expect(passes(fileLocation.path!, bad), bad).toBe(false);
+      }
+    });
+  });
 });

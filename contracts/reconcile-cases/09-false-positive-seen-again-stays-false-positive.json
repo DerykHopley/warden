@@ -1,6 +1,6 @@
 {
   "name": "A False positive that a Scan sees again stays a False positive",
-  "rule": "A person can reopen it, with a reason.",
+  "rule": "A False positive that a Scan no longer sees stays a False positive: only a person's reopen changes it.",
   "given": {
     "now": "2026-11-24T08:00:00Z",
     "findings": [

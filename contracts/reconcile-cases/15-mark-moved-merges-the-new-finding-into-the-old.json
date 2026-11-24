@@ -67,6 +67,6 @@
       "fingerprint": "guard/agent-can-read-env|file:.claude/settings.local.json",
       "moved_to": null
     },
-    { "new": "moved", "moved_to": { "id": "f-env" } }
+    { "new": "moved", "status": "fixed", "moved_to": { "id": "f-env" } }
   ]
 }

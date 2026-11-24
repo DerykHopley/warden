@@ -38,22 +38,35 @@
       "description": "One thing a Scan or Spot run saw."
     },
     "Asset": {
+      "readOnly": true,
+      "description": "The thing a Finding is about.",
       "type": "object",
       "properties": {
         "kind": { "type": "string", "enum": ["repo", "product", "device", "agent_session"] },
         "ref": { "type": "string", "minLength": 1, "maxLength": 2000 }
       },
       "required": ["kind", "ref"],
-      "additionalProperties": false,
-      "description": "The thing a Finding is about."
+      "additionalProperties": false
     },
     "Location": {
+      "readOnly": true,
+      "description": "Where on its Asset the problem sits.",
       "oneOf": [
         {
           "type": "object",
           "properties": {
             "kind": { "type": "string", "const": "file" },
-            "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "allOf": [
+                {
+                  "pattern": "^(?:[^/\\\\.][^/\\\\]*|\\.[^/\\\\.][^/\\\\]*|\\.\\.[^/\\\\]+)(?:\\/(?:[^/\\\\.][^/\\\\]*|\\.[^/\\\\.][^/\\\\]*|\\.\\.[^/\\\\]+))*$"
+                },
+                { "pattern": "^(?:[^A-Za-z]|[A-Za-z](?:[^:]|$)|[A-Za-z]:(?:[^/\\\\]|$))" }
+              ]
+            },
             "line": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
           },
           "required": ["kind", "path"],
@@ -63,9 +76,14 @@
           "type": "object",
           "properties": {
             "kind": { "type": "string", "const": "dependency" },
-            "package": { "type": "string", "minLength": 1, "maxLength": 214 },
+            "package": { "type": "string", "minLength": 1, "maxLength": 214, "pattern": "^[^|]+$" },
             "version": { "type": "string", "minLength": 1, "maxLength": 100 },
-            "vulnerability": { "type": "string", "minLength": 1, "maxLength": 100 }
+            "vulnerability": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[^|]+$"
+            }
           },
           "required": ["kind", "package", "version"],
           "additionalProperties": false
@@ -74,7 +92,7 @@
           "type": "object",
           "properties": {
             "kind": { "type": "string", "const": "setting" },
-            "name": { "type": "string", "minLength": 1, "maxLength": 200 }
+            "name": { "type": "string", "minLength": 1, "maxLength": 200, "pattern": "^[^|]+$" }
           },
           "required": ["kind", "name"],
           "additionalProperties": false
@@ -85,10 +103,11 @@
           "required": ["kind"],
           "additionalProperties": false
         }
-      ],
-      "description": "Where on its Asset the problem sits."
+      ]
     },
     "Evidence": {
+      "readOnly": true,
+      "description": "Why the module raised it. Never a secret's value or an event's raw content.",
       "type": "object",
       "properties": {
         "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
@@ -96,25 +115,43 @@
         "session": { "$ref": "#/$defs/SessionEvidence" }
       },
       "required": ["summary"],
-      "additionalProperties": false,
-      "description": "Why the module raised it. Never a secret's value or an event's raw content."
+      "additionalProperties": false
     },
     "SecretEvidence": {
+      "readOnly": true,
+      "description": "A secret's type, path, line and mask; never its value.",
       "type": "object",
       "properties": {
         "type": { "type": "string", "minLength": 1, "maxLength": 100 },
-        "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "allOf": [
+            {
+              "pattern": "^(?:[^/\\\\.][^/\\\\]*|\\.[^/\\\\.][^/\\\\]*|\\.\\.[^/\\\\]+)(?:\\/(?:[^/\\\\.][^/\\\\]*|\\.[^/\\\\.][^/\\\\]*|\\.\\.[^/\\\\]+))*$"
+            },
+            { "pattern": "^(?:[^A-Za-z]|[A-Za-z](?:[^:]|$)|[A-Za-z]:(?:[^/\\\\]|$))" }
+          ]
+        },
         "line": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
-        "mask": { "type": "string", "minLength": 1, "maxLength": 256 }
+        "mask": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "allOf": [{ "pattern": "\\*" }, { "pattern": "^\\**(?:[^*]\\**){0,4}$" }]
+        }
       },
       "required": ["type", "path", "line", "mask"],
-      "additionalProperties": false,
-      "description": "A secret's type, path, line and mask; never its value."
+      "additionalProperties": false
     },
     "SessionEvidence": {
+      "readOnly": true,
+      "description": "The masked events a Judge relied on, and a hash of all it read.",
       "type": "object",
       "properties": {
         "events": {
+          "readOnly": true,
           "minItems": 1,
           "maxItems": 50,
           "type": "array",
@@ -124,10 +161,11 @@
         "events_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
       },
       "required": ["events", "events_read", "events_hash"],
-      "additionalProperties": false,
-      "description": "The masked events a Judge relied on, and a hash of all it read."
+      "additionalProperties": false
     },
     "MaskedAgentEvent": {
+      "readOnly": true,
+      "description": "One redacted Agent event the Judge relied on.",
       "type": "object",
       "properties": {
         "seq": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
@@ -141,8 +179,7 @@
         "text": { "type": "string", "maxLength": 4000 }
       },
       "required": ["seq", "at", "name", "text"],
-      "additionalProperties": false,
-      "description": "One redacted Agent event the Judge relied on."
+      "additionalProperties": false
     }
   }
 }

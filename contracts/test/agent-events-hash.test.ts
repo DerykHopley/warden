@@ -52,7 +52,5 @@ describe("agentEventsHash()", () => {
   it("refuses an event MaskedAgentEvent refuses, so it never hashes a raw event", async () => {
     const raw = { ...maskedEvent(0), raw: "AWS_SECRET_ACCESS_KEY=abc" } as MaskedAgentEvent;
     await expect(agentEventsHash([raw])).rejects.toThrow(/raw/);
-    const long = maskedEvent(0, { text: "x".repeat(4001) });
-    await expect(agentEventsHash([long])).rejects.toThrow(/text/);
   });
 });

@@ -26,7 +26,8 @@ the Fingerprint and the events hash from this page, reads the JSON Schema files,
 - **Lifecycle:** `status` (`open`, `fixed`, `accepted`, `false_positive`), `unconfirmed_fix` (null, or
   `{ candidates }`: ids of new Findings that may be this one moved; only on a Fixed Finding), `accepted_reason` and
   `accepted_until` (set exactly when the status is `accepted`), `first_seen_scan` and `last_seen_scan` (the id of a
-  Scan or Spot run), `moved_to` (null, or the id of the Finding this one was merged into).
+  Scan or Spot run), `moved_to` (null, or the id of another Finding this one was merged into; this one is then
+  `fixed`).
 
 A `Location` is one of:
 
@@ -37,9 +38,11 @@ A `Location` is one of:
 | `setting`    | `name`                                                    | a Device                        |
 | `session`    | none                                                      | an Agent session, and only that |
 
-A `path` is relative to its Asset: an absolute path, or one with a `..` part, is refused. A `session` Location goes
-only with an `agent_session` Asset, and an `agent_session` Asset only with a `session` Location. A parsed Finding
-is read-only (frozen, and a readonly type).
+A `path` is relative to its Asset and has one spelling, so one file has one Fingerprint: parts joined by `/`, none
+of them empty, `.` or `..`, no `\`, and no drive letter followed by `/` (`C:/…`). So `/etc`, `../x`, `./x`,
+`a/./b`, `a//b`, `a/` and `a\b` are all refused. A `session` Location goes only with an `agent_session` Asset, and
+an `agent_session` Asset only with a `session` Location. A parsed Finding is read-only all the way down: it and
+every object and array in it are frozen, and its type is readonly.
 
 ## The Fingerprint rule
 
@@ -55,7 +58,10 @@ is read-only (frozen, and a readonly type).
 - A file's `line` is left out, so a problem that moves lines in the same file is the same Finding.
 - A package's `version` is left out, so an upgrade isn't a new problem.
 - The Asset is never part of it, so the same problem on two Assets has the same Fingerprint.
-- A Rule id holds no `|` or whitespace. `Finding` refuses a `fingerprint` that isn't the one this rule gives.
+- No part holds a `|`: a Rule id (which also holds no whitespace), a `package`, a `vulnerability` and a setting's
+  `name` with one are refused, so a Fingerprint splits back into its parts one way.
+- A `path` has one spelling (above), so the same file can't give two Fingerprints.
+- `Finding` refuses a `fingerprint` that isn't the one this rule gives.
 
 ## Evidence
 
@@ -160,15 +166,21 @@ step may refer only to a label an earlier step created; an unknown id or label f
 
 **`expect`** lists every Finding the Team has after the steps, each named by a ref (`id` or `new`) plus only the
 fields the case checks. A field that holds a Finding id there (`moved_to`, `unconfirmed_fix.candidates`) holds a ref
-instead, since new Findings' ids aren't known in advance. A Finding not listed must not exist.
+instead, since new Findings' ids aren't known in advance. A Finding not listed must not exist. The Finding rules
+hold among the fields an expectation gives (a Rule of its module, the Location and Asset pairing, the Fingerprint,
+the lifecycle fields against `status`); a rule whose fields are left out isn't checked.
+
+A label names one new Finding, so a step gives each Observation at most one label, and a `mark_moved` never names
+the same Finding as both `finding` and `candidate`.
 
 ## JSON Schema
 
 `json-schema/` holds one JSON Schema (draft 2020-12) per published schema: `Finding`, `Observation`, `Scan`,
 `SpotRun` and `ReconcileCase`, written by zod's `z.toJSONSchema` and formatted with prettier. They're committed so
-code outside Node can read them. They carry the shapes (fields, types, bounds, strictness); the rules between
-fields (the Location and Asset pairing, the lifecycle fields, a Scan's coverage, the Fingerprint) are enforced by
-the zod schemas and stated on this page.
+code outside Node can read them. They carry the shapes (fields, types, bounds, strictness) and every rule on a
+single string as a `pattern`, the mask and path rules included; none uses lookaround, so Rust's `regex` crate runs
+them as written. The rules between fields (the Location and Asset pairing, the lifecycle fields, a Scan's
+coverage, the Fingerprint) are enforced by the zod schemas and stated on this page.
 
 After changing a schema, regenerate them:
 
