@@ -1,4 +1,5 @@
-// Clearing out test databases a killed run left behind, without touching one a run still uses.
+// Clearing out test databases a killed run left behind, without touching one a run still uses or one a person made.
+import { randomBytes } from "node:crypto";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
@@ -24,12 +25,15 @@ async function exists(name: string) {
   return rows.length === 1;
 }
 
+// Fixture names are new on each run, so two runs on one Postgres don't make the same database.
+const suffix = () => randomBytes(6).toString("hex");
+
 describe("dropStaleTestDatabases", () => {
   it("drops test databases over an hour old, and ones named before names carried a time", async () => {
     const twoHoursAgo = Math.floor(Date.now() / 1000) - 2 * 3600;
-    const stale = `warden_test_${twoHoursAgo}_0000000000aa`;
-    const untimed = "warden_test_0000000000bb";
-    const recent = `warden_test_${Math.floor(Date.now() / 1000)}_0000000000cc`;
+    const stale = `warden_test_${twoHoursAgo}_${suffix()}`;
+    const untimed = `warden_test_${suffix()}`;
+    const recent = `warden_test_${Math.floor(Date.now() / 1000)}_${suffix()}`;
     for (const name of [stale, untimed, recent]) await makeDatabase(name);
 
     await dropStaleTestDatabases();
@@ -37,5 +41,20 @@ describe("dropStaleTestDatabases", () => {
     expect(await exists(stale)).toBe(false);
     expect(await exists(untimed)).toBe(false);
     expect(await exists(recent)).toBe(true);
+  });
+
+  it("keeps a database with the prefix that the tests didn't name", async () => {
+    const twoHoursAgo = Math.floor(Date.now() / 1000) - 2 * 3600;
+    // Someone's own databases: no time, a time with their own words, and a suffix that isn't the tests' 12 hex.
+    const theirs = [
+      `warden_test_mine_${suffix()}`,
+      `warden_test_${twoHoursAgo}_mine_${suffix()}`,
+      `warden_test_${twoHoursAgo}_${suffix()}ff`,
+    ];
+    for (const name of theirs) await makeDatabase(name);
+
+    await dropStaleTestDatabases();
+
+    for (const name of theirs) expect(await exists(name), name).toBe(true);
   });
 });
