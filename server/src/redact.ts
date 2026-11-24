@@ -10,7 +10,13 @@ const PATTERNS: [RegExp, string][] = [
   [/\bsk_(test|live)_[A-Za-z0-9]+/g, `sk_$1_${MASK}`],
   [/\bBearer\s+[^\s"',;]+/gi, `Bearer ${MASK}`],
   [/\beyJ[\w-]*\.[\w-]*\.[\w-]*/g, MASK],
-  [/(postgres(?:ql)?:\/\/[^:/@\s]*:)[^@\s]*@/gi, `$1${MASK}@`],
+  // A URL's password runs to the URL's last @, so a password holding an @ (with a /, ? or # after it, too) is masked
+  // whole. The URL ends at whitespace, a quote or the next URL's `://`, and the password never runs into a second
+  // URL. An @ in the path or query (`?user=a@b`) would mask the host too: over-masking, never a leak.
+  [
+    /(postgres(?:ql)?:\/\/[^:/@\s]*:)(?:(?!:\/\/)\S)*?@(?=(?:(?!:\/\/)[^@\s"'])*(?:[\s"']|:\/\/|$))/gi,
+    `$1${MASK}@`,
+  ],
   [/([?&][^=&#\s?]+=)[^&#\s"']*/g, `$1${MASK}`],
 ];
 

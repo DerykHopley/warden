@@ -91,6 +91,75 @@ describe("findUnprotectedTables", () => {
     ]);
   });
 
+  it("names a table whose Team policy has a permissive policy beside it that doesn't read the Team", async () => {
+    const { pool } = await migratedDatabase();
+    const teamTable = (name: string) => `
+      create table ${name} (team_id text);
+      alter table ${name} enable row level security;
+      alter table ${name} force row level security;
+      create policy ${name}_team on ${name} for all
+        using (team_id = current_setting('warden.team_id', true))
+        with check (team_id = current_setting('warden.team_id', true));
+    `;
+    await pool.query(`
+      ${teamTable("app_reads_any")}
+      create policy app_reads_any_all on app_reads_any for select to warden_app using (true);
+
+      ${teamTable("everyone_any")}
+      create policy everyone_any_all on everyone_any for all using (true);
+
+      ${teamTable("restricted_further")}
+      create policy restricted_further_more on restricted_further as restrictive for select to warden_app
+        using (true);
+
+      ${teamTable("admin_reads_any")}
+      create policy admin_reads_any_all on admin_reads_any for select to warden_admin using (true);
+    `);
+
+    expect(await findUnprotectedTables(pool)).toEqual(["app_reads_any", "everyone_any"]);
+  });
+
+  it("names a table in a schema other than public, schema-qualified", async () => {
+    const { name, pool } = await migratedDatabase();
+    const superuser = createPool(
+      createLogger(() => {}),
+      { database: name, max: 1 },
+    );
+    cleanups.push(() => superuser.end());
+    await superuser.query(`
+      create schema other;
+      create table other.rows (team_id text);
+      alter table other.rows enable row level security;
+      alter table other.rows force row level security;
+      create policy other_rows_team on other.rows for all
+        using (team_id = current_setting('warden.team_id', true))
+        with check (team_id = current_setting('warden.team_id', true));
+    `);
+
+    expect(await findUnprotectedTables(pool)).toEqual(["other.rows"]);
+  });
+
+  it("leaves warden_app usage on no schema but public, pg_catalog and information_schema", async () => {
+    const { name } = await migratedDatabase();
+    const superuser = createPool(
+      createLogger(() => {}),
+      { database: name, max: 1 },
+    );
+    cleanups.push(() => superuser.end());
+    await superuser.query("create schema other; create table other.rows (team_id text)");
+    const app = poolAs("warden_app", name);
+    cleanups.push(() => app.end());
+
+    const { rows } = await app.query<{ nspname: string }>(`
+      select nspname from pg_namespace
+       where has_schema_privilege(oid, 'usage')
+         and nspname !~ '^pg_(toast_)?temp_'
+       order by nspname
+    `);
+
+    expect(rows.map((row) => row.nspname)).toEqual(["information_schema", "pg_catalog", "public"]);
+  });
+
   it("names a materialized view and a foreign table, which row-level security doesn't cover", async () => {
     const { name, pool } = await migratedDatabase();
     // A foreign data wrapper needs the superuser (the PG* user).

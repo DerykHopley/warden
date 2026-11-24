@@ -82,6 +82,17 @@ function SignedInPage(props: { onSessionEnded: () => void; onSignOut: () => void
             Warden's server isn't answering
           </p>
         )}
+        {me !== "checking" && me.kind === "team-not-opened" && (
+          <p className="notice" role="alert">
+            Your Team's Admin must open Warden first. Try again once they have.
+          </p>
+        )}
+        {me !== "checking" && me.kind === "too-many-attempts" && (
+          <p className="notice" role="alert">
+            Too many sign-in attempts. Try again in{" "}
+            {me.retryAfter === null ? "a minute" : `${me.retryAfter} seconds`}.
+          </p>
+        )}
         <div className="actions">
           {notAnswering && (
             <button type="button" className="primary" onClick={retry}>

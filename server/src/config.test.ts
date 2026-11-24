@@ -59,4 +59,41 @@ describe("loadConfig", () => {
   it("refuses a PORT that isn't a port number", () => {
     expect(() => loadConfig({ ...env, PORT: "http" })).toThrow(/PORT/);
   });
+
+  it("knows it's on Cloud Run when K_SERVICE is set, and not otherwise", () => {
+    const onCloudRun = {
+      ...env,
+      K_SERVICE: "warden",
+      CLERK_AUTHORIZED_PARTIES: "https://w.example",
+    };
+    expect(loadConfig(onCloudRun).behindCloudRun).toBe(true);
+    expect(loadConfig(env).behindCloudRun).toBe(false);
+    expect(loadConfig({ ...env, K_SERVICE: "" }).behindCloudRun).toBe(false);
+  });
+
+  it("reads the dashboard origins Clerk tokens may be made for, comma-separated", () => {
+    const config = loadConfig({
+      ...env,
+      CLERK_AUTHORIZED_PARTIES: "https://warden.example, https://preview.warden.example",
+    });
+    expect(config.clerk.authorizedParties).toEqual([
+      "https://warden.example",
+      "https://preview.warden.example",
+    ]);
+  });
+
+  it("defaults the origins to the local dashboard's, off Cloud Run only", () => {
+    expect(loadConfig(env).clerk.authorizedParties).toEqual(["http://localhost:5173"]);
+    expect(() => loadConfig({ ...env, K_SERVICE: "warden" })).toThrow(/CLERK_AUTHORIZED_PARTIES/);
+  });
+
+  it.each([
+    ["a path", "https://warden.example/app"],
+    ["no scheme", "warden.example"],
+    ["an empty entry", "https://warden.example,,"],
+  ])("refuses an origin with %s", (_name, value) => {
+    expect(() => loadConfig({ ...env, CLERK_AUTHORIZED_PARTIES: value })).toThrow(
+      /CLERK_AUTHORIZED_PARTIES/,
+    );
+  });
 });

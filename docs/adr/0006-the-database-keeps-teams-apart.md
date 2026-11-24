@@ -34,8 +34,14 @@ Spike code and cases: the capstone archive, `architecture/spikes/team-scoping/`.
 
 ## Consequences
 
-- **Check on real Cloud SQL in the walking skeleton** that the app role is bound by the policies (unverified:
-  how the `cloudsqlsuperuser` setup affects table owners).
+- **On Cloud SQL, what's known before the first deploy:**
+  - Where the user running `roles` can't grant `BYPASSRLS` (Cloud SQL's `postgres`), `warden_admin` is made
+    without it, with a warning. There it's bound by the policies like `warden_app`, so `withAdmin` can't cross
+    Teams.
+  - `checkDatabaseRole` refuses `warden_admin` and `warden_migrate`, and any role that can become them, by name, at
+    start and on each new connection (#16, #17).
+  - What the first deploy must still show live: `warden_app`'s attributes on Cloud SQL, and `warden_admin`'s
+    outcome, which #24 records.
 - An empty result can mean "no Team set" as well as "nothing there": tests assert the Team is set, and `withTeam`
   refuses an empty Team.
 - The local-first desktop app holds one Team, so it doesn't need the policies; it keeps the same `withTeam` shape.

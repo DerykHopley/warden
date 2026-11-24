@@ -34,6 +34,28 @@ describe("redact", () => {
     );
   });
 
+  it("masks a Postgres URL's whole password when it holds an @", () => {
+    expect(redact("postgres://u:p@ss@host/db")).toBe("postgres://u:***@host/db");
+    expect(redact("postgres://u:a@b@c@host:5432/db?x")).toBe("postgres://u:***@host:5432/db?x");
+  });
+
+  it.each([
+    ["/", "postgres://u:p@ss/x@host/db"],
+    ["?", "postgres://u:p@ss?1@host/db"],
+    ["#", "postgres://u:p@ss#1@host/db"],
+  ])("masks a whole password whose @ is followed by %s", (_char, url) => {
+    expect(redact(url)).toBe("postgres://u:***@host/db");
+  });
+
+  it("masks both passwords in a string with two Postgres URLs, keeping each user and host", () => {
+    expect(
+      redact("from postgres://alice:p@ss@db1/a to postgresql://bob:x@y@db2:5432/b failed"),
+    ).toBe("from postgres://alice:***@db1/a to postgresql://bob:***@db2:5432/b failed");
+    expect(redact("postgres://alice:p@db1/a,postgres://bob:q@ss@db2/b")).toBe(
+      "postgres://alice:***@db1/a,postgres://bob:***@db2/b",
+    );
+  });
+
   it("drops the Authorization, Cookie and Set-Cookie headers wherever they sit", () => {
     const out = text({
       headers: {
