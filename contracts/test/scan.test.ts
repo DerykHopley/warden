@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { Observation, Scan, SpotRun } from "../src/index.ts";
 import {
   agentSession,
+  dependencyLocation,
+  fileLocation,
   observation,
   product,
   repo,
@@ -10,7 +12,7 @@ import {
   sessionObservation,
   spotRun,
 } from "./fixtures.ts";
-import { expectRefused } from "./refused.ts";
+import { expectIssueAt, expectRefused } from "./refused.ts";
 
 describe("Observation", () => {
   it("parses what a Scan saw", () => {
@@ -98,7 +100,84 @@ describe("Scan", () => {
     expectRefused(Scan, scan({ assets: [], observations: [] }), "assets");
     expectRefused(Scan, scan({ rules: [], observations: [] }), "rules");
   });
+
+  it("refuses the same Asset twice in what it covered, on the second one", () => {
+    const api = { kind: "repo", ref: "https://github.com/example/api" };
+    expectIssueAt(Scan, scan({ assets: [repo, api, { ...repo }] }), ["assets", 2]);
+    expect(Scan.safeParse(scan({ assets: [repo, api] })).success).toBe(true);
+    // The same ref under another kind is another Asset.
+    expect(
+      Scan.safeParse(scan({ assets: [repo, { kind: "product", ref: repo.ref }] })).success,
+    ).toBe(true);
+  });
+
+  it("refuses the same Rule twice in what it covered, on the second one", () => {
+    expectIssueAt(Scan, scan({ rules: ["guard/agent-can-read-env", "guard/agent-can-read-env"] }), [
+      "rules",
+      1,
+    ]);
+  });
+
+  describe("refuses one problem reported twice: the same Asset and Fingerprint", () => {
+    it.each(sameProblemTwice)("$name", ({ first, second }) => {
+      const value = scan({ rules: rulesOf(first, second), observations: [first, second] });
+      expectIssueAt(Scan, value, ["observations", 1], /observations\[0\]/);
+    });
+
+    it("accepts the same Fingerprint on two Assets, and two Fingerprints on one Asset", () => {
+      const api = { kind: "repo", ref: "https://github.com/example/api" };
+      expect(
+        Scan.safeParse(
+          scan({
+            assets: [repo, api],
+            observations: [observation(), observation({ asset: api })],
+          }),
+        ).success,
+      ).toBe(true);
+      expect(
+        Scan.safeParse(
+          scan({
+            observations: [
+              observation(),
+              observation({ location: { kind: "file", path: ".claude/settings.local.json" } }),
+            ],
+          }),
+        ).success,
+      ).toBe(true);
+    });
+  });
 });
+
+/** Two Observations of one problem: the same Asset and Fingerprint, differing only where the Fingerprint doesn't look. */
+const sameProblemTwice = [
+  {
+    name: "a different line",
+    first: observation(),
+    second: observation({ location: { ...fileLocation, line: 9 } }),
+  },
+  {
+    name: "a different severity and evidence",
+    first: observation(),
+    second: observation({ severity: "low", evidence: { summary: "seen again" } }),
+  },
+  {
+    name: "a different dependency version",
+    first: observation({
+      asset: repo,
+      rule_id: "guard/agent-added-dependency",
+      location: { ...dependencyLocation, version: "4.17.20" },
+    }),
+    second: observation({
+      asset: repo,
+      rule_id: "guard/agent-added-dependency",
+      location: { ...dependencyLocation, version: "4.17.21" },
+    }),
+  },
+];
+
+const rulesOf = (...observations: { rule_id: string }[]) => [
+  ...new Set(observations.map((o) => o.rule_id)),
+];
 
 describe("SpotRun", () => {
   it("has no assets or rules", () => {
@@ -125,5 +204,36 @@ describe("SpotRun", () => {
       spotRun({ observations: [observation({ rule_id: "patch/known-vulnerability" })] }),
       "rule_id",
     );
+  });
+
+  describe("refuses one problem reported twice: the same Asset and Fingerprint", () => {
+    it.each(sameProblemTwice)("$name", ({ first, second }) => {
+      expectIssueAt(
+        SpotRun,
+        spotRun({ observations: [first, second] }),
+        ["observations", 1],
+        /observations\[0\]/,
+      );
+    });
+
+    it("accepts the same Fingerprint on two Assets", () => {
+      const onApi = observation({ asset: { kind: "repo", ref: "https://github.com/example/api" } });
+      expect(SpotRun.safeParse(spotRun({ observations: [observation(), onApi] })).success).toBe(
+        true,
+      );
+    });
+  });
+});
+
+describe("Title", () => {
+  it.each([" ", "   ", "\t", "\n", " \t\r\n "])(
+    "refuses a title of only whitespace (%j) on an Observation",
+    (title) => {
+      expectRefused(Observation, observation({ title }), "title");
+    },
+  );
+
+  it("accepts a title with a character among the spaces", () => {
+    expect(Observation.safeParse(observation({ title: "  x  " })).success).toBe(true);
   });
 });

@@ -8,8 +8,10 @@ import {
   Finding,
   FindingFields,
   Id,
+  problemKey,
   Scan,
   SpotRun,
+  Text,
 } from "./finding.ts";
 
 /** Who made a change: a person or an agent. */
@@ -46,7 +48,7 @@ const DecisionStep = z
     decision: z.enum(["accept", "mark_false_positive", "confirm_fix", "mark_moved", "reopen"]),
     finding: FindingRef,
     actor: Actor,
-    reason: z.string().min(1).max(2000),
+    reason: Text(2000),
     /** `accept` only: when the acceptance expires. */
     until: DateTime.optional(),
     /** `mark_moved` only: the new Finding that merges into `finding`. */
@@ -154,6 +156,10 @@ export const ReconcileCase = z
     });
 
     const labels = new Set<string>();
+    /** The label already on each problem (module, Asset and Fingerprint): one problem opens at most one Finding. */
+    const labelOfProblem = new Map<string, string>();
+    /** The problem each label's Finding holds now: a mark_moved moves it. */
+    const problemOfLabel = new Map<string, string>();
     const checkRef = (ref: FindingRef, path: (string | number)[]) => {
       if ("id" in ref && !ids.has(ref.id)) {
         ctx.addIssue({ code: "custom", path, message: `no Finding "${ref.id}" is given` });
@@ -171,10 +177,23 @@ export const ReconcileCase = z
       if (step.step === "decision") {
         checkRef(step.finding, ["steps", i, "finding"]);
         if (step.candidate) checkRef(step.candidate, ["steps", i, "candidate"]);
+        // Mark moved: the old Finding leaves its problem, which is free again, and takes the candidate's.
+        if (step.decision === "mark_moved" && step.candidate && "new" in step.finding) {
+          const old = step.finding.new;
+          const left = problemOfLabel.get(old);
+          if (left !== undefined && labelOfProblem.get(left) === old) labelOfProblem.delete(left);
+          problemOfLabel.delete(old);
+          const taken =
+            "new" in step.candidate ? problemOfLabel.get(step.candidate.new) : undefined;
+          if (taken !== undefined) {
+            labelOfProblem.set(taken, old);
+            problemOfLabel.set(old, taken);
+          }
+        }
       }
       if (step.step === "scan" || step.step === "spot_run") {
-        const observations =
-          step.step === "scan" ? step.scan.observations : step.spot_run.observations;
+        const run = step.step === "scan" ? step.scan : step.spot_run;
+        const observations = run.observations;
         const labelled = new Map<number, string>();
         for (const [label, index] of Object.entries(step.labels ?? {})) {
           const path = ["steps", i, "labels", label];
@@ -198,6 +217,20 @@ export const ReconcileCase = z
               path,
               message: `the Observation at index ${index} already has the label "${other}"`,
             });
+          }
+          const observation = observations[index];
+          if (observation) {
+            const problem = JSON.stringify([run.module, problemKey(observation)]);
+            const earlier = labelOfProblem.get(problem);
+            if (earlier !== undefined && earlier !== other) {
+              ctx.addIssue({
+                code: "custom",
+                path,
+                message: `the label "${earlier}" already names this problem (Asset, module and Fingerprint): one problem opens at most one Finding`,
+              });
+            }
+            labelOfProblem.set(problem, earlier ?? label);
+            if (earlier === undefined) problemOfLabel.set(label, problem);
           }
           labelled.set(index, label);
           labels.add(label);

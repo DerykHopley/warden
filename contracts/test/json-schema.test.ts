@@ -38,6 +38,15 @@ describe("the committed JSON Schema files", () => {
     expect(file.$defs.Location.oneOf).toHaveLength(4);
   });
 
+  /** Whitespace beyond ASCII that the not-blank rule counts as blank: no-break space, ideographic space, BOM. */
+  const UNICODE_BLANKS = [
+    [0xa0],
+    [0x3000],
+    [0xfeff],
+    [0x2028],
+    [0x20, 0xa0, 0xfeff, 0x2009, 0x20],
+  ].map((points) => String.fromCodePoint(...points));
+
   // A reader without zod (the Rust app) gets the mask and path rules from the patterns alone.
   describe("publish the mask and path rules as patterns", () => {
     type StringSchema = { pattern?: string; allOf?: { pattern?: string }[] };
@@ -57,6 +66,38 @@ describe("the committed JSON Schema files", () => {
       expect(passes(mask, "AKIAABCDEFGHIJKLMNOP")).toBe(false);
       expect(passes(mask, "AKIAB***")).toBe(false);
       expect(passes(mask, "A*K*I*A*B")).toBe(false);
+    });
+
+    it("refuses a title, an accepted_reason and a decision's reason of only whitespace", async () => {
+      const rendered = await renderJsonSchemas();
+      const finding = JSON.parse(rendered.get("Finding.json")!).$defs.Finding.properties;
+      const observation = JSON.parse(rendered.get("Observation.json")!).$defs.Observation
+        .properties;
+      const reconcileCase = JSON.parse(rendered.get("ReconcileCase.json")!);
+      const decision = (
+        reconcileCase.$defs.ReconcileCase.properties.steps.items.oneOf as {
+          properties: Record<string, StringSchema & { const?: string }>;
+        }[]
+      ).find((step) => step.properties.reason)!.properties;
+      const acceptedReason = (finding.accepted_reason.anyOf as StringSchema[]).find(
+        (part) => (part as { type?: string }).type === "string",
+      )!;
+      for (const schema of [finding.title, observation.title, acceptedReason, decision.reason]) {
+        for (const blank of [" ", "\t", "\n", " \t\r\n ", ...UNICODE_BLANKS]) {
+          expect(passes(schema, blank), JSON.stringify(blank)).toBe(false);
+        }
+        expect(passes(schema, String.fromCodePoint(0xa0, 0xe9, 0xfeff))).toBe(true);
+        expect(passes(schema, " x ")).toBe(true);
+      }
+    });
+
+    // `\s` differs between regex engines (Rust's leaves out U+FEFF), so the rule names its characters.
+    it("spell the not-blank rule as an explicit character class, not \\s", async () => {
+      const observation = JSON.parse((await renderJsonSchemas()).get("Observation.json")!).$defs
+        .Observation.properties;
+      const pattern = (observation.title as StringSchema).pattern!;
+      expect(pattern).toMatch(/^\[\^.*\]$/);
+      expect(pattern).not.toMatch(/\\[sS]/);
     });
 
     it("refuses an absolute path and the other spellings the zod schema refuses", async () => {
