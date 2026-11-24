@@ -8,8 +8,10 @@
 // - warden_admin bypasses row-level security, for the few deliberate cross-Team tasks. Only a user that has
 //   BYPASSRLS can grant it, so on Cloud SQL warden_admin is made without it, with a warning.
 //
-// Passwords: WARDEN_APP_PASSWORD and WARDEN_MIGRATE_PASSWORD, when set, become warden_app's and warden_migrate's.
-// Unset, no password is set: compose and CI use trust auth. No password reaches a log line or an error.
+// Passwords: WARDEN_APP_PASSWORD and WARDEN_MIGRATE_PASSWORD, when set (printable ASCII), become warden_app's and
+// warden_migrate's, sent as SCRAM-SHA-256 verifiers made here. Unset, no password is set, and one already set is left:
+// compose and CI use trust auth. No password reaches Postgres, a log line or an error.
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import pg from "pg";
 import { createPool, DATABASE_ROLE_NAMES, type DatabaseRoleNames } from "./database.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -40,6 +42,8 @@ export async function createRoles(
   pool: RolesConnection,
   { names = DATABASE_ROLE_NAMES, passwords = {}, logger = createLogger() }: CreateRolesOptions = {},
 ): Promise<void> {
+  checkPassword(names.app, passwords.app);
+  checkPassword(names.migrate, passwords.migrate);
   const {
     rows: [runner],
   } = await pool.query<{ name: string; superuser: boolean; bypassrls: boolean }>(
@@ -71,14 +75,8 @@ export async function createRoles(
   await ensureRole(pool, names.admin, adminAttributes);
 
   const [migrate, app, admin] = [names.migrate, names.app, names.admin].map(pg.escapeIdentifier);
-  // warden_app may not become the other two, however it got a membership.
-  const { rowCount } = await pool.query(
-    `select from pg_auth_members m
-      where m.member = (select oid from pg_roles where rolname = $1)
-        and m.roleid in (select oid from pg_roles where rolname = any($2))`,
-    [names.app, [names.migrate, names.admin]],
-  );
-  if (rowCount) await pool.query(`revoke ${migrate}, ${admin} from ${app}`);
+  // warden_app may not become any other role, however it got a membership.
+  await revokeMemberships(pool, names.app);
 
   // A user that isn't a superuser hands the schema over only when it can `set role` to the new owner, and grants on
   // the schema afterwards only with the owner's privileges: it gives itself both, through membership.
@@ -126,20 +124,78 @@ function isPgError(error: unknown, ...codes: string[]): boolean {
   return error instanceof pg.DatabaseError && codes.includes(error.code ?? "");
 }
 
-/** Sets `name`'s password when one is given. A failure is rethrown as a new error naming the role, with Postgres's
- * message masked and no cause: Postgres can quote the statement's text back (a syntax error names the token), and
- * the statement holds the password. */
+/** Postgres's own iteration count for a SCRAM-SHA-256 verifier (`scram_iterations`' default). */
+const SCRAM_ITERATIONS = 4096;
+
+/**
+ * A SCRAM-SHA-256 verifier for `password`, in the form Postgres stores (RFC 5802, RFC 7677). Given one in ALTER
+ * ROLE, Postgres stores it as it is, so the password itself never reaches the server or its logs. The password is
+ * printable ASCII, so the SASLprep that Postgres and pg apply to it changes nothing.
+ */
+export function scramVerifier(password: string, salt = randomBytes(16)): string {
+  const salted = pbkdf2Sync(password, salt, SCRAM_ITERATIONS, 32, "sha256");
+  const storedKey = createHash("sha256")
+    .update(createHmac("sha256", salted).update("Client Key").digest())
+    .digest();
+  const serverKey = createHmac("sha256", salted).update("Server Key").digest();
+  return `SCRAM-SHA-256$${SCRAM_ITERATIONS}:${salt.toString("base64")}$${storedKey.toString("base64")}:${serverKey.toString("base64")}`;
+}
+
+const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
+
+/** Refuses a password that isn't printable ASCII, before anything is changed. */
+function checkPassword(name: string, password: string | undefined) {
+  if (password && !PRINTABLE_ASCII.test(password)) {
+    throw new Error(`${name}'s password must be printable ASCII`);
+  }
+}
+
+/** Sets `name`'s password when one is given, as a SCRAM verifier. A failure is rethrown naming the role and
+ * Postgres's code only, with no cause: Postgres can quote a statement's text back. */
 async function setPassword(pool: RolesConnection, name: string, password: string | undefined) {
   if (!password) return;
   try {
     await pool.query(
-      `alter role ${pg.escapeIdentifier(name)} password ${pg.escapeLiteral(password)}`,
+      `alter role ${pg.escapeIdentifier(name)} password ${pg.escapeLiteral(scramVerifier(password))}`,
     );
   } catch (error) {
-    const reason =
-      error instanceof Error ? error.message.replaceAll(password, "***") : "unknown error";
-    // eslint-disable-next-line preserve-caught-error -- the cause could quote the password back
-    throw new Error(`setting ${name}'s password failed: ${reason}`);
+    const code = error instanceof pg.DatabaseError ? error.code : undefined;
+    // eslint-disable-next-line preserve-caught-error -- the cause could quote the statement back
+    throw new Error(`setting ${name}'s password failed (SQLSTATE ${code ?? "unknown"})`);
+  }
+}
+
+/** Every role `role` is a member of, and who granted each membership. */
+async function membershipsOf(pool: RolesConnection, role: string) {
+  const { rows } = await pool.query<{ role: string; grantor: string }>(
+    `select r.rolname as role, g.rolname as grantor
+       from pg_auth_members m
+       join pg_roles r on r.oid = m.roleid
+       join pg_roles g on g.oid = m.grantor
+      where m.member = (select oid from pg_roles where rolname = $1)
+      order by r.rolname`,
+    [role],
+  );
+  return rows;
+}
+
+/** Revokes every membership the app role holds, each as granted by its grantor (a plain revoke only takes back the
+ * running user's own grant), then checks none is left: a revoke the running user may not make throws here, naming
+ * the role. */
+async function revokeMemberships(pool: RolesConnection, app: string) {
+  let refused: unknown;
+  for (const { role, grantor } of await membershipsOf(pool, app)) {
+    const [granted, by] = [role, grantor].map(pg.escapeIdentifier);
+    await pool
+      .query(`revoke ${granted} from ${pg.escapeIdentifier(app)} granted by ${by}`)
+      .catch((error: unknown) => (refused ??= error));
+  }
+  const left = await membershipsOf(pool, app);
+  if (left.length > 0) {
+    const roles = [...new Set(left.map((row) => row.role))].join(", ");
+    throw new Error(`${app} is still a member of ${roles}; revoke it as a superuser`, {
+      cause: refused,
+    });
   }
 }
 
