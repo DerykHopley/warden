@@ -9,7 +9,8 @@ function contentSecurityPolicy(frontendApiHost: string): string {
     `script-src 'self' ${clerk} https://challenges.cloudflare.com https://*.protect.clerk.com`,
     // The protection hosts use ports other than 443, and a source with no port matches 443 only.
     `connect-src 'self' ${clerk} https://*.protect.clerk.com:*`,
-    "img-src 'self' https://img.clerk.com",
+    // Clerk's sign-in shows a data: SVG. An image can't run script.
+    "img-src 'self' https://img.clerk.com data:",
     "worker-src 'self' blob:",
     // Clerk generates its CSS at run time.
     "style-src 'self' 'unsafe-inline'",
