@@ -22,7 +22,7 @@ const STALE_AFTER_SECONDS = 3600;
 /** A new database with the roles in place and warden_migrate as its owner, and a way to drop it. `connection`
  * reaches the superuser; left empty, the PG* variables do. */
 export async function createTestDatabase(connection: pg.PoolConfig = {}) {
-  const name = `${PREFIX}${Math.floor(Date.now() / 1000)}_${randomBytes(6).toString("hex")}`;
+  const name = testName();
   const drop = () => dropDatabase(connection, name);
   await withPool(connection, (pool) => pool.query(`create database ${name}`));
   try {
@@ -59,15 +59,40 @@ export async function createMigratedTestDatabase(connection: pg.PoolConfig = {})
   return database;
 }
 
-/** The names createTestDatabase makes: when, in seconds, then 12 hex digits. */
+/** A name for a test database or test role: the prefix, when, in seconds, then 12 hex digits. A test role may add a
+ * `_word` suffix. */
+export function testName(): string {
+  return `${PREFIX}${Math.floor(Date.now() / 1000)}_${randomBytes(6).toString("hex")}`;
+}
+
+/** The names testName makes. */
 const TIMED_NAME = /^warden_test_(\d+)_[0-9a-f]{12}$/;
+/** The test roles' names: testName's, with an optional suffix. */
+const TIMED_ROLE = /^warden_test_(\d+)_[0-9a-f]{12}(_[a-z]+)?$/;
 /** The names it made before names carried a time. */
 const UNTIMED_NAME = /^warden_test_[0-9a-f]{12}$/;
 
-/** Drops test databases made over an hour ago, or named before names carried a time: what a killed run left. A run
- * in progress (the suite takes seconds, CI stops at 10 minutes) keeps its own, and a database with the prefix that
- * createTestDatabase didn't name is someone's own and stays. */
+/** Drops test databases made over an hour ago, or named before names carried a time, then test roles made over an
+ * hour ago: what a killed run left. A run in progress (the suite takes seconds, CI stops at 10 minutes) keeps its
+ * own, and a database or role with the prefix that testName didn't name is someone's own and stays. */
 export async function dropStaleTestDatabases(connection: pg.PoolConfig = {}): Promise<void> {
+  await dropStale(connection);
+  // Roles after databases: a stale role's objects were in a stale database.
+  const { rows } = await withPool(connection, (pool) =>
+    pool.query<{ rolname: string }>("select rolname from pg_roles where starts_with(rolname, $1)", [
+      PREFIX,
+    ]),
+  );
+  const now = Math.floor(Date.now() / 1000);
+  for (const { rolname } of rows) {
+    const made = TIMED_ROLE.exec(rolname)?.[1];
+    if (made !== undefined && now - Number(made) > STALE_AFTER_SECONDS) {
+      await withPool(connection, (pool) => pool.query(`drop role if exists "${rolname}"`));
+    }
+  }
+}
+
+async function dropStale(connection: pg.PoolConfig) {
   const { rows } = await withPool(connection, (pool) =>
     pool.query<{ datname: string }>(
       "select datname from pg_database where starts_with(datname, $1)",
