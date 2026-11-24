@@ -23,8 +23,8 @@ import pg from "pg";
 import {
   createPool,
   DATABASE_ROLE_NAMES,
+  DATABASE_ROLE_SETS,
   databaseRoleNames,
-  PREVIEW_DATABASE_ROLE_NAMES,
   type DatabaseRoleNames,
 } from "./database.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -58,7 +58,7 @@ export async function createRoles(
   pool: RolesConnection,
   {
     names = DATABASE_ROLE_NAMES,
-    sets = [DATABASE_ROLE_NAMES, PREVIEW_DATABASE_ROLE_NAMES],
+    sets = DATABASE_ROLE_SETS,
     passwords = {},
     logger = createLogger(),
   }: CreateRolesOptions = {},

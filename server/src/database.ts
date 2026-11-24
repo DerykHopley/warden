@@ -37,6 +37,12 @@ export const PREVIEW_DATABASE_ROLE_NAMES = {
   admin: "warden_preview_admin",
 } as const satisfies DatabaseRoleNames;
 
+/** Every role set: the live one and the preview one. */
+export const DATABASE_ROLE_SETS: readonly DatabaseRoleNames[] = [
+  DATABASE_ROLE_NAMES,
+  PREVIEW_DATABASE_ROLE_NAMES,
+];
+
 /** The role set WARDEN_DATABASE_ROLES picks: unset, empty or `live` the live set, `preview` the preview set. Any
  * other value throws, naming the variable and the two allowed values. */
 export function databaseRoleNames(env: Record<string, string | undefined>): DatabaseRoleNames {
@@ -118,7 +124,7 @@ export async function checkDatabaseRole(
   client: Pick<pg.ClientBase, "query">,
   {
     timeoutMs = ROLE_CHECK_TIMEOUT_MS,
-    names: sets = [DATABASE_ROLE_NAMES, PREVIEW_DATABASE_ROLE_NAMES],
+    names: sets = DATABASE_ROLE_SETS,
   }: CheckDatabaseRoleOptions = {},
 ): Promise<DatabaseRoleRefusal | undefined> {
   let timer: NodeJS.Timeout | undefined;

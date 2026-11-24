@@ -25,14 +25,6 @@ async function ownership(database: string) {
   }
 }
 
-/** The error a promise rejects with, or undefined. */
-function rejection(promise: Promise<unknown>): Promise<unknown> {
-  return promise.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-}
-
 describe("the roles script on a database of the other role set", () => {
   // Two sets under test names (roles belong to the whole Postgres server, so a developer's own roles are never
   // touched), each with a database of its own, made as the setup script makes them.
@@ -69,15 +61,11 @@ describe("the roles script on a database of the other role set", () => {
       const before = await ownership(database);
       const onDatabase = createPool(silent, { database, max: 1 });
       try {
-        const error = await rejection(
-          createRoles(onDatabase, { names: running, sets, logger: silent }),
-        );
+        const run = createRoles(onDatabase, { names: running, sets, logger: silent });
 
-        expect(error).toBeInstanceOf(Error);
-        const { message } = error as Error;
-        expect(message).toContain(database);
-        expect(message).toContain(running.migrate);
-        expect(message).toContain(owning.migrate);
+        await expect(run).rejects.toThrow(database);
+        await expect(run).rejects.toThrow(running.migrate);
+        await expect(run).rejects.toThrow(owning.migrate);
       } finally {
         await onDatabase.end();
       }
@@ -87,12 +75,13 @@ describe("the roles script on a database of the other role set", () => {
 });
 
 describe("pnpm roles for the preview set on a database the live set owns", () => {
-  // The ticket's steps with the real set names, on the suite's database: the live set's, set up and migrated. A new
-  // database here would slow every drop's checkpoint, which the suite's other files wait on; and the refusal comes
-  // before any change, so the suite's database is left as it was.
+  // The wiring only: the script passes the real sets, so the preview set is refused on the suite's database (the live
+  // set's). The tests above prove the check itself.
   const database = inject("testDatabase");
 
-  it("exits non-zero naming the database and both sets, and changes nothing", async () => {
+  it("exits non-zero naming warden_preview_migrate", async () => {
+    // A safety net, not part of the proof: the suite's database is shared, so a run that got through would take it
+    // over under every other file. This says so here, rather than as their failures.
     const before = await ownership(database);
 
     const { code, output } = await runInServer([process.execPath, "src/roles.ts"], {
@@ -101,9 +90,8 @@ describe("pnpm roles for the preview set on a database the live set owns", () =>
     });
 
     expect(code, output).not.toBe(0);
-    expect(output).toContain(database);
-    expect(output).toContain("warden_migrate");
-    expect(output).toContain("warden_preview_migrate");
+    // "roles ready" lists warden_preview_migrate too: the refusal's own wording.
+    expect(output).toContain("not warden_preview_migrate");
     expect(await ownership(database)).toEqual(before);
   });
 });
