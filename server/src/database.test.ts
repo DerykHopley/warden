@@ -3,6 +3,7 @@
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 import {
+  checkDatabaseRole,
   connectionFailure,
   DatabaseRoleCheckError,
   databaseRoleNames,
@@ -51,6 +52,27 @@ describe("connectionFailure", () => {
   it("calls anything else other", () => {
     expect(connectionFailure(postgresError("53300", "too many connections"))).toBe("other");
     expect(connectionFailure(new Error("something new"))).toBe("other");
+  });
+});
+
+describe("checkDatabaseRole's names", () => {
+  it("refuses the migration and admin roles of both sets when it's given none", async () => {
+    const params: unknown[] = [];
+    const client = {
+      query: async (_text: string, values: unknown[]) => {
+        params.push(values);
+        return { rows: [] };
+      },
+    } as unknown as pg.ClientBase;
+
+    expect(await checkDatabaseRole(client)).toBeUndefined();
+
+    expect(params).toEqual([
+      [
+        ["warden_migrate", "warden_preview_migrate"],
+        ["warden_admin", "warden_preview_admin"],
+      ],
+    ]);
   });
 });
 

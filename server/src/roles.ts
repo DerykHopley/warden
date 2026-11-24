@@ -121,10 +121,11 @@ async function restrictConnect(pool: RolesConnection, roles: string[]) {
   } = await pool.query<{ database: string }>("select current_database() as database");
   if (!current) throw new Error("the database running roles has no name");
   const database = pg.escapeIdentifier(current.database);
-  await pool.query(`revoke connect on database ${database} from public`);
+  // Granted first: run again on a database in use, the roles never lose CONNECT between the two statements.
   await pool.query(
     `grant connect on database ${database} to ${roles.map(pg.escapeIdentifier).join(", ")}`,
   );
+  await pool.query(`revoke connect on database ${database} from public`);
   const { rows } = await pool.query<{ open: boolean }>(
     "select has_database_privilege('public', current_database(), 'CONNECT') as open",
   );

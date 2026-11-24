@@ -120,28 +120,23 @@ describe("findUnprotectedTables", () => {
     expect(await findUnprotectedTables(pool)).toEqual(["app_reads_any", "everyone_any"]);
   });
 
-  // A policy for a role the app role is a member of applies to the app role. Shown on warden_preview_app, an app role
-  // the check knows, as giving warden_app a membership would change it for every other test file running at once.
+  // A policy for a role the app role is a member of applies to the app role. Shown on a test-named app role given to
+  // the check, as giving warden_app a membership would change it for every other test file running at once.
   it("counts a policy for a role an app role is a member of, directly or indirectly", async () => {
-    const { pool } = await migratedDatabase();
     const superuser = createPool(silent, { max: 1 });
-    cleanups.splice(0, 0, () => superuser.end());
     const base = testName();
-    const [readers, middle] = [`${base}_readers`, `${base}_middle`];
-    const { rows } = await superuser.query(
-      "select from pg_roles where rolname = 'warden_preview_app'",
-    );
-    const made = rows.length === 0;
-    if (made) await superuser.query("create role warden_preview_app login");
-    await superuser.query(`create role ${readers} nologin; create role ${middle} nologin`);
-    await superuser.query(`grant ${readers} to ${middle}; grant ${middle} to warden_preview_app`);
-    // Run after the database is dropped (cleanups run in reverse), so no policy still names them, and before the
-    // superuser's pool ends.
-    cleanups.splice(1, 0, async () => {
-      await superuser.query(`revoke ${middle} from warden_preview_app`);
-      await superuser.query(`drop role if exists ${middle}; drop role if exists ${readers}`);
-      if (made) await superuser.query("drop role if exists warden_preview_app");
+    const [app, middle, readers] = [`${base}_app`, `${base}_middle`, `${base}_readers`];
+    // Pushed before the database's cleanups, so it runs after them (cleanups run in reverse): no policy still names
+    // the roles when they're dropped.
+    cleanups.push(async () => {
+      await superuser.query(`drop role if exists ${app}; drop role if exists ${middle}`);
+      await superuser.query(`drop role if exists ${readers}`);
+      await superuser.end();
     });
+    await superuser.query(`create role ${app} login; create role ${middle} nologin`);
+    await superuser.query(`create role ${readers} nologin`);
+    await superuser.query(`grant ${readers} to ${middle}; grant ${middle} to ${app}`);
+    const { pool } = await migratedDatabase();
     const teamTable = (table: string) => `
       create table ${table} (team_id text);
       alter table ${table} enable row level security;
@@ -159,7 +154,7 @@ describe("findUnprotectedTables", () => {
         using (true);
     `);
 
-    expect(await findUnprotectedTables(pool)).toEqual([
+    expect(await findUnprotectedTables(pool, [app])).toEqual([
       "direct_group_reads_any",
       "indirect_group_reads_any",
     ]);

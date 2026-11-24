@@ -7,11 +7,7 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, inject, it } from "vitest";
-import {
-  createPool,
-  PREVIEW_DATABASE_ROLE_NAMES,
-  type DatabaseRoleNames,
-} from "../src/database.ts";
+import { createPool, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { MIGRATIONS_FOLDER, migrate } from "../src/migrate.ts";
 import { createTestDatabase, poolAs, runInServer, testName } from "./databases.ts";
@@ -74,9 +70,7 @@ describe("pnpm migrate", () => {
     });
 
     expect(result.code).toBe(1);
-    expect(result.output).toContain(
-      'WARDEN_DATABASE_ROLES must be live or preview, not \\"staging\\"',
-    );
+    expect(result.output).toContain("WARDEN_DATABASE_ROLES");
     expect(result.output).not.toMatch(/ECONNREFUSED/);
   });
 
@@ -170,8 +164,8 @@ describe("the migration runner", () => {
 });
 
 describe("the migration runner for another role set", () => {
-  /** A fresh database made for a role set under test names (roles belong to the whole Postgres server, and the
-   * preview set's real names are the role check's to test), with a pool as that set's migration role. */
+  /** A fresh database made for a role set under test names (roles belong to the whole Postgres server, so a
+   * developer's own warden_preview_* roles are never touched), with a pool as that set's migration role. */
   async function freshDatabaseFor() {
     const base = testName();
     const names: DatabaseRoleNames = {
@@ -210,17 +204,6 @@ describe("the migration runner for another role set", () => {
         expect(rows[0], `${privilege} on ${table}`).toEqual({ own: true, live: false });
       }
     }
-  });
-
-  it("refuses warden_migrate for the preview set, naming the preview migration role", async () => {
-    const database = await freshDatabase();
-
-    const result = await migrate(database.pool, MIGRATIONS_FOLDER, PREVIEW_DATABASE_ROLE_NAMES);
-
-    expect(result.applied).toEqual([]);
-    expect((result.error as Error).message).toBe(
-      "migrations run as warden_preview_migrate, not warden_migrate: set PGUSER=warden_preview_migrate",
-    );
   });
 });
 

@@ -1,9 +1,10 @@
 // The migration runner: plain SQL files in server/migrations, applied in file-name order by Kysely's Migrator, as
-// the role set's migration role (PGUSER=warden_migrate; any other user is refused). Forwards only: no down migrations.
+// the role set's migration role: PGUSER is that role (warden_migrate for the live set), and any other user is
+// refused. Forwards only: no down migrations.
 //
 // WARDEN_DATABASE_ROLES picks the set (see databaseRoleNames): live by default, or `preview` for the warden_preview
-// database, where the run is as warden_preview_migrate and each whole-word warden_migrate, warden_app and
-// warden_admin in a file's text becomes the preview set's name. The files themselves name the live roles.
+// database, where PGUSER is warden_preview_migrate and each whole-word warden_migrate, warden_app and warden_admin
+// in a file's text becomes the preview set's name (withRoleNames). The files themselves name the live roles.
 //
 // Row-level security on Team-owned tables is forced, so it binds warden_migrate too (ADR 0006): a data migration
 // over Team-owned rows sees and writes none unless it sets `warden.team_id`, once per Team (see 0002_teams.sql).
@@ -27,20 +28,26 @@ import { createLogger, type Logger } from "./log.ts";
 /** Where the migrations live, here and in the image. */
 export const MIGRATIONS_FOLDER = fileURLToPath(new URL("../migrations", import.meta.url));
 
-/** The live role names, each as a whole word: not part of a longer identifier (`warden_app_x`, `x_warden_app`). */
-const LIVE_ROLE_NAME = new RegExp(
-  `(?<![\\w$])(${Object.values(DATABASE_ROLE_NAMES).join("|")})(?![\\w$])`,
-  "g",
+/** A double-quoted identifier (on one line, `""` for a quote inside it), or a live role name written unquoted, in
+ * any case, as a whole word: not part of a longer identifier (`warden_app_x`, `x_warden_app`). */
+const ROLE_NAME_OR_QUOTED = new RegExp(
+  `"(?:[^"\\n]|"")*"|(?<![\\w$])(?:${Object.values(DATABASE_ROLE_NAMES).join("|")})(?![\\w$])`,
+  "gi",
 );
 
-/** A migration's text with each whole-word live role name swapped for `names`' own. */
+/** A migration's text with each live role name swapped for `names`' own, as Postgres reads names: an unquoted one in
+ * any case (Postgres folds it to lower case), a double-quoted one only when it's exactly the live name. */
 export function withRoleNames(text: string, names: DatabaseRoleNames): string {
-  const swap: Record<string, string> = {
-    [DATABASE_ROLE_NAMES.migrate]: names.migrate,
-    [DATABASE_ROLE_NAMES.app]: names.app,
-    [DATABASE_ROLE_NAMES.admin]: names.admin,
-  };
-  return text.replace(LIVE_ROLE_NAME, (name) => swap[name] ?? name);
+  const swap = new Map<string, string>([
+    [DATABASE_ROLE_NAMES.migrate, names.migrate],
+    [DATABASE_ROLE_NAMES.app, names.app],
+    [DATABASE_ROLE_NAMES.admin, names.admin],
+  ]);
+  return text.replace(ROLE_NAME_OR_QUOTED, (found) => {
+    if (!found.startsWith('"')) return swap.get(found.toLowerCase()) ?? found;
+    const swapped = swap.get(found.slice(1, -1));
+    return swapped === undefined ? found : `"${swapped}"`;
+  });
 }
 
 /** Each `.sql` file in `folder` as one migration, named by its file name without `.sql`, naming `names`' roles. */

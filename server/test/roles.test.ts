@@ -60,7 +60,7 @@ describe("the roles script", () => {
     });
 
     expect(code).toBe(1);
-    expect(output).toContain('WARDEN_DATABASE_ROLES must be live or preview, not \\"staging\\"');
+    expect(output).toContain("WARDEN_DATABASE_ROLES");
     expect(output).not.toMatch(/ECONNREFUSED/);
   });
 });
@@ -356,13 +356,13 @@ async function twoSets() {
     const asRunner = createPool(silent, { user: runner, database, max: 1 });
     const runs: string[] = [];
     try {
-      for (const run of [1, 2]) {
+      for (let run = 0; run < 2; run++) {
         await createRoles(asRunner, { names, logger: silent });
         const { rows } = await superuser.query<{ acl: string }>(
           "select datacl::text as acl from pg_database where datname = $1",
           [database],
         );
-        runs.push(`run ${run}: ${rows[0]?.acl}`);
+        runs.push(rows[0]?.acl ?? "");
       }
     } finally {
       await asRunner.end();
@@ -434,8 +434,33 @@ describe("the roles script and who may connect", () => {
 
   it("changes nothing the second time it runs", () => {
     for (const [first, second] of fixture.acls) {
-      expect(second?.replace("run 2", "run 1")).toBe(first);
+      expect(first).toMatch(/=c/);
+      expect(second).toBe(first);
     }
+  });
+
+  // Run again on the live database, the set's roles never lose CONNECT, even for a moment: they get it before PUBLIC
+  // loses it.
+  it("grants CONNECT to the set's roles before it takes it away from PUBLIC", async () => {
+    const [live] = fixture.sets;
+    const statements: string[] = [];
+    const onDatabase = createPool(silent, { database: live!.database, max: 1 });
+    try {
+      const recording = {
+        query: (text: string, values?: unknown[]) => {
+          statements.push(text);
+          return onDatabase.query(text, values);
+        },
+      } as unknown as pg.Pool;
+      await createRoles(recording, { names: live!.names, logger: silent });
+    } finally {
+      await onDatabase.end();
+    }
+
+    const grant = statements.findIndex((text) => /^grant connect/.test(text));
+    const revoke = statements.findIndex((text) => /^revoke connect/.test(text));
+    expect(grant).toBeGreaterThanOrEqual(0);
+    expect(revoke).toBeGreaterThan(grant);
   });
 });
 

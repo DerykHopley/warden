@@ -108,17 +108,19 @@ select * from (
 export type CheckDatabaseRoleOptions = {
   /** How long the check waits for its answer. */
   timeoutMs?: number;
-  /** The migration and admin roles, refused by name; tests pass their own. Unset, both sets' are refused: the live
-   * set's and the preview set's. */
-  names?: Pick<DatabaseRoleNames, "migrate" | "admin">;
+  /** The role sets whose migration and admin roles are refused by name: the live set's and the preview set's unless
+   * given; tests pass their own. */
+  names?: readonly Pick<DatabaseRoleNames, "migrate" | "admin">[];
 };
 
 /** Whether the role `client` connected as can get around row-level security, and why; undefined when it can't. */
 export async function checkDatabaseRole(
   client: Pick<pg.ClientBase, "query">,
-  { timeoutMs = ROLE_CHECK_TIMEOUT_MS, names }: CheckDatabaseRoleOptions = {},
+  {
+    timeoutMs = ROLE_CHECK_TIMEOUT_MS,
+    names: sets = [DATABASE_ROLE_NAMES, PREVIEW_DATABASE_ROLE_NAMES],
+  }: CheckDatabaseRoleOptions = {},
 ): Promise<DatabaseRoleRefusal | undefined> {
-  const sets = names ? [names] : [DATABASE_ROLE_NAMES, PREVIEW_DATABASE_ROLE_NAMES];
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(

@@ -1,7 +1,8 @@
 // The server's database role. checkDatabaseRole, with a pool per role, refuses a role that can get around row-level
-// security: a superuser, a role with BYPASSRLS, the owner of a table, of the schema or of the database, the migration
-// role (of either set), or one that can become any of them. Then the real process: refusing warden_admin, serving as warden_app, a
-// database that answers only after the server started, and a login the database refuses.
+// security: a superuser, a role with BYPASSRLS, the owner of a table, of the schema or of the database, the
+// migration or admin role of either set, a member of any role, or one that can become any of them. Then the real
+// process: refusing warden_admin, serving as warden_app, a database that answers only after the server started, and
+// a login the database refuses.
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type pg from "pg";
 import { checkDatabaseRole, createPool, guardDatabaseRole } from "../src/database.ts";
@@ -109,7 +110,7 @@ describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
   async function checkNamed(role: string) {
     const pool = createPool(silent, { user: role, database: plainDatabase, max: 1 });
     try {
-      return await checkDatabaseRole(pool, { names });
+      return await checkDatabaseRole(pool, { names: [names] });
     } finally {
       await pool.end();
     }
@@ -127,26 +128,32 @@ describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
   });
 });
 
-// The preview set's migration and admin roles, by their real names (the check's default names are what's under
-// test), each owning nothing and without BYPASSRLS, as on Cloud SQL. On the plain database: the suite's own refuses
-// a login by any role outside the live set.
-describe("checkDatabaseRole, with the preview set's migration and admin roles", () => {
-  const previewRoles = ["warden_preview_migrate", "warden_preview_admin"];
+// Two sets given, as the default gives the live and the preview set (database.test.ts): the second set's migration
+// and admin roles are refused by name too, each owning nothing and without BYPASSRLS, as on Cloud SQL. Under test
+// names, so a developer's own warden_preview_* roles on the same server are never touched. On the plain database:
+// the suite's own refuses a login by any role outside the live set.
+describe("checkDatabaseRole, given a second set's migration and admin roles", () => {
+  const second = { migrate: `${base}_secondmigrate`, admin: `${base}_secondadmin` };
   beforeAll(async () => {
-    for (const role of previewRoles) {
-      await superuser.query(`drop role if exists ${role}`);
+    for (const role of Object.values(second)) {
       await superuser.query(`create role ${role} login nobypassrls`);
     }
   });
   afterAll(async () => {
-    for (const role of previewRoles) await superuser.query(`drop role if exists ${role}`);
+    for (const role of Object.values(second)) await superuser.query(`drop role if exists ${role}`);
   });
 
   it.each([
-    ["warden_preview_migrate", "warden_preview_migrate is the migration role"],
-    ["warden_preview_admin", "warden_preview_admin is the admin role"],
+    [second.migrate, `${second.migrate} is the migration role`],
+    [second.admin, `${second.admin} is the admin role`],
   ])("refuses %s by name", async (role, reason) => {
-    expect(await check(role, plainDatabase)).toEqual({ role, reason });
+    const pool = createPool(silent, { user: role, database: plainDatabase, max: 1 });
+    try {
+      const names = [{ migrate: "warden_migrate", admin: "warden_admin" }, second];
+      expect(await checkDatabaseRole(pool, { names })).toEqual({ role, reason });
+    } finally {
+      await pool.end();
+    }
   });
 });
 

@@ -1,6 +1,7 @@
+import type pg from "pg";
 import { describe, expect, it } from "vitest";
 import { DATABASE_ROLE_NAMES, PREVIEW_DATABASE_ROLE_NAMES } from "./database.ts";
-import { failureMessage, withRoleNames } from "./migrate.ts";
+import { failureMessage, migrate, withRoleNames } from "./migrate.ts";
 
 describe("withRoleNames", () => {
   it("swaps each live role name for the set's", () => {
@@ -25,6 +26,39 @@ revoke all on t from warden_preview_app;`);
   it("leaves the text as it is for the live set", () => {
     const text = "grant select on tables to warden_app; -- warden_admin, warden_migrate";
     expect(withRoleNames(text, DATABASE_ROLE_NAMES)).toBe(text);
+  });
+
+  // Postgres folds an unquoted name to lower case, and keeps a double-quoted one exactly.
+  it("swaps an unquoted name in any case, and a quoted one only when it's exact", () => {
+    expect(
+      withRoleNames(
+        `REVOKE ALL ON t FROM WARDEN_APP; grant select on t to "warden_app", Warden_Admin;
+grant select on t to "WARDEN_APP", "Warden_admin", "warden_app x";`,
+        PREVIEW_DATABASE_ROLE_NAMES,
+      ),
+    )
+      .toBe(`REVOKE ALL ON t FROM warden_preview_app; grant select on t to "warden_preview_app", warden_preview_admin;
+grant select on t to "WARDEN_APP", "Warden_admin", "warden_app x";`);
+  });
+});
+
+describe("migrate", () => {
+  it("refuses a user that isn't the set's migration role, naming it, before running anything", async () => {
+    const queries: string[] = [];
+    const pool = {
+      query: async (text: string) => {
+        queries.push(text);
+        return { rows: [{ user: "warden_migrate" }] };
+      },
+    } as unknown as pg.Pool;
+
+    const result = await migrate(pool, "/no/such/folder", PREVIEW_DATABASE_ROLE_NAMES);
+
+    expect(result.applied).toEqual([]);
+    expect((result.error as Error).message).toBe(
+      "migrations run as warden_preview_migrate, not warden_migrate: set PGUSER=warden_preview_migrate",
+    );
+    expect(queries).toHaveLength(1);
   });
 });
 
