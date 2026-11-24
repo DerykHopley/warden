@@ -60,6 +60,9 @@ jobs:
         run: pnpm --filter @warden/dashboard test
       - name: Design lint
         run: pnpm design-lint
+      - name: Script tests (scripts/test/*.test.sh)
+        # Each stops at its first failed assertion; the step stops at the first test that fails.
+        run: for test in scripts/test/*.test.sh; do echo "== $test"; bash "$test"; done
       - name: Image build (not pushed)
         # A stand-in publishable key: the build needs one, and a real key isn't a CI secret worth keeping.
         run: >-

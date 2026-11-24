@@ -37,7 +37,8 @@ const ROLE_CHECK_TIMEOUT_MS = 5000;
 
 /** What makes a role able to get around row-level security, as the check's query names it, with how it reads. A
  * table's owner isn't bound by its policies unless they're forced; the schema's or the database's owner, and the
- * migration role, can make or take over tables, so they own them as soon as there are any. */
+ * migration role, can make or take over tables, so they own them as soon as there are any. The admin role is
+ * refused by name too: on Cloud SQL it's made without BYPASSRLS, but it's still for cross-Team work only. */
 const BYPASS_REASONS = {
   superuser: "is a superuser",
   bypassrls: "has BYPASSRLS",
@@ -45,11 +46,12 @@ const BYPASS_REASONS = {
   "schema owner": "owns the schema public",
   "database owner": "owns the database",
   "migration role": "is the migration role",
+  "admin role": "is the admin role",
 } as const;
 
 // The connected role and every role it can become through membership (any grant counts: one with only the admin
 // option can grant itself the rest), with the first that can get around row-level security, and why. The role itself
-// comes first. $1 is the migration role's name.
+// comes first. $1 is the migration role's name, $2 the admin role's.
 const BYPASSING_ROLE_SQL = `
 with recursive reachable (oid) as (
   select oid from pg_roles where rolname = current_user
@@ -70,6 +72,7 @@ select * from (
            when exists (select from pg_database d where d.datname = current_database() and d.datdba = r.oid)
              then 'database owner'
            when r.rolname = $1 then 'migration role'
+           when r.rolname = $2 then 'admin role'
          end as why
     from reachable join pg_roles r on r.oid = reachable.oid
 ) found
@@ -77,10 +80,17 @@ select * from (
  order by via = role desc, via
  limit 1`;
 
+export type CheckDatabaseRoleOptions = {
+  /** How long the check waits for its answer. */
+  timeoutMs?: number;
+  /** The migration and admin roles, refused by name; tests pass their own. */
+  names?: Pick<DatabaseRoleNames, "migrate" | "admin">;
+};
+
 /** Whether the role `client` connected as can get around row-level security, and why; undefined when it can't. */
 export async function checkDatabaseRole(
   client: Pick<pg.ClientBase, "query">,
-  timeoutMs = ROLE_CHECK_TIMEOUT_MS,
+  { timeoutMs = ROLE_CHECK_TIMEOUT_MS, names = DATABASE_ROLE_NAMES }: CheckDatabaseRoleOptions = {},
 ): Promise<DatabaseRoleRefusal | undefined> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<never>((_, reject) => {
@@ -94,7 +104,7 @@ export async function checkDatabaseRole(
     const { rows } = await Promise.race([
       client.query<{ role: string; via: string; why: keyof typeof BYPASS_REASONS }>(
         BYPASSING_ROLE_SQL,
-        [DATABASE_ROLE_NAMES.migrate],
+        [names.migrate, names.admin],
       ),
       timeout,
     ]);
@@ -128,7 +138,7 @@ export function guardDatabaseRole(
   return async (client: pg.ClientBase) => {
     let refusal: DatabaseRoleRefusal | undefined;
     try {
-      refusal = await checkDatabaseRole(client, timeoutMs);
+      refusal = await checkDatabaseRole(client, { timeoutMs });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new DatabaseRoleCheckError(`database role check failed: ${message}`, { cause: error });
