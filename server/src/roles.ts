@@ -53,7 +53,12 @@ export async function createRoles(
   if (!runner) throw new Error("the user running roles isn't in pg_roles");
   // Postgres lets only a superuser, or a role that has BYPASSRLS itself, give BYPASSRLS or take it away.
   const canGrantBypass = runner.superuser || runner.bypassrls;
-  if (!canGrantBypass) {
+  const { rows: adminRows } = await pool.query<{ bypassrls: boolean }>(
+    "select rolbypassrls as bypassrls from pg_roles where rolname = $1",
+    [names.admin],
+  );
+  // Warned only when warden_admin will end without it: one that already has it keeps it.
+  if (!canGrantBypass && !adminRows[0]?.bypassrls) {
     logger.warn(`${names.admin} gets no BYPASSRLS: ${runner.name} can't grant it`, {
       role: names.admin,
       user: runner.name,

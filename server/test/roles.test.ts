@@ -170,6 +170,26 @@ describe("the roles script run twice by a user with CREATEROLE that isn't a supe
   });
 });
 
+describe("the roles script run by a user that can't grant BYPASSRLS, once the admin role has it", () => {
+  let fixture: Awaited<ReturnType<typeof cloudSqlLike>>;
+  beforeAll(async () => {
+    fixture = await cloudSqlLike();
+    await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
+    await superuser.query(`alter role ${fixture.names.admin} bypassrls`);
+    fixture.lines.length = 0;
+    await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
+  });
+  afterAll(() => fixture.drop());
+
+  it("leaves the admin role's BYPASSRLS on, and logs no warning about it", async () => {
+    const { rows } = await superuser.query("select rolbypassrls from pg_roles where rolname = $1", [
+      fixture.names.admin,
+    ]);
+    expect(rows).toEqual([{ rolbypassrls: true }]);
+    expect(fixture.lines.join("\n")).not.toMatch(/gets no BYPASSRLS/);
+  });
+});
+
 describe("the roles script given passwords", () => {
   // A quote and a backslash, so the password's escaped form differs from its raw one.
   const passwords = {
