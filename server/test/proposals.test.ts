@@ -13,7 +13,6 @@ import {
   ProposalDecided,
   ProposalNotFound,
   type Findings,
-  type ProposeInput,
 } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
@@ -219,24 +218,44 @@ describe("proposing", () => {
     expect(after.proposals).toHaveLength(1);
   });
 
-  it.each([
-    ["an accept without until", { decision: "accept" as const, reason: "r" }],
-    [
-      "a mark_false_positive with until",
-      { decision: "mark_false_positive" as const, reason: "r", until: nextWeek() },
-    ],
-    [
-      "an until in the past",
-      { decision: "accept" as const, reason: "r", until: "2020-01-01T00:00:00Z" },
-    ],
-  ])("throws a zod error for %s, and stores nothing", async (_name, input) => {
+  // Each refused field is the contracts' (contracts/test/decisions.test.ts); one case proves propose checks them.
+  it("throws a zod error for an until in the past, and stores nothing", async () => {
     const { team, finding } = await teamWithFinding();
     const before = await stored(team);
 
-    // Input the types refuse too, as a caller past them could send it.
-    const unchecked = { requester: member, ...input } as unknown as ProposeInput;
+    await expect(
+      findings.propose(team, finding.id, {
+        requester: member,
+        decision: "accept",
+        reason: "r",
+        until: "2020-01-01T00:00:00Z",
+      }),
+    ).rejects.toThrow(ZodError);
 
-    await expect(findings.propose(team, finding.id, unchecked)).rejects.toThrow(ZodError);
+    expect(await stored(team)).toEqual(before);
+  });
+
+  it("throws DecisionRefused for a Finding merged into another, and stores nothing", async () => {
+    const { team, finding } = await teamWithFinding();
+    const location = { kind: "file", path: "moved.json" } as const;
+    const merged: Finding = {
+      ...finding,
+      id: `f-${randomUUID()}`,
+      location,
+      fingerprint: fingerprint(ENV, location),
+      status: "fixed",
+      moved_to: finding.id,
+    };
+    await withTeam(team, (tx) => tx.insertInto("findings").values(toRow(merged)).execute());
+    const before = await stored(team);
+
+    await expect(
+      findings.propose(team, merged.id, {
+        requester: agent,
+        decision: "mark_false_positive",
+        reason: "r",
+      }),
+    ).rejects.toThrow(/it is merged into/);
 
     expect(await stored(team)).toEqual(before);
   });

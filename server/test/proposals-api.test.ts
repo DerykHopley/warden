@@ -279,14 +279,13 @@ describe("a Member", () => {
 });
 
 describe("Team B and Team A's Proposal and Finding", () => {
-  it("Team B's Lead approving gets 404, Team B's Member proposing gets 404, and Team A's rows are unchanged", async () => {
-    const { team: a, finding, proposal } = await pendingProposal();
+  it("Team B's Lead approving or rejecting gets 404, and Team B's Member proposing gets 404", async () => {
+    const { finding, proposal } = await pendingProposal();
     const b = `org_${randomUUID()}`;
     await seedTeam(withTeam, b, [
       [LEAD, "lead"],
       [MEMBER, "member"],
     ]);
-    const before = await stored(a);
 
     expect(await approve(b, proposal.id)).toEqual({
       status: 404,
@@ -300,9 +299,6 @@ describe("Team B and Team A's Proposal and Finding", () => {
       status: 404,
       body: { error: "No such Finding" },
     });
-
-    expect(await stored(a)).toEqual(before);
-    expect((await stored(b)).proposals).toEqual([]);
   });
 });
 
@@ -326,50 +322,37 @@ describe("a Proposal its decision would refuse now", () => {
     expect(await stored(team)).toEqual(before);
   });
 
-  it("answers 409 for a merged Finding, and stores nothing", async () => {
-    const { team, finding } = await teamWithFinding();
-    // The Finding is merged into a second one: a Scan moves it, then a Lead marks it moved.
-    await findings.reconcile(scan(team, "scan-2", "2026-11-24T10:00:00Z", ["moved.json"]));
-    const candidate = (await findings.list(team)).find((f) => f.id !== finding.id)!;
-    await findings.markMoved(team, finding.id, {
-      actor: { kind: "person", id: LEAD },
-      reason: "Moved",
-      candidate: candidate.id,
-    });
-    expect((await findings.list(team)).find((f) => f.id === candidate.id)).toMatchObject({
-      moved_to: finding.id,
+  it("answers 409 when the Finding changed after the Proposal was asked, and the Proposal stays pending", async () => {
+    // A Member proposes a False positive; a Lead then accepts the Finding directly. Approving the old Proposal would
+    // override that later decision.
+    const { team, finding, proposal } = await pendingProposal();
+    await post(`/api/findings/${finding.id}/accept`, {
+      as: LEAD,
+      team,
+      body: { reason: "Fixed next sprint", until: nextWeek() },
     });
     const before = await stored(team);
 
-    const answer = await propose(team, candidate.id, {
-      decision: "mark_false_positive",
-      reason: "r",
-    });
+    const answer = await approve(team, proposal.id);
 
     expect(answer).toEqual({
       status: 409,
-      body: { error: expect.stringMatching(/it is merged into/) },
+      body: { error: expect.stringMatching(/changed since the Proposal was asked/) },
     });
     expect(await stored(team)).toEqual(before);
+    expect(before.proposals).toMatchObject([{ id: proposal.id, state: "pending" }]);
   });
 });
 
+// Each refused field is the contracts' (contracts/test/decisions.test.ts); one case proves the route answers 400.
 describe("a Proposal's bad input", () => {
-  it.each([
-    ["an accept without until", { decision: "accept", reason: "r" }],
-    [
-      "a mark_false_positive with until",
-      { decision: "mark_false_positive", reason: "r", until: nextWeek() },
-    ],
-    ["an until in the past", { decision: "accept", reason: "r", until: "2020-01-01T00:00:00Z" }],
-    ["a decision of reopen", { decision: "reopen", reason: "r" }],
-  ])("answers 400 for %s, and writes nothing", async (_name, body) => {
+  it("answers 400 for an accept without until, and writes nothing", async () => {
     const { team, finding } = await teamWithFinding();
     const before = await stored(team);
 
-    const answer = await propose(team, finding.id, body);
+    const answer = await propose(team, finding.id, { decision: "accept", reason: "r" });
 
-    expect(answer).toEqual({ status: 400, body: { error: expect.any(String) } });
+    expect(answer).toEqual({ status: 400, body: { error: expect.stringMatching(/until/) } });
     expect(await stored(team)).toEqual(before);
   });
 

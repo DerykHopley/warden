@@ -102,11 +102,15 @@ alter table finding_history
   check (proposal_id is null or actor_kind = 'person');
 
 -- warden_admin (the owner's answer on #35, ADR 0009): no BYPASSRLS anywhere (`pnpm roles`), and one permissive policy
--- that lets it list Team ids, for the daily Job, which then changes each Team through `withTeam`. Only the id column:
--- its table-wide select (0001's default privileges) goes. It reads no row of any other table: forced row-level
--- security, whose only policies are the Team ones, and no Team is set in `withAdmin`.
+-- that lets it list Team ids, for the daily Job, which then changes each Team through `withTeam`. It keeps no other
+-- grant: the Team policies apply to every role, so a select grant would show it a Team's rows once it set
+-- `warden.team_id` itself. 0001's select on every table goes, and tables warden_migrate makes from here on grant it
+-- nothing; only `teams (id)` stays.
 create policy teams_admin_lists_ids on teams for select to warden_admin using (true);
 
-revoke select on teams from warden_admin;
+revoke select on all tables in schema public from warden_admin;
+
+alter default privileges for role warden_migrate in schema public
+  revoke select on tables from warden_admin;
 
 grant select (id) on teams to warden_admin;

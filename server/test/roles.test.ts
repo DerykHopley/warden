@@ -221,6 +221,22 @@ describe("the roles script run by a user that can't take BYPASSRLS away, once th
     expect(warnings[0]?.message).toContain(`${fixture.names.admin} keeps BYPASSRLS`);
     expect(warnings[0]?.message).toContain(`${fixture.base}_owner`);
   });
+
+  it("refuses to set the admin password, naming the role and the runner, and changes nothing", async () => {
+    const before = await storedPasswords(fixture.names);
+
+    const error = await rejection(
+      createRoles(fixture.asRunner, {
+        names: fixture.names,
+        logger: fixture.logger,
+        passwords: { app: "app-pw", admin: "admin-pw" },
+      }),
+    );
+
+    expect((error as Error).message).toContain(`${fixture.names.admin} has BYPASSRLS`);
+    expect((error as Error).message).toContain(`${fixture.base}_owner can't take it away`);
+    expect(await storedPasswords(fixture.names)).toEqual(before);
+  });
 });
 
 describe("the roles script given passwords", () => {

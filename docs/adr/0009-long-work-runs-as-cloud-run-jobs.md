@@ -23,7 +23,9 @@ Cloud Scheduler. Nothing long runs in the service after it answers, and nothing 
   `withTeam(team, …)` (ADR 0006). A Scan with no Team is refused before the job touches the database, and the job
   exits non-zero. The daily expiry job spans Teams: it lists Team ids in the one marked admin place (`withAdmin`,
   read only), then runs each Team's expiry inside `withTeam` for that Team. So every write stays under row-level
-  security, and the admin role only ever reads ids. One Team failing is logged and doesn't stop the rest. It runs as
+  security, and the admin role can only read ids: select on `teams (id)` is its one grant. Each Team's transaction
+  gives up after 30 s waiting for its lock or 60 s on a statement. One Team failing is logged and doesn't stop the
+  rest; an empty Team list is logged as a warning, as it is also what a missing admin policy looks like. It runs as
   its own service account, `warden-daily`, not `warden-run`: only it reads the admin role's password, so the server
   can't list Teams (#36). Its entry point is `server/src/daily-expiry.ts`.
 - **A retry is harmless.** The job runs with `--max-retries=1` and a retry runs the same Scan id. `reconcile` checks

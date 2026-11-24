@@ -244,26 +244,41 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   });
 
   /**
-   * A Lead's named decision on one Finding (story 4): the body parsed with its contracts schema, the Team and the
-   * Actor taken from the session, never the request. Answers the Finding as changed.
+   * One POST route that changes a Finding or a Proposal (story 4): `requireRole(role)`, the body parsed with its
+   * contracts schema (none: no body is read), the Team and the person taken from the session, never the request. Each
+   * refusal answers through findingRefusal; success answers `status` with what `act` returns.
    */
-  function decisionRoute<Body>(
+  function findingsRoute<Body extends object, Answer>(
     path: string,
-    schema: z.ZodType<Body>,
-    decide: (team: string, id: string, input: Body & { actor: Actor }) => Promise<Finding>,
+    { role, schema, status = 200 }: { role: Role; schema?: z.ZodType<Body>; status?: 200 | 201 },
+    act: (team: string, id: string, body: Body, actor: Actor) => Promise<Answer>,
   ) {
-    app.post(`/api/findings/:id/${path}`, requireRole("lead"), async (c) => {
-      // A body that isn't JSON parses as undefined, which every schema refuses.
-      const parsed = schema.safeParse(await c.req.json().catch(() => undefined));
-      if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
-      const actor = sessionActor(c);
+    app.post(path, requireRole(role), async (c) => {
+      let body = {} as Body;
+      if (schema) {
+        // A body that isn't JSON parses as undefined, which every schema refuses.
+        const parsed = schema.safeParse(await c.req.json().catch(() => undefined));
+        if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
+        body = parsed.data;
+      }
       try {
-        return c.json(await decide(c.get("team"), c.req.param("id"), { ...parsed.data, actor }));
+        const answer = await act(c.get("team"), c.req.param("id")!, body, sessionActor(c));
+        return c.json(answer, status);
       } catch (error) {
         return findingRefusal(c, error);
       }
     });
   }
+
+  /** A Lead's named decision on one Finding: answers the Finding as changed. */
+  const decisionRoute = <Body extends object>(
+    path: string,
+    schema: z.ZodType<Body>,
+    decide: (team: string, id: string, input: Body & { actor: Actor }) => Promise<Finding>,
+  ) =>
+    findingsRoute(`/api/findings/:id/${path}`, { role: "lead", schema }, (team, id, body, actor) =>
+      decide(team, id, { ...body, actor }),
+    );
 
   const { findings } = deps;
   decisionRoute("accept", AcceptBody, (team, id, input) => findings.accept(team, id, input));
@@ -279,45 +294,24 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   decisionRoute("reopen", ReasonBody, (team, id, input) => findings.reopen(team, id, input));
 
   // A Proposal (story 4, ADR 0008): any person in the Team suggests accept or mark_false_positive, as themselves; a
-  // Lead approves it (the decision is made as that Lead) or rejects it with a reason.
-  app.post("/api/findings/:id/proposals", requireRole("member"), async (c) => {
-    const parsed = ProposeBody.safeParse(await c.req.json().catch(() => undefined));
-    if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
-    try {
-      const proposal = await findings.propose(c.get("team"), c.req.param("id"), {
-        ...parsed.data,
-        requester: sessionActor(c),
-      });
-      return c.json(proposal satisfies Proposal, 201);
-    } catch (error) {
-      return findingRefusal(c, error);
-    }
-  });
-
-  app.post("/api/proposals/:id/approve", requireRole("lead"), async (c) => {
-    try {
-      const proposal = await findings.approveProposal(c.get("team"), c.req.param("id"), {
-        actor: sessionActor(c),
-      });
-      return c.json(proposal satisfies Proposal);
-    } catch (error) {
-      return findingRefusal(c, error);
-    }
-  });
-
-  app.post("/api/proposals/:id/reject", requireRole("lead"), async (c) => {
-    const parsed = ReasonBody.safeParse(await c.req.json().catch(() => undefined));
-    if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
-    try {
-      const proposal = await findings.rejectProposal(c.get("team"), c.req.param("id"), {
-        ...parsed.data,
-        actor: sessionActor(c),
-      });
-      return c.json(proposal satisfies Proposal);
-    } catch (error) {
-      return findingRefusal(c, error);
-    }
-  });
+  // Lead approves it (the decision is made as that Lead) or rejects it with a reason. Each answers the Proposal.
+  findingsRoute(
+    "/api/findings/:id/proposals",
+    { role: "member", schema: ProposeBody, status: 201 },
+    (team, id, body, requester): Promise<Proposal> =>
+      findings.propose(team, id, { ...body, requester }),
+  );
+  findingsRoute(
+    "/api/proposals/:id/approve",
+    { role: "lead" },
+    (team, id, _body, actor): Promise<Proposal> => findings.approveProposal(team, id, { actor }),
+  );
+  findingsRoute(
+    "/api/proposals/:id/reject",
+    { role: "lead", schema: ReasonBody },
+    (team, id, body, actor): Promise<Proposal> =>
+      findings.rejectProposal(team, id, { ...body, actor }),
+  );
 
   // Any person in the Team reads a Finding's history, oldest first.
   app.get("/api/findings/:id/history", requireRole("member"), async (c) => {

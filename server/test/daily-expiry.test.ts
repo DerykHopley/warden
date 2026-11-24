@@ -3,14 +3,15 @@
 // may list Team ids and nothing else) and `withTeam` (warden_app). Each test gets a fresh database of its own, so the
 // Teams the Job lists are only the ones it made.
 import { fingerprint, type Finding } from "@warden/contracts";
-import { afterEach, describe, expect, it } from "vitest";
-import { runDailyExpiry } from "../src/daily-expiry.ts";
+import { afterEach, describe, expect, inject, it } from "vitest";
+import { checkAdminRole, runDailyExpiry } from "../src/daily-expiry.ts";
+import { createPool, DATABASE_ROLE_NAMES } from "../src/database.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { createLogger } from "../src/log.ts";
 import { createWithAdmin, type WithAdmin } from "../src/with-admin.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
-import { createMigratedTestDatabase, poolAs } from "./databases.ts";
+import { createMigratedTestDatabase, poolAs, testName } from "./databases.ts";
 
 const ends: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -29,7 +30,7 @@ async function freshDatabase() {
   );
   const withTeam = createWithTeam(app);
   const findings = createFindings({ withTeam, moveRules: {} });
-  return { withTeam, withAdmin: createWithAdmin(admin), findings };
+  return { app, withTeam, withAdmin: createWithAdmin(admin), findings };
 }
 
 type Db = { withTeam: WithTeam; findings: Findings };
@@ -182,6 +183,64 @@ describe("runDailyExpiry", () => {
     });
   }, 30_000);
 
+  it("gives up on a Team stuck behind its lock, logs it as failed, and goes on to the next", async () => {
+    const db = await freshDatabase();
+    for (const team of ["org_stuck_a", "org_stuck_b", "org_stuck_c"])
+      await newTeam(db, team, [PAST]);
+    // Another transaction holds org_stuck_b's Findings lock (the one reconcile and decisions take) throughout.
+    const holder = await db.app.connect();
+    const lines: string[] = [];
+    try {
+      await holder.query("begin");
+      await holder.query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))", [
+        "org_stuck_b",
+      ]);
+
+      const code = await runDailyExpiry({
+        withAdmin: db.withAdmin,
+        // The Job's own limits are 30 s and 60 s; the test's are short.
+        findings: {
+          expireAcceptances: (team, now) =>
+            db.findings.expireAcceptances(team, now, { lockTimeoutMs: 200 }),
+        },
+        logger: createLogger((line) => lines.push(line)),
+        now: NOW,
+      });
+
+      expect(code).toBe(1);
+    } finally {
+      await holder.query("rollback");
+      holder.release();
+    }
+    expect(await statuses(db, "org_stuck_a")).toEqual(["open"]);
+    expect(await statuses(db, "org_stuck_b")).toEqual(["accepted"]);
+    expect(await statuses(db, "org_stuck_c")).toEqual(["open"]);
+    const logged = lines.map((line) => JSON.parse(line));
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        severity: "ERROR",
+        team: "org_stuck_b",
+        error: expect.objectContaining({ code: "55P03" }),
+      }),
+    );
+    expect(logged.at(-1)).toMatchObject({ teamsVisited: 3, teamsFailed: 1, findingsReopened: 2 });
+  }, 30_000);
+
+  it("on a database with no Team, warns naming the likely cause, and returns 0", async () => {
+    const db = await freshDatabase();
+    const lines: string[] = [];
+
+    const code = await runDailyExpiry({
+      ...db,
+      logger: createLogger((line) => lines.push(line)),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    const warning = lines.map((line) => JSON.parse(line)).find((e) => e.severity === "WARNING");
+    expect(warning?.message).toContain("teams_admin_lists_ids");
+  }, 30_000);
+
   it("returns 1, logging the error, when the Team list can't be read", async () => {
     const lines: string[] = [];
     const broken: WithAdmin = () => Promise.reject(new Error("permission denied for table teams"));
@@ -189,7 +248,7 @@ describe("runDailyExpiry", () => {
 
     const code = await runDailyExpiry({
       withAdmin: broken,
-      findings: untouched as unknown as Findings,
+      findings: untouched,
       logger: createLogger((line) => lines.push(line)),
       now: NOW,
     });
@@ -197,5 +256,48 @@ describe("runDailyExpiry", () => {
     expect(code).toBe(1);
     expect(lines.join("\n")).toContain("permission denied for table teams");
     expect(lines.join("\n")).not.toContain("never called");
+  });
+});
+
+// The Job's check on its admin connection, before it lists anything: on the suite's shared database.
+describe("checkAdminRole", () => {
+  const database = inject("testDatabase");
+  const silent = createLogger(() => {});
+
+  async function checkAs(role: string, names: { admin: string } = DATABASE_ROLE_NAMES) {
+    const pool = createPool(silent, { user: role, database, max: 1 });
+    try {
+      return await checkAdminRole(pool, names);
+    } finally {
+      await pool.end();
+    }
+  }
+
+  it("passes warden_admin", async () => {
+    await expect(checkAs("warden_admin")).resolves.toBeUndefined();
+  });
+
+  it("refuses a connection as warden_app, naming it", async () => {
+    await expect(checkAs("warden_app")).rejects.toThrow(
+      "the admin connection is warden_app, not warden_admin",
+    );
+  });
+
+  it("refuses the admin role when it has BYPASSRLS", async () => {
+    // A test-named admin role, as roles belong to the whole Postgres server.
+    const superuser = createPool(silent, { database, max: 1 });
+    const admin = `${testName()}_admin`;
+    try {
+      await superuser.query(`create role ${admin} login bypassrls`);
+      await superuser.query(`grant connect on database ${database} to ${admin}`);
+
+      await expect(checkAs(admin, { ...DATABASE_ROLE_NAMES, admin })).rejects.toThrow(
+        `${admin} has BYPASSRLS`,
+      );
+    } finally {
+      await superuser.query(`revoke connect on database ${database} from ${admin}`);
+      await superuser.query(`drop role if exists ${admin}`);
+      await superuser.end();
+    }
   });
 });

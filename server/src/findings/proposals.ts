@@ -1,5 +1,5 @@
 // Proposals (ADR 0005, ADR 0008): a decision an agent or a Member suggests, kept as a `pending` row until a Lead
-// approves it (the decision is then made as that Lead, through applyDecision) or rejects it. Each keeps who asked and
+// approves it (the decision is then made as that Lead, through the named call's own rules) or rejects it. Each keeps who asked and
 // who decided. Every call runs inside the caller's `withTeam` transaction, under the Team's Findings lock, so a
 // Proposal is decided at most once and a refusal writes nothing.
 import { randomUUID } from "node:crypto";
@@ -7,7 +7,7 @@ import { Proposal, type Actor, type ProposalDecision, type ProposeBody } from "@
 import { sql, type Selectable, type Transaction } from "kysely";
 import type { Database } from "../schema.ts";
 import {
-  applyDecision,
+  applyLockedDecision,
   findingFor,
   recheckLead,
   type Decision,
@@ -49,7 +49,7 @@ const CALL: Record<ProposalDecision, DecisionCall> = {
 type ProposalRow = Selectable<Database["proposals"]>;
 
 /** The Proposal a row holds, parsed with the contracts' Proposal. */
-function fromRow(row: ProposalRow): Proposal {
+function proposalFromRow(row: ProposalRow): Proposal {
   return Proposal.parse({
     id: row.id,
     finding_id: row.finding_id,
@@ -89,7 +89,7 @@ export async function applyPropose(
     })
     .returningAll()
     .executeTakeFirstOrThrow();
-  return fromRow(row);
+  return proposalFromRow(row);
 }
 
 /** Under the Team's lock, the Lead `person` rechecked, the Team's pending Proposal `id`. */
@@ -128,12 +128,13 @@ async function decide(
     .where("id", "=", id)
     .returningAll()
     .executeTakeFirstOrThrow();
-  return fromRow(row);
+  return proposalFromRow(row);
 }
 
 /**
- * Approves the Team's pending Proposal `id` as the Lead `person`: its decision is made through applyDecision as that
- * person, with the Proposal's reason and until, and its history rows name the Proposal.
+ * Approves the Team's pending Proposal `id` as the Lead `person`: its decision is made as that person, with the
+ * Proposal's reason and until, under the lock pendingProposal took, and its history rows name the Proposal. Refused
+ * (DecisionRefused) when the Finding has changed since the Proposal was asked: a later decision isn't overridden.
  */
 export async function applyApprove(
   tx: Transaction<Database>,
@@ -146,7 +147,7 @@ export async function applyApprove(
     proposal.decision === "accept"
       ? { call: "accept", reason: proposal.reason, until: proposal.accepted_until!.toISOString() }
       : { call: "markFalsePositive", reason: proposal.reason };
-  await applyDecision(tx, team, proposal.finding_id, person, decision, proposal.id);
+  await applyLockedDecision(tx, team, proposal.finding_id, person, decision, { id: proposal.id });
   return decide(tx, team, id, person, { state: "approved", decided_reason: null });
 }
 

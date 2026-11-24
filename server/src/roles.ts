@@ -7,7 +7,8 @@
 //   of no other role, so it can't `set role` its way out.
 // - warden_admin is the daily Job's way to list Team ids (ADR 0009): no BYPASSRLS anywhere, here as on Cloud SQL, so
 //   it reads only what 0006_proposals's policy and column grant on `teams` allow. A superuser runner takes BYPASSRLS
-//   away from one that has it; a runner that can't (Cloud SQL's `postgres`) warns instead.
+//   away from one that has it; a runner that can't (Cloud SQL's `postgres`) warns instead, and refuses to set its
+//   password.
 //
 // Only those three (and the database's owner) may connect to the database: PUBLIC loses CONNECT on it.
 //
@@ -17,8 +18,9 @@
 // a database that belongs to the other set before changing anything (see refuseOtherSet).
 //
 // Passwords: WARDEN_APP_PASSWORD, WARDEN_MIGRATE_PASSWORD and WARDEN_ADMIN_PASSWORD, when set (printable ASCII),
-// become warden_app's, warden_migrate's and warden_admin's, sent as SCRAM-SHA-256 verifiers made here. Unset, no password is set, and one already set is left:
-// compose and CI use trust auth. No password reaches Postgres, a log line or an error.
+// become warden_app's, warden_migrate's and warden_admin's, sent as SCRAM-SHA-256 verifiers made here. Unset, no
+// password is set, and one already set is left: compose and CI use trust auth. No password reaches Postgres, a log
+// line or an error.
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import pg from "pg";
 import {
@@ -78,13 +80,25 @@ export async function createRoles(
     name: string;
     superuser: boolean;
     bypassrls: boolean;
+    adminBypassrls: boolean;
   }>(
-    `select current_user as name, rolsuper as superuser, rolbypassrls as bypassrls
+    `select current_user as name, rolsuper as superuser, rolbypassrls as bypassrls,
+            coalesce((select rolbypassrls from pg_roles where rolname = $1), false) as "adminBypassrls"
        from pg_roles where rolname = current_user`,
+    [names.admin],
   );
   if (!runner) throw new Error("the user running roles isn't in pg_roles");
   // Postgres lets only a superuser, or a role that has BYPASSRLS itself, give BYPASSRLS or take it away.
   const canChangeBypass = runner.superuser || runner.bypassrls;
+  // warden_admin keeps BYPASSRLS only where it has it and the runner can't take it away. A role that can read every
+  // Team gets no password to log in with: refused before anything changes.
+  const adminKeepsBypass = runner.adminBypassrls && !canChangeBypass;
+  if (adminKeepsBypass && passwords.admin) {
+    throw new Error(
+      `${names.admin} has BYPASSRLS and ${runner.name} can't take it away, so its password isn't set: ` +
+        "run roles as a superuser, or take BYPASSRLS away first. Nothing was changed",
+    );
+  }
 
   const plain: Attributes = {
     rolcanlogin: true,
@@ -98,20 +112,14 @@ export async function createRoles(
   // warden_admin has no BYPASSRLS either: one policy lets it list Team ids (0006_proposals). A runner that may not
   // take BYPASSRLS away (Cloud SQL's `postgres`) leaves it as it is: none when the role is new, as there. One that
   // has it still is warned about.
-  const plainButBypass: Attributes = { ...plain };
-  delete plainButBypass.rolbypassrls;
-  await ensureRole(pool, names.admin, canChangeBypass ? plain : plainButBypass);
-  if (!canChangeBypass) {
-    const { rows } = await pool.query<{ bypassrls: boolean }>(
-      "select rolbypassrls as bypassrls from pg_roles where rolname = $1",
-      [names.admin],
+  const plainKeepingBypass: Attributes = { ...plain };
+  delete plainKeepingBypass.rolbypassrls;
+  await ensureRole(pool, names.admin, canChangeBypass ? plain : plainKeepingBypass);
+  if (adminKeepsBypass) {
+    logger.warn(
+      `${names.admin} keeps BYPASSRLS: ${runner.name} can't take it away; run roles as a superuser`,
+      { role: names.admin, user: runner.name },
     );
-    if (rows[0]?.bypassrls) {
-      logger.warn(
-        `${names.admin} keeps BYPASSRLS: ${runner.name} can't take it away; run roles as a superuser`,
-        { role: names.admin, user: runner.name },
-      );
-    }
   }
 
   const [migrate, app, admin] = [names.migrate, names.app, names.admin].map(pg.escapeIdentifier);

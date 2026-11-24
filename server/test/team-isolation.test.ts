@@ -375,9 +375,9 @@ describe("withAdmin", () => {
     );
   });
 
-  it("reads no row of any other table", async () => {
+  it("is refused every other table, with a Team set in its transaction too", async () => {
     const admin = track(poolAs("warden_admin", databaseName));
-    // A Finding and a Proposal of Team A's, so an empty answer means "refused", not "nothing there".
+    // A Finding and a Proposal of Team A's: with the Team set, a Team policy would show them if a grant let it.
     await withTeam(A, async (tx) => {
       await sql`insert into findings (team_id, id, asset_kind, asset_ref, module, rule_id, fingerprint, location,
                   severity, title, evidence, status, first_seen_scan, last_seen_scan)
@@ -390,8 +390,19 @@ describe("withAdmin", () => {
       );
     });
 
-    for (const table of ["findings", "proposals", "team_members", "test_notes"]) {
-      expect((await admin.query(`select * from ${table}`)).rows, table).toEqual([]);
+    // test_notes was made after the migrations, by warden_migrate: its default privileges grant warden_admin nothing.
+    const client = await admin.connect();
+    try {
+      for (const table of ["findings", "proposals", "team_members", "role_history", "test_notes"]) {
+        await client.query("begin read only");
+        await client.query("select set_config('warden.team_id', $1, true)", [A]);
+        await expect(client.query(`select * from ${table}`), table).rejects.toThrow(
+          `permission denied for table ${table}`,
+        );
+        await client.query("rollback");
+      }
+    } finally {
+      client.release();
     }
   });
 

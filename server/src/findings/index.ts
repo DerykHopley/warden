@@ -30,7 +30,7 @@ import {
   type DecisionCall,
   type DecisionInput,
 } from "./decisions.ts";
-import { applyExpiry } from "./expiry.ts";
+import { applyExpiry, type ExpiryLimits } from "./expiry.ts";
 import { applyApprove, applyPropose, applyReject } from "./proposals.ts";
 import { applyRun, type MoveRule, type ReconcileOutcome } from "./reconcile.ts";
 import { fromRow, isoDateTime, loadFinding } from "./rows.ts";
@@ -42,7 +42,7 @@ export {
   type DecisionCall,
   type DecisionInput,
 } from "./decisions.ts";
-export { DAILY_EXPIRY } from "./expiry.ts";
+export { DAILY_EXPIRY, type ExpiryLimits } from "./expiry.ts";
 export { ProposalDecided, ProposalNotFound } from "./proposals.ts";
 export type { MoveRule, ReconcileOutcome } from "./reconcile.ts";
 export { sameAsset } from "./rows.ts";
@@ -144,14 +144,15 @@ export interface Findings {
   rejectProposal(
     team: string,
     proposalId: string,
-    input: { actor: Actor; reason: string },
+    input: ReasonBody & { actor: Actor },
   ): Promise<Proposal>;
 
   /**
    * The daily Job's work for one Team: every Accepted Finding whose until is at or before `now` reopens, with a `job`
-   * history row. Returns the reopened ids; run again with the same `now`, it changes nothing.
+   * history row. Returns the reopened ids; run again with the same `now`, it changes nothing. It fails, writing
+   * nothing, after waiting 30 s for the Team's lock or 60 s on one statement (`limits` changes either, for tests).
    */
-  expireAcceptances(team: string, now: Date): Promise<string[]>;
+  expireAcceptances(team: string, now: Date, limits?: ExpiryLimits): Promise<string[]>;
 }
 
 export function createFindings({
@@ -205,14 +206,14 @@ export function createFindings({
       return withTeam(team, (tx) => applyApprove(tx, team, proposalId, person));
     },
 
-    async rejectProposal(team, proposalId, { actor, reason }) {
+    async rejectProposal(team, proposalId, { actor, ...input }) {
       const person = personOf(actor);
-      const checked = ReasonBody.parse({ reason });
+      const checked = ReasonBody.parse(input);
       return withTeam(team, (tx) => applyReject(tx, team, proposalId, person, checked.reason));
     },
 
-    expireAcceptances(team, now) {
-      return withTeam(team, (tx) => applyExpiry(tx, team, now));
+    expireAcceptances(team, now, limits) {
+      return withTeam(team, (tx) => applyExpiry(tx, team, now, limits));
     },
 
     async report(value) {

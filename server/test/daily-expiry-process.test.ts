@@ -1,7 +1,7 @@
 // The daily Job's entry point as its own process (ADR 0009), on a fresh migrated database of this file's own: as
 // warden_app, with warden_admin listing the Teams, it reopens an expired acceptance in each of two Teams. Refused
-// before anything changes: an admin connection that isn't the admin role, an app role that can get around row-level
-// security, a database that can't be reached. The refusals run first; the run that changes rows runs last.
+// before anything changes: an app password with no admin password beside it, an app role that can get around
+// row-level security, a database that can't be reached. The refusals run first; the run that changes rows runs last.
 import { fingerprint, type Finding } from "@warden/contracts";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -73,13 +73,13 @@ const everyStatus = async () =>
 const errorLine = (output: string) => logEntries(output).find((e) => e.severity === "ERROR");
 
 describe("the daily Job's process", () => {
-  it("exits 1 naming the role when the admin connection isn't the set's admin role, and changes nothing", async () => {
-    const { code, output } = await runJob({ WARDEN_ADMIN_USER: "warden_app" });
+  // The admin connection's own role check is checkAdminRole's (daily-expiry.test.ts).
+  it("exits 1 before connecting when PGPASSWORD is set but WARDEN_ADMIN_PASSWORD isn't, and changes nothing", async () => {
+    const { code, output } = await runJob({ PGPASSWORD: "the-app-password" });
 
     expect(code, output).toBe(1);
-    expect(JSON.stringify(errorLine(output))).toContain(
-      "the admin connection is warden_app, not warden_admin",
-    );
+    expect(errorLine(output)?.message).toContain("WARDEN_ADMIN_PASSWORD");
+    expect(output).not.toContain("the-app-password");
     expect(await everyStatus()).toEqual([["accepted"], ["accepted"]]);
   });
 

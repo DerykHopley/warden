@@ -13,8 +13,9 @@ that can't bypass them. A query that forgets the Team still can't reach another 
   too. A CI check fails when any table lacks it.
 - **Separate roles:** the app role (bound by the policies), a migration role, and an admin role for the few
   deliberate cross-Team tasks, used from one marked place in the code. The admin role has no `BYPASSRLS` anywhere:
-  one policy and a column grant let it read `teams (id)` and nothing else, so the daily Job can list the Teams
-  (ADR 0009) and every other table shows it no row (#36).
+  its one grant is select on `teams (id)`, with one policy that shows it every Team's id, so the daily Job can list
+  the Teams (ADR 0009). Every other table refuses it, even with a Team set: the Team policies apply to every role,
+  so it holds no grant they could open (#36).
 - **Foreign keys include the Team:** `(team_id, id)`, because Postgres checks foreign keys without the policies,
   and a plain key would let Team A point at Team B's rows and learn they exist.
 - **Fields people filter on are real columns**, not JSON: a JSON filter lost its index under the policies.
@@ -38,8 +39,9 @@ Spike code and cases: the capstone archive, `architecture/spikes/team-scoping/`.
 
 - **On Cloud SQL, what's known before the first deploy:**
   - `warden_admin` is made without `BYPASSRLS` everywhere, so Cloud SQL, the local database and CI work alike; a
-    superuser running `roles` takes it away from one that has it (#36). It reads only `teams (id)`, through its own
-    policy, and logs in with its own password (`warden-db-admin-password`), which only the daily Job's account reads.
+    superuser running `roles` takes it away from one that has it, and a runner that can't refuses to set its
+    password (#36). It reads only `teams (id)`, through its own grant and policy, and logs in with its own password
+    (`warden-db-admin-password`), which only the daily Job's account reads.
   - `checkDatabaseRole` refuses `warden_admin` and `warden_migrate`, and any role that can become them, by name, at
     start and on each new connection (#16, #17); also their preview twins, and an app role that is a member of any
     role (#32).
