@@ -11,9 +11,9 @@
 #        Unset, empty or 0 is a real run. Any other value stops it before anything runs.
 # Env:   WARDEN_GITHUB_REPO (<owner>/<repo>) and WARDEN_GITHUB_REPO_ID (its numeric id:
 #        `gh api repos/<owner>/<repo> --jq .id`), both required: the one GitHub repository that may deploy.
-# Needs: for a real run, gcloud signed in, application-default credentials (gcloud auth application-default login),
-#        node, cloud-sql-proxy, and the server's dependencies (pnpm install): the roles step runs
-#        server/src/roles.ts from this machine.
+# Needs: for a real run, gcloud signed in, application-default credentials (gcloud auth application-default login)
+#        whose quota project is <project-id> or unset, node, cloud-sql-proxy, and the server's dependencies
+#        (pnpm install): the roles step runs server/src/roles.ts from this machine.
 #
 # No secret value is printed, logged or written to a file: each password is generated in a pipe straight into
 # `gcloud secrets create --data-file=-`, and read back only into the one roles process's environment.
@@ -177,6 +177,29 @@ github_repository() {
   GITHUB_REPO_ID=$WARDEN_GITHUB_REPO_ID
 }
 
+# The quota project in the application-default credentials, or nothing when they set none. No gcloud command prints
+# it: it's the credentials file's quota_project_id, which gcloud and Google's client libraries (the proxy's) read
+# from GOOGLE_APPLICATION_CREDENTIALS when set, otherwise from gcloud's config folder (CLOUDSDK_CONFIG, or
+# ~/.config/gcloud). No file (credentials from a metadata server): nothing. A file that isn't valid JSON fails with
+# that alone: JSON.parse's own error quotes the file, which holds secrets (client_secret, refresh_token).
+adc_quota_project() {
+  local config=${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}
+  local file=${GOOGLE_APPLICATION_CREDENTIALS:-$config/application_default_credentials.json}
+  if [[ ! -f $file ]]; then return 0; fi
+  node -e '
+    const file = process.argv[1];
+    let credentials;
+    try {
+      credentials = JSON.parse(require("node:fs").readFileSync(file, "utf8"));
+    } catch {
+      process.stderr.write(`gcp-setup: the application-default credentials file ${file} isn'\''t valid JSON\n`);
+      process.exit(1);
+    }
+    const quota = credentials?.quota_project_id;
+    if (typeof quota === "string") process.stdout.write(quota);
+  ' "$file"
+}
+
 preflight() {
   if dry_run; then
     note "DRY_RUN: printing the commands only, as if nothing existed yet; a real run skips what's already there"
@@ -211,8 +234,20 @@ preflight() {
       "run gcloud auth application-default login first" >&2
     exit 1
   fi
+  local project=$1 instance=$2 missing=() secret quota
+  # The proxy bills its Cloud SQL Admin API calls to the credentials' quota project: another project, where that API
+  # may be off, refuses them, and the roles step fails with a bare ECONNRESET.
+  if ! quota=$(adc_quota_project); then
+    echo "gcp-setup: couldn't read the application-default credentials' quota project; nothing was changed" >&2
+    exit 1
+  fi
+  if [[ -n $quota && $quota != "$project" ]]; then
+    echo "gcp-setup: the application-default credentials' quota project is $quota, not $project," \
+      "so the Cloud SQL Auth Proxy's calls would be refused; run" \
+      "gcloud auth application-default set-quota-project $project first. Nothing was changed." >&2
+    exit 1
+  fi
   # What the owner makes by hand, checked before any change.
-  local project=$1 instance=$2 missing=() secret
   exists gcloud sql instances describe "$instance" --project="$project" ||
     missing+=("Cloud SQL instance $instance")
   for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key; do
@@ -316,14 +351,15 @@ print_roles() {
     ${5:+"WARDEN_ADMIN_PASSWORD=<from $5>"} "node server/src/roles.ts" | paste -sd ' ' -
 }
 
-# run_roles <project> <set> <database> <app secret> <migrate secret> [admin secret]: the roles script for one set, on
-# its own database, as postgres, through the proxy. Each password goes from Secret Manager into this one process's
-# environment only (a prefix assignment, not an argument). Without an admin secret, the admin role gets no password
-# (the preview set: no preview Job runs, so it can't log in). A failure stops the script with the roles script's exit
-# code; its own error, which holds no password, is above.
+# run_roles <project> <instance> <set> <database> <app secret> <migrate secret> [admin secret]: the roles script for
+# one set, on its own database, as postgres, through the proxy. Each password goes from Secret Manager into this one
+# process's environment only (a prefix assignment, not an argument). Without an admin secret, the admin role gets no
+# password (the preview set: no preview Job runs, so it can't log in). A failure stops the script with the roles
+# script's exit code; its own error, which holds no password, is above. When postgres's login is refused (28P01), it
+# also says how to reset that password from warden-db-password.
 run_roles() {
-  local project=$1 set=$2 database=$3 app_secret=$4 migrate_secret=$5 admin_secret=${6-}
-  local postgres_password app_password migrate_password admin_password="" status=0
+  local project=$1 instance=$2 set=$3 database=$4 app_secret=$5 migrate_secret=$6 admin_secret=${7-}
+  local postgres_password app_password migrate_password admin_password="" status=0 output
   postgres_password=$(gcloud secrets versions access latest --secret=warden-db-password --project="$project")
   app_password=$(gcloud secrets versions access latest --secret="$app_secret" --project="$project")
   migrate_password=$(gcloud secrets versions access latest --secret="$migrate_secret" --project="$project")
@@ -331,14 +367,25 @@ run_roles() {
     admin_password=$(gcloud secrets versions access latest --secret="$admin_secret" --project="$project")
   fi
   note "the $set roles, on $database"
-  WARDEN_DATABASE_ROLES=$set PGHOST=127.0.0.1 PGPORT=$PROXY_PORT PGUSER=postgres PGDATABASE=$database \
+  # Its output is kept to look for the refused login: printed on stdout when it succeeds, and on stderr, above the
+  # script's own error, when it fails.
+  output=$(WARDEN_DATABASE_ROLES=$set PGHOST=127.0.0.1 PGPORT=$PROXY_PORT PGUSER=postgres PGDATABASE=$database \
     PGPASSWORD=$postgres_password WARDEN_APP_PASSWORD=$app_password WARDEN_MIGRATE_PASSWORD=$migrate_password \
-    WARDEN_ADMIN_PASSWORD=$admin_password node "$ROOT/server/src/roles.ts" || status=$?
-  if [[ $status != 0 ]]; then
-    echo "gcp-setup: the roles step failed for the $set set on $database (exit $status);" \
-      "the roles script's error is above" >&2
-    exit "$status"
+    WARDEN_ADMIN_PASSWORD=$admin_password node "$ROOT/server/src/roles.ts" 2>&1) || status=$?
+  if [[ $status == 0 ]]; then
+    if [[ -n $output ]]; then printf '%s\n' "$output"; fi
+    return 0
   fi
+  if [[ -n $output ]]; then printf '%s\n' "$output" >&2; fi
+  echo "gcp-setup: the roles step failed for the $set set on $database (exit $status);" \
+    "the roles script's error is above" >&2
+  if [[ $output =~ 28P01|password\ authentication\ failed ]]; then
+    # shellcheck disable=SC2016 # printed for the owner to paste: the secret is read then, not here
+    echo "gcp-setup: the postgres password doesn't match the secret warden-db-password;" \
+      "reset it with this command, then run this script again:" >&2
+    printf '  %s\n' "gcloud sql users set-password postgres --instance=$instance --project=$project"' --password="$(gcloud secrets versions access latest --secret=warden-db-password --project='"$project"')"' >&2
+  fi
+  exit "$status"
 }
 
 main() {
@@ -444,8 +491,10 @@ main() {
     note "then the proxy is stopped"
   else
     start_proxy "$connection"
-    run_roles "$project" live warden warden-db-app-password warden-db-migrate-password warden-db-admin-password
-    run_roles "$project" preview warden_preview warden-db-preview-app-password warden-db-preview-migrate-password
+    run_roles "$project" "$instance" live warden warden-db-app-password warden-db-migrate-password \
+      warden-db-admin-password
+    run_roles "$project" "$instance" preview warden_preview warden-db-preview-app-password \
+      warden-db-preview-migrate-password
     cleanup
   fi
 
