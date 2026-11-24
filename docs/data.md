@@ -61,8 +61,9 @@ Warden itself sends no product telemetry anywhere.
 - **Team deletion isn't available yet** (until #6). Nobody can delete a Team today, from Warden or from Clerk:
   Organization deletion is turned off in Clerk through `adminDeleteEnabled`, for the instance (the setting "Allow
   members to delete this organization", which new Teams take) and on each existing Team (#70), not through the
-  `org:admin` role's permissions. So the Team switcher's Manage screen offers Leave Team and no delete. Deleting only the Clerk Organization would leave every Warden row for the Team behind, so the
-  delete stays off until #6 deletes both together.
+  `org:admin` role's permissions. So the Team switcher's Manage screen offers Leave Team and no delete. Deleting
+  only the Clerk Organization would leave every Warden row for the Team behind, so the delete stays off until #6
+  deletes both together.
 - **A person leaving:** history keeps their Clerk user id, never their name or email. The dashboard reads names from
   Clerk when it shows them. Once Clerk deletes the person, history shows "former member".
 - **Cloud Logging:** Warden keeps the `_Default` bucket's 30 days. Every log line Warden writes passes through the
