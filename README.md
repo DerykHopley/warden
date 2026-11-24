@@ -37,8 +37,8 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    ```
 
    `roles` runs as the compose superuser `warden` and makes `warden_migrate` (owns the schema and runs the
-   migrations), `warden_app` (what the app connects as, bound by row-level security) and `warden_admin` (bypasses
-   it, for deliberate cross-Team tasks); it's safe to run again. `migrate` applies the new SQL files in
+   migrations), `warden_app` (what the app connects as, bound by row-level security) and `warden_admin` (no
+   `BYPASSRLS`: it lists Team ids, for the daily Job, and reads nothing else); it's safe to run again. `migrate` applies the new SQL files in
    `server/migrations`, in file-name order, each in its own transaction; it only goes forwards. It runs only as
    `warden_migrate` (the `.envrc` user `warden` is refused), so every table gets the app's grants. Run it again
    after pulling new migrations.
@@ -49,9 +49,13 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
 The server checks its configuration at start-up and stops, naming the variable, when a required one is missing.
 It also stops, naming the role and the reason, when its database role can bypass row-level security: a superuser,
 a role with `BYPASSRLS`, or one that can become such a role or a table's owner. It refuses `warden_migrate` and
-`warden_admin` by name too, whatever their attributes, as on Cloud SQL `warden_admin` has no `BYPASSRLS`.
+`warden_admin` by name too, whatever their attributes.
 When the database can't be reached at start, it stays up and checks the role on the first connection that
 succeeds.
+
+`pnpm --filter @warden/server expire` runs the daily Job once against the compose database: as `warden_app`, with
+`warden_admin` listing the Teams, it reopens every Accepted Finding whose expiry has passed, and logs one summary
+line.
 `GET /api/health` answers 200 when the database answers and offers the `vector` extension, and 503 naming the
 failed part otherwise.
 
@@ -107,8 +111,8 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 | Artifact Registry | the Docker repositories `warden` (releases) and `warden-preview` (owner previews), in `europe-west1` |
 | Cloud SQL | the databases `warden` and `warden_preview`; daily backups, 7 kept; point-in-time recovery with 6 days of logs (Cloud SQL's docs ask for fewer log days than backups); no authorized networks, and connectors required |
 | Logging | the `_Default` log bucket keeps 30 days; Data Access audit logs (`DATA_READ`) for Secret Manager only, so each read of a secret is recorded |
-| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all eight secrets' replication |
-| Database roles | run from your machine, as `postgres`, through the Cloud SQL Auth Proxy on a free local port: `server/src/roles.ts` makes the live roles (`warden_migrate`, `warden_app`, `warden_admin`) on `warden`, then the preview roles (`warden_preview_migrate`, `warden_preview_app`, `warden_preview_admin`) on `warden_preview`, each with its set's two passwords. Each database lets only its own set connect. The passwords go from Secret Manager into that one process's environment only; the proxy is stopped when the script ends, also on failure. No service account reads the `postgres` password, so **rerun the script after a change to `createRoles`** |
+| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-admin-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all nine secrets' replication |
+| Database roles | run from your machine, as `postgres`, through the Cloud SQL Auth Proxy on a free local port: `server/src/roles.ts` makes the live roles (`warden_migrate`, `warden_app`, `warden_admin`) on `warden`, with their three passwords, then the preview roles (`warden_preview_migrate`, `warden_preview_app`, `warden_preview_admin`) on `warden_preview`, with the app and migrate passwords only: no preview Job runs, so `warden_preview_admin` can't log in. Each database lets only its own set connect. The passwords go from Secret Manager into that one process's environment only; the proxy is stopped when the script ends, also on failure. No service account reads the `postgres` password, so **rerun the script after a change to `createRoles`** |
 | Service accounts | none has a key. See the table below |
 | Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches. The provider maps each token to its repository id and branch kind (`attribute.deploy`, such as `<repo-id>:main`): only this repository's `main` tokens may act as `warden-deploy`, and only its `preview/*` tokens as `warden-preview-deploy`, so a token from another repository can never match, even through another provider in the pool |
 | The services and the job | Cloud Run services `warden` (as `warden-run`, at most 2 instances) and `warden-preview` (as `warden-preview-run`, at most 1 instance), each public with Google's placeholder image, and the Cloud Run job `warden-migrate-preview` (as `warden-preview-migrate`, with Google's placeholder job image). The script makes them because the deploy accounts can't make a service public, and `warden-preview-deploy`'s roles are on the preview service and job themselves. Run again, it puts each one's service account, instance limit and public access back, keeping the image it runs. Sign-in is Clerk's job |
@@ -119,7 +123,8 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 |---|---|---|
 | `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key` |
 | `warden-migrate` | the live migration job | Cloud SQL client; read `warden-db-app-password` and `warden-db-migrate-password`. Not the `postgres` password |
-| `warden-deploy` | GitHub Actions on `main` | Cloud Run developer on the project; writer on the `warden` repository; act as `warden-run` and `warden-migrate`. Reads no secret |
+| `warden-daily` | the daily expiry Job (#24 makes it) | Cloud SQL client; read `warden-db-app-password` and `warden-db-admin-password`. The only account that reads the admin password, so the server can't list Teams |
+| `warden-deploy` | GitHub Actions on `main` | Cloud Run developer on the project; writer on the `warden` repository; act as `warden-run`, `warden-migrate` and `warden-daily`. Reads no secret |
 | `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key` |
 | `warden-preview-migrate` | the `warden-migrate-preview` job | Cloud SQL client; read `warden-db-preview-migrate-password` only |
 | `warden-preview-deploy` | GitHub Actions on `preview/*` | Cloud Run developer on the `warden-preview` service and the `warden-migrate-preview` job only, never the project; writer on the `warden-preview` repository only; act as `warden-preview-run` and `warden-preview-migrate` only. Reads no secret |

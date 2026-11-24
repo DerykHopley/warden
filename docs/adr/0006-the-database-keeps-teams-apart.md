@@ -12,7 +12,9 @@ that can't bypass them. A query that forgets the Team still can't reach another 
 - **Policies on every Team-owned table, read and write,** with row-level security forced so the table owner is bound
   too. A CI check fails when any table lacks it.
 - **Separate roles:** the app role (bound by the policies), a migration role, and an admin role for the few
-  deliberate cross-Team tasks (the dev page's totals), used from one marked place in the code.
+  deliberate cross-Team tasks, used from one marked place in the code. The admin role has no `BYPASSRLS` anywhere:
+  one policy and a column grant let it read `teams (id)` and nothing else, so the daily Job can list the Teams
+  (ADR 0009) and every other table shows it no row (#36).
 - **Foreign keys include the Team:** `(team_id, id)`, because Postgres checks foreign keys without the policies,
   and a plain key would let Team A point at Team B's rows and learn they exist.
 - **Fields people filter on are real columns**, not JSON: a JSON filter lost its index under the policies.
@@ -35,9 +37,9 @@ Spike code and cases: the capstone archive, `architecture/spikes/team-scoping/`.
 ## Consequences
 
 - **On Cloud SQL, what's known before the first deploy:**
-  - Where the user running `roles` can't grant `BYPASSRLS` (Cloud SQL's `postgres`), `warden_admin` is made
-    without it, with a warning. There it's bound by the policies like `warden_app`, so `withAdmin` can't cross
-    Teams.
+  - `warden_admin` is made without `BYPASSRLS` everywhere, so Cloud SQL, the local database and CI work alike; a
+    superuser running `roles` takes it away from one that has it (#36). It reads only `teams (id)`, through its own
+    policy, and logs in with its own password (`warden-db-admin-password`), which only the daily Job's account reads.
   - `checkDatabaseRole` refuses `warden_admin` and `warden_migrate`, and any role that can become them, by name, at
     start and on each new connection (#16, #17); also their preview twins, and an app role that is a member of any
     role (#32).
@@ -48,8 +50,8 @@ Spike code and cases: the capstone archive, `architecture/spikes/team-scoping/`.
     machine, through the Cloud SQL Auth Proxy, and the migration jobs run only migrations (#32). Whether `postgres`
     may revoke PUBLIC's CONNECT on a database `gcloud` made (it belongs to `cloudsqlsuperuser`) is checked by
     `createRoles` itself, which stops if PUBLIC can still connect.
-  - What the first deploy must still show live: `warden_app`'s attributes on Cloud SQL, and `warden_admin`'s
-    outcome, which #24 records.
+  - What the first deploy must still show live: `warden_app`'s attributes on Cloud SQL, and that `warden_admin`
+    lists Team ids there, which #24 records.
 - An empty result can mean "no Team set" as well as "nothing there": tests assert the Team is set, and `withTeam`
   refuses an empty Team.
 - The local-first desktop app holds one Team, so it doesn't need the policies; it keeps the same `withTeam` shape.

@@ -119,8 +119,8 @@ Where a Finding stands: Open, Fixed, Accepted or False positive. Every change na
 Who made a change: a person or an agent. An agent can't set Accepted or False positive; it makes a Proposal.
 
 **Proposal**:
-A decision an agent suggests, such as accepting a Finding. It waits until a person with the right Role approves or
-rejects it, and keeps both who asked for it and who approved it.
+A decision an agent or a Member suggests: accepting a Finding, or marking it a False positive. It waits until a
+Lead approves or rejects it, and keeps both who asked for it and who approved it.
 _Avoid_: suggestion, draft decision
 
 **Fix rate**:
