@@ -2,9 +2,9 @@
 # Sets up Warden's Google Cloud project, once: the APIs, the Docker repositories, the database's backups and network,
 # log retention and Secret Manager's audit logs, one password secret per database role, the database roles
 # themselves, two sets of service accounts (live, with the daily Job's, and owner previews), GitHub's deploy
-# identities, the two public services and the preview migration job. Safe to run again: it creates only what's
-# missing, and sets each setting to the value below whatever it was. README.md's "Setting up Google Cloud" says what it
-# makes, and why.
+# identities, the two public services, the preview migration job, and the daily expiry Job with the Cloud Scheduler
+# job that starts it. Safe to run again: it creates only what's missing, and sets each setting to the value below
+# whatever it was. README.md's "Setting up Google Cloud" says what it makes, and why.
 #
 # Usage: [DRY_RUN=1] scripts/gcp-setup.sh <project-id> <instance>
 #        DRY_RUN=1 prints each command instead of running it, needs no credentials, and assumes nothing exists yet.
@@ -25,6 +25,9 @@ readonly SERVICE=warden
 readonly PREVIEW_REPOSITORY=warden-preview
 readonly PREVIEW_SERVICE=warden-preview
 readonly PREVIEW_JOB=warden-migrate-preview
+# The daily expiry Job and the Cloud Scheduler job that starts it share this name (ADR 0009). After the 03:00 backup.
+readonly DAILY_JOB=warden-daily-expiry
+readonly DAILY_SCHEDULE="0 4 * * *"
 readonly SERVICE_IMAGE=us-docker.pkg.dev/cloudrun/container/hello
 readonly JOB_IMAGE=us-docker.pkg.dev/cloudrun/container/job:latest
 readonly POOL=github
@@ -294,6 +297,18 @@ ensure_service() {
   fi
 }
 
+# ensure_job <project> <job> <service account>: made with Google's placeholder job image, or its service account put
+# back, keeping whatever image it runs now (a release sets that).
+ensure_job() {
+  local project=$1 job=$2 account=$3
+  if ! exists gcloud run jobs describe "$job" --region="$REGION" --project="$project"; then
+    run gcloud run jobs create "$job" --image="$JOB_IMAGE" --region="$REGION" --service-account="$account" \
+      --project="$project"
+  else
+    run gcloud run jobs update "$job" --region="$REGION" --service-account="$account" --project="$project"
+  fi
+}
+
 # The roles run for a set as the dry run prints it: <set> <database> <app secret> <migrate secret> [admin secret].
 print_roles() {
   printf '%s\n' "WARDEN_DATABASE_ROLES=$1 PGHOST=127.0.0.1 PGPORT=LOCAL_PORT PGUSER=postgres PGDATABASE=$2" \
@@ -349,11 +364,12 @@ main() {
   local preview_run_sa="warden-preview-run@$project.iam.gserviceaccount.com"
   local preview_migrate_sa="warden-preview-migrate@$project.iam.gserviceaccount.com"
   local preview_deploy_sa="warden-preview-deploy@$project.iam.gserviceaccount.com"
+  local scheduler_sa="warden-scheduler@$project.iam.gserviceaccount.com"
 
   step "1. APIs"
   run gcloud services enable run.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com \
     artifactregistry.googleapis.com iam.googleapis.com sts.googleapis.com iamcredentials.googleapis.com \
-    --project="$project"
+    cloudscheduler.googleapis.com --project="$project"
 
   step "2. Artifact Registry (warden for releases, warden-preview for owner previews)"
   local repository
@@ -435,8 +451,10 @@ main() {
 
   step "7. Service accounts (none gets a key)"
   local account
+  # warden-scheduler (Cloud Scheduler) gets no project role and reads no secret: its one binding is on the daily Job,
+  # in step 9.
   for account in warden-run warden-migrate warden-deploy warden-daily warden-preview-run warden-preview-migrate \
-    warden-preview-deploy; do
+    warden-preview-deploy warden-scheduler; do
     if ! exists gcloud iam service-accounts describe "$account@$project.iam.gserviceaccount.com" \
       --project="$project"; then
       run gcloud iam service-accounts create "$account" --display-name="Warden: $account" --project="$project"
@@ -507,22 +525,30 @@ main() {
     --member="principalSet://iam.googleapis.com/$pool_name/attribute.deploy/$GITHUB_REPO_ID:preview" \
     --project="$project"
 
-  step "9. The services and the preview migration job"
-  # Made here because the deploy accounts can't set IAM policy, so they can't make a service public, and
-  # warden-preview-deploy's Cloud Run roles are on the preview service and job themselves. Sign-in is Clerk's job.
+  step "9. The services, the preview migration job, and the daily Job with its Cloud Scheduler trigger"
+  # Made here because the deploy accounts can't set IAM policy, so they can't make a service public or let Scheduler
+  # start a Job, and warden-preview-deploy's Cloud Run roles are on the preview service and job themselves. Sign-in is
+  # Clerk's job.
   ensure_service "$project" "$SERVICE" "$run_sa" 2
   ensure_service "$project" "$PREVIEW_SERVICE" "$preview_run_sa" 1
-  if ! exists gcloud run jobs describe "$PREVIEW_JOB" --region="$REGION" --project="$project"; then
-    run gcloud run jobs create "$PREVIEW_JOB" --image="$JOB_IMAGE" --region="$REGION" \
-      --service-account="$preview_migrate_sa" --project="$project"
-  else
-    run gcloud run jobs update "$PREVIEW_JOB" --region="$REGION" --service-account="$preview_migrate_sa" \
-      --project="$project"
-  fi
+  ensure_job "$project" "$PREVIEW_JOB" "$preview_migrate_sa"
   run_retrying gcloud run services add-iam-policy-binding "$PREVIEW_SERVICE" --region="$REGION" \
     --member="serviceAccount:$preview_deploy_sa" --role=roles/run.developer --project="$project"
   run_retrying gcloud run jobs add-iam-policy-binding "$PREVIEW_JOB" --region="$REGION" \
     --member="serviceAccount:$preview_deploy_sa" --role=roles/run.developer --project="$project"
+  # The daily Job (ADR 0009): a release gives it Warden's image and settings. Cloud Scheduler starts it without
+  # overrides, so run.invoker (which holds run.jobs.run) is all warden-scheduler needs.
+  ensure_job "$project" "$DAILY_JOB" "$daily_sa"
+  run_retrying gcloud run jobs add-iam-policy-binding "$DAILY_JOB" --region="$REGION" \
+    --member="serviceAccount:$scheduler_sa" --role=roles/run.invoker --project="$project"
+  local trigger_verb=create
+  if exists gcloud scheduler jobs describe "$DAILY_JOB" --location="$REGION" --project="$project"; then
+    trigger_verb=update
+  fi
+  run gcloud scheduler jobs "$trigger_verb" http "$DAILY_JOB" --location="$REGION" --schedule="$DAILY_SCHEDULE" \
+    --time-zone=Etc/UTC \
+    --uri="https://run.googleapis.com/v2/projects/$project/locations/$REGION/jobs/$DAILY_JOB:run" \
+    --http-method=POST --oauth-service-account-email="$scheduler_sa" --project="$project"
 
   step "The database's network"
   note "Why the public IP stays: a private IP needs a VPC network, private services access and Direct VPC egress,"
