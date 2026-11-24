@@ -7,22 +7,16 @@ import { randomUUID } from "node:crypto";
 import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createWithTeam, type WithTeam } from "../src/with-team.ts";
-import { createMigratedTestDatabase, poolAs, type DatabaseRole } from "./databases.ts";
+import type { WithTeam } from "../src/with-team.ts";
+import { ownDatabase } from "./databases.ts";
 
 const team = `org_roles_${randomUUID()}`;
-const pools: pg.Pool[] = [];
-let drop: (() => Promise<unknown>) | undefined;
-const withTeamAs = {} as Record<"warden_app" | "warden_migrate", WithTeam>;
+let pools: Record<"warden_app" | "warden_migrate", pg.Pool>;
+let withTeamAs: Record<"warden_app" | "warden_migrate", WithTeam>;
+let end: (() => Promise<void>) | undefined;
 
 beforeAll(async () => {
-  const database = await createMigratedTestDatabase();
-  drop = database.drop;
-  for (const role of ["warden_app", "warden_migrate"] as const satisfies DatabaseRole[]) {
-    const pool = poolAs(role, database.name);
-    pools.push(pool);
-    withTeamAs[role] = createWithTeam(pool);
-  }
+  ({ pools, withTeamAs, end } = await ownDatabase(["warden_app", "warden_migrate"]));
   await withTeamAs.warden_app(team, async (tx) => {
     await tx.insertInto("teams").values({ id: team }).execute();
     await tx
@@ -43,14 +37,11 @@ beforeAll(async () => {
   });
 }, 30_000);
 
-afterAll(async () => {
-  for (const pool of pools) await pool.end();
-  await drop?.();
-}, 30_000);
+afterAll(() => end?.(), 30_000);
 
 describe("0004_team_members", () => {
   it("makes team_members and role_history with the approved columns", async () => {
-    const { rows } = await pools[0]!.query<{
+    const { rows } = await pools.warden_app.query<{
       table_name: string;
       column_name: string;
       data_type: string;
@@ -98,7 +89,11 @@ describe("0004_team_members", () => {
   });
 
   it("keys each table by the Team, and points both at teams", async () => {
-    const { rows } = await pools[0]!.query<{ table: string; kind: string; definition: string }>(`
+    const { rows } = await pools.warden_app.query<{
+      table: string;
+      kind: string;
+      definition: string;
+    }>(`
       select conrelid::regclass::text as table, contype as kind, pg_get_constraintdef(oid) as definition
         from pg_constraint
        where conrelid in ('team_members'::regclass, 'role_history'::regclass) and contype in ('p', 'f')

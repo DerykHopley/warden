@@ -68,10 +68,10 @@ export async function lockTeamFindings(tx: Transaction<Database>, team: string):
 }
 
 /**
- * The time a row is written, for a history row's `at` and a Proposal's `requested_at`: the clock when the statement
- * runs, under the Team's lock, not `now()`, which is when the transaction began. A transaction can begin before
- * another and take the lock after it; the lock's order is the order changes happen in, and only the write time keeps
- * it, so the stale check on approving a Proposal compares the two in that order.
+ * The time a row is written, for a history row's `at` and a Proposal's `requested_at` and `decided_at`: the clock
+ * when the statement runs, under the Team's lock, not `now()`, which is when the transaction began. A transaction can
+ * begin before another and take the lock after it; the lock's order is the order changes happen in, and only the
+ * write time keeps it, so the stale check on approving a Proposal compares history and Proposal in that order.
  */
 export const writtenAt = sql<Date>`clock_timestamp()`;
 

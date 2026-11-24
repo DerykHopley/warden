@@ -7,12 +7,12 @@
 import { randomUUID } from "node:crypto";
 import { sql, type RawBuilder } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createWithTeam, type WithTeam } from "../src/with-team.ts";
-import { createMigratedTestDatabase, poolAs, type DatabaseRole } from "./databases.ts";
+import type { WithTeam } from "../src/with-team.ts";
+import { ownDatabase } from "./databases.ts";
 
 const team = `org_proposals_${randomUUID()}`;
-const ends: (() => Promise<unknown>)[] = [];
-const withTeamAs = {} as Record<"warden_app" | "warden_migrate", WithTeam>;
+let withTeamAs: Record<"warden_app" | "warden_migrate", WithTeam>;
+let end: (() => Promise<void>) | undefined;
 
 const finding = (id: string) => ({
   team_id: team,
@@ -65,13 +65,7 @@ const decide = (id: string, role: "warden_app" | "warden_migrate" = "warden_app"
   );
 
 beforeAll(async () => {
-  const database = await createMigratedTestDatabase();
-  ends.push(database.drop);
-  for (const role of ["warden_app", "warden_migrate"] as const satisfies DatabaseRole[]) {
-    const pool = poolAs(role, database.name);
-    ends.push(() => pool.end());
-    withTeamAs[role] = createWithTeam(pool);
-  }
+  ({ withTeamAs, end } = await ownDatabase(["warden_app", "warden_migrate"]));
   await withTeamAs.warden_app(team, async (tx) => {
     await tx.insertInto("teams").values({ id: team }).execute();
     await tx
@@ -84,9 +78,7 @@ beforeAll(async () => {
   await decide("p-decided");
 }, 30_000);
 
-afterAll(async () => {
-  for (const end of ends.splice(0).reverse()) await end();
-}, 30_000);
+afterAll(() => end?.(), 30_000);
 
 const rows = () =>
   withTeamAs.warden_app(team, (tx) =>

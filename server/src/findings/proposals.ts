@@ -4,7 +4,7 @@
 // Proposal is decided at most once and a refusal writes nothing.
 import { randomUUID } from "node:crypto";
 import { Proposal, type Actor, type ProposalDecision, type ProposeBody } from "@warden/contracts";
-import { sql, type Selectable, type Transaction } from "kysely";
+import type { Selectable, Transaction } from "kysely";
 import type { Database } from "../schema.ts";
 import {
   applyLockedDecision,
@@ -124,7 +124,7 @@ async function decide(
 ): Promise<Proposal> {
   const row = await tx
     .updateTable("proposals")
-    .set({ ...outcome, decided_by: person, decided_at: sql<Date>`now()` })
+    .set({ ...outcome, decided_by: person, decided_at: writtenAt })
     .where("team_id", "=", team)
     .where("id", "=", id)
     .returningAll()

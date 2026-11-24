@@ -9,6 +9,7 @@ import { createPool, DATABASE_ROLE_NAMES, type DatabaseRoleNames } from "../src/
 import { createLogger } from "../src/log.ts";
 import { migrate } from "../src/migrate.ts";
 import { createRoles } from "../src/roles.ts";
+import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 
 /** A database role (not a person's Role in a Team). */
 export type DatabaseRole = (typeof DATABASE_ROLE_NAMES)[keyof typeof DATABASE_ROLE_NAMES];
@@ -62,6 +63,26 @@ export async function createMigratedTestDatabase(connection: pg.PoolConfig = {})
     await pool.end();
   }
   return database;
+}
+
+/**
+ * A migrated database of a test file's own, with a pool and a `withTeam` as each of `roles`: for a file that locks a
+ * table other files write (a truncate, a drop), which on the suite's shared database can deadlock them. `end` closes
+ * the pools and drops the database. Making it waits on a checkpoint: the hook passes a 30 s timeout.
+ */
+export async function ownDatabase<R extends DatabaseRole>(roles: readonly R[]) {
+  const database = await createMigratedTestDatabase();
+  const pools = {} as Record<R, pg.Pool>;
+  const withTeamAs = {} as Record<R, WithTeam>;
+  for (const role of roles) {
+    pools[role] = poolAs(role, database.name);
+    withTeamAs[role] = createWithTeam(pools[role]);
+  }
+  const end = async () => {
+    for (const role of roles) await pools[role].end();
+    await database.drop();
+  };
+  return { pools, withTeamAs, end };
 }
 
 /** A name for a test database or test role: the prefix, when, in seconds, then 12 hex digits. A test role may add a
