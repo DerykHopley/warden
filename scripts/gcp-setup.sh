@@ -465,9 +465,10 @@ main() {
   run gcloud sql instances patch "$instance" --backup-start-time=03:00 --retained-backups-count="$BACKUPS" \
     ${recovery[@]+"${recovery[@]}"} --retained-transaction-log-days="$LOG_DAYS" --project="$project"
   # D7: no address reaches the database directly. It keeps its public IP: Cloud Run's built-in connection goes
-  # through the Cloud SQL Auth Proxy, authorized by IAM, which connector enforcement admits.
+  # through the Cloud SQL Auth Proxy, authorized by IAM, which connector enforcement admits. And it takes only
+  # encrypted connections, so a plain one is refused even if a connector ever let it through.
   run gcloud sql instances patch "$instance" --clear-authorized-networks --connector-enforcement=REQUIRED \
-    --project="$project"
+    --ssl-mode=ENCRYPTED_ONLY --project="$project"
 
   step "4. Logging"
   run gcloud logging buckets update _Default --location=global --retention-days=30 --project="$project"

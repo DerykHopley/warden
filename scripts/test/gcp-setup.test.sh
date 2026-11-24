@@ -166,8 +166,8 @@ warden-preview-deploy@$project.iam.gserviceaccount.com --member=$pool_set/attrib
 assert_no_line "no binding admits the whole repository" "attribute.repository_id/"
 assert_line "the repository is named from WARDEN_GITHUB_REPO" "# GitHub repository: $repo (id $repo_id)"
 
-assert_line "authorized networks are cleared and connectors are required" \
-  "gcloud sql instances patch $instance --clear-authorized-networks --connector-enforcement=REQUIRED --project=$project"
+assert_line "authorized networks are cleared, connectors are required, and only encrypted connections are taken" \
+  "gcloud sql instances patch $instance --clear-authorized-networks --connector-enforcement=REQUIRED --ssl-mode=ENCRYPTED_ONLY --project=$project"
 assert_line "7 backups are kept, with 6 days of recovery logs (fewer than the backups, as Cloud SQL's docs say)" \
   "--retained-backups-count=7 --enable-point-in-time-recovery --retained-transaction-log-days=6"
 assert_line "it warns that turning on point-in-time recovery restarts the instance" \
