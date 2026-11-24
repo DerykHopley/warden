@@ -52,8 +52,11 @@ Spike code and cases: the capstone archive, `architecture/spikes/team-scoping/`.
     machine, through the Cloud SQL Auth Proxy, and the migration jobs run only migrations (#32). Whether `postgres`
     may revoke PUBLIC's CONNECT on a database `gcloud` made (it belongs to `cloudsqlsuperuser`) is checked by
     `createRoles` itself, which stops if PUBLIC can still connect.
-  - What the first deploy must still show live: `warden_app`'s attributes on Cloud SQL, and that `warden_admin`
-    lists Team ids there, which #24 records.
+  - What the first deploy showed live (the first owner preview, #65): the preview revision connected to Cloud SQL as
+    `warden_preview_app` and started, so the server's role check found it no superuser, without BYPASSRLS and a
+    member of no role. The rest needs `postgres`, which no agent reads: the owner's queries on #65, through the
+    Cloud SQL Auth Proxy, for `warden_app`'s and `warden_preview_app`'s attributes, PUBLIC's CONNECT on `warden` and
+    `warden_preview`, and `warden_admin` selecting `teams (id)` and nothing else. Their output lands here.
 - An empty result can mean "no Team set" as well as "nothing there": tests assert the Team is set, and `withTeam`
   refuses an empty Team.
 - The local-first desktop app holds one Team, so it doesn't need the policies; it keeps the same `withTeam` shape.
