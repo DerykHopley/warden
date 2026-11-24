@@ -7,9 +7,12 @@ import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createPool, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { createRoles } from "../src/roles.ts";
-import { poolAs, runInServer, testName } from "./databases.ts";
+import { DATABASE_TIMEOUT_MS, poolAs, runInServer, testName } from "./databases.ts";
 import { closedPort } from "./ports.ts";
 import { scramAuthenticates } from "./scram.ts";
+
+/** For a test that makes a database of its own (cloudSqlLike), and drops it. */
+const createsDatabase = { timeout: DATABASE_TIMEOUT_MS };
 
 const database = inject("testDatabase");
 const app = poolAs("warden_app", database);
@@ -147,8 +150,8 @@ describe("the roles script run twice by a user with CREATEROLE that isn't a supe
     fixture = await cloudSqlLike();
     await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
     await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
-  });
-  afterAll(() => fixture.drop());
+  }, DATABASE_TIMEOUT_MS);
+  afterAll(() => fixture.drop(), DATABASE_TIMEOUT_MS);
 
   it("hands public to the migration role", async () => {
     const { rows } = await fixture.asRunner.query(
@@ -192,8 +195,8 @@ describe("the roles script run by a user that can't grant BYPASSRLS, once the ad
     await superuser.query(`alter role ${fixture.names.admin} bypassrls`);
     fixture.lines.length = 0;
     await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
-  });
-  afterAll(() => fixture.drop());
+  }, DATABASE_TIMEOUT_MS);
+  afterAll(() => fixture.drop(), DATABASE_TIMEOUT_MS);
 
   it("leaves the admin role's BYPASSRLS on, and logs no warning about it", async () => {
     const { rows } = await superuser.query("select rolbypassrls from pg_roles where rolname = $1", [
@@ -218,8 +221,8 @@ describe("the roles script given passwords", () => {
       logger: fixture.logger,
       passwords,
     });
-  });
-  afterAll(() => fixture.drop());
+  }, DATABASE_TIMEOUT_MS);
+  afterAll(() => fixture.drop(), DATABASE_TIMEOUT_MS);
 
   it("checks a verifier as a login would", async () => {
     // Postgres's own verifier, from a password it hashed itself: the check passes it, and fails another password.
@@ -275,57 +278,65 @@ describe("the roles script given passwords", () => {
 });
 
 describe("the roles script failing to set a password", () => {
-  it("names the role and Postgres's code, and holds the password in neither form", async () => {
-    const fixture = await cloudSqlLike();
-    try {
-      await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
-      // CREATEROLE and the admin option on the migration role only: every step passes until it sets the app role's
-      // password, which Postgres refuses it.
-      const stranger = await fixture.role("stranger", "login createrole createdb");
-      await superuser.query(`grant ${fixture.names.migrate} to ${stranger} with admin option`);
-      const asStranger = createPool(silent, { user: stranger, database: fixture.base, max: 1 });
-      const password = `pw'\\${randomBytes(8).toString("hex")}`;
+  it(
+    "names the role and Postgres's code, and holds the password in neither form",
+    createsDatabase,
+    async () => {
+      const fixture = await cloudSqlLike();
+      try {
+        await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
+        // CREATEROLE and the admin option on the migration role only: every step passes until it sets the app role's
+        // password, which Postgres refuses it.
+        const stranger = await fixture.role("stranger", "login createrole createdb");
+        await superuser.query(`grant ${fixture.names.migrate} to ${stranger} with admin option`);
+        const asStranger = createPool(silent, { user: stranger, database: fixture.base, max: 1 });
+        const password = `pw'\\${randomBytes(8).toString("hex")}`;
+        try {
+          const error = await rejection(
+            createRoles(asStranger, {
+              names: fixture.names,
+              logger: fixture.logger,
+              passwords: { app: password },
+            }),
+          );
+
+          expect((error as Error).message).toBe(
+            `setting ${fixture.names.app}'s password failed (SQLSTATE 42501)`,
+          );
+          expect(everythingIn(error)).not.toContain(password);
+          expect(everythingIn(error)).not.toContain(pg.escapeLiteral(password));
+        } finally {
+          await asStranger.end();
+        }
+      } finally {
+        await fixture.drop();
+      }
+    },
+  );
+
+  it(
+    "refuses a password that isn't printable ASCII, without echoing it",
+    createsDatabase,
+    async () => {
+      const fixture = await cloudSqlLike();
       try {
         const error = await rejection(
-          createRoles(asStranger, {
+          createRoles(fixture.asRunner, {
             names: fixture.names,
             logger: fixture.logger,
-            passwords: { app: password },
+            passwords: { migrate: "päss-wörd" },
           }),
         );
 
         expect((error as Error).message).toBe(
-          `setting ${fixture.names.app}'s password failed (SQLSTATE 42501)`,
+          `${fixture.names.migrate}'s password must be printable ASCII`,
         );
-        expect(everythingIn(error)).not.toContain(password);
-        expect(everythingIn(error)).not.toContain(pg.escapeLiteral(password));
+        expect(everythingIn(error)).not.toContain("päss-wörd");
       } finally {
-        await asStranger.end();
+        await fixture.drop();
       }
-    } finally {
-      await fixture.drop();
-    }
-  });
-
-  it("refuses a password that isn't printable ASCII, without echoing it", async () => {
-    const fixture = await cloudSqlLike();
-    try {
-      const error = await rejection(
-        createRoles(fixture.asRunner, {
-          names: fixture.names,
-          logger: fixture.logger,
-          passwords: { migrate: "päss-wörd" },
-        }),
-      );
-
-      expect((error as Error).message).toBe(
-        `${fixture.names.migrate}'s password must be printable ASCII`,
-      );
-      expect(everythingIn(error)).not.toContain("päss-wörd");
-    } finally {
-      await fixture.drop();
-    }
-  });
+    },
+  );
 });
 
 /**
@@ -390,8 +401,8 @@ describe("the roles script and who may connect", () => {
   let fixture: Awaited<ReturnType<typeof twoSets>>;
   beforeAll(async () => {
     fixture = await twoSets();
-  });
-  afterAll(() => fixture?.drop());
+  }, DATABASE_TIMEOUT_MS);
+  afterAll(() => fixture?.drop(), DATABASE_TIMEOUT_MS);
 
   const canConnect = async (role: string, database: string) => {
     const { rows } = await superuser.query<{ can: boolean }>(
@@ -465,7 +476,7 @@ describe("the roles script and who may connect", () => {
 });
 
 describe("the roles script and stray memberships of the app role", () => {
-  it("revokes them, whoever granted them", async () => {
+  it("revokes them, whoever granted them", createsDatabase, async () => {
     const fixture = await cloudSqlLike();
     try {
       await createRoles(fixture.asSuperuser, { names: fixture.names, logger: fixture.logger });
@@ -487,7 +498,7 @@ describe("the roles script and stray memberships of the app role", () => {
     }
   });
 
-  it("throws naming the app role when one can't be revoked", async () => {
+  it("throws naming the app role when one can't be revoked", createsDatabase, async () => {
     const fixture = await cloudSqlLike();
     try {
       await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });

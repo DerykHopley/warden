@@ -15,6 +15,12 @@ export type DatabaseRole = (typeof DATABASE_ROLE_NAMES)[keyof typeof DATABASE_RO
 
 const logger = createLogger(() => {});
 
+/**
+ * The timeout for a test or hook that creates or drops a database. Postgres runs a checkpoint for each, which took
+ * over 5 s (vitest's default) in one full run; the other tests keep the default.
+ */
+export const DATABASE_TIMEOUT_MS = 30_000;
+
 /** A test database's name carries when it was made, so a later run can tell a killed run's leftovers from a live one. */
 const PREFIX = "warden_test_";
 const STALE_AFTER_SECONDS = 3600;

@@ -10,14 +10,22 @@ import { afterEach, describe, expect, inject, it } from "vitest";
 import { createPool, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { MIGRATIONS_FOLDER, migrate } from "../src/migrate.ts";
-import { createTestDatabase, poolAs, runInServer, testName } from "./databases.ts";
+import {
+  createTestDatabase,
+  DATABASE_TIMEOUT_MS,
+  poolAs,
+  runInServer,
+  testName,
+} from "./databases.ts";
 import { closedPort } from "./ports.ts";
 
 const silent = createLogger(() => {});
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-});
+}, DATABASE_TIMEOUT_MS);
+/** For a test that makes a fresh database. */
+const createsDatabase = { timeout: DATABASE_TIMEOUT_MS };
 
 async function freshDatabase() {
   const database = await createTestDatabase();
@@ -49,7 +57,7 @@ const shipped = readdirSync(MIGRATIONS_FOLDER)
   .map((file) => file.slice(0, -".sql".length));
 
 describe("pnpm migrate", () => {
-  it("applies the migrations folder, then nothing on a second run", async () => {
+  it("applies the migrations folder, then nothing on a second run", createsDatabase, async () => {
     const database = await freshDatabase();
 
     const first = await runInServer(["pnpm", "--silent", "migrate"], asMigrate(database.name));
@@ -74,83 +82,101 @@ describe("pnpm migrate", () => {
     expect(result.output).not.toMatch(/ECONNREFUSED/);
   });
 
-  it("refuses to run as any user but warden_migrate, applying nothing", async () => {
-    const database = await freshDatabase();
+  it(
+    "refuses to run as any user but warden_migrate, applying nothing",
+    createsDatabase,
+    async () => {
+      const database = await freshDatabase();
 
-    // The PG* superuser: tables it made would miss warden_migrate's default grants.
-    const result = await runInServer(["pnpm", "--silent", "migrate"], {
-      PGDATABASE: database.name,
-    });
+      // The PG* superuser: tables it made would miss warden_migrate's default grants.
+      const result = await runInServer(["pnpm", "--silent", "migrate"], {
+        PGDATABASE: database.name,
+      });
 
-    expect(result.code).not.toBe(0);
-    expect(result.output).toContain("warden_migrate");
-    const { rows } = await database.pool.query(
-      "select to_regclass('kysely_migration') is not null as tracked",
-    );
-    expect(rows[0]).toEqual({ tracked: false });
-  });
+      expect(result.code).not.toBe(0);
+      expect(result.output).toContain("warden_migrate");
+      const { rows } = await database.pool.query(
+        "select to_regclass('kysely_migration') is not null as tracked",
+      );
+      expect(rows[0]).toEqual({ tracked: false });
+    },
+  );
 });
 
 describe("the migration runner", () => {
   const migrateProcess = (folder: string, env: Record<string, string>) =>
     runInServer([process.execPath, "src/migrate.ts", folder], env);
 
-  it("applies files in the byte order of their names, not the order they were written", async () => {
-    const database = await freshDatabase();
-    // "0002_Beta" sorts before "0002_alpha" by bytes, after it in most locales.
-    const folder = migrationsFolder({
-      "0010_third.sql": "insert into ran (name) values ('0010_third');",
-      "0002_alpha.sql": "insert into ran (name) values ('0002_alpha');",
-      "0002_Beta.sql": "insert into ran (name) values ('0002_Beta');",
-      "0001_first.sql":
-        "create table ran (id int generated always as identity, name text); insert into ran (name) values ('0001_first');",
-    });
-    const order = ["0001_first", "0002_Beta", "0002_alpha", "0010_third"];
+  it(
+    "applies files in the byte order of their names, not the order they were written",
+    createsDatabase,
+    async () => {
+      const database = await freshDatabase();
+      // "0002_Beta" sorts before "0002_alpha" by bytes, after it in most locales.
+      const folder = migrationsFolder({
+        "0010_third.sql": "insert into ran (name) values ('0010_third');",
+        "0002_alpha.sql": "insert into ran (name) values ('0002_alpha');",
+        "0002_Beta.sql": "insert into ran (name) values ('0002_Beta');",
+        "0001_first.sql":
+          "create table ran (id int generated always as identity, name text); insert into ran (name) values ('0001_first');",
+      });
+      const order = ["0001_first", "0002_Beta", "0002_alpha", "0010_third"];
 
-    const result = await migrate(database.pool, folder);
+      const result = await migrate(database.pool, folder);
 
-    expect(result).toEqual({ applied: order });
-    const { rows } = await database.pool.query("select name from ran order by id");
-    expect(rows.map((row) => row.name)).toEqual(order);
-    expect(await appliedMigrations(database.pool)).toEqual(order);
-  });
+      expect(result).toEqual({ applied: order });
+      const { rows } = await database.pool.query("select name from ran order by id");
+      expect(rows.map((row) => row.name)).toEqual(order);
+      expect(await appliedMigrations(database.pool)).toEqual(order);
+    },
+  );
 
-  it("reads back applied migrations with equal times in the same byte order", async () => {
-    const database = await freshDatabase();
-    const first = { "0001_Beta.sql": "select 1;", "0001_alpha.sql": "select 1;" };
-    expect(await migrate(database.pool, migrationsFolder(first))).toEqual({
-      applied: ["0001_Beta", "0001_alpha"],
-    });
-    // Two migrations recorded in the same millisecond: Kysely orders them by name, and must agree with the files.
-    await database.pool.query("update kysely_migration set timestamp = '2026-11-24T00:00:00.000Z'");
+  it(
+    "reads back applied migrations with equal times in the same byte order",
+    createsDatabase,
+    async () => {
+      const database = await freshDatabase();
+      const first = { "0001_Beta.sql": "select 1;", "0001_alpha.sql": "select 1;" };
+      expect(await migrate(database.pool, migrationsFolder(first))).toEqual({
+        applied: ["0001_Beta", "0001_alpha"],
+      });
+      // Two migrations recorded in the same millisecond: Kysely orders them by name, and must agree with the files.
+      await database.pool.query(
+        "update kysely_migration set timestamp = '2026-11-24T00:00:00.000Z'",
+      );
 
-    const result = await migrate(
-      database.pool,
-      migrationsFolder({ ...first, "0002_next.sql": "select 1;" }),
-    );
+      const result = await migrate(
+        database.pool,
+        migrationsFolder({ ...first, "0002_next.sql": "select 1;" }),
+      );
 
-    expect(result).toEqual({ applied: ["0002_next"] });
-  });
+      expect(result).toEqual({ applied: ["0002_next"] });
+    },
+  );
 
-  it("rolls back a failing file, names it, exits non-zero and applies no later file", async () => {
-    const database = await freshDatabase();
-    const folder = migrationsFolder({
-      "0001_good.sql": "create table good (id int);",
-      "0002_bad.sql": "create table half_made (id int); select * from no_such_table;",
-      "0003_later.sql": "create table later (id int);",
-    });
+  it(
+    "rolls back a failing file, names it, exits non-zero and applies no later file",
+    createsDatabase,
+    async () => {
+      const database = await freshDatabase();
+      const folder = migrationsFolder({
+        "0001_good.sql": "create table good (id int);",
+        "0002_bad.sql": "create table half_made (id int); select * from no_such_table;",
+        "0003_later.sql": "create table later (id int);",
+      });
 
-    const result = await migrateProcess(folder, asMigrate(database.name));
+      const result = await migrateProcess(folder, asMigrate(database.name));
 
-    expect(result.code).not.toBe(0);
-    expect(result.output).toContain("0002_bad");
-    const { rows } = await database.pool.query(
-      `select to_regclass('good') is not null as good, to_regclass('half_made') is not null as half_made,
+      expect(result.code).not.toBe(0);
+      expect(result.output).toContain("0002_bad");
+      const { rows } = await database.pool.query(
+        `select to_regclass('good') is not null as good, to_regclass('half_made') is not null as half_made,
               to_regclass('later') is not null as later`,
-    );
-    expect(rows[0]).toEqual({ good: true, half_made: false, later: false });
-    expect(await appliedMigrations(database.pool)).toEqual(["0001_good"]);
-  });
+      );
+      expect(rows[0]).toEqual({ good: true, half_made: false, later: false });
+      expect(await appliedMigrations(database.pool)).toEqual(["0001_good"]);
+    },
+  );
 
   it("exits non-zero with the driver's error when the database can't be reached", async () => {
     const result = await migrateProcess(migrationsFolder({ "0001_any.sql": "select 1;" }), {
@@ -190,21 +216,25 @@ describe("the migration runner for another role set", () => {
     return { names, pool };
   }
 
-  it("applies every shipped migration, granting that set's app role the tables and the live app role nothing", async () => {
-    const { names, pool } = await freshDatabaseFor();
+  it(
+    "applies every shipped migration, granting that set's app role the tables and the live app role nothing",
+    createsDatabase,
+    async () => {
+      const { names, pool } = await freshDatabaseFor();
 
-    expect(await migrate(pool, MIGRATIONS_FOLDER, names)).toEqual({ applied: shipped });
+      expect(await migrate(pool, MIGRATIONS_FOLDER, names)).toEqual({ applied: shipped });
 
-    for (const table of ["teams", "findings"]) {
-      for (const privilege of ["select", "insert", "update", "delete"]) {
-        const { rows } = await pool.query(
-          "select has_table_privilege($1, $2, $3) as own, has_table_privilege('warden_app', $2, $3) as live",
-          [names.app, `public.${table}`, privilege],
-        );
-        expect(rows[0], `${privilege} on ${table}`).toEqual({ own: true, live: false });
+      for (const table of ["teams", "findings"]) {
+        for (const privilege of ["select", "insert", "update", "delete"]) {
+          const { rows } = await pool.query(
+            "select has_table_privilege($1, $2, $3) as own, has_table_privilege('warden_app', $2, $3) as live",
+            [names.app, `public.${table}`, privilege],
+          );
+          expect(rows[0], `${privilege} on ${table}`).toEqual({ own: true, live: false });
+        }
       }
-    }
-  });
+    },
+  );
 });
 
 describe("the first migration's grants", () => {
