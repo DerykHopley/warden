@@ -24,7 +24,12 @@ begin
     attributes := 'login nosuperuser nocreatedb nocreaterole '
       || case when wanted.bypassrls then 'bypassrls' else 'nobypassrls' end;
     if not exists (select from pg_roles where rolname = wanted.name) then
-      execute format('create role %I %s', wanted.name, attributes);
+      begin
+        execute format('create role %I %s', wanted.name, attributes);
+      exception
+        -- Another run made it first: duplicate_object when it had committed, unique_violation when it was midway.
+        when duplicate_object or unique_violation then null;
+      end;
     elsif not exists (
       select from pg_roles
        where rolname = wanted.name and rolcanlogin and not rolsuper and not rolcreatedb and not rolcreaterole

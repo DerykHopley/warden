@@ -1,5 +1,5 @@
 // The migration runner: plain SQL files in server/migrations, applied in file-name order by Kysely's Migrator, as
-// whatever PG* user the caller sets (warden_migrate). Forwards only: no down migrations.
+// warden_migrate (PGUSER=warden_migrate; any other user is refused). Forwards only: no down migrations.
 //
 // `pnpm migrate [folder]` exits non-zero, naming the file, when one fails, and with the driver's error when the
 // database can't be reached.
@@ -14,6 +14,9 @@ import { createLogger, type Logger } from "./log.ts";
 
 /** Where the migrations live, here and in the image. */
 export const MIGRATIONS_FOLDER = fileURLToPath(new URL("../migrations", import.meta.url));
+
+/** The only user migrations run as: it owns the schema, and the default grants follow its tables. */
+const MIGRATION_ROLE = "warden_migrate";
 
 /** Each `.sql` file in `folder` as one migration, named by its file name without `.sql`. */
 export function sqlFileMigrations(folder: string): MigrationProvider {
@@ -51,8 +54,31 @@ export type MigrateResult = {
  * transaction, so a failing file would also undo the good files before it.
  */
 export async function migrate(pool: pg.Pool, folder = MIGRATIONS_FOLDER): Promise<MigrateResult> {
+  // Only warden_migrate's tables get the default grants, so any other user would make tables the app can't use (or,
+  // as a superuser, tables nobody else owns).
+  try {
+    const { rows } = await pool.query<{ user: string }>('select current_user as "user"');
+    const user = rows[0]?.user;
+    if (user !== MIGRATION_ROLE) {
+      return {
+        applied: [],
+        error: new Error(
+          `migrations run as ${MIGRATION_ROLE}, not ${user}: set PGUSER=${MIGRATION_ROLE}`,
+        ),
+      };
+    }
+  } catch (error) {
+    return { applied: [], error };
+  }
+
   const db = new Kysely<unknown>({ dialect: new PostgresDialect({ pool }) });
-  const migrator = new Migrator({ db, provider: sqlFileMigrations(folder) });
+  const migrator = new Migrator({
+    db,
+    provider: sqlFileMigrations(folder),
+    // Kysely sorts the files by bytes but breaks ties between applied migrations with localeCompare; one order for
+    // both, whatever the locale.
+    nameComparator: (a, b) => (a < b ? -1 : a > b ? 1 : 0),
+  });
   const applied: string[] = [];
   for (;;) {
     const { error, results = [] } = await migrator.migrateUp();
@@ -65,16 +91,22 @@ export async function migrate(pool: pg.Pool, folder = MIGRATIONS_FOLDER): Promis
   }
 }
 
+/** What a failed run did: the file that failed, or how far it got before it stopped. */
+export function failureMessage({ applied, failed }: MigrateResult): string {
+  if (failed)
+    return `migration ${failed} failed; it was rolled back and no later migration was applied`;
+  if (applied.length === 0) return "migrating failed before any migration ran";
+  return `migrating stopped after applying ${applied.join(", ")}; no later migration was applied`;
+}
+
 async function main(logger: Logger, folder: string): Promise<number> {
   const pool = createPool(logger, { max: 1 });
   try {
-    const { applied, failed, error } = await migrate(pool, folder);
+    const result = await migrate(pool, folder);
+    const { applied, failed, error } = result;
     for (const migration of applied) logger.info("applied", { migration });
     if (error !== undefined) {
-      const message = failed
-        ? `migration ${failed} failed; it was rolled back and no later migration was applied`
-        : "migrating failed before any migration ran";
-      logger.error(message, { migration: failed, error });
+      logger.error(failureMessage(result), { migration: failed, error });
       return 1;
     }
     logger.info(applied.length ? "migrations applied" : "nothing to migrate", {

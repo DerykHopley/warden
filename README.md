@@ -35,8 +35,9 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    `roles` runs as the compose superuser `warden` and makes `warden_migrate` (owns the schema and runs the
    migrations), `warden_app` (what the app connects as, bound by row-level security) and `warden_admin` (bypasses
    it, for deliberate cross-Team tasks); it's safe to run again. `migrate` applies the new SQL files in
-   `server/migrations`, in file-name order, each in its own transaction; it only goes forwards. Run it again after
-   pulling new migrations.
+   `server/migrations`, in file-name order, each in its own transaction; it only goes forwards. It runs only as
+   `warden_migrate` (the `.envrc` user `warden` is refused), so every table gets the app's grants. Run it again
+   after pulling new migrations.
 6. `pnpm dev`: the server on `PORT` (default 8080) and the dashboard on Vite's port (5173), which hands `/api` to
    the server. Open http://localhost:5173.
 
