@@ -471,7 +471,8 @@ pass "a failing roles run: the proxy is stopped"
 "$real_node" -e 'const s = require("node:net").createServer((c) => c.end());
   s.listen(0, "127.0.0.1", () => console.log(s.address().port));' >"$scratch/squatter-port" &
 squatter=$!
-trap 'kill "$squatter" 2>/dev/null; rm -rf "$scratch"' EXIT
+# set -e holds inside the trap too: a kill of a squatter already stopped (below) must not end the trap with status 1.
+trap 'kill "$squatter" 2>/dev/null || true; rm -rf "$scratch"' EXIT
 for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s $scratch/squatter-port ]] && break; sleep 0.2; done
 squatted=$(cat "$scratch/squatter-port")
 [[ $squatted =~ ^[0-9]+$ ]] || fail "the squatter didn't report its port"
