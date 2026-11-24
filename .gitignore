@@ -3,6 +3,8 @@
 .env.*
 !.env.example
 .dev.vars*
+# The credentials file google-github-actions/auth writes into the workspace (preview.yml)
+gha-creds-*.json
 
 # Python
 __pycache__/
