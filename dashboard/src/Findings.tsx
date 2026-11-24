@@ -1,7 +1,7 @@
 // The Findings page (story 9, docs/design.md direction E): a one-line summary, the five most urgent Open Findings as
 // cards ("Start here"), then every Finding that matches the view in a table, with filter tabs. The view lives in the
 // URL: a filter pushes a history entry, so Back and Forward step through views; selecting a Finding replaces the
-// entry, so a reload or a shared link selects it again.
+// entry, so a reload or a shared link selects it again, and opens the Ask Warden panel as a click does.
 import {
   FindingsView,
   findingsViewPath,
@@ -10,7 +10,7 @@ import {
   type Finding,
   type Level,
 } from "@warden/contracts";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { askAboutTeam } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import { FINDING_GONE } from "./decisions.ts";
@@ -148,6 +148,15 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
   ]);
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);
+
+  // A link that names a Finding opens a closed panel as selecting it does, once the Team's list holds it: only on the
+  // page's load, so a list asked for again doesn't reopen a panel the person closed.
+  const linked = useRef(view.finding);
+  useEffect(() => {
+    if (linked.current === undefined || findings === null) return;
+    if (focusedFinding?.id === linked.current) openPanel();
+    linked.current = undefined;
+  }, [findings, focusedFinding, openPanel]);
 
   /** Selecting a Finding replaces the address's entry (the effect above writes it), and opens a closed panel. */
   const select = (id: string) => {

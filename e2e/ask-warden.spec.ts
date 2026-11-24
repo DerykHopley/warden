@@ -170,6 +170,27 @@ test("story 9: a Member at 1700px lands on Findings with the panel pinned, and t
   await expect(panel(page)).toHaveAttribute("data-shown", "pinned");
 });
 
+for (const [width, shown] of [
+  [1024, "floating"],
+  [390, "full-screen"],
+] as const) {
+  test(`story 9: a link to a Finding at ${width}px opens the panel ${shown} with that Finding's detail card`, async ({
+    page,
+  }) => {
+    await openAt(page, width);
+    const first = page.locator(".finding-card").first();
+    const title = await first.locator(".card-title").textContent();
+    const id = await first.getAttribute("data-finding");
+
+    await page.goto(`/findings?finding=${id}`);
+
+    await expect(panel(page)).toHaveAttribute("data-shown", shown);
+    await expect(panel(page).locator(".detail-card").getByRole("heading", { level: 3 })).toHaveText(
+      title!,
+    );
+  });
+}
+
 test("story 3: after Grace proposes on a seeded Finding, she sees the Proposal in its detail card", async ({
   page,
   baseURL,

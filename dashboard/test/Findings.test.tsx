@@ -278,10 +278,38 @@ describe("selecting a Finding", () => {
   });
 
   it("selects nothing for an id the Team's list doesn't have, and drops it from the URL", async () => {
-    open("/findings?severity=high&finding=not-ours");
+    const { panel } = open("/findings?severity=high&finding=not-ours");
     await screen.findByRole("table");
     await vi.waitFor(() => expect(address()).toBe("/findings?severity=high"));
     expect(current()).toEqual([]);
+    expect(panel.open).not.toHaveBeenCalled();
+  });
+});
+
+describe("a link that names a Finding", () => {
+  it("opens the panel as selecting it does, once the Team's list holds it", async () => {
+    const { panel } = open(`/findings?finding=${ID.lodash}`);
+    expect(panel.open).not.toHaveBeenCalled();
+    await screen.findByRole("table");
+    expect(panel.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens it only on the page's load, not again when the list comes back", async () => {
+    const { panel } = open(`/findings?finding=${ID.lodash}`);
+    await screen.findByRole("table");
+    const context = panel.setContext.mock.lastCall?.[0] as { onFindingChanged: () => void };
+
+    context.onFindingChanged();
+    await vi.waitFor(() => expect(callsTo("/api/findings")).toHaveLength(2));
+    await screen.findByRole("table");
+
+    expect(panel.open).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't open it for a page load that names no Finding", async () => {
+    const { panel } = open("/findings?severity=high");
+    await screen.findByRole("table");
+    expect(panel.open).not.toHaveBeenCalled();
   });
 });
 

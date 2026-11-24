@@ -276,6 +276,27 @@ describe("selecting a Finding", () => {
     },
   );
 
+  it("by a link that names it, opens the panel floating with its detail card, not stored: after a close, a load without the link starts at the width default", async () => {
+    const { unmount } = open(`/findings?finding=${ID.lodash}`);
+    expect(await screen.findByRole("complementary", { name: "Ask Warden" })).toHaveAttribute(
+      "data-shown",
+      "floating",
+    );
+    expect(
+      within(card()).getByRole("heading", { name: "lodash 4.17.20 has a known vulnerability" }),
+    ).toBeInTheDocument();
+    expect(stored()).toBeNull();
+
+    await userEvent.click(within(panel()).getByRole("button", { name: "Close Ask Warden" }));
+    unmount();
+    open("/findings");
+    await screen.findByRole("table");
+
+    // 1024px: the width default is closed.
+    expect(queryPanel()).not.toBeInTheDocument();
+    expect(askWardenButton()).toBeInTheDocument();
+  });
+
   it("leaves a pinned panel pinned", async () => {
     localStorage.setItem(STORED, JSON.stringify({ mode: "pinned", width: 400 }));
     atWidth(1400);
@@ -465,9 +486,9 @@ describe("the context line", () => {
   const contextLine = () => within(panel()).getByText(/^Talking about:/);
 
   it("with a focus, names its short id and the view", async () => {
+    // A link that names a Finding opens the panel.
     open(`/findings?severity=high&finding=${ID.lodash}`);
-    await screen.findByRole("table");
-    await userEvent.click(askWardenButton());
+    await screen.findByRole("complementary", { name: "Ask Warden" });
     expect(contextLine()).toHaveTextContent(
       /^Talking about: a1c4e7f0 · view: Findings, Open, High$/,
     );
