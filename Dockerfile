@@ -38,6 +38,8 @@ COPY contracts/package.json contracts/
 COPY contracts/src contracts/src
 COPY server/package.json server/
 COPY server/src server/src
+# The release runs `node server/src/migrate.ts` from the image, so the migrations ship with it.
+COPY server/migrations server/migrations
 COPY --from=build /app/dashboard/dist dashboard/dist
 USER node
 ENV PORT=8080
