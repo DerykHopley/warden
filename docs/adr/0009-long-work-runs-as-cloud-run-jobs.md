@@ -24,10 +24,10 @@ Cloud Scheduler. Nothing long runs in the service after it answers, and nothing 
   exits non-zero. The daily expiry job spans Teams: it lists Team ids in the one marked admin place (`withAdmin`,
   read only), then runs each Team's expiry inside `withTeam` for that Team. So every write stays under row-level
   security, and the admin role only ever reads ids. One Team failing is logged and doesn't stop the rest.
-- **A retry is harmless.** The job runs with `--max-retries=1` and a retry runs the same Scan id. `reconcile(scan)`
-  checks the Scan id against the Scans table in the same transaction that applies it. A Scan id already applied
-  changes nothing and returns the earlier outcome (slice 7 builds this check). The daily expiry is harmless twice
-  over: a Finding already reopened isn't reopened again. A refused Scan is retried and refused again, at about 30
+- **A retry is harmless.** The job runs with `--max-retries=1` and a retry runs the same Scan id. `reconcile` checks
+  the Scan id in the `scans` table, keyed by `(team_id, id)`, inside the transaction that applies the Scan. A Scan
+  id already applied changes nothing (built in slice 7, #22). The job adds no check of its own. The daily expiry is
+  harmless twice over: a Finding already reopened isn't reopened again. A refused Scan is retried and refused again, at about 30
   seconds of cost (measured), so a refusal still shows as a failed execution.
 - **Past the limit.** A task runs up to its task timeout: 10 minutes by default, 168 hours at most. Warden sets
   1 hour for Scans. At the timeout Cloud Run sends SIGTERM, then SIGKILL 10 seconds later. The attempt counts as
@@ -134,15 +134,15 @@ confirms it.
 - **Cloud Scheduler is a new outside service,** and this choice waits for the owner's approval on #14. Cloud Run
   Jobs are part of Cloud Run, already chosen. The Cloud Tasks API was turned on for the spike only and isn't used;
   the owner may turn it off.
-- **Slice 7 builds:**
-  - the Scan job and its entry point;
-  - the Scan id check in `reconcile`;
-  - the queued Scan row.
-- **Slice 8 builds** the daily expiry job and its Scheduler trigger. Slice 1b's pipeline needs a step that updates
-  the jobs' images on each release.
-- **`docs/data.md` gains a row in slice 7:** "Cloud Run job executions: each execution's Scan id and Team id (its
-  env override) and its logs, kept as Cloud Run keeps executions". How long Cloud Run keeps executions is
-  unverified; slice 7 checks it.
+- **Who builds what:**
+  - Slice 8 builds the daily expiry job, its entry point and its Scheduler trigger.
+  - The first spec that starts Scans from a request (the Guard spec, with its scanners) builds the Scan job and the
+    queued-Scan row in Cloud SQL.
+  - The Scan id check is already built (slice 7, #22).
+  - Slice 1b's release pipeline needs a step that updates the jobs' images on each release.
+- **`docs/data.md` gains a row,** added by whichever of those lands first: "Cloud Run job executions: each
+  execution's env override (a Scan id and a Team id; none for the daily job) and its logs, kept as Cloud Run keeps
+  executions". How long Cloud Run keeps executions is unverified; that slice checks it.
 - **A Scan takes 15 to 29 s longer to start** than it would in-process. The dashboard shows a queued Scan as
   started, not done.
 - **A new word, "Job",** is proposed on #1 for the glossary, not added here.
