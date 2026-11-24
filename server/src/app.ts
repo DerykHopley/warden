@@ -6,6 +6,7 @@ import {
   AcceptBody,
   atLeast,
   MarkMovedBody,
+  ProposeBody,
   ReasonBody,
   RoleChangeBody,
   type Actor,
@@ -14,12 +15,20 @@ import {
   type HistoryBody,
   type MeBody,
   type MembersBody,
+  type Proposal,
   type TeamMember,
   type Role,
 } from "@warden/contracts";
 import type { z } from "zod";
 import type { Session, VerifySessionToken } from "./auth.ts";
-import { DecisionRefused, FindingNotFound, NotALead, type Findings } from "./findings/index.ts";
+import {
+  DecisionRefused,
+  FindingNotFound,
+  NotALead,
+  ProposalDecided,
+  ProposalNotFound,
+  type Findings,
+} from "./findings/index.ts";
 import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
 import { securityHeaders } from "./security-headers.ts";
@@ -213,39 +222,63 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   });
 
   /**
-   * What a Findings call's refusal answers: 404 for an id the Team doesn't have (another Team's included), 409 for a
-   * Status the decision doesn't take, 403 for a person no longer a Lead under the Team's lock. Nothing was written in
-   * any of them. Anything else, a zod error included (stored or derived data that broke Finding v1), is thrown on to
-   * the logged 500, which shows no schema text: only the route's own body parse answers 400.
+   * What a Findings call's refusal answers: 404 for a Finding or Proposal id the Team doesn't have (another Team's
+   * included), 409 for a Status the decision doesn't take or a Proposal already decided, 403 for a person no longer a
+   * Lead under the Team's lock. Nothing was written in any of them. Anything else, a zod error included (stored or
+   * derived data that broke Finding v1), is thrown on to the logged 500, which shows no schema text: only the route's
+   * own body parse answers 400.
    */
   function findingRefusal(c: Context<AppEnv>, error: unknown): Response {
     if (error instanceof FindingNotFound) return c.json({ error: "No such Finding" }, 404);
+    if (error instanceof ProposalNotFound) return c.json({ error: "No such Proposal" }, 404);
     if (error instanceof DecisionRefused) return c.json({ error: error.message }, 409);
+    if (error instanceof ProposalDecided) return c.json({ error: error.message }, 409);
     if (error instanceof NotALead) return c.json({ error: ROLE_TOO_LOW }, 403);
     throw error;
   }
 
+  /** The signed-in person, as the Actor of a decision or a Proposal: never the request's. */
+  const sessionActor = (c: Context<AppEnv>): Actor => ({
+    kind: "person",
+    id: c.get("session").userId,
+  });
+
   /**
-   * A Lead's named decision on one Finding (story 4): the body parsed with its contracts schema, the Team and the
-   * Actor taken from the session, never the request. Answers the Finding as changed.
+   * One POST route that changes a Finding or a Proposal (story 4): `requireRole(role)`, the body parsed with its
+   * contracts schema (none: no body is read), the Team and the person taken from the session, never the request. Each
+   * refusal answers through findingRefusal; success answers `status` with what `act` returns.
    */
-  function decisionRoute<Body>(
+  function findingsRoute<Body extends object, Answer>(
     path: string,
-    schema: z.ZodType<Body>,
-    decide: (team: string, id: string, input: Body & { actor: Actor }) => Promise<Finding>,
+    { role, schema, status = 200 }: { role: Role; schema?: z.ZodType<Body>; status?: 200 | 201 },
+    act: (team: string, id: string, body: Body, actor: Actor) => Promise<Answer>,
   ) {
-    app.post(`/api/findings/:id/${path}`, requireRole("lead"), async (c) => {
-      // A body that isn't JSON parses as undefined, which every schema refuses.
-      const parsed = schema.safeParse(await c.req.json().catch(() => undefined));
-      if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
-      const actor: Actor = { kind: "person", id: c.get("session").userId };
+    app.post(path, requireRole(role), async (c) => {
+      let body = {} as Body;
+      if (schema) {
+        // A body that isn't JSON parses as undefined, which every schema refuses.
+        const parsed = schema.safeParse(await c.req.json().catch(() => undefined));
+        if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
+        body = parsed.data;
+      }
       try {
-        return c.json(await decide(c.get("team"), c.req.param("id"), { ...parsed.data, actor }));
+        const answer = await act(c.get("team"), c.req.param("id")!, body, sessionActor(c));
+        return c.json(answer, status);
       } catch (error) {
         return findingRefusal(c, error);
       }
     });
   }
+
+  /** A Lead's named decision on one Finding: answers the Finding as changed. */
+  const decisionRoute = <Body extends object>(
+    path: string,
+    schema: z.ZodType<Body>,
+    decide: (team: string, id: string, input: Body & { actor: Actor }) => Promise<Finding>,
+  ) =>
+    findingsRoute(`/api/findings/:id/${path}`, { role: "lead", schema }, (team, id, body, actor) =>
+      decide(team, id, { ...body, actor }),
+    );
 
   const { findings } = deps;
   decisionRoute("accept", AcceptBody, (team, id, input) => findings.accept(team, id, input));
@@ -259,6 +292,26 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     findings.markMoved(team, id, input),
   );
   decisionRoute("reopen", ReasonBody, (team, id, input) => findings.reopen(team, id, input));
+
+  // A Proposal (story 4, ADR 0008): any person in the Team suggests accept or mark_false_positive, as themselves; a
+  // Lead approves it (the decision is made as that Lead) or rejects it with a reason. Each answers the Proposal.
+  findingsRoute(
+    "/api/findings/:id/proposals",
+    { role: "member", schema: ProposeBody, status: 201 },
+    (team, id, body, requester): Promise<Proposal> =>
+      findings.propose(team, id, { ...body, requester }),
+  );
+  findingsRoute(
+    "/api/proposals/:id/approve",
+    { role: "lead" },
+    (team, id, _body, actor): Promise<Proposal> => findings.approveProposal(team, id, { actor }),
+  );
+  findingsRoute(
+    "/api/proposals/:id/reject",
+    { role: "lead", schema: ReasonBody },
+    (team, id, body, actor): Promise<Proposal> =>
+      findings.rejectProposal(team, id, { ...body, actor }),
+  );
 
   // Any person in the Team reads a Finding's history, oldest first.
   app.get("/api/findings/:id/history", requireRole("member"), async (c) => {

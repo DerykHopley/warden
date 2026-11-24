@@ -95,6 +95,10 @@ const noFindings: Findings = {
   confirmFix: noDatabase,
   markMoved: noDatabase,
   reopen: noDatabase,
+  propose: noDatabase,
+  approveProposal: noDatabase,
+  rejectProposal: noDatabase,
+  expireAcceptances: noDatabase,
 };
 
 /** A Clerk seam for a test that doesn't look at Clerk: every call is refused (a Role change answers 502; a join logs it). */

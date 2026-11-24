@@ -28,13 +28,13 @@ describe("the roles script", () => {
     }
   });
 
-  it("leaves warden_migrate, warden_app and warden_admin, with only warden_admin bypassing RLS", async () => {
+  it("leaves warden_migrate, warden_app and warden_admin, none of them bypassing RLS", async () => {
     const { rows } = await app.query(
       `select rolname, rolsuper, rolbypassrls, rolcanlogin from pg_roles
         where rolname in ('warden_migrate', 'warden_app', 'warden_admin') order by rolname`,
     );
     expect(rows).toEqual([
-      { rolname: "warden_admin", rolsuper: false, rolbypassrls: true, rolcanlogin: true },
+      { rolname: "warden_admin", rolsuper: false, rolbypassrls: false, rolcanlogin: true },
       { rolname: "warden_app", rolsuper: false, rolbypassrls: false, rolcanlogin: true },
       { rolname: "warden_migrate", rolsuper: false, rolbypassrls: false, rolcanlogin: true },
     ]);
@@ -166,7 +166,7 @@ describe("the roles script run twice by a user with CREATEROLE that isn't a supe
     });
   });
 
-  it("makes the admin role without BYPASSRLS, and warns naming it", async () => {
+  it("makes no role with BYPASSRLS, and warns about none", async () => {
     const { rows } = await superuser.query(
       "select rolbypassrls from pg_roles where rolname = any($1)",
       [Object.values(fixture.names)],
@@ -176,15 +176,29 @@ describe("the roles script run twice by a user with CREATEROLE that isn't a supe
       { rolbypassrls: false },
       { rolbypassrls: false },
     ]);
-    const warnings = fixture.lines
-      .map((line) => JSON.parse(line))
-      .filter((entry) => entry.severity === "WARNING");
-    expect(warnings[0]?.message).toContain(fixture.names.admin);
-    expect(warnings[0]?.message).toContain("BYPASSRLS");
+    expect(fixture.lines.join("\n")).not.toMatch(/BYPASSRLS/);
   });
 });
 
-describe("the roles script run by a user that can't grant BYPASSRLS, once the admin role has it", () => {
+describe("the roles script run by a superuser, once the admin role has BYPASSRLS", () => {
+  let fixture: Awaited<ReturnType<typeof cloudSqlLike>>;
+  beforeAll(async () => {
+    fixture = await cloudSqlLike();
+    await createRoles(fixture.asSuperuser, { names: fixture.names, logger: fixture.logger });
+    await superuser.query(`alter role ${fixture.names.admin} bypassrls`);
+    await createRoles(fixture.asSuperuser, { names: fixture.names, logger: fixture.logger });
+  }, 30_000);
+  afterAll(() => fixture.drop(), 30_000);
+
+  it("takes it away", async () => {
+    const { rows } = await superuser.query("select rolbypassrls from pg_roles where rolname = $1", [
+      fixture.names.admin,
+    ]);
+    expect(rows).toEqual([{ rolbypassrls: false }]);
+  });
+});
+
+describe("the roles script run by a user that can't take BYPASSRLS away, once the admin role has it", () => {
   let fixture: Awaited<ReturnType<typeof cloudSqlLike>>;
   beforeAll(async () => {
     fixture = await cloudSqlLike();
@@ -195,12 +209,33 @@ describe("the roles script run by a user that can't grant BYPASSRLS, once the ad
   }, 30_000);
   afterAll(() => fixture.drop(), 30_000);
 
-  it("leaves the admin role's BYPASSRLS on, and logs no warning about it", async () => {
+  it("leaves it, and warns naming the role and the user that can't take it away", async () => {
     const { rows } = await superuser.query("select rolbypassrls from pg_roles where rolname = $1", [
       fixture.names.admin,
     ]);
     expect(rows).toEqual([{ rolbypassrls: true }]);
-    expect(fixture.lines.join("\n")).not.toMatch(/gets no BYPASSRLS/);
+    const warnings = fixture.lines
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.severity === "WARNING");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain(`${fixture.names.admin} keeps BYPASSRLS`);
+    expect(warnings[0]?.message).toContain(`${fixture.base}_owner`);
+  });
+
+  it("refuses to set the admin password, naming the role and the runner, and changes nothing", async () => {
+    const before = await storedPasswords(fixture.names);
+
+    const error = await rejection(
+      createRoles(fixture.asRunner, {
+        names: fixture.names,
+        logger: fixture.logger,
+        passwords: { app: "app-pw", admin: "admin-pw" },
+      }),
+    );
+
+    expect((error as Error).message).toContain(`${fixture.names.admin} has BYPASSRLS`);
+    expect((error as Error).message).toContain(`${fixture.base}_owner can't take it away`);
+    expect(await storedPasswords(fixture.names)).toEqual(before);
   });
 });
 
@@ -209,6 +244,7 @@ describe("the roles script given passwords", () => {
   const passwords = {
     app: `app'pw\\${randomBytes(8).toString("hex")}`,
     migrate: `migrate'pw\\${randomBytes(8).toString("hex")}`,
+    admin: `admin'pw\\${randomBytes(8).toString("hex")}`,
   };
   let fixture: Awaited<ReturnType<typeof cloudSqlLike>>;
   beforeAll(async () => {
@@ -232,13 +268,13 @@ describe("the roles script given passwords", () => {
     expect(await scramAuthenticates(rows[0].rolpassword, "pencils")).toBe(false);
   });
 
-  it("stores a SCRAM-SHA-256 verifier for the app and migration roles that the password signs in with", async () => {
+  it("stores a SCRAM-SHA-256 verifier for each of the three roles that its password signs in with", async () => {
     const stored = await storedPasswords(fixture.names);
 
-    expect(stored[fixture.names.admin]).toBeNull();
     for (const [role, password] of [
       [fixture.names.app, passwords.app],
       [fixture.names.migrate, passwords.migrate],
+      [fixture.names.admin, passwords.admin],
     ] as const) {
       expect(stored[role]).toMatch(/^SCRAM-SHA-256\$4096:/);
       expect(await scramAuthenticates(stored[role] ?? "", password), role).toBe(true);

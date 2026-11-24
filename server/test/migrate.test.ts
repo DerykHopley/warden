@@ -241,13 +241,12 @@ describe("the first migration's grants", () => {
     );
   });
 
-  it("lets warden_admin read a table warden_migrate makes later, but not write it", async () => {
+  // 0006_proposals takes back 0001's default select for warden_admin: it reads only `teams (id)`.
+  it("gives warden_admin no read or write on a table warden_migrate makes later", async () => {
     const { table, app, admin } = await laterTable();
     await app.query(`insert into ${table} (note) values ('from the app')`);
 
-    const { rows } = await admin.query(`select note from ${table}`);
-
-    expect(rows).toEqual([{ note: "from the app" }]);
+    await expect(admin.query(`select note from ${table}`)).rejects.toThrow(/permission denied/);
     await expect(admin.query(`insert into ${table} (note) values ('x')`)).rejects.toThrow(
       /permission denied/,
     );

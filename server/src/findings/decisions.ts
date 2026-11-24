@@ -90,7 +90,45 @@ const ALLOWED_FROM: Record<DecisionCall, readonly Status[]> = {
   reopen: ["false_positive", "accepted"],
 };
 
-const notAccepted = { accepted_reason: null, accepted_until: null } as const;
+export const notAccepted = { accepted_reason: null, accepted_until: null } as const;
+
+/**
+ * Under the Team's lock (the caller holds it), throws NotALead unless `person` is a Lead or Admin in the Team now.
+ * requireRole read the Role before the lock; a change that committed since may have taken it. `for share` holds the
+ * row, so a Role change waits for the caller's transaction rather than slipping in after the check.
+ */
+export async function recheckLead(tx: Transaction<Database>, team: string, person: string) {
+  const member = await tx
+    .selectFrom("team_members")
+    .select("role")
+    .where("team_id", "=", team)
+    .where("user_id", "=", person)
+    .forShare()
+    .executeTakeFirst();
+  if (!member || !atLeast(member.role, "lead")) throw new NotALead(person);
+}
+
+/**
+ * The Team's Finding `id`, when `call` may be made on it as it is now, and how to refuse `call` on it for any other
+ * reason: FindingNotFound for an id the Team doesn't have, DecisionRefused for a merged Finding or a Status the call
+ * doesn't take. The same rules for a decision and for a Proposal of one.
+ */
+export async function findingFor(
+  tx: Transaction<Database>,
+  team: string,
+  id: string,
+  call: DecisionCall,
+): Promise<{ finding: Finding; refuse: (why: string) => DecisionRefused }> {
+  const finding = await loadFinding(tx, team, id);
+  if (!finding) throw new FindingNotFound(id);
+  const refuse = (why: string) => new DecisionRefused(call, finding.status, why);
+  if (finding.moved_to !== null) throw refuse(`it is merged into ${finding.moved_to}`);
+  const allowed = ALLOWED_FROM[call];
+  if (!allowed.includes(finding.status)) {
+    throw refuse(`${call} takes a Finding that is ${allowed.join(" or ")}`);
+  }
+  return { finding, refuse };
+}
 
 /** Applies one decision by `person` to the Team's Finding `id`, and returns it as changed (markMoved: the old one). */
 export async function applyDecision(
@@ -101,24 +139,45 @@ export async function applyDecision(
   decision: Decision,
 ): Promise<Finding> {
   await lockTeamFindings(tx, team);
-  // requireRole read the Role before the lock; a change that committed since may have taken it. `for share` holds
-  // the row, so a Role change waits for this decision rather than slipping in after the check.
-  const member = await tx
-    .selectFrom("team_members")
-    .select("role")
-    .where("team_id", "=", team)
-    .where("user_id", "=", person)
-    .forShare()
-    .executeTakeFirst();
-  if (!member || !atLeast(member.role, "lead")) throw new NotALead(person);
+  await recheckLead(tx, team, person);
+  return applyLockedDecision(tx, team, id, person, decision);
+}
 
-  const finding = await loadFinding(tx, team, id);
-  if (!finding) throw new FindingNotFound(id);
-  const refuse = (why: string) => new DecisionRefused(decision.call, finding.status, why);
-  if (finding.moved_to !== null) throw refuse(`it is merged into ${finding.moved_to}`);
-  const allowed = ALLOWED_FROM[decision.call];
-  if (!allowed.includes(finding.status)) {
-    throw refuse(`${decision.call} takes a Finding that is ${allowed.join(" or ")}`);
+/**
+ * applyDecision's work, for a caller that already holds the Team's lock and has rechecked the Lead. With `proposal`,
+ * the decision approves that Proposal: it is refused when the Finding has changed since the Proposal was asked (a
+ * history row after its `requested_at`), and each history row it writes names the Proposal.
+ */
+export async function applyLockedDecision(
+  tx: Transaction<Database>,
+  team: string,
+  id: string,
+  person: string,
+  decision: Decision,
+  proposal?: { id: string },
+): Promise<Finding> {
+  const { finding, refuse } = await findingFor(tx, team, id, decision.call);
+  if (proposal) {
+    // Compared in Postgres, at its microseconds: a JavaScript Date would round requested_at to the millisecond.
+    const later = await tx
+      .selectFrom("finding_history")
+      .select("at")
+      .where("team_id", "=", team)
+      .where("finding_id", "=", id)
+      .where("at", ">", (eb) =>
+        eb
+          .selectFrom("proposals")
+          .select("requested_at")
+          .where("team_id", "=", team)
+          .where("id", "=", proposal.id),
+      )
+      .orderBy("id")
+      .executeTakeFirst();
+    if (later) {
+      throw refuse(
+        `it changed since the Proposal was asked (at ${later.at.toISOString()}): ask again`,
+      );
+    }
   }
 
   /** The Findings to write, in order: markMoved frees the candidate's Fingerprint before the old Finding takes it. */
@@ -127,6 +186,10 @@ export async function applyDecision(
   const untouchedStatus: Finding[] = [];
   switch (decision.call) {
     case "accept":
+      // Checked when the input was parsed; a Proposal's until may have passed since it was asked.
+      if (Date.parse(decision.until) <= Date.now()) {
+        throw refuse(`its until (${decision.until}) has passed`);
+      }
       changes.push({
         before: finding,
         after: {
@@ -234,6 +297,7 @@ export async function applyDecision(
         actor_kind: "person" as const,
         actor_id: person,
         reason: decision.reason,
+        proposal_id: proposal?.id ?? null,
       })),
     )
     .execute();

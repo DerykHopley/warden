@@ -26,11 +26,13 @@ const adminMember = `${base}_adminmember`;
 const databaseOwner = `${base}_databaseowner`;
 const schemaOwner = `${base}_schemaowner`;
 const tableOwner = `${base}_tableowner`;
-const testRoles = [migrateMember, adminMember, databaseOwner, schemaOwner, tableOwner];
+const bypasser = `${base}_bypasser`;
+const testRoles = [migrateMember, adminMember, databaseOwner, schemaOwner, tableOwner, bypasser];
 
 beforeAll(async () => {
   await superuser.query(`create role ${migrateMember} login in role warden_migrate`);
   await superuser.query(`create role ${adminMember} login in role warden_admin`);
+  await superuser.query(`create role ${bypasser} login bypassrls`);
   for (const role of [databaseOwner, schemaOwner, tableOwner]) {
     await superuser.query(`create role ${role} login`);
   }
@@ -63,13 +65,14 @@ async function check(role: string, on = database) {
 describe("checkDatabaseRole", () => {
   it.each([
     [superuserName, database, `${superuserName} is a superuser`],
-    ["warden_admin", database, "warden_admin has BYPASSRLS"],
+    ["warden_admin", database, "warden_admin is the admin role"],
+    [bypasser, plainDatabase, `${bypasser} has BYPASSRLS`],
     [
       migrateMember,
       database,
       `${migrateMember} can become warden_migrate, which owns a table in public`,
     ],
-    [adminMember, database, `${adminMember} can become warden_admin, which has BYPASSRLS`],
+    [adminMember, database, `${adminMember} can become warden_admin, which is the admin role`],
     [tableOwner, plainDatabase, `${tableOwner} owns a table in public`],
     [schemaOwner, plainDatabase, `${schemaOwner} owns the schema public`],
     [databaseOwner, plainDatabase, `${databaseOwner} owns the database`],
@@ -92,9 +95,8 @@ describe("checkDatabaseRole", () => {
   });
 });
 
-// As on Cloud SQL, where the admin role is made without BYPASSRLS: refused by its name. Under test names, as the
-// suite's warden_admin has BYPASSRLS and roles belong to the whole Postgres server. On the plain database: the suite's
-// own refuses a login by any role outside the live set.
+// The admin role has no BYPASSRLS (0006_proposals): refused by its name. Under test names, as roles belong to the
+// whole Postgres server. On the plain database: the suite's own refuses a login by any role outside the live set.
 describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
   const names = { migrate: "warden_migrate", admin: `${base}_admin` };
   const admin = names.admin;
@@ -224,7 +226,7 @@ describe("the server process", () => {
     expect(await server.exited).toBe(1);
     expect(stopLine(server.output())).toMatchObject({
       role: "warden_admin",
-      reason: "warden_admin has BYPASSRLS",
+      reason: "warden_admin is the admin role",
     });
   });
 

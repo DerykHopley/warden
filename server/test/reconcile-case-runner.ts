@@ -1,6 +1,7 @@
 // Runs one reconcile case (contracts/README.md, "The reconcile cases") against the real Findings module: the case's
-// Team becomes one of its own, `given` goes straight into `findings`, each step goes through `reconcile`, `report`
-// or the named decision call, and the Team's Findings are compared with `expect`, refs resolved.
+// Team becomes one of its own, `given` goes straight into `findings`, each step goes through `reconcile`, `report`,
+// the named decision call or the daily Job's `expireAcceptances`, and the Team's Findings are compared with
+// `expect`, refs resolved.
 import { randomUUID } from "node:crypto";
 import type {
   ExpectedFinding,
@@ -12,18 +13,6 @@ import type {
 import type { Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import type { WithTeam } from "../src/with-team.ts";
-
-/** The steps only slice 8b builds: the daily expiry job. */
-const SLICE_8B_STEPS = new Set(["expire"]);
-
-/** Whether the runner runs a case now, or lists it as todo: only a case with a slice 8b step waits. */
-export function planCase(c: ReconcileCase): { run: true } | { run: false; todo: string } {
-  const waiting = [
-    ...new Set(c.steps.map((step) => step.step).filter((step) => SLICE_8B_STEPS.has(step))),
-  ];
-  if (waiting.length === 0) return { run: true };
-  return { run: false, todo: `needs slice 8b for its ${waiting.join(" and ")} step` };
-}
 
 type DecisionStep = Extract<ReconcileStep, { step: "decision" }>;
 
@@ -99,8 +88,9 @@ export async function runCase(
       await decide(findings, team, step, resolve);
       continue;
     }
-    if (step.step !== "scan" && step.step !== "spot_run") {
-      throw new Error(`step ${i} is a ${step.step} step, which needs slice 8b`);
+    if (step.step === "expire") {
+      await findings.expireAcceptances(team, new Date(step.now));
+      continue;
     }
     const outcome =
       step.step === "scan"

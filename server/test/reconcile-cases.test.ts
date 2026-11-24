@@ -1,6 +1,6 @@
 // The reconcile cases against the real thing (ADR 0005): every case in contracts/reconcile-cases/ runs through
 // `createFindings` on the suite's shared database, as warden_app, with Guard's and Patch's move rules wired in as
-// the start-up file wires them. A case with an expire step waits for slice 8b and shows as todo.
+// the start-up file wires them. Every case runs, case 10's daily expiry included.
 import { loadReconcileCases } from "@warden/contracts/reconcile-cases";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
@@ -9,7 +9,7 @@ import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { planCase, runCase } from "./reconcile-case-runner.ts";
+import { runCase } from "./reconcile-case-runner.ts";
 
 let pool: pg.Pool;
 let withTeam: WithTeam;
@@ -30,11 +30,6 @@ afterAll(async () => {
 
 describe("the reconcile cases, against createFindings on Postgres", () => {
   for (const { file, case: c } of loadReconcileCases()) {
-    const plan = planCase(c);
-    if (!plan.run) {
-      it.todo(`${file}: ${plan.todo}`);
-      continue;
-    }
     it(`${file}: ${c.name}`, async () => {
       const { expected, actual } = await runCase(c, { findings, withTeam });
       expect(actual).toEqual(expected);

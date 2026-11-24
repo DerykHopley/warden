@@ -356,6 +356,56 @@ describe("withAdmin", () => {
     expect(ids.sort()).toEqual([A, B]);
   });
 
+  // 0006_proposals: warden_admin has no BYPASSRLS anywhere; one policy lets it list Team ids, and nothing else.
+  it("has no BYPASSRLS: the teams policy is what lists the Teams", async () => {
+    const { rows } = await app.query<{ rolbypassrls: boolean }>(
+      "select rolbypassrls from pg_roles where rolname = 'warden_admin'",
+    );
+    expect(rows).toEqual([{ rolbypassrls: false }]);
+  });
+
+  it("is refused any column of teams but id", async () => {
+    const admin = track(poolAs("warden_admin", databaseName));
+
+    await expect(admin.query("select created_at from teams")).rejects.toThrow(
+      /permission denied for table teams/,
+    );
+    await expect(admin.query("select * from teams")).rejects.toThrow(
+      /permission denied for table teams/,
+    );
+  });
+
+  it("is refused every other table, with a Team set in its transaction too", async () => {
+    const admin = track(poolAs("warden_admin", databaseName));
+    // A Finding and a Proposal of Team A's: with the Team set, a Team policy would show them if a grant let it.
+    await withTeam(A, async (tx) => {
+      await sql`insert into findings (team_id, id, asset_kind, asset_ref, module, rule_id, fingerprint, location,
+                  severity, title, evidence, status, first_seen_scan, last_seen_scan)
+                values (${A}, 'f-admin', 'repo', 'r', 'guard', 'guard/x', 'guard/x|a', '{}', 'high', 't', '{}',
+                  'open', 's', 's')`.execute(tx);
+      await sql`insert into proposals (team_id, id, finding_id, decision, reason, requested_by_kind,
+                  requested_by_id)
+                values (${A}, 'p-admin', 'f-admin', 'mark_false_positive', 'r', 'person', 'user_x')`.execute(
+        tx,
+      );
+    });
+
+    // test_notes was made after the migrations, by warden_migrate: its default privileges grant warden_admin nothing.
+    const client = await admin.connect();
+    try {
+      for (const table of ["findings", "proposals", "team_members", "role_history", "test_notes"]) {
+        await client.query("begin read only");
+        await client.query("select set_config('warden.team_id', $1, true)", [A]);
+        await expect(client.query(`select * from ${table}`), table).rejects.toThrow(
+          `permission denied for table ${table}`,
+        );
+        await client.query("rollback");
+      }
+    } finally {
+      client.release();
+    }
+  });
+
   it("runs read-only, so a write inside it fails", async () => {
     const withAdmin = createWithAdmin(track(poolAs("warden_admin", databaseName)));
 
