@@ -12,7 +12,8 @@
 //
 // WARDEN_DATABASE_ROLES picks the set (see databaseRoleNames): the live one above by default, or `preview` for the
 // warden_preview database, whose warden_preview_* roles do the same three jobs. The setup script runs it once per
-// set, each on its own database, so neither set can connect to the other's.
+// set, each on its own database, so neither set can connect to the other's. Run by hand with the wrong set, it refuses
+// a database that belongs to the other set before changing anything (see refuseOtherSet).
 //
 // Passwords: WARDEN_APP_PASSWORD and WARDEN_MIGRATE_PASSWORD, when set (printable ASCII), become warden_app's and
 // warden_migrate's, sent as SCRAM-SHA-256 verifiers made here. Unset, no password is set, and one already set is left:
@@ -23,6 +24,7 @@ import {
   createPool,
   DATABASE_ROLE_NAMES,
   databaseRoleNames,
+  PREVIEW_DATABASE_ROLE_NAMES,
   type DatabaseRoleNames,
 } from "./database.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -30,6 +32,9 @@ import { createLogger, type Logger } from "./log.ts";
 export type CreateRolesOptions = {
   /** The roles' names; tests use their own, as roles belong to the whole Postgres server. */
   names?: DatabaseRoleNames;
+  /** Every role set: a database that belongs to one other than `names` is refused. The live and the preview set
+   * unless given; tests pass their own. */
+  sets?: readonly DatabaseRoleNames[];
   passwords?: { app?: string; migrate?: string };
   logger?: Logger;
 };
@@ -51,10 +56,20 @@ type Attributes = Partial<Record<Attribute, boolean>>;
 
 export async function createRoles(
   pool: RolesConnection,
-  { names = DATABASE_ROLE_NAMES, passwords = {}, logger = createLogger() }: CreateRolesOptions = {},
+  {
+    names = DATABASE_ROLE_NAMES,
+    sets = [DATABASE_ROLE_NAMES, PREVIEW_DATABASE_ROLE_NAMES],
+    passwords = {},
+    logger = createLogger(),
+  }: CreateRolesOptions = {},
 ): Promise<void> {
   checkPassword(names.app, passwords.app);
   checkPassword(names.migrate, passwords.migrate);
+  await refuseOtherSet(
+    pool,
+    names,
+    sets.filter((set) => set.migrate !== names.migrate),
+  );
   const {
     rows: [runner],
   } = await pool.query<{
@@ -109,6 +124,43 @@ export async function createRoles(
 
   await setPassword(pool, names.app, passwords.app);
   await setPassword(pool, names.migrate, passwords.migrate);
+}
+
+/** Throws, before anything is changed, when the database belongs to one of the `others` sets: that set's migration
+ * role owns its schema public, or one of that set's roles may connect to it (its owner can, so a database the other
+ * migration role owns counts too). Taking it over would hand the other set's tables to `names`' migration role. A
+ * fresh database, or one `names` already owns, passes. */
+async function refuseOtherSet(
+  pool: RolesConnection,
+  names: DatabaseRoleNames,
+  others: readonly DatabaseRoleNames[],
+) {
+  const {
+    rows: [found],
+  } = await pool.query<{ database: string; schemaOwner: string | null; connecting: string[] }>(
+    `select current_database() as database,
+            (select pg_get_userbyid(nspowner)::text from pg_namespace where nspname = 'public') as "schemaOwner",
+            array(select distinct pg_get_userbyid(acl.grantee)::text
+                    from pg_database d, aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) acl
+                   where d.datname = current_database() and acl.privilege_type = 'CONNECT' and acl.grantee <> 0
+                   order by 1) as connecting`,
+  );
+  if (!found) throw new Error("the database running roles has no name");
+  for (const other of others) {
+    const roles = [other.migrate, other.app, other.admin];
+    const signs = [
+      ...(found.schemaOwner === other.migrate ? [`${other.migrate} owns its schema public`] : []),
+      ...found.connecting
+        .filter((role) => roles.includes(role))
+        .map((role) => `${role} may connect to it`),
+    ];
+    if (signs.length > 0) {
+      throw new Error(
+        `${found.database} belongs to the role set of ${roles.join(", ")}, not ${names.migrate}, ${names.app}, ` +
+          `${names.admin}: ${signs.join("; ")}. Nothing was changed: run roles for that set, or on this set's own database`,
+      );
+    }
+  }
 }
 
 /** Only `roles` (and the database's owner) may connect to the database the roles script runs on: PUBLIC loses
