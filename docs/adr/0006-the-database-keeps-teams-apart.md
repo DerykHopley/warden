@@ -39,7 +39,15 @@ Spike code and cases: the capstone archive, `architecture/spikes/team-scoping/`.
     without it, with a warning. There it's bound by the policies like `warden_app`, so `withAdmin` can't cross
     Teams.
   - `checkDatabaseRole` refuses `warden_admin` and `warden_migrate`, and any role that can become them, by name, at
-    start and on each new connection (#16, #17).
+    start and on each new connection (#16, #17); also their preview twins, and an app role that is a member of any
+    role (#32).
+  - Owner previews have their own three roles (`warden_preview_migrate`, `warden_preview_app`,
+    `warden_preview_admin`) on the `warden_preview` database. Roles belong to the whole instance, so each database
+    lets only its own set connect: `createRoles` takes CONNECT away from PUBLIC (#32).
+  - No service account reads `postgres`'s password: the setup script runs `roles` for both sets from the owner's
+    machine, through the Cloud SQL Auth Proxy, and the migration jobs run only migrations (#32). Whether `postgres`
+    may revoke PUBLIC's CONNECT on a database `gcloud` made (it belongs to `cloudsqlsuperuser`) is checked by
+    `createRoles` itself, which stops if PUBLIC can still connect.
   - What the first deploy must still show live: `warden_app`'s attributes on Cloud SQL, and `warden_admin`'s
     outcome, which #24 records.
 - An empty result can mean "no Team set" as well as "nothing there": tests assert the Team is set, and `withTeam`
