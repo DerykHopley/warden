@@ -6,7 +6,7 @@ Each of the others goes to the first ticket that brings its trait in.
 
 | Trait | Why Warden has it | Default | Answer |
 |---|---|---|---|
-| Public URL | Cloud Run web app | Security headers on every response: CSP, `frame-ancestors 'none'`, `X-Content-Type-Options: nosniff` (**skeleton**) | yes |
+| Public URL | Cloud Run web app | Security headers on every response: CSP, `frame-ancestors 'none'`, `X-Content-Type-Options: nosniff` (**skeleton**). The CSP's `img-src` allows `data:` images, because Clerk's sign-in shows a `data:` SVG; an image can't run script (#73) | yes |
 | | | Rate limits on sign-in and on every paid or slow path | yes |
 | | | Cloud Run runs as its own least-privilege service account, never the default one (**skeleton**) | yes |
 | Paid model calls | Judge, chat and assessments through OpenRouter | A spending cap set at OpenRouter (**skeleton**) | yes |
