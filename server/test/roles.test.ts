@@ -1,10 +1,19 @@
-// The roles script against the test Postgres: the three roles, what warden_app can't do, and running it again.
+// The roles script against the test Postgres: the three roles, what warden_app can't do, and running it again; then
+// run as Cloud SQL runs it, by a user that isn't a superuser, with and without passwords; then stray memberships.
+import { randomBytes } from "node:crypto";
+import pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import { poolAs, runInServer } from "./databases.ts";
+import { createPool, type DatabaseRoleNames } from "../src/database.ts";
+import { createLogger } from "../src/log.ts";
+import { createRoles } from "../src/roles.ts";
+import { poolAs, runInServer, testName } from "./databases.ts";
+import { scramAuthenticates } from "./scram.ts";
 
 const database = inject("testDatabase");
 const app = poolAs("warden_app", database);
-afterAll(() => app.end());
+const silent = createLogger(() => {});
+const superuser = createPool(silent, { max: 1 });
+afterAll(() => Promise.all([app.end(), superuser.end()]));
 
 describe("the roles script", () => {
   beforeAll(async () => {
@@ -39,5 +48,291 @@ describe("the roles script", () => {
 
   it.each(["warden_admin", "warden_migrate"])("refuses warden_app a set role %s", async (role) => {
     await expect(app.query(`set role ${role}`)).rejects.toThrow(/permission denied/);
+  });
+});
+
+/**
+ * Three roles under test names, and a database owned by a user like Cloud SQL's `postgres` (CREATEROLE and
+ * CREATEDB, no SUPERUSER or BYPASSRLS): roles belong to the whole Postgres server, and the suite's warden_* roles are
+ * in use by other files. `asRunner` connects as that user, `asSuperuser` as the PG* superuser, both to that database.
+ */
+async function cloudSqlLike() {
+  const base = testName();
+  const runner = `${base}_owner`;
+  const names: DatabaseRoleNames = {
+    migrate: `${base}_migrate`,
+    app: `${base}_app`,
+    admin: `${base}_admin`,
+  };
+  const extraRoles: string[] = [];
+  await superuser.query(`create role ${runner} login createrole createdb`);
+  await superuser.query(`create database ${base} owner ${runner}`);
+  const asRunner = createPool(silent, { user: runner, database: base, max: 1 });
+  const asSuperuser = createPool(silent, { database: base, max: 1 });
+  const lines: string[] = [];
+  return {
+    base,
+    names,
+    asRunner,
+    asSuperuser,
+    lines,
+    logger: createLogger((line) => lines.push(line)),
+    /** A role dropped with the rest. */
+    role: async (suffix: string, attributes = "login") => {
+      const name = `${base}_${suffix}`;
+      extraRoles.push(name);
+      await superuser.query(`create role ${name} ${attributes}`);
+      return name;
+    },
+    drop: async () => {
+      await asRunner.end();
+      await asSuperuser.end();
+      await superuser.query(`drop database if exists ${base} with (force)`);
+      // The app role first: dropping it drops the memberships other roles granted it.
+      for (const role of [names.app, names.admin, names.migrate, ...extraRoles, runner]) {
+        await superuser.query(`drop role if exists ${role}`);
+      }
+    },
+  };
+}
+
+async function storedPasswords(names: DatabaseRoleNames) {
+  const { rows } = await superuser.query<{ rolname: string; rolpassword: string | null }>(
+    "select rolname, rolpassword from pg_authid where rolname = any($1)",
+    [[names.migrate, names.app, names.admin]],
+  );
+  return Object.fromEntries(rows.map((row) => [row.rolname, row.rolpassword]));
+}
+
+async function membershipsOf(role: string) {
+  const { rows } = await superuser.query<{ rolname: string }>(
+    `select r.rolname from pg_auth_members m join pg_roles r on r.oid = m.roleid
+      where m.member = (select oid from pg_roles where rolname = $1) order by r.rolname`,
+    [role],
+  );
+  return rows.map((row) => row.rolname);
+}
+
+/** The error a promise rejects with, or undefined. */
+function rejection(promise: Promise<unknown>): Promise<unknown> {
+  return promise.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+}
+
+/** Everything an error carries that a log line could show. */
+function everythingIn(error: unknown): string {
+  const { message, stack, cause } = error as Error;
+  return JSON.stringify({ message, stack, cause: String(cause), own: { ...(error as object) } });
+}
+
+describe("the roles script run twice by a user with CREATEROLE that isn't a superuser", () => {
+  let fixture: Awaited<ReturnType<typeof cloudSqlLike>>;
+  beforeAll(async () => {
+    fixture = await cloudSqlLike();
+    await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
+    await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
+  });
+  afterAll(() => fixture.drop());
+
+  it("hands public to the migration role", async () => {
+    const { rows } = await fixture.asRunner.query(
+      "select nspowner::regrole::text as owner from pg_namespace where nspname = 'public'",
+    );
+    expect(rows).toEqual([{ owner: fixture.names.migrate }]);
+  });
+
+  it("sets no password", async () => {
+    const { migrate, app, admin } = fixture.names;
+    expect(await storedPasswords(fixture.names)).toEqual({
+      [migrate]: null,
+      [app]: null,
+      [admin]: null,
+    });
+  });
+
+  it("makes the admin role without BYPASSRLS, and warns naming it", async () => {
+    const { rows } = await superuser.query(
+      "select rolbypassrls from pg_roles where rolname = any($1)",
+      [Object.values(fixture.names)],
+    );
+    expect(rows).toEqual([
+      { rolbypassrls: false },
+      { rolbypassrls: false },
+      { rolbypassrls: false },
+    ]);
+    const warnings = fixture.lines
+      .map((line) => JSON.parse(line))
+      .filter((entry) => entry.severity === "WARNING");
+    expect(warnings[0]?.message).toContain(fixture.names.admin);
+    expect(warnings[0]?.message).toContain("BYPASSRLS");
+  });
+});
+
+describe("the roles script given passwords", () => {
+  // A quote and a backslash, so the password's escaped form differs from its raw one.
+  const passwords = {
+    app: `app'pw\\${randomBytes(8).toString("hex")}`,
+    migrate: `migrate'pw\\${randomBytes(8).toString("hex")}`,
+  };
+  let fixture: Awaited<ReturnType<typeof cloudSqlLike>>;
+  beforeAll(async () => {
+    fixture = await cloudSqlLike();
+    await createRoles(fixture.asRunner, {
+      names: fixture.names,
+      logger: fixture.logger,
+      passwords,
+    });
+  });
+  afterAll(() => fixture.drop());
+
+  it("checks a verifier as a login would", async () => {
+    // Postgres's own verifier, from a password it hashed itself: the check passes it, and fails another password.
+    const own = await fixture.role("hashedbypostgres");
+    await superuser.query(`alter role ${own} password 'pencil'`);
+    const { rows } = await superuser.query("select rolpassword from pg_authid where rolname = $1", [
+      own,
+    ]);
+    expect(await scramAuthenticates(rows[0].rolpassword, "pencil")).toBe(true);
+    expect(await scramAuthenticates(rows[0].rolpassword, "pencils")).toBe(false);
+  });
+
+  it("stores a SCRAM-SHA-256 verifier for the app and migration roles that the password signs in with", async () => {
+    const stored = await storedPasswords(fixture.names);
+
+    expect(stored[fixture.names.admin]).toBeNull();
+    for (const [role, password] of [
+      [fixture.names.app, passwords.app],
+      [fixture.names.migrate, passwords.migrate],
+    ] as const) {
+      expect(stored[role]).toMatch(/^SCRAM-SHA-256\$4096:/);
+      expect(await scramAuthenticates(stored[role] ?? "", password), role).toBe(true);
+      expect(await scramAuthenticates(stored[role] ?? "", `${password}x`), role).toBe(false);
+    }
+  });
+
+  it("sends Postgres neither password, raw or escaped", async () => {
+    const statements: string[] = [];
+    const recording = {
+      query: (text: string, values?: unknown[]) => {
+        statements.push(text, ...(values ?? []).map(String));
+        return fixture.asRunner.query(text, values);
+      },
+    } as unknown as pg.Pool;
+
+    await createRoles(recording, { names: fixture.names, logger: fixture.logger, passwords });
+
+    expect(statements.some((statement) => /alter role .* password/.test(statement))).toBe(true);
+    const sent = statements.join("\n");
+    for (const password of Object.values(passwords)) {
+      expect(sent).not.toContain(password);
+      expect(sent).not.toContain(pg.escapeLiteral(password));
+    }
+  });
+
+  it("logs neither password, raw or escaped", () => {
+    const logged = fixture.lines.join("\n");
+    for (const password of Object.values(passwords)) {
+      expect(logged).not.toContain(password);
+      expect(logged).not.toContain(pg.escapeLiteral(password));
+    }
+  });
+});
+
+describe("the roles script failing to set a password", () => {
+  it("names the role and Postgres's code, and holds the password in neither form", async () => {
+    const fixture = await cloudSqlLike();
+    try {
+      await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
+      // CREATEROLE and the admin option on the migration role only: every step passes until it sets the app role's
+      // password, which Postgres refuses it.
+      const stranger = await fixture.role("stranger", "login createrole createdb");
+      await superuser.query(`grant ${fixture.names.migrate} to ${stranger} with admin option`);
+      const asStranger = createPool(silent, { user: stranger, database: fixture.base, max: 1 });
+      const password = `pw'\\${randomBytes(8).toString("hex")}`;
+      try {
+        const error = await rejection(
+          createRoles(asStranger, {
+            names: fixture.names,
+            logger: fixture.logger,
+            passwords: { app: password },
+          }),
+        );
+
+        expect((error as Error).message).toBe(
+          `setting ${fixture.names.app}'s password failed (SQLSTATE 42501)`,
+        );
+        expect(everythingIn(error)).not.toContain(password);
+        expect(everythingIn(error)).not.toContain(pg.escapeLiteral(password));
+      } finally {
+        await asStranger.end();
+      }
+    } finally {
+      await fixture.drop();
+    }
+  });
+
+  it("refuses a password that isn't printable ASCII, without echoing it", async () => {
+    const fixture = await cloudSqlLike();
+    try {
+      const error = await rejection(
+        createRoles(fixture.asRunner, {
+          names: fixture.names,
+          logger: fixture.logger,
+          passwords: { migrate: "päss-wörd" },
+        }),
+      );
+
+      expect((error as Error).message).toBe(
+        `${fixture.names.migrate}'s password must be printable ASCII`,
+      );
+      expect(everythingIn(error)).not.toContain("päss-wörd");
+    } finally {
+      await fixture.drop();
+    }
+  });
+});
+
+describe("the roles script and stray memberships of the app role", () => {
+  it("revokes them, whoever granted them", async () => {
+    const fixture = await cloudSqlLike();
+    try {
+      await createRoles(fixture.asSuperuser, { names: fixture.names, logger: fixture.logger });
+      const { app, migrate, admin } = fixture.names;
+      const granter = await fixture.role("granter");
+      await superuser.query(`grant ${migrate} to ${granter} with admin option`);
+      await superuser.query(`grant ${migrate}, ${admin} to ${app}`);
+      await superuser.query(`set role ${granter}`);
+      await superuser.query(`grant ${migrate} to ${app}`);
+      await superuser.query(`reset role`);
+      await superuser.query(`grant pg_read_all_data to ${app}`);
+
+      await createRoles(fixture.asSuperuser, { names: fixture.names, logger: fixture.logger });
+
+      expect(await membershipsOf(app)).toEqual([]);
+    } finally {
+      await superuser.query(`reset role`);
+      await fixture.drop();
+    }
+  });
+
+  it("throws naming the app role when one can't be revoked", async () => {
+    const fixture = await cloudSqlLike();
+    try {
+      await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
+      // Granted by the superuser: a user that isn't one may not revoke it.
+      await superuser.query(`grant pg_read_all_data to ${fixture.names.app}`);
+
+      const error = await rejection(
+        createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger }),
+      );
+
+      expect((error as Error).message).toMatch(
+        `${fixture.names.app} is still a member of pg_read_all_data`,
+      );
+    } finally {
+      await fixture.drop();
+    }
   });
 });
