@@ -11,6 +11,7 @@ import {
   RoleChangeBody,
   type Actor,
   type Finding,
+  type FindingsBody,
   type HealthBody,
   type HistoryBody,
   type MeBody,
@@ -312,6 +313,13 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     (team, id, body, actor): Promise<Proposal> =>
       findings.rejectProposal(team, id, { ...body, actor }),
   );
+
+  // Any person in the Team reads every Finding of the session's Team (story 9). No filtering here: a Team's list is
+  // small, and the Findings page filters it.
+  app.get("/api/findings", requireRole("member"), async (c) => {
+    const list = await findings.list(c.get("team"));
+    return c.json({ findings: list } satisfies FindingsBody);
+  });
 
   // Any person in the Team reads a Finding's history, oldest first.
   app.get("/api/findings/:id/history", requireRole("member"), async (c) => {

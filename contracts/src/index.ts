@@ -59,3 +59,4 @@ export const RoleChangeBody = z.object({ role: Role });
 export type RoleChangeBody = z.infer<typeof RoleChangeBody>;
 
 export * from "./decisions.ts";
+export * from "./findings-view.ts";
