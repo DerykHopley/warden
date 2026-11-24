@@ -52,7 +52,7 @@ flowchart LR
       DB[("Cloud SQL Postgres, row-level security")]
     end
     subgraph TB4["TB4: Secret Manager"]
-      SM["Clerk key, database passwords, hook tokens, GitHub app key, OpenRouter key, pseudonym keys"]
+      SM["Clerk keys, database passwords, hook tokens, GitHub app key and webhook secret, OpenRouter key, Langfuse keys, pseudonym keys"]
     end
     LOG["Cloud Logging, through the redactor"]
   end
@@ -100,7 +100,7 @@ flowchart LR
 | TB1 the browser and the dashboard | A person's requests, carrying a Clerk session token | Clerk session check, Role check on the server, security headers | Built: session check and headers (slice 1a, #4); the Team read only from the verified token's active Clerk Organization, the Role read from Warden's own table by `requireRole`, and the sign-in limit (slice 5a, #27) |
 | TB2 the API on Cloud Run | Every request from outside Google Cloud | The checks above, plus the hook token and the webhook signature | Built in part: slice 1a (#4). Designed: hook and webhooks (Guard spec), Cloud Run itself (slice 1b) |
 | TB3 the database through `withTeam` | Every query from request and job code | Row-level security, forced, on every Team-owned table | Built in part: `teams`, `withTeam` and the CI check (slice 4b, #12). Designed: request code through `withTeam` (slice 5) |
-| TB4 Secret Manager | Secret values, read by Warden's service account | IAM: only Warden's own service account reads them | Designed: slice 1b |
+| TB4 Secret Manager | Secret values, read by Warden's service accounts | IAM on each secret: `warden-run` reads the Clerk secret key (`warden-clerk-secret`), the Clerk JWT key (`warden-clerk-jwt-key`) and the app password (`warden-db-app-password`); `warden-migrate` reads the three database passwords (`warden-db-password`, `warden-db-app-password`, `warden-db-migrate-password`); `warden-deploy` reads none. No service account has a key. Secret Manager's Data Access logs record every read (L4) | Built: slice 1b-ii, the setup script (#16). What it shows live is #24's to record. Designed: the Guard spec's secrets |
 | TB5 the developer's laptop and its managed hook, into the hook endpoint | Agent events | The hook token, the limits, redaction on arrival | Designed: Guard spec |
 | TB6 the GitHub app, both ways | Webhooks in; repo reads and Fix PRs out | Webhook signature in; the app's permissions out | Designed: Guard spec |
 | TB7 the Judge calling OpenRouter | Redacted Agent events and repo text | Tagged data, ZDR-only routing, spending limits | Designed: Guard spec |
@@ -142,10 +142,10 @@ settled on ticket #5.
 | H2 | A token used to write into another Team | S, E | A developer in the Team; a leaked token's holder | Events land in the wrong Team | The token names the Team. The endpoint takes the Team from the token alone, never from the body, and writes through `withTeam`, so an event reaches only its own Team | Guard spec | Designed | ADR 0007, ADR 0006 |
 | H3 | The token read from a laptop used for more than events | E | A developer in the Team | Reading the Team's data, or changing a Status | Every developer in the Team can read the token, so it grants writing Agent events into that Team and nothing else: the API never accepts it, so no read, no Status change, no other Team | Guard spec | Designed | ADR 0007, #5 d6 |
 | H4 | A leaked token kept in use | S | A leaked token's holder | Fake or flooding events until it's stopped | Tokens live in Secret Manager and an Admin rotates them per Team. On rotation the old token stays valid for 24 hours, so the managed settings can be redeployed, then stops | Guard spec | Designed | ADR 0007, #5 d6 |
-| H5 | A token in a URL ends up in the logs | I | Anyone who reads the logs | A working token leaks | The token goes only in a request header (the hook's `headers`, from a variable in `allowedEnvVars`), never in a URL, because Cloud Run's request logs keep the URL. The redactor masks bearer tokens in Warden's own lines | Guard spec (header); slice 1a, #4 (redactor) | Designed (header); Built (redactor) | SD redaction in logs |
+| H5 | A token in a URL ends up in the logs | I | Anyone who reads the logs | A working token leaks | The token is a header value in the managed settings (the hook's `headers`), never in a URL, because Cloud Run's request logs keep the URL. The redactor masks bearer tokens in Warden's own lines | Guard spec (header); slice 1a, #4 (redactor) | Designed (header); Built (redactor) | SD redaction in logs |
 | H6 | A flood of events | D | An outside attacker with a token; a developer | Each event leads to a paid Judge call: a big bill, a slow endpoint | A per-Team rate limit and a body size limit; events over them are refused, and the refusals are counted in the session record | Guard spec | Designed | SD rate limits on every paid or slow path |
 | H7 | Event content written to the logs | I | Anyone who reads the logs; the operator | Agent event content kept 30 days, outside judge-then-drop | Event bodies are never logged: only the Team, the event name, its size and the outcome | Guard spec | Designed | SD redaction in logs, ADR 0007 |
-| H8 | Secrets or personal data stored from event content | I | Anyone with database access; the operator | Secrets, prompts or names kept | Redacted on arrival, whatever the Privacy tier, including the home folder name in `cwd` and `transcript_path`. Fields above the Team's Privacy tier are dropped before anything is stored | Guard spec | Designed | ADR 0007, SD redaction on output |
+| H8 | Secrets or personal data stored from event content | I | Anyone with database access; the operator | Secrets, prompts or names kept | Redacted on arrival, at every Privacy tier, including the home folder name in `cwd`, `transcript_path`, and every path in the tool input and tool output. Fields above the Team's Privacy tier are dropped before anything is stored | Guard spec | Designed | ADR 0007, SD redaction on output |
 | H9 | Events kept longer than needed | I | Anyone who reaches the database later | More data to leak | Judge, then drop: events kept only until judged and at most 7 days; a daily job deletes the rest (`data.md`) | Guard spec | Designed | ADR 0007, SD retention |
 | H10 | A developer forges or floods their own Team's events, or sends another developer's identifier | S, R | A developer in the Team | False or hidden sessions in their own Team | Accepted residual risk: it costs the Team's own budget, the limits in H6 cap it, and it shows in the session records | Guard spec | Designed | ADR 0007 |
 | H11 | A developer switches the hook off | R | A developer in the Team | Sessions go unseen | The hook is set in managed settings, which outrank a developer's own settings. A developer with admin rights on their laptop can still remove them: an accepted residual risk | Guard spec | Designed | ADR 0007 |
@@ -179,7 +179,7 @@ settled on ticket #5.
 
 | # | Threat | STRIDE | Who | Impact | Mitigation | Where built | Built or designed | Source |
 |---|---|---|---|---|---|---|---|---|
-| A1 | API calls without a valid session | S | Outside attacker | Reading a person's data | Every API request but the health check needs a valid Clerk session token; a missing, expired or wrongly signed token gets 401, and so does one made for another app on the same Clerk instance: its authorized party (`azp`) must be one of Warden's dashboard origins (`CLERK_AUTHORIZED_PARTIES`, required on Cloud Run) | Slice 1a, #4; the origins, slice 5a, #27 | Built | ADR 0008 |
+| A1 | API calls without a valid session | S | Outside attacker | Reading a person's data | `GET /api/me` checks the Clerk session token; a missing, expired or wrongly signed token gets 401, and so does one made for another app on the same Clerk instance: its authorized party (`azp`) must be one of Warden's dashboard origins (`CLERK_AUTHORIZED_PARTIES`, required on Cloud Run). `GET /api/health` needs no session, and every other `/api/*` path answers 404. Each new route brings its own check through `requireRole`, which signs in the same way; no shipped route uses it yet | Slice 1a, #4; the origins, slice 5a, #27 | Built | ADR 0008 |
 | A2 | Framing, injected scripts, MIME sniffing | T, I | Outside attacker | Clickjacking, script injection | Every response carries a Content-Security-Policy with `frame-ancestors 'none'`, and `X-Content-Type-Options: nosniff` | Slice 1a, #4 | Built | SD security headers |
 | A3 | An error leaks detail | I | Outside attacker | Stack traces or internals revealed | A 500 answers with a generic body: no stack, no error message | Slice 1a, #4 | Built | SD redaction on output |
 | A4 | A Member tries a Lead's or Admin's action | E | A Member | Risk accepted, or Roles changed, without the right Role | The Role is read from Warden's own table, on the server, on every data-changing request; never trusted from the client | Slice 5 (Roles), slice 8 (decisions) | Built in part: `requireRole(role)` reads the Role from `team_members` through `withTeam` and refuses one too low with 403, never trusting the token's Clerk role, with a test that a stored Member whose token says `org:admin` is refused a Lead's route (slice 5a, #27). Designed: the decisions that use it (slice 8) | SD Roles server-side, ADR 0008 |
@@ -195,10 +195,10 @@ settled on ticket #5.
 | D1 | A query forgets the Team | I, T | A bug in Warden; a person in another Team | Another Team's rows read or changed | Row-level security, forced, on every Team-owned table, read and write. `withTeam` is the only way request and job code reaches the database; no Team set means no rows | Slice 4 | Built in part: forced policies on `teams`, `withTeam`, and the attack cases (slice 4b, #12). Designed: request and job code through `withTeam` (slice 5) | ADR 0006 |
 | D2 | A new table without the policies | I | A bug in Warden | A table every Team can read | A CI check fails when a table, materialized view or foreign table in `public` lacks row-level security, forced, with a policy for each of select, insert, update and delete that applies to warden_app (or everyone) and reads the Team `withTeam` sets, or that has any permissive policy for warden_app (or everyone) that doesn't read the Team, which Postgres would OR with the Team policy. It also names any table outside `public` and the system schemas. It reads the policies' text, so it catches a missing or open policy, not a wrong comparison | Slice 4 | Built: `findUnprotectedTables`, run by the server tests on every shipped migration (slice 4b, #12; the extra permissive policy and other schemas, slice 5a, #27) | ADR 0006 |
 | D3 | A foreign key reveals another Team's rows | I | A person in another Team | Learning that another Team's rows exist | Foreign keys carry the Team: `(team_id, id)` | Slice 4, and every later table | Designed: every Team-owned table. Proven on a test-only table (case 12, #12) | ADR 0006 |
-| D4 | The app's connection bypasses the policies | E | A bug in Warden; the operator | Policies don't apply | Separate roles: the app role (bound by the policies), the migration role, and the admin role, used from one marked place in the code. Checked on the real Cloud SQL that the app role is bound | Slice 4; slice 1b for the Cloud SQL check | Built in part: the three roles, warden_app without BYPASSRLS or membership (slice 4a, #10); the admin role from one marked place, `withAdmin` (slice 4b, #12). Built: the server refuses a role that is a superuser, has BYPASSRLS, owns or will own tables, or can become warden_migrate or warden_admin, at start and on each new connection (#17). Designed: the check on the real Cloud SQL (slice 1b) | ADR 0006 |
+| D4 | The app's connection bypasses the policies | E | A bug in Warden; the operator | Policies don't apply | Separate roles: the app role (bound by the policies), the migration role, and the admin role, used from one marked place in the code. Checked on the real Cloud SQL that the app role is bound | Slice 4; #16 and #17 for the role check; #24 for the Cloud SQL check | Built in part: the three roles, warden_app without BYPASSRLS or membership (slice 4a, #10); the admin role from one marked place, `withAdmin` (slice 4b, #12). Built: the server refuses a role that is a superuser, has BYPASSRLS, owns or will own tables, or is or can become warden_migrate or warden_admin (refused by name, `DATABASE_ROLE_NAMES`), at start and on each new connection (#16, #17). Built: where the user running `roles` can't grant BYPASSRLS (Cloud SQL's `postgres`), `createRoles` makes warden_admin without it, with a warning, so there it's bound by the policies like warden_app and `withAdmin` can't cross Teams (#16). Designed: the check on the real Cloud SQL (#24): warden_app's attributes there, and warden_admin's outcome | ADR 0006 |
 | D5 | A pooled connection carries a Team into its next use | I | A bug in Warden | One request sees another Team's rows | `withTeam` sets the Team for one transaction only | Slice 4 | Built: with a test on a one-connection pool (slice 4b, #12) | ADR 0006 |
 | D6 | History edited to hide a decision | T, R | The app role; a bug | Audit evidence changed | Status history and Role history are append-only, enforced in Postgres (a trigger or grants), with a test that an update or delete fails. Residual risk: warden_migrate owns the table, so it could disable or drop the trigger; that risk is held by whoever holds the migration credentials | Slice 5 (Role history), slice 7 (Status history) | Built: Status history (slice 7, #22) and Role history (`role_history`, slice 5a, #27), where a trigger refuses every role's update, delete and truncate and warden_app has no update, delete or truncate grant, with a test of each statement as warden_app and as warden_migrate | SD append-only |
-| D7 | The database reached from the internet | I, S | Outside attacker | Direct access to every Team | Cloud SQL is reached only through Cloud Run's Cloud SQL connection, as Warden's service account; no public authorized networks | Slice 1b | Designed | SD least-privilege service account |
+| D7 | The database reached from the internet | I, S | Outside attacker | Direct access to every Team | Cloud SQL has no authorized networks and requires connectors (`--connector-enforcement=REQUIRED`), so only the Cloud SQL Auth Proxy and Google's connectors, authorized by IAM, connect: Cloud Run's Cloud SQL connection, as `warden-run`. It keeps its public IP, because a private IP needs a VPC network, private services access and Direct VPC egress, which Warden has none of | Slice 1b-ii, the setup script (#16) | Built: slice 1b-ii, the setup script (#16). What it shows live is #24's to record | SD least-privilege service account |
 
 ### Secrets and the release (slice 1b, #4)
 
@@ -206,9 +206,9 @@ settled on ticket #5.
 |---|---|---|---|---|---|---|---|---|
 | R1 | A secret committed to the repo | I | Anyone who reads the repo | The secret leaks | Locally, secrets live in the keyring and a committed `.envrc` reads them; `.env.example` lists names only, and no `.env` exists | Slice 1a, #4 | Built | SD secrets |
 | R2 | A secret baked into the image or its settings | I | Anyone who reads the image or the service's settings | The secret leaks | On Cloud Run, secrets come from Secret Manager, never from the image | Slice 1b | Designed | SD secrets |
-| R3 | The running app holds too much power | E | Whoever controls the running app | Access to the whole GCP project | Cloud Run runs as its own least-privilege service account, never the default one | Slice 1b | Designed | SD least-privilege service account |
+| R3 | The running app holds too much power | E | Whoever controls the running app | Access to the whole GCP project | The service runs as `warden-run`, its own service account, never the default compute account. It holds Cloud SQL client and read access to three secrets: the Clerk secret key, the Clerk JWT key and the app password (TB4) | Slice 1b-ii, the setup script (#16) | Built: slice 1b-ii, the setup script (#16). What it shows live is #24's to record | SD least-privilege service account |
 | R4 | Unreviewed code released | T | A person with push access; a bad merge | Unchecked code live | Releases go only from `main`, and code reaches `main` only through the merge gate (`scripts/merge-on-green.sh`: every check green, merge commit); a bad release is rolled back to the previous revision | Merge gate: built (rig). Release and rollback: slice 1b | Built (merge gate); Designed (release) | SD public URL, project rule (merge gate) |
-| R5 | A compromised dependency or CI step | T, E | A compromised package or action | Secrets stolen, a backdoor released | CI installs with the frozen lockfile; the image runs as a non-root user; pull request workflows get no cloud credentials, only the release from `main` can deploy, and it signs in through Workload Identity Federation rather than a stored key | Slice 1a, #4 (lockfile, non-root); slice 1b (deploy rights) | Built (lockfile, non-root); Designed (deploy rights) | SD least-privilege service account, SD secrets |
+| R5 | A compromised dependency or CI step | T, E | A compromised package or action | Secrets stolen, a backdoor released | CI installs with the frozen lockfile; the image runs as a non-root user. Deploy rights: GitHub Actions signs in as `warden-deploy` through Workload Identity Federation, with no stored key. Its provider admits only this repository, by its numeric id, only a push or a manual dispatch (`workflow_dispatch`), and only on `main` and `preview/*`, so a pull request workflow gets no token. How `main` and `preview/*` tokens are kept apart is #32's; the release workflow is #24's | Slice 1a, #4 (lockfile, non-root); slice 1b-ii, the setup script, #16 (deploy rights) | Built (lockfile, non-root; deploy rights). Designed (the release workflow, #24) | SD least-privilege service account, SD secrets |
 
 ### Logs (#4)
 
@@ -216,8 +216,8 @@ settled on ticket #5.
 |---|---|---|---|---|---|---|---|---|
 | L1 | A secret or session token written to a log | I | Anyone who reads the logs | Tokens and keys leak | One logger, with a redactor on every line: the Authorization, Cookie and Set-Cookie headers are never logged; Clerk secret keys, bearer tokens, JWTs and a Postgres URL's password are masked in messages, fields and stacks; query string values are masked | Slice 1a, #4 | Built | SD redaction in logs |
 | L2 | Agent event content logged | I | Anyone who reads the logs | Content kept outside judge-then-drop | Event bodies are never logged (H7) | Guard spec | Designed | ADR 0007 |
-| L3 | Cloud Run's request logs, which skip the redactor, hold a secret | I | Anyone who reads the logs | A token in a URL leaks | No secret or token ever goes in a URL; request logs keep 30 days | Slice 1b; Guard spec for the hook (H5) | Designed | SD redaction in logs |
-| L4 | Changes to the cloud setup hidden | R | The operator; a leaked key's holder | No record of who changed what | Google's Admin Activity audit logs go to the `_Required` bucket, kept 400 days, which nobody can shorten | Slice 1b | Designed | SD audit trail |
+| L3 | Cloud Run's request logs, which skip the redactor, hold a secret | I | Anyone who reads the logs | A token in a URL leaks | No secret or token ever goes in a URL; request logs keep 30 days, in the `_Default` bucket | Slice 1b-ii, the setup script, #16 (30 days); Guard spec for the hook (H5) | Built: the `_Default` bucket set to 30 days (slice 1b-ii, the setup script, #16). Designed: the hook token's header (Guard spec, H5) | SD redaction in logs |
+| L4 | Changes to the cloud setup hidden | R | The operator; a leaked key's holder | No record of who changed what | Google's Admin Activity audit logs go to the `_Required` bucket, kept 400 days (Google's), which nobody can shorten. Secret Manager's Data Access logs (`DATA_READ`) record which principal read which secret, and when, never the value, kept 30 days in `_Default` | Google (Admin Activity); slice 1b-ii, the setup script, #16 (Data Access) | Built: slice 1b-ii, the setup script (#16). What it shows live is #24's to record | SD audit trail |
 
 ## Accepted residual risks
 
@@ -229,10 +229,11 @@ What Warden doesn't protect against, and why. Each names the spec that builds wh
   developer can also claim another's pseudonym.
 - **Warden's operator reading data through the admin role** (slice 4 builds the roles). Whoever runs Warden runs
   its database. The admin role is used from one marked place in the code, Google's audit logs record changes to the
-  cloud setup, and Agent events are gone within 14 days, but an operator who wants to read a Team's Findings can.
-- **Backups holding dropped events for up to 7 days** (slice 1b sets the backups). Cloud SQL's backups and recovery
-  logs can't be edited row by row, so an Agent event dropped from the live database stays in them until they age
-  out: 14 days at most in any form.
+  cloud setup, and Agent events are gone within 15 days, but an operator who wants to read a Team's Findings can.
+- **Backups holding dropped events for up to 7 days** (slice 1b-ii's setup script, #16, sets the backups). Cloud
+  SQL's backups and recovery logs can't be edited row by row, so an Agent event dropped from the live database stays
+  in them until they age out: 15 days at most in any form, up to 7 days live, up to 1 more until the daily delete job
+  runs, then up to 7 in backups (recovery logs keep 6).
 - **A developer with admin rights on their laptop removing the managed hook** (H11; Guard spec). Managed settings
   outrank a developer's own settings, but not the person who controls the machine.
 - **The sign-in limit counts per server instance** (A5; slice 5a, #27). The failed sign-ins are kept in each
@@ -257,8 +258,8 @@ The Guard spec's tickets carry each line as a criterion. Each line names the spe
 - [ ] Events are redacted on arrival, home folder names included, and fields above the Privacy tier are dropped
       before storing (H8; Guard spec).
 - [ ] The daily job drops events once judged or after 7 days, with a test (H9; Guard spec).
-- [ ] Cloud SQL's backups and point-in-time recovery logs are set to 7 days on the live instance (`data.md`; slice
-      1b, checked again by the Guard spec).
+- [ ] Cloud SQL keeps 7 automated backups and 6 days of point-in-time recovery logs on the live instance
+      (`data.md`; set by slice 1b-ii's setup script, #16, checked live by #24 and again by the Guard spec).
 - [ ] The pseudonym is an HMAC-SHA256 with a per-Team key in Secret Manager, and the developer identifier's source
       is decided (open question 1; Guard spec).
 - [ ] The OpenRouter account refuses providers that train on or keep prompts, and each Judge call asks for ZDR
@@ -282,7 +283,7 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 |---|---|---|
 | Security headers on every response | A2 | Built: slice 1a, #4 |
 | Rate limits on sign-in and on every paid or slow path | A5 (sign-in), H6 (hook), J5 (Judge) | Built: sign-in, per server instance (slice 5a, #27). Designed: Guard spec (hook, Judge) |
-| Cloud Run's own least-privilege service account | R3, D7 | Designed: slice 1b |
+| Cloud Run's own least-privilege service account | R3, D7 | Built: the accounts `warden-run`, `warden-migrate` and `warden-deploy`, and IAM per secret (slice 1b-ii, the setup script, #16). Designed: running as them and reading their secrets on Cloud Run (#24) |
 | A spending cap set at OpenRouter | J5 | Designed: Guard spec (the cap is set on the key) |
 | Per-Team limits that count every spending path, with a test for each | J5 | Designed: Guard spec |
 | A call budget per run | J5 | Designed: Guard spec |
@@ -296,7 +297,7 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 | `docs/data.md` lists what leaves the machine | `data.md`, What leaves the machine | Built: slice 2 (this document) |
 | A local-model option for the Judge | J6; `data.md`, What leaves the machine | Designed: Guard spec |
 | Append-only history enforced in Postgres, with a test | D6 | Built: Status history (slice 7, #22) and Role history (slice 5a, #27) |
-| Secrets: keyring and `.envrc` locally, Secret Manager on the host | R1, R2 | Built: keyring and `.envrc` (slice 1a, #4). Designed: Secret Manager (slice 1b) |
+| Secrets: keyring and `.envrc` locally, Secret Manager on the host | R1, R2 | Built: keyring and `.envrc` (slice 1a, #4); the secrets in Secret Manager and which account may read each (slice 1b-ii, the setup script, #16). Designed: Cloud Run reading them from Secret Manager (#24) |
 
 ## Open questions
 
@@ -313,8 +314,8 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 6. **Where the Judge's local model runs** (Guard spec), and how a Team turns it on.
 7. **How the endpoint checks a token** (Guard spec): read from Secret Manager per request, or a cached copy, and
    how the 24-hour overlap is held.
-8. **Whether Cloud SQL accepts 7 days of recovery logs beside 7 backups** (slice 1b). One Google summary says the
-   log setting must be less than the backup count; if so, the logs are set to 6 days, and the bounds in `data.md`
-   still hold.
+8. **Closed: recovery logs keep 6 days beside 7 backups** (#16). Cloud SQL requires the log setting to be less than
+   the backup count, so the setup script sets 6 days of recovery logs beside 7 backups, and the bounds in `data.md`
+   hold.
 9. **Whether a managed hook resists a developer without admin rights** (Guard spec): checked on a real laptop,
    since ADR 0007 relies on it.

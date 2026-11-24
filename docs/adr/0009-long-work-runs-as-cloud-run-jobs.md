@@ -61,7 +61,8 @@ a "Scan" that logs a tick every 10 seconds.
 - **B, Cloud Tasks calling back, retried correctly.** The first delivery got 500 (retry count 0), and the same Scan
   came back 5 s later (retry count 1, previous response 500). But its dispatch deadline is 30 minutes at most. With
   a 15 s deadline on 40 s of work, Cloud Tasks gave up on each of three attempts at 15.0 s (`DEADLINE_EXCEEDED`),
-  while each handler ran its full 40 s, so three copies of one Scan ran at once.
+  while each handler ran its full 40 s, so the attempts overlapped: at most two copies of one Scan ran at the same
+  time.
 - **C, a Cloud Run Job, ran a 5-minute Scan to the end** and exited 0.
   - **Start-up:** the first log line came 15 to 29 s after the execute call.
   - **Retry:** a failed first attempt ran the same Scan id again 27 s later (`retriedCount: 1`).
@@ -110,8 +111,8 @@ their figures with JavaScript.
 Each fits easily in the free-trial credit: about $258, with about 55 days left on 2026-11-24.
 
 **The spike's own cost:** the resources lived 38 minutes, using about 1,450 instance-based vCPU-s and a few minutes
-of request time. That is about $0.03 before the free tiers. The billing report, read by the owner after tear-down,
-confirms it.
+of request time. Its cost: $0.00 reported on the day; estimate ~$0.03 before free tiers. The owner read the billing
+report after tear-down (#14).
 
 ## Considered options
 
@@ -131,7 +132,7 @@ confirms it.
 
 ## Consequences
 
-- **Cloud Scheduler is a new outside service,** and this choice waits for the owner's approval on #14. Cloud Run
+- **Cloud Scheduler is a new outside service,** and the owner approved it on #14. Cloud Run
   Jobs are part of Cloud Run, already chosen. The Cloud Tasks API was turned on for the spike only and isn't used;
   the owner may turn it off.
 - **Who builds what:**
