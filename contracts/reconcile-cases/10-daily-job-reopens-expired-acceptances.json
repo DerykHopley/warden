@@ -1,0 +1,112 @@
+{
+  "name": "The daily job reopens an Accepted Finding past its expiry, seen or not, and keeps one whose expiry hasn't passed",
+  "rule": "A daily job reopens every Accepted Finding whose expiry has passed, whether or not a Scan sees it.",
+  "given": {
+    "now": "2026-11-29T08:00:00Z",
+    "findings": [
+      {
+        "id": "f-env",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+        "module": "guard",
+        "rule_id": "guard/agent-can-read-env",
+        "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+        "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+        "severity": "high",
+        "title": "The agent can read .env files",
+        "evidence": { "summary": "permissions.allow lets the agent read .env" },
+        "status": "accepted",
+        "unconfirmed_fix": null,
+        "accepted_reason": "The repo's .env holds only local test values",
+        "accepted_until": "2026-12-01T00:00:00Z",
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      },
+      {
+        "id": "f-api",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/api" },
+        "module": "guard",
+        "rule_id": "guard/agent-can-read-env",
+        "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+        "location": { "kind": "file", "path": ".claude/settings.json", "line": 8 },
+        "severity": "high",
+        "title": "The agent can read .env files",
+        "evidence": { "summary": "permissions.allow lets the agent read .env" },
+        "status": "accepted",
+        "unconfirmed_fix": null,
+        "accepted_reason": "The api repo is being archived",
+        "accepted_until": "2026-11-30T00:00:00Z",
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      },
+      {
+        "id": "f-mcp",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+        "module": "guard",
+        "rule_id": "guard/mcp-server-unpinned",
+        "fingerprint": "guard/mcp-server-unpinned|file:.mcp.json",
+        "location": { "kind": "file", "path": ".mcp.json", "line": 5 },
+        "severity": "medium",
+        "title": "An MCP server runs an unpinned package",
+        "evidence": { "summary": ".mcp.json runs npx some-server@latest" },
+        "status": "accepted",
+        "unconfirmed_fix": null,
+        "accepted_reason": "The server's maintainers are the team itself",
+        "accepted_until": "2027-06-01T00:00:00Z",
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-1",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-30T09:00:00Z",
+        "assets": [{ "kind": "repo", "ref": "https://github.com/example/app" }],
+        "rules": ["guard/agent-can-read-env"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      }
+    },
+    { "step": "expire", "now": "2026-12-02T03:00:00Z" }
+  ],
+  "expect": [
+    {
+      "id": "f-env",
+      "status": "open",
+      "accepted_reason": null,
+      "accepted_until": null,
+      "last_seen_scan": "scan-1"
+    },
+    {
+      "id": "f-api",
+      "status": "open",
+      "accepted_reason": null,
+      "accepted_until": null,
+      "last_seen_scan": "scan-0"
+    },
+    {
+      "id": "f-mcp",
+      "status": "accepted",
+      "accepted_reason": "The server's maintainers are the team itself",
+      "accepted_until": "2027-06-01T00:00:00Z"
+    }
+  ]
+}

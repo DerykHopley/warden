@@ -1,0 +1,61 @@
+{
+  "name": "Guard's move rule: the same Rule on the same Asset at another path makes an Unconfirmed fix",
+  "rule": "Each module says what \"may have moved\" means: for Guard, the same Rule on the same Asset; for Patch, the same CVE under a different package.",
+  "given": {
+    "now": "2026-11-24T08:00:00Z",
+    "findings": [
+      {
+        "id": "f-env",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+        "module": "guard",
+        "rule_id": "guard/agent-can-read-env",
+        "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+        "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+        "severity": "high",
+        "title": "The agent can read .env files",
+        "evidence": { "summary": "permissions.allow lets the agent read .env" },
+        "status": "open",
+        "unconfirmed_fix": null,
+        "accepted_reason": null,
+        "accepted_until": null,
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-1",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [{ "kind": "repo", "ref": "https://github.com/example/app" }],
+        "rules": ["guard/agent-can-read-env"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.local.json", "line": 2 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      },
+      "labels": { "moved": 0 }
+    }
+  ],
+  "expect": [
+    { "id": "f-env", "status": "fixed", "unconfirmed_fix": { "candidates": [{ "new": "moved" }] } },
+    {
+      "new": "moved",
+      "status": "open",
+      "unconfirmed_fix": null,
+      "fingerprint": "guard/agent-can-read-env|file:.claude/settings.local.json"
+    }
+  ]
+}
