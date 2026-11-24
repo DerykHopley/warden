@@ -6,7 +6,8 @@
 set -euo pipefail
 
 # Only what each case sets reaches the script, and never this machine's application-default credentials.
-unset DRY_RUN WARDEN_GITHUB_REPO WARDEN_GITHUB_REPO_ID GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_CONFIG
+unset DRY_RUN WARDEN_GITHUB_REPO WARDEN_GITHUB_REPO_ID GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_CONFIG \
+  GOOGLE_CLOUD_QUOTA_PROJECT
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 setup="$root/scripts/gcp-setup.sh"
@@ -487,6 +488,37 @@ assert_equal "a malformed credentials file: exit 1" 1 "$code"
 assert_no_line "a malformed credentials file: none of it is printed" "marker-adc-secret" "$out"
 assert_line "a malformed credentials file: says it isn't valid JSON" "isn't valid JSON" "$out"
 assert_equal "a malformed credentials file: it changes nothing" "" "$(changes)"
+
+# A credentials file it can't read: it says so, not that the file isn't valid JSON (#66).
+adc_file "$scratch/adc-unreadable.json" "$project"
+chmod 000 "$scratch/adc-unreadable.json"
+[[ -r $scratch/adc-unreadable.json ]] && fail "a file with no permissions is still readable (run as root?)"
+real_run adc-unreadable fresh GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-unreadable.json"
+assert_equal "an unreadable credentials file: exit 1" 1 "$code"
+assert_line "an unreadable credentials file: says it can't read it" \
+  "can't read $scratch/adc-unreadable.json" "$out"
+assert_no_line "an unreadable credentials file: doesn't say it isn't valid JSON" "isn't valid JSON" "$out"
+assert_line "an unreadable credentials file: says nothing was changed" "nothing was changed" "$out"
+assert_equal "an unreadable credentials file: it changes nothing" "" "$(changes)"
+
+# GOOGLE_APPLICATION_CREDENTIALS naming a file that doesn't exist: it stops, rather than skipping the check (#66).
+real_run adc-env-missing fresh GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-missing.json"
+assert_equal "a missing GOOGLE_APPLICATION_CREDENTIALS file: exit 1" 1 "$code"
+assert_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: says so" \
+  "the file GOOGLE_APPLICATION_CREDENTIALS names doesn't exist" "$out"
+assert_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: names it" "$scratch/adc-missing.json" "$out"
+assert_equal "a missing GOOGLE_APPLICATION_CREDENTIALS file: it changes nothing" "" "$(changes)"
+
+# GOOGLE_CLOUD_QUOTA_PROJECT comes before the file's quota project, as it does for the proxy's Google auth library
+# (cloud.google.com/go/auth: override, then the variable, then the file), so it's checked the same way (#66).
+real_run quota-env-other fresh GOOGLE_CLOUD_QUOTA_PROJECT=other-project
+assert_equal "GOOGLE_CLOUD_QUOTA_PROJECT set to another project: exit 1" 1 "$code"
+assert_line "GOOGLE_CLOUD_QUOTA_PROJECT set to another project: names the variable and both projects" \
+  "GOOGLE_CLOUD_QUOTA_PROJECT is other-project, not $project" "$out"
+assert_equal "GOOGLE_CLOUD_QUOTA_PROJECT set to another project: it changes nothing" "" "$(changes)"
+ADC_QUOTA=other-project real_run quota-env-overrides fresh GOOGLE_CLOUD_QUOTA_PROJECT="$project"
+[[ $code == 0 ]] || fail "GOOGLE_CLOUD_QUOTA_PROJECT set to the target over a file with another: the run failed: $out"
+pass "GOOGLE_CLOUD_QUOTA_PROJECT set to the target over a file with another: a run ends"
 
 ADC_QUOTA=$project real_run adc-same-quota fresh
 [[ $code == 0 ]] || fail "ADC whose quota project is the target: the run failed: $out"

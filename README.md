@@ -121,7 +121,8 @@ sets.
 - the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install), signed in, with application-default
   credentials for the Cloud SQL Auth Proxy (`gcloud auth application-default login`). Their quota project must be
   this project, or unset: the proxy's calls are billed there, and another project refuses them. The script checks it
-  first; to set it, run `gcloud auth application-default set-quota-project <project-id>`;
+  first; to set it, run `gcloud auth application-default set-quota-project <project-id>`. A
+  `GOOGLE_CLOUD_QUOTA_PROJECT` in your environment comes before it for the proxy, so it must be this project too;
 - the [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/sql-proxy#install), `cloud-sql-proxy`, on
   your `PATH` (`gcloud components install cloud-sql-proxy` installs it);
 - Node 24, and the server's dependencies installed (`pnpm install` in this repository): the script runs
