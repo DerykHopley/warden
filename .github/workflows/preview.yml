@@ -6,60 +6,66 @@ on:
   push:
     branches: ["preview/**"]
 
-# Previews share one database, so one deploy at a time, and none is cancelled halfway through a migration.
-concurrency:
-  group: preview
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
 jobs:
-  name:
-    name: Check the preview name
+  check:
+    name: Check the name and the repository variables
     runs-on: ubuntu-latest
     timeout-minutes: 2
     outputs:
-      name: ${{ steps.name.outputs.name }}
+      name: ${{ steps.check.outputs.name }}
+      configured: ${{ steps.check.outputs.configured }}
     steps:
-      # Before anything is built: the name becomes a Cloud Run tag, and scripts/cloud-run-deploy.sh holds it to the
-      # same rule.
-      - name: preview/<name> must be a Cloud Run tag
-        id: name
-        env:
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          name=${BRANCH#preview/}
-          if [[ ! $name =~ ^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$ ]]; then
-            echo "::error::The preview name '$name' must be 1 to 20 lowercase letters, digits and hyphens, starting with a letter and not ending in a hyphen"
-            exit 1
-          fi
-          echo "name=$name" >>"$GITHUB_OUTPUT"
-
-  # Without the repository variables (a fork, or before scripts/gcp-setup.sh has run), there's nowhere to deploy: the
-  # run says which is missing and stays green.
-  not-configured:
-    name: Preview not configured
-    needs: name
-    if: vars.GCP_PROJECT_ID == '' || vars.GCP_PREVIEW_DEPLOY_SA == ''
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    steps:
-      - name: Say which variable is missing
+      - uses: actions/checkout@v7
+      # Before anything is built: the name must be a Cloud Run tag, and the five variables the deploy reads set.
+      # Without GCP_PROJECT_ID or GCP_PREVIEW_DEPLOY_SA it prints a notice naming what's missing and the run stays
+      # green, deploying nothing; with those two but another missing, it fails naming each.
+      - name: preview/<name> must be a Cloud Run tag; the deploy's variables must be set
+        id: check
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           GCP_PREVIEW_DEPLOY_SA: ${{ vars.GCP_PREVIEW_DEPLOY_SA }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+        run: scripts/preview-check.sh "$GITHUB_REF_NAME"
+
+  # Outside the preview lock, with no Google credentials: the image goes to the deploy job as an artifact.
+  build:
+    name: Build the image
+    needs: check
+    if: needs.check.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the image
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
         run: |
-          for var in GCP_PROJECT_ID GCP_PREVIEW_DEPLOY_SA; do
-            [[ -n ${!var} ]] || echo "::notice::No preview deployed: the repository variable $var isn't set (scripts/gcp-setup.sh sets it)"
-          done
+          docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY --tag warden:preview .
+          docker save warden:preview | gzip >"$RUNNER_TEMP/image.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image
+          path: ${{ runner.temp }}/image.tar.gz
+          compression-level: 0
+          retention-days: 1
 
   deploy:
     name: Deploy the preview
-    needs: name
-    if: vars.GCP_PROJECT_ID != '' && vars.GCP_PREVIEW_DEPLOY_SA != ''
+    needs: [check, build]
+    if: needs.check.outputs.configured == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Previews share one database, so one migrate-and-deploy at a time, and none is cancelled halfway through a
+    # migration. GitHub keeps one waiting job per group: a newer push replaces an older one still waiting, which then
+    # shows as cancelled and must be pushed again.
+    concurrency:
+      group: preview
+      cancel-in-progress: false
     # The only job that may ask GitHub for an OIDC token, which Workload Identity Federation trades for
     # warden-preview-deploy's credentials.
     permissions:
@@ -69,11 +75,15 @@ jobs:
       IMAGE: europe-west1-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/warden-preview/warden:${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
-      # Built before signing in, so the credentials file auth writes into the workspace is never in the build context.
-      - name: Build the image
-        env:
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
-        run: docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY --tag "$IMAGE" .
+      - uses: actions/download-artifact@v8
+        with:
+          name: image
+          path: ${{ runner.temp }}
+      # Loaded before signing in; nothing is built here, so auth's credentials file never reaches a build context.
+      - name: Load the image
+        run: |
+          gunzip -c "$RUNNER_TEMP/image.tar.gz" | docker load
+          docker tag warden:preview "$IMAGE"
       - name: Sign in to Google Cloud (Workload Identity Federation, no key)
         uses: google-github-actions/auth@v3
         with:
@@ -89,5 +99,5 @@ jobs:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
-          PREVIEW_NAME: ${{ needs.name.outputs.name }}
+          PREVIEW_NAME: ${{ needs.check.outputs.name }}
         run: scripts/cloud-run-deploy.sh "$IMAGE" preview "$PREVIEW_NAME"

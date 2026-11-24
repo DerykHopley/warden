@@ -33,7 +33,7 @@ assert_line() {
   pass "$1"
 }
 
-# assert_no_line <what> <extended regex> <text>: no line of the text matches it.
+# assert_no_match <what> <extended regex> <text>: no line of the text matches it.
 assert_no_match() {
   if grep -qE -- "$2" <<<"$3"; then fail "$1: a line matches: $2"$'\n'"$(grep -E -- "$2" <<<"$3")"; fi
   pass "$1"
@@ -43,13 +43,18 @@ scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
 # A stub gcloud: records each call, one per line, and answers as FAKE_MIGRATION says (ok, or fail: the job's
-# execution fails the way `gcloud run jobs execute --wait` reports it).
+# execution fails the way `gcloud run jobs execute --wait` reports it). FAKE_DESCRIBE=fail makes reading the service
+# fail, as when the deploy account can't.
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
 printf 'gcloud %s\n' "$*" >>"$dir/calls"
 case "$*" in
   "run services describe warden-preview "*)
+    if [[ ${FAKE_DESCRIBE-} == fail ]]; then
+      echo "ERROR: (gcloud.run.services.describe) PERMISSION_DENIED" >&2
+      exit 1
+    fi
     cat <<JSON
 {"metadata":{"name":"warden-preview","annotations":{"run.googleapis.com/urls":"[\"$FAKE_URL_NEW\",\"$FAKE_URL_OLD\"]"}},
  "status":{"url":"$FAKE_URL_NEW"}}
@@ -74,7 +79,8 @@ chmod +x "$scratch/gcloud" "$scratch/curl"
 
 # run_deploy <health> <migration> [VAR=value...] -- [arguments]: the script with only the stubs, /usr/bin and /bin on
 # PATH, the variables the workflow sets plus any given (VAR= unsets one), no wait between health tries. Its output
-# (stdout and stderr) is in $out, its exit code in $code, the stubs' calls in $calls.
+# (stdout and stderr) is in $out, its exit code in $code, the stubs' calls in $calls. DEPLOY_SCRIPT runs another
+# copy of the script.
 run_deploy() {
   local health=$1 migration=$2
   shift 2
@@ -88,7 +94,8 @@ run_deploy() {
   : >"$scratch/calls"
   set +e
   out=$(env -i HOME="$scratch" PATH="$scratch:/usr/bin:/bin" FAKE_HEALTH="$health" FAKE_MIGRATION="$migration" \
-    FAKE_URL_NEW="$url_new" FAKE_URL_OLD="$url_old" HEALTH_INTERVAL=0 "${vars[@]}" bash "$deploy" "$@" 2>&1)
+    FAKE_URL_NEW="$url_new" FAKE_URL_OLD="$url_old" HEALTH_INTERVAL=0 "${vars[@]}" bash "${DEPLOY_SCRIPT:-$deploy}" \
+    "$@" 2>&1)
   code=$?
   set -e
   calls=$(cat "$scratch/calls")
@@ -160,10 +167,6 @@ assert_equal "the revision runs as warden-preview-run" "warden-preview-run@$proj
 assert_equal "the revision has the Cloud SQL instance attached" "$connection" \
   "$(flag set-cloudsql-instances "$service_deploy")"
 assert_no_match "no call uses an --update- flag" ' --update-' "$calls"
-for call in "$job_deploy" "$service_deploy"; do
-  assert_line "${call:0:40}…: sets the whole environment" "--set-env-vars=" "$call"
-  assert_line "${call:0:40}…: sets the whole secret list" "--set-secrets=" "$call"
-done
 
 assert_equal "the revision's plain values, CLERK_AUTHORIZED_PARTIES the tag's two URLs comma-separated and intact" \
   "PGHOST=/cloudsql/$connection
@@ -180,7 +183,6 @@ CLERK_JWT_KEY=warden-clerk-jwt-key" \
   "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
 assert_equal "each of the revision's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
-assert_no_match "no secret reference in any call ends in :latest" ':latest' "$calls"
 
 assert_line "the health gate calls /api/health on the tag's URL" \
   "https://demo---warden-preview-123456789012.europe-west1.run.app/api/health" "$(grep '^curl ' <<<"$calls")"
@@ -208,6 +210,36 @@ run_deploy 200 fail -- "$image" preview demo
 assert_equal "with the migration job failing: exit 1" 1 "$code"
 assert_no_match "with the migration job failing: no revision is deployed" '^gcloud run deploy ' "$calls"
 assert_no_match "with the migration job failing: the health gate isn't called" '^curl ' "$calls"
+
+# --- The service's URLs can't be read ---
+run_deploy 200 ok FAKE_DESCRIBE=fail -- "$image" preview demo
+assert_equal "with the service's URLs unreadable: exit 1" 1 "$code"
+assert_line "with the service's URLs unreadable: says so" "couldn't read warden-preview's URLs" "$out"
+assert_no_match "with the service's URLs unreadable: no job or revision is deployed" '^gcloud run (jobs )?deploy ' \
+  "$calls"
+
+# --- A secret with no pinned version stops the deploy before the gcloud call that would name it ---
+# without_pin <secret>: a copy of the script whose version table has no row for that secret.
+without_pin() {
+  local copy="$scratch/deploy-without-$1.sh"
+  grep -vF -- "    $1) echo" "$deploy" >"$copy"
+  grep -qF -- "    $1) echo" "$copy" && fail "the copy still pins $1"
+  printf '%s' "$copy"
+}
+# Assigned first, so set -e stops the test when a copy can't be made.
+no_migrate_pin=$(without_pin warden-db-preview-migrate-password)
+no_jwt_pin=$(without_pin warden-clerk-jwt-key)
+DEPLOY_SCRIPT=$no_migrate_pin run_deploy 200 ok -- "$image" preview demo
+assert_equal "with no pinned version for the migrate password: exit 1" 1 "$code"
+assert_line "with no pinned version for the migrate password: names it" \
+  "no pinned version for the secret warden-db-preview-migrate-password" "$out"
+assert_no_match "with no pinned version for the migrate password: no job or revision is deployed" \
+  '^gcloud run (jobs )?deploy ' "$calls"
+DEPLOY_SCRIPT=$no_jwt_pin run_deploy 200 ok -- "$image" preview demo
+assert_equal "with no pinned version for the Clerk JWT key: exit 1" 1 "$code"
+assert_line "with no pinned version for the Clerk JWT key: names it" \
+  "no pinned version for the secret warden-clerk-jwt-key" "$out"
+assert_no_match "with no pinned version for the Clerk JWT key: no revision is deployed" '^gcloud run deploy ' "$calls"
 
 # --- Bad input: exit 1 with a message, before any gcloud call ---
 # bad_input <what> <expected message> [VAR=value...] -- [arguments]

@@ -255,26 +255,32 @@ git push origin <commit>:refs/heads/preview/<name>
 ```
 
 `<name>` becomes the preview's Cloud Run tag, so it must be **1 to 20 lowercase letters, digits and hyphens,
-starting with a letter and not ending in a hyphen** (`foundation`, `sign-in-fix`). The workflow checks it before
-building and fails, naming the rule, when it isn't. Push again to the same branch to replace the preview.
+starting with a letter and not ending in a hyphen** (`foundation`, `sign-in-fix`). Push again to the same branch to
+replace the preview.
 
 **What the deploy does** (`.github/workflows/preview.yml`, then `scripts/cloud-run-deploy.sh <image> preview
 <name>`):
 
-1. It builds the image, signs in to Google Cloud through Workload Identity Federation (no key) as
-   `warden-preview-deploy`, and pushes the image to the `warden-preview` repository, tagged with the commit.
-2. **Migrate:** it deploys the `warden-migrate-preview` job with the image, as `warden-preview-migrate`, runs
-   `node server/src/migrate.ts` on `warden_preview` and waits for it. A failed migration stops the deploy before any
+1. **Check** (`scripts/preview-check.sh`), before anything is built: the name must follow the rule above, and the
+   repository variables `GCP_PROJECT_ID`, `GCP_PREVIEW_DEPLOY_SA`, `GCP_WIF_PROVIDER`, `CLOUD_SQL_CONNECTION` and
+   `VITE_CLERK_PUBLISHABLE_KEY` must be set. Without `GCP_PROJECT_ID` or `GCP_PREVIEW_DEPLOY_SA`, the run deploys
+   nothing and stays green, with a notice naming every missing variable. With those two but another missing, it
+   fails, naming each.
+2. **Build** the image, with no Google credentials.
+3. Sign in to Google Cloud through Workload Identity Federation (no key) as `warden-preview-deploy`, and push the
+   image to the `warden-preview` repository, tagged with the commit.
+4. **Migrate:** deploy the `warden-migrate-preview` job with the image, as `warden-preview-migrate`, run
+   `node server/src/migrate.ts` on `warden_preview` and wait for it. A failed migration stops the deploy before any
    revision exists.
-3. **Deploy:** it deploys a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
-   `warden-preview-run`, tagged `<name>`, with **no traffic**. Every run sets the revision's whole configuration
-   afresh, so nothing carries over from an earlier one.
-4. **Health gate:** it calls `/api/health` on the tag's URL for up to about 90 seconds (a cold start) until it
-   answers 200, or fails the run.
+5. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
+   `warden-preview-run`, tagged `<name>`, with **no traffic**. Every run sets the revision's env vars and secrets
+   afresh, so none carries over from an earlier revision.
+6. **Health gate:** call `/api/health` on the tag's URL for up to about 90 seconds (a cold start) until it answers
+   200, or fail the run.
 
-One preview deploys at a time (they share the database), and none is cancelled halfway. Without the repository
-variables `GCP_PROJECT_ID` or `GCP_PREVIEW_DEPLOY_SA`, the run deploys nothing and stays green with a notice naming
-the missing one.
+**One at a time.** Previews share the database, so steps 3 to 6 run for one preview at a time, and a running one is
+never cancelled halfway. Builds run side by side. While one preview deploys, GitHub keeps only the newest waiting
+behind it: an older waiting preview is cancelled (the run shows it) and must be pushed again.
 
 **Its URL** is `https://<name>---warden-preview-<project-number>.europe-west1.run.app`. The run prints it at the end
 of the deploy step's log and on the run's summary page. Sign-in uses Clerk's development instance.

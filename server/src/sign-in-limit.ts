@@ -97,8 +97,8 @@ export function limitKey(address: string): string {
  *
  * On Cloud Run, Google's front end appends the address it saw to X-Forwarded-For, after anything the client sent, and
  * the socket's peer is Google's. This takes the **last** entry as the client: true for a service reached at its own
- * run.app URL, as Warden is. Google's docs don't say so for Cloud Run itself; the first owner preview (#65) checks it, comparing the
- * clientAddress on a refused sign-in's request log line with Cloud Run's httpRequest.remoteIp. **A
+ * run.app URL, as Warden is. Google's docs don't say so for Cloud Run itself; the first owner preview (#65) checks
+ * it, comparing the clientAddress on a refused sign-in's request log line with Cloud Run's httpRequest.remoteIp. **A
  * load balancer in front would change this:** it appends the client and then its own address, so the client would be
  * the second-to-last entry, and this would count every request under the load balancer's address (threat A5).
  *

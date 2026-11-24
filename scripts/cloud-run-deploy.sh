@@ -63,8 +63,13 @@ usage_error() {
   exit 1
 }
 
-# <secret>: its pinned reference, <secret>:<version>.
-pinned() { echo "$1:$(secret_version "$1")"; }
+# <secret>: its pinned reference, <secret>:<version>; fails, naming it, for a secret with no pinned version. Called
+# in a command substitution, so each caller adds `|| exit 1`: an exit in there ends only the subshell.
+pinned() {
+  local version
+  version=$(secret_version "$1") || return 1
+  echo "$1:$version"
+}
 
 # <items...>: a gcloud dict flag's value with @ as its delimiter (`gcloud topic escaping`), so a value may hold
 # commas. No value here holds an @.
@@ -84,6 +89,8 @@ service_urls() {
 tag_url() { echo "https://$TAG---${1#https://}"; }
 
 migrate() {
+  local password
+  password=$(pinned "$MIGRATE_PASSWORD_SECRET") || exit 1
   gcloud run jobs deploy "$JOB" \
     --image="$IMAGE" \
     --region="$REGION" \
@@ -94,7 +101,7 @@ migrate() {
     --max-retries=0 \
     --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "WARDEN_DATABASE_ROLES=$DATABASE_ROLES" \
       "PGUSER=$MIGRATE_USER" "PGDATABASE=$DATABASE")" \
-    --set-secrets="$(dict "PGPASSWORD=$(pinned "$MIGRATE_PASSWORD_SECRET")")" \
+    --set-secrets="$(dict "PGPASSWORD=$password")" \
     --project="$GCP_PROJECT_ID"
   if ! gcloud run jobs execute "$JOB" --region="$REGION" --wait --project="$GCP_PROJECT_ID"; then
     echo "cloud-run-deploy: the migration job $JOB failed; no revision was deployed" >&2
@@ -103,7 +110,10 @@ migrate() {
 }
 
 deploy_revision() {
-  local parties=$1
+  local parties=$1 password clerk_secret clerk_jwt
+  password=$(pinned "$APP_PASSWORD_SECRET") || exit 1
+  clerk_secret=$(pinned "$CLERK_SECRET") || exit 1
+  clerk_jwt=$(pinned "$CLERK_JWT_SECRET") || exit 1
   gcloud run deploy "$SERVICE" \
     --image="$IMAGE" \
     --region="$REGION" \
@@ -114,8 +124,7 @@ deploy_revision() {
     --set-cloudsql-instances="$CLOUD_SQL_CONNECTION" \
     --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "PGUSER=$APP_USER" "PGDATABASE=$DATABASE" \
       "VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY" "CLERK_AUTHORIZED_PARTIES=$parties")" \
-    --set-secrets="$(dict "PGPASSWORD=$(pinned "$APP_PASSWORD_SECRET")" \
-      "CLERK_SECRET_KEY=$(pinned "$CLERK_SECRET")" "CLERK_JWT_KEY=$(pinned "$CLERK_JWT_SECRET")")" \
+    --set-secrets="$(dict "PGPASSWORD=$password" "CLERK_SECRET_KEY=$clerk_secret" "CLERK_JWT_KEY=$clerk_jwt")" \
     --project="$GCP_PROJECT_ID"
 }
 
@@ -152,8 +161,14 @@ main() {
   SUFFIX="pre-$TAG-${GITHUB_SHA:0:7}-$GITHUB_RUN_NUMBER-${GITHUB_RUN_ATTEMPT:-1}"
 
   # The tag's URLs, read before the deploy: the revision's CLERK_AUTHORIZED_PARTIES must name them.
-  local urls=() url
-  while IFS= read -r url; do urls+=("$(tag_url "$url")"); done < <(service_urls)
+  local described urls=() url
+  described=$(service_urls) || {
+    echo "cloud-run-deploy: couldn't read $SERVICE's URLs" >&2
+    exit 1
+  }
+  while IFS= read -r url; do
+    [[ -n $url ]] && urls+=("$(tag_url "$url")")
+  done <<<"$described"
   [[ ${#urls[@]} -gt 0 ]] || {
     echo "cloud-run-deploy: $SERVICE reports no URL" >&2
     exit 1
