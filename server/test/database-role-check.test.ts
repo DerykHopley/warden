@@ -150,6 +150,33 @@ describe("checkDatabaseRole, with the preview set's migration and admin roles", 
   });
 });
 
+// An app role is a member of no role (createRoles revokes them all): a policy for a role it's a member of would apply
+// to it, so any membership at all is refused, even of a role that owns nothing and can't get around row-level
+// security.
+describe("checkDatabaseRole, with a role that is a member of another", () => {
+  const group = `${base}_plaingroup`;
+  const grouped = `${base}_grouped`;
+  const noInherit = `${base}_noinherit`;
+  beforeAll(async () => {
+    await superuser.query(`create role ${group} nologin`);
+    await superuser.query(`create role ${grouped} login in role ${group}`);
+    await superuser.query(`create role ${noInherit} login`);
+    await superuser.query(`grant ${group} to ${noInherit} with inherit false, set false`);
+  });
+  afterAll(async () => {
+    for (const role of [grouped, noInherit, group]) {
+      await superuser.query(`drop role if exists ${role}`);
+    }
+  });
+
+  it.each([
+    [grouped, `${grouped} is a member of ${group}`],
+    [noInherit, `${noInherit} is a member of ${group}`],
+  ])("refuses %s", async (role, reason) => {
+    expect(await check(role, plainDatabase)).toEqual({ role, reason });
+  });
+});
+
 describe("guardDatabaseRole", () => {
   it("throws when the check doesn't answer in time, so the connection is closed", async () => {
     const refuse = vi.fn();

@@ -55,7 +55,8 @@ const ROLE_CHECK_TIMEOUT_MS = 5000;
 /** What makes a role able to get around row-level security, as the check's query names it, with how it reads. A
  * table's owner isn't bound by its policies unless they're forced; the schema's or the database's owner, and the
  * migration role, can make or take over tables, so they own them as soon as there are any. The admin role is
- * refused by name too: on Cloud SQL it's made without BYPASSRLS, but it's still for cross-Team work only. */
+ * refused by name too: on Cloud SQL it's made without BYPASSRLS, but it's still for cross-Team work only. Any
+ * membership is refused last: a policy for a role the app role is a member of applies to it. */
 const BYPASS_REASONS = {
   superuser: "is a superuser",
   bypassrls: "has BYPASSRLS",
@@ -64,11 +65,14 @@ const BYPASS_REASONS = {
   "database owner": "owns the database",
   "migration role": "is the migration role",
   "admin role": "is the admin role",
+  membership: "is a member of",
 } as const;
 
 // The connected role and every role it can become through membership (any grant counts: one with only the admin
 // option can grant itself the rest), with the first that can get around row-level security, and why. The role itself
-// comes first. $1 is the migration roles' names, $2 the admin roles'.
+// comes first. Failing those, the first role it's a member of at all: an app role is a member of none (createRoles
+// revokes them), and a policy for a role it's a member of would apply to it. $1 is the migration roles' names, $2 the
+// admin roles'.
 const BYPASSING_ROLE_SQL = `
 with recursive reachable (oid) as (
   select oid from pg_roles where rolname = current_user
@@ -92,9 +96,13 @@ select * from (
            when r.rolname = any($2) then 'admin role'
          end as why
     from reachable join pg_roles r on r.oid = reachable.oid
+  union all
+  select current_user, r.rolname, 'membership'
+    from pg_auth_members m join pg_roles r on r.oid = m.roleid
+   where m.member = (select oid from pg_roles where rolname = current_user)
 ) found
  where why is not null
- order by via = role desc, via
+ order by why = 'membership', via = role desc, via
  limit 1`;
 
 export type CheckDatabaseRoleOptions = {
@@ -131,9 +139,11 @@ export async function checkDatabaseRole(
     if (!found) return undefined;
     const what = BYPASS_REASONS[found.why];
     const reason =
-      found.via === found.role
-        ? `${found.role} ${what}`
-        : `${found.role} can become ${found.via}, which ${what}`;
+      found.why === "membership"
+        ? `${found.role} ${what} ${found.via}`
+        : found.via === found.role
+          ? `${found.role} ${what}`
+          : `${found.role} can become ${found.via}, which ${what}`;
     return { role: found.role, reason };
   } finally {
     clearTimeout(timer);
