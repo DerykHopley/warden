@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# A fake podman: records the call, reads stdin (login's password) without printing it.
+echo "podman $1" >>"$FAKE_DIR/calls"
+[[ ${1:-} == login ]] && cat >/dev/null
+exit 0

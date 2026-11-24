@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# A fake gcloud for the spike scripts' tests. It keeps "kind name" lines in $FAKE_DIR/state, answers
+# `services list --enabled` from $FAKE_DIR/enabled, and logs every call to $FAKE_DIR/calls.
+set -euo pipefail
+echo "gcloud $*" >>"$FAKE_DIR/calls"
+touch "$FAKE_DIR/state"
+
+words=()
+for arg in "$@"; do [[ $arg == --* ]] || words+=("$arg"); done
+
+has() { grep -qxF "$1 $2" "$FAKE_DIR/state"; }
+add() { echo "$1 $2" >>"$FAKE_DIR/state"; }
+remove() {
+  if [[ -n ${FAKE_STUCK:-} && $2 == "$FAKE_STUCK" ]]; then return 0; fi
+  grep -vxF "$1 $2" "$FAKE_DIR/state" >"$FAKE_DIR/state.new" || true
+  mv "$FAKE_DIR/state.new" "$FAKE_DIR/state"
+}
+names() { grep "^$1 " "$FAKE_DIR/state" | cut -d' ' -f2- || true; }
+
+if ((${#words[@]} == 0)); then echo "Google Cloud SDK (fake)"; exit 0; fi
+
+case "${words[0]} ${words[1]:-}" in
+  "services list") cat "$FAKE_DIR/enabled"; exit 0 ;;
+  "projects describe") echo 123456789; exit 0 ;;
+  "auth print-access-token" | "auth print-identity-token") echo fake-token; exit 0 ;;
+  "run deploy") add "run services" "${words[2]}"; exit 0 ;;
+  "logging read") exit 0 ;;
+esac
+
+if [[ ${words[0]} == secrets ]]; then
+  kind=secrets verb="${words[1]}" name="${words[2]:-}"
+else
+  kind="${words[0]} ${words[1]}" verb="${words[2]:-}" name="${words[3]:-}"
+fi
+[[ $kind == "scheduler jobs" && $verb == create ]] && name="${words[4]}"
+[[ $kind == "iam service-accounts" && $verb == create ]] && name="$name@$CLOUDSDK_CORE_PROJECT.iam.gserviceaccount.com"
+
+case "$verb" in
+  create)
+    if has "$kind" "$name"; then echo "ALREADY_EXISTS: $name" >&2; exit 1; fi
+    [[ $kind == secrets ]] && cat >"$FAKE_DIR/secret-value"
+    add "$kind" "$name"
+    ;;
+  describe)
+    if ! has "$kind" "$name"; then echo "NOT_FOUND: $name" >&2; exit 1; fi
+    if [[ $kind == "run services" ]]; then echo "https://$name.example.run.app"; fi
+    ;;
+  delete)
+    if ! has "$kind" "$name"; then echo "NOT_FOUND: $name" >&2; exit 1; fi
+    remove "$kind" "$name"
+    ;;
+  list) names "$kind" ;;
+  add-iam-policy-binding | execute | run) ;;
+  *) echo "fake gcloud: unhandled: $*" >&2; exit 3 ;;
+esac

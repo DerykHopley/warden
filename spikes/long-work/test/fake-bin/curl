@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# A fake curl: 403 without an Authorization header, 200 with one; a JSON body for the Service Usage call.
+echo "curl $*" >>"$FAKE_DIR/calls"
+for arg in "$@"; do
+  if [[ $arg == *generateServiceIdentity* ]]; then
+    echo '{"response":{"email":"service-123456789@gcp-sa-cloudtasks.iam.gserviceaccount.com"}}'
+    exit 0
+  fi
+done
+for arg in "$@"; do
+  if [[ $arg == Authorization:* ]]; then echo 200; exit 0; fi
+done
+echo 403

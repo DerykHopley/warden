@@ -1,0 +1,9 @@
+{
+  "name": "spike-long-work",
+  "private": true,
+  "type": "module",
+  "description": "Throwaway spike for #14: where Scans and daily jobs run on Cloud Run. Never merged.",
+  "scripts": {
+    "test": "node --test --test-timeout=30000 \"src/*.test.ts\" \"test/*.test.ts\""
+  }
+}
