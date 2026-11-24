@@ -7,5 +7,6 @@
 .env
 .env.*
 .envrc
+gha-creds-*.json
 **/*.test.ts
 **/*.test.tsx

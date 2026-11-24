@@ -240,3 +240,55 @@ refused. Without it there the server stops at start, naming the variable. Locall
 `http://localhost:5173`. Cloud Run also decides the client address the sign-in limit counts: the last
 `X-Forwarded-For` entry, which holds while Warden is reached at its own run.app URL; a load balancer in front would
 need that changed (`docs/threat-model.md`, A5).
+
+## Owner previews
+
+An owner preview is a running copy of any commit, on its own URL, for the owner to try before it reaches `main`. It
+runs on the `warden-preview` service and the `warden_preview` database, as the preview accounts only: nothing in it
+touches the live service, its traffic or its data. It needs Google Cloud set up first (above).
+
+**Deploy one** by pushing the commit to a branch named `preview/<name>`:
+
+```sh
+git push origin <commit>:refs/heads/preview/<name>
+```
+
+`<name>` becomes the preview's Cloud Run tag, so it must be **1 to 20 lowercase letters, digits and hyphens,
+starting with a letter and not ending in a hyphen** (`foundation`, `sign-in-fix`). The workflow checks it before
+building and fails, naming the rule, when it isn't. Push again to the same branch to replace the preview.
+
+**What the deploy does** (`.github/workflows/preview.yml`, then `scripts/cloud-run-deploy.sh <image> preview
+<name>`):
+
+1. It builds the image, signs in to Google Cloud through Workload Identity Federation (no key) as
+   `warden-preview-deploy`, and pushes the image to the `warden-preview` repository, tagged with the commit.
+2. **Migrate:** it deploys the `warden-migrate-preview` job with the image, as `warden-preview-migrate`, runs
+   `node server/src/migrate.ts` on `warden_preview` and waits for it. A failed migration stops the deploy before any
+   revision exists.
+3. **Deploy:** it deploys a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
+   `warden-preview-run`, tagged `<name>`, with **no traffic**. Every run sets the revision's whole configuration
+   afresh, so nothing carries over from an earlier one.
+4. **Health gate:** it calls `/api/health` on the tag's URL for up to about 90 seconds (a cold start) until it
+   answers 200, or fails the run.
+
+One preview deploys at a time (they share the database), and none is cancelled halfway. Without the repository
+variables `GCP_PROJECT_ID` or `GCP_PREVIEW_DEPLOY_SA`, the run deploys nothing and stays green with a notice naming
+the missing one.
+
+**Its URL** is `https://<name>---warden-preview-<project-number>.europe-west1.run.app`. The run prints it at the end
+of the deploy step's log and on the run's summary page. Sign-in uses Clerk's development instance.
+
+**Secrets are pinned.** The revision and the job read their passwords and Clerk keys from Secret Manager by version
+number, never `latest`. The numbers live in `secret_version` in `scripts/cloud-run-deploy.sh`. To move one: add the
+new version (`gcloud secrets versions add <secret> --data-file=-`), change its number there in a PR, merge it, then
+push a preview. Disable the old version only after no running revision reads it.
+
+**Logs:** the workflow run on GitHub (Actions, "Preview"); the migration job's executions
+(`gcloud run jobs executions list --job warden-migrate-preview --region europe-west1`) and their logs; and the
+revision's own logs in Cloud Logging
+(`gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="warden-preview"'`).
+Warden's request lines hold no address, except on a refused sign-in (`clientAddress`, the address the sign-in limit
+counted).
+
+The preview's data stays in `warden_preview`: seed it as "Local setup" shows. Old tags and revisions aren't cleaned
+up yet.
