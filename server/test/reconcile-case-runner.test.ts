@@ -1,24 +1,16 @@
-// The runner's skip rule: only a case with an expire step (slice 8b) waits; any other case runs, decisions included.
+// The runner itself: every case runs (none is todo), and each case gets a Team of its own.
 import { loadReconcileCases } from "@warden/contracts/reconcile-cases";
 import { describe, expect, it } from "vitest";
-import { planCase, withTeamId } from "./reconcile-case-runner.ts";
+import { withTeamId } from "./reconcile-case-runner.ts";
 
 const cases = new Map(loadReconcileCases().map(({ file, case: c }) => [file.slice(0, 2), c]));
 
-describe("planCase", () => {
-  it("lists only case 10 as todo, naming slice 8b, and runs the other 20", () => {
-    const todo = [...cases].filter(([, c]) => !planCase(c).run).map(([number]) => number);
-    expect(todo).toEqual(["10"]);
-    expect(planCase(cases.get("10")!)).toEqual({
-      run: false,
-      todo: "needs slice 8b for its expire step",
-    });
-  });
+describe("the cases the runner runs", () => {
+  it("no case is todo: the cases use only the four step kinds runCase runs, case 10's expire among them", () => {
+    const kinds = new Set([...cases.values()].flatMap((c) => c.steps.map((step) => step.step)));
 
-  it("runs case 10 once its expire step is gone", () => {
-    const case10 = cases.get("10")!;
-    const withoutExpire = { ...case10, steps: case10.steps.filter((s) => s.step !== "expire") };
-    expect(planCase(withoutExpire)).toEqual({ run: true });
+    expect([...kinds].sort()).toEqual(["decision", "expire", "scan", "spot_run"]);
+    expect(cases.get("10")!.steps.map((step) => step.step)).toContain("expire");
   });
 });
 

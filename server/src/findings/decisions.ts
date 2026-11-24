@@ -90,19 +90,14 @@ const ALLOWED_FROM: Record<DecisionCall, readonly Status[]> = {
   reopen: ["false_positive", "accepted"],
 };
 
-const notAccepted = { accepted_reason: null, accepted_until: null } as const;
+export const notAccepted = { accepted_reason: null, accepted_until: null } as const;
 
-/** Applies one decision by `person` to the Team's Finding `id`, and returns it as changed (markMoved: the old one). */
-export async function applyDecision(
-  tx: Transaction<Database>,
-  team: string,
-  id: string,
-  person: string,
-  decision: Decision,
-): Promise<Finding> {
-  await lockTeamFindings(tx, team);
-  // requireRole read the Role before the lock; a change that committed since may have taken it. `for share` holds
-  // the row, so a Role change waits for this decision rather than slipping in after the check.
+/**
+ * Under the Team's lock (the caller holds it), throws NotALead unless `person` is a Lead or Admin in the Team now.
+ * requireRole read the Role before the lock; a change that committed since may have taken it. `for share` holds the
+ * row, so a Role change waits for the caller's transaction rather than slipping in after the check.
+ */
+export async function recheckLead(tx: Transaction<Database>, team: string, person: string) {
   const member = await tx
     .selectFrom("team_members")
     .select("role")
@@ -111,15 +106,47 @@ export async function applyDecision(
     .forShare()
     .executeTakeFirst();
   if (!member || !atLeast(member.role, "lead")) throw new NotALead(person);
+}
 
+/**
+ * The Team's Finding `id`, when `call` may be made on it as it is now: FindingNotFound for an id the Team doesn't
+ * have, DecisionRefused for a merged Finding or a Status the call doesn't take. The same rules for a decision and for
+ * a Proposal of one.
+ */
+export async function findingFor(
+  tx: Transaction<Database>,
+  team: string,
+  id: string,
+  call: DecisionCall,
+): Promise<Finding> {
   const finding = await loadFinding(tx, team, id);
   if (!finding) throw new FindingNotFound(id);
-  const refuse = (why: string) => new DecisionRefused(decision.call, finding.status, why);
+  const refuse = (why: string) => new DecisionRefused(call, finding.status, why);
   if (finding.moved_to !== null) throw refuse(`it is merged into ${finding.moved_to}`);
-  const allowed = ALLOWED_FROM[decision.call];
+  const allowed = ALLOWED_FROM[call];
   if (!allowed.includes(finding.status)) {
-    throw refuse(`${decision.call} takes a Finding that is ${allowed.join(" or ")}`);
+    throw refuse(`${call} takes a Finding that is ${allowed.join(" or ")}`);
   }
+  return finding;
+}
+
+/**
+ * Applies one decision by `person` to the Team's Finding `id`, and returns it as changed (markMoved: the old one).
+ * `proposalId` names the Proposal the decision approves, on each history row it writes.
+ */
+export async function applyDecision(
+  tx: Transaction<Database>,
+  team: string,
+  id: string,
+  person: string,
+  decision: Decision,
+  proposalId: string | null = null,
+): Promise<Finding> {
+  await lockTeamFindings(tx, team);
+  await recheckLead(tx, team, person);
+
+  const finding = await findingFor(tx, team, id, decision.call);
+  const refuse = (why: string) => new DecisionRefused(decision.call, finding.status, why);
 
   /** The Findings to write, in order: markMoved frees the candidate's Fingerprint before the old Finding takes it. */
   const changes: { before: Finding; after: Finding }[] = [];
@@ -127,6 +154,10 @@ export async function applyDecision(
   const untouchedStatus: Finding[] = [];
   switch (decision.call) {
     case "accept":
+      // Checked when the input was parsed; a Proposal's until may have passed since it was asked.
+      if (Date.parse(decision.until) <= Date.now()) {
+        throw refuse(`its until (${decision.until}) has passed`);
+      }
       changes.push({
         before: finding,
         after: {
@@ -234,6 +265,7 @@ export async function applyDecision(
         actor_kind: "person" as const,
         actor_id: person,
         reason: decision.reason,
+        proposal_id: proposalId,
       })),
     )
     .execute();

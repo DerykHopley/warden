@@ -2,32 +2,80 @@
 // Team and the Actor come from the session, never the body: each body is strict, so naming either is refused.
 import { z } from "zod";
 import { DateTime, Id, Severity, Status, Text } from "./finding.ts";
+import { Actor } from "./reconcile-case.ts";
 
 /** Why a person decided: 1 to 2,000 characters, not only whitespace. */
 export const DecisionReason = Text(2000);
 
-/** `POST /api/findings/:id/false-positive`, `confirm-fix` and `reopen`: the reason alone. */
+/** `POST /api/findings/:id/false-positive`, `confirm-fix`, `reopen` and `POST /api/proposals/:id/reject`: the reason
+ * alone. */
 export const ReasonBody = z.strictObject({ reason: DecisionReason });
 export type ReasonBody = z.infer<typeof ReasonBody>;
 
-/** `POST /api/findings/:id/accept`: the reason, and when the acceptance expires, which must be later than now. */
-export const AcceptBody = z.strictObject({
-  reason: DecisionReason,
-  until: DateTime.refine((until) => Date.parse(until) > Date.now(), {
-    message: "until must be later than now",
-  }),
+/** When an acceptance expires, as a body sends it: later than now. */
+const FutureUntil = DateTime.refine((until) => Date.parse(until) > Date.now(), {
+  message: "until must be later than now",
 });
+
+/** `POST /api/findings/:id/accept`: the reason, and when the acceptance expires, which must be later than now. */
+export const AcceptBody = z.strictObject({ reason: DecisionReason, until: FutureUntil });
 export type AcceptBody = z.infer<typeof AcceptBody>;
 
 /** `POST /api/findings/:id/mark-moved`: the reason, and the new Finding (one of its candidates) that merges into it. */
 export const MarkMovedBody = z.strictObject({ reason: DecisionReason, candidate: Id });
 export type MarkMovedBody = z.infer<typeof MarkMovedBody>;
 
-/** What caused a history entry: a Scan, a Spot run, or a person's named decision. Never an agent: it only proposes. */
-export const HistoryCauseKind = z.enum(["scan", "spot_run", "person"]);
+/** The decisions a Proposal may suggest: only these two are Proposals. */
+export const ProposalDecision = z.enum(["accept", "mark_false_positive"]);
+export type ProposalDecision = z.infer<typeof ProposalDecision>;
+
+/**
+ * `POST /api/findings/:id/proposals`: a suggested decision and its reason, with an `until` exactly on an accept,
+ * later than now. Who asks is the session's person, never the body's.
+ */
+export const ProposeBody = z.discriminatedUnion("decision", [
+  z.strictObject({ decision: z.literal("accept"), reason: DecisionReason, until: FutureUntil }),
+  z.strictObject({ decision: z.literal("mark_false_positive"), reason: DecisionReason }),
+]);
+export type ProposeBody = z.infer<typeof ProposeBody>;
+
+/** A Proposal waits for a Lead (`pending`), then is decided once and kept as it is. */
+export const ProposalState = z.enum(["pending", "approved", "rejected"]);
+export type ProposalState = z.infer<typeof ProposalState>;
+
+/**
+ * A decision an agent or a Member suggests, which a Lead approves or rejects (ADR 0005, ADR 0008). It keeps who asked
+ * and who decided. The answer of the three Proposal routes.
+ */
+export const Proposal = z.strictObject({
+  id: Id,
+  finding_id: Id,
+  decision: ProposalDecision,
+  reason: DecisionReason,
+  /** An accept's expiry, as asked; null on mark_false_positive. It may have passed since. */
+  until: DateTime.nullable(),
+  requested_by: Actor,
+  requested_at: DateTime,
+  state: ProposalState,
+  /** The Lead who approved or rejected it: a Clerk user id. Null while pending. */
+  decided_by: Id.nullable(),
+  decided_at: DateTime.nullable(),
+  /** Why it was rejected; null otherwise. */
+  decided_reason: DecisionReason.nullable(),
+});
+export type Proposal = z.infer<typeof Proposal>;
+
+/**
+ * What caused a history entry: a Scan, a Spot run, a person's named decision, or a Job of Warden's own (the daily
+ * expiry). Never an agent: it only proposes.
+ */
+export const HistoryCauseKind = z.enum(["scan", "spot_run", "person", "job"]);
 export type HistoryCauseKind = z.infer<typeof HistoryCauseKind>;
 
-/** One change in a Finding's history. Its cause is the Scan or Spot run, or the person who decided; never an agent. */
+/**
+ * One change in a Finding's history. Its cause is the Scan or Spot run, the person who decided, or the Job; never an
+ * agent. When a person's decision approved a Proposal, `proposal` names it and who asked for it.
+ */
 export const HistoryEntryBody = z.strictObject({
   at: DateTime,
   /** Null when this entry opened the Finding. */
@@ -37,6 +85,7 @@ export const HistoryEntryBody = z.strictObject({
   severity_after: Severity,
   cause: z.strictObject({ kind: HistoryCauseKind, id: Id }),
   reason: z.string().min(1),
+  proposal: z.strictObject({ id: Id, requested_by: Actor }).nullable(),
 });
 export type HistoryEntryBody = z.infer<typeof HistoryEntryBody>;
 

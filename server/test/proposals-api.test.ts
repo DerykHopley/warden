@@ -1,0 +1,385 @@
+// Story 4's Proposal part at the API: a Member proposes, a Lead approves or rejects, and the Proposal keeps who asked
+// and who decided (ADR 0008). Through the real app, as the person each session names; each case uses Teams of its own
+// in the suite's shared database, with Findings from real Scans through the Findings module.
+import { randomUUID } from "node:crypto";
+import { HistoryBody, Proposal, type Observation, type Scan } from "@warden/contracts";
+import type { Hono } from "hono";
+import type { CryptoKey } from "jose";
+import type pg from "pg";
+import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
+import type { AppEnv } from "../src/app.ts";
+import { createFindings, type Findings } from "../src/findings/index.ts";
+import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import { createWithTeam, type WithTeam } from "../src/with-team.ts";
+import { poolAs } from "./databases.ts";
+import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
+
+let key: CryptoKey;
+let pool: pg.Pool;
+/** Its own pool, to hold a Team's Findings lock and read pg_locks while the app's connections wait. */
+let probe: pg.Pool;
+let withTeam: WithTeam;
+let findings: Findings;
+let app: Hono<AppEnv>;
+
+beforeAll(async () => {
+  const { privateKey, publicPem } = await testKey();
+  key = privateKey;
+  pool = poolAs("warden_app", inject("testDatabase"));
+  probe = poolAs("warden_app", inject("testDatabase"));
+  withTeam = createWithTeam(pool);
+  findings = createFindings({ withTeam, moveRules: { guard: guardMoveRule } });
+  ({ app } = testApp({ publicPem, withTeam }));
+});
+
+afterAll(async () => {
+  await pool.end();
+  await probe.end();
+});
+
+const repo = { kind: "repo", ref: "https://github.com/example/app" } as const;
+const ENV = "guard/agent-can-read-env";
+const LEAD = "user_lead";
+const OTHER_LEAD = "user_other_lead";
+const MEMBER = "user_member";
+const nextWeek = () => new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+
+const observation = (path: string): Observation => ({
+  asset: repo,
+  rule_id: ENV,
+  location: { kind: "file", path },
+  severity: "high",
+  title: "The agent can read .env files",
+  evidence: { summary: "permissions.allow lets the agent read .env" },
+});
+
+const scan = (team: string, id: string, startedAt: string, paths: string[]): Scan => ({
+  id,
+  team,
+  module: "guard",
+  started_at: startedAt,
+  assets: [repo],
+  rules: [ENV],
+  observations: paths.map(observation),
+});
+
+/** A Team with two Leads and a Member, and one Open Finding a Scan opened. */
+async function teamWithFinding() {
+  const team = `org_${randomUUID()}`;
+  await seedTeam(withTeam, team, [
+    [LEAD, "lead"],
+    [OTHER_LEAD, "lead"],
+    [MEMBER, "member"],
+  ]);
+  await findings.reconcile(scan(team, "scan-1", "2026-11-24T09:00:00Z", [".claude/settings.json"]));
+  const [finding] = await findings.list(team);
+  return { team, finding: finding! };
+}
+
+async function post(
+  path: string,
+  {
+    as,
+    team,
+    body,
+    method = "POST",
+  }: { as: string; team: string; body?: unknown; method?: string },
+) {
+  const token = await sessionToken(key, as, 60, activeOrganization(team));
+  const res = await app.request(path, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  return { status: res.status, body: await res.json() };
+}
+
+const propose = (team: string, findingId: string, body: unknown, as = MEMBER) =>
+  post(`/api/findings/${findingId}/proposals`, { as, team, body });
+const approve = (team: string, proposalId: string, as = LEAD) =>
+  post(`/api/proposals/${proposalId}/approve`, { as, team });
+const reject = (team: string, proposalId: string, body: unknown, as = LEAD) =>
+  post(`/api/proposals/${proposalId}/reject`, { as, team, body });
+
+/** Everything stored for the Team's Findings and Proposals, read as that Team. */
+function stored(team: string) {
+  return withTeam(team, async (tx) => ({
+    findings: await tx.selectFrom("findings").selectAll().orderBy("id").execute(),
+    history: await tx.selectFrom("finding_history").selectAll().orderBy("id").execute(),
+    proposals: await tx.selectFrom("proposals").selectAll().orderBy("id").execute(),
+  }));
+}
+
+/** A Member's pending Proposal to mark the Team's Finding a False positive. */
+async function pendingProposal() {
+  const { team, finding } = await teamWithFinding();
+  const proposed = await propose(team, finding.id, {
+    decision: "mark_false_positive",
+    reason: "The file is a test fixture",
+  });
+  expect(proposed.status).toBe(201);
+  return { team, finding, proposal: Proposal.parse(proposed.body) };
+}
+
+describe("story 4: a Member proposes, a Lead approves", () => {
+  it("the Proposal keeps who asked and who approved, and the history row names both", async () => {
+    const { team, finding } = await teamWithFinding();
+    const until = nextWeek();
+    const before = await stored(team);
+
+    const proposed = await propose(team, finding.id, {
+      decision: "accept",
+      reason: "Fixed next sprint",
+      until,
+    });
+
+    expect(proposed.status).toBe(201);
+    const proposal = Proposal.parse(proposed.body);
+    expect(proposal).toMatchObject({
+      finding_id: finding.id,
+      decision: "accept",
+      state: "pending",
+      requested_by: { kind: "person", id: MEMBER },
+      decided_by: null,
+    });
+    expect(Date.parse(proposal.until!)).toBe(Date.parse(until));
+    const afterProposing = await stored(team);
+    expect(afterProposing.findings).toEqual(before.findings);
+    expect(afterProposing.history).toEqual(before.history);
+
+    const approved = await approve(team, proposal.id);
+
+    expect(approved.status).toBe(200);
+    expect(Proposal.parse(approved.body)).toMatchObject({
+      id: proposal.id,
+      state: "approved",
+      requested_by: { kind: "person", id: MEMBER },
+      decided_by: LEAD,
+    });
+    expect((await findings.list(team))[0]).toMatchObject({
+      status: "accepted",
+      accepted_reason: "Fixed next sprint",
+    });
+    const history = await post(`/api/findings/${finding.id}/history`, {
+      as: MEMBER,
+      team,
+      method: "GET",
+    });
+    expect(history.status).toBe(200);
+    expect(HistoryBody.parse(history.body).history.at(-1)).toMatchObject({
+      status_before: "open",
+      status_after: "accepted",
+      cause: { kind: "person", id: LEAD },
+      proposal: { id: proposal.id, requested_by: { kind: "person", id: MEMBER } },
+    });
+    expect((await stored(team)).proposals).toMatchObject([
+      { id: proposal.id, state: "approved", decided_by: LEAD },
+    ]);
+  });
+});
+
+describe("a Lead's reject", () => {
+  it("leaves the Finding unchanged, rejects the Proposal with the reason, writes no history; again answers 409", async () => {
+    const { team, proposal } = await pendingProposal();
+    const before = await stored(team);
+
+    const rejected = await reject(team, proposal.id, { reason: "Fix it this sprint" });
+
+    expect(rejected.status).toBe(200);
+    expect(Proposal.parse(rejected.body)).toMatchObject({
+      state: "rejected",
+      decided_by: LEAD,
+      decided_reason: "Fix it this sprint",
+    });
+    const after = await stored(team);
+    expect(after.findings).toEqual(before.findings);
+    expect(after.history).toEqual(before.history);
+
+    expect(await approve(team, proposal.id)).toMatchObject({ status: 409 });
+    expect(await reject(team, proposal.id, { reason: "Again" })).toMatchObject({ status: 409 });
+    expect(await stored(team)).toEqual(after);
+  });
+});
+
+describe("two Leads approving one Proposal at once", () => {
+  it("one gets 200, the other 409, and one history row is written", async () => {
+    const { team, proposal } = await pendingProposal();
+    const historyBefore = (await stored(team)).history.length;
+
+    const answers = await Promise.all([
+      approve(team, proposal.id, LEAD),
+      approve(team, proposal.id, OTHER_LEAD),
+    ]);
+
+    expect(answers.map((a) => a.status).sort()).toEqual([200, 409]);
+    expect((await stored(team)).history).toHaveLength(historyBefore + 1);
+  });
+});
+
+/** Resolves once a transaction is waiting for `team`'s Findings lock. */
+async function queuedBehindFindingsLock(team: string) {
+  for (let tries = 0; tries < 100; tries++) {
+    const { rows } = await probe.query<{ waiting: number }>(
+      `select count(*)::int as waiting from pg_locks
+        where locktype = 'advisory' and not granted and objsubid = 1
+          and ((classid::bigint << 32) | objid::bigint) = hashtextextended($1, 0)`,
+      [team],
+    );
+    if (rows[0]!.waiting > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("the approve never queued behind the Team's Findings lock");
+}
+
+describe("a Lead demoted while their approve waits on the lock", () => {
+  it("gets 403, and the Proposal stays pending", async () => {
+    const { team, proposal } = await pendingProposal();
+    const holder = await probe.connect();
+    try {
+      await holder.query("begin");
+      await holder.query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))", [team]);
+
+      const approving = approve(team, proposal.id);
+      await queuedBehindFindingsLock(team);
+      await withTeam(team, (tx) =>
+        tx
+          .updateTable("team_members")
+          .set({ role: "member" })
+          .where("user_id", "=", LEAD)
+          .execute(),
+      );
+      const before = await stored(team);
+      await holder.query("commit");
+
+      expect(await approving).toEqual({ status: 403, body: { error: "Your Role can't do this" } });
+      expect(await stored(team)).toEqual(before);
+      expect(before.proposals).toMatchObject([{ state: "pending" }]);
+    } finally {
+      holder.release();
+    }
+  });
+});
+
+describe("a Member", () => {
+  it("gets 403 on approve and reject, and the Proposal is unchanged", async () => {
+    const { team, proposal } = await pendingProposal();
+    const before = await stored(team);
+
+    expect(await approve(team, proposal.id, MEMBER)).toEqual({
+      status: 403,
+      body: { error: "Your Role can't do this" },
+    });
+    expect(await reject(team, proposal.id, { reason: "r" }, MEMBER)).toEqual({
+      status: 403,
+      body: { error: "Your Role can't do this" },
+    });
+
+    expect(await stored(team)).toEqual(before);
+  });
+});
+
+describe("Team B and Team A's Proposal and Finding", () => {
+  it("Team B's Lead approving gets 404, Team B's Member proposing gets 404, and Team A's rows are unchanged", async () => {
+    const { team: a, finding, proposal } = await pendingProposal();
+    const b = `org_${randomUUID()}`;
+    await seedTeam(withTeam, b, [
+      [LEAD, "lead"],
+      [MEMBER, "member"],
+    ]);
+    const before = await stored(a);
+
+    expect(await approve(b, proposal.id)).toEqual({
+      status: 404,
+      body: { error: "No such Proposal" },
+    });
+    expect(await reject(b, proposal.id, { reason: "r" })).toEqual({
+      status: 404,
+      body: { error: "No such Proposal" },
+    });
+    expect(await propose(b, finding.id, { decision: "mark_false_positive", reason: "r" })).toEqual({
+      status: 404,
+      body: { error: "No such Finding" },
+    });
+
+    expect(await stored(a)).toEqual(before);
+    expect((await stored(b)).proposals).toEqual([]);
+  });
+});
+
+describe("a Proposal its decision would refuse now", () => {
+  it("answers 409 for an accept on a Fixed Finding, and stores nothing", async () => {
+    const { team, finding } = await teamWithFinding();
+    await findings.reconcile(scan(team, "scan-2", "2026-11-24T10:00:00Z", []));
+    expect((await findings.list(team))[0]).toMatchObject({ status: "fixed" });
+    const before = await stored(team);
+
+    const answer = await propose(team, finding.id, {
+      decision: "accept",
+      reason: "r",
+      until: nextWeek(),
+    });
+
+    expect(answer).toEqual({
+      status: 409,
+      body: { error: expect.stringMatching(/accept refused: the Finding is fixed/) },
+    });
+    expect(await stored(team)).toEqual(before);
+  });
+
+  it("answers 409 for a merged Finding, and stores nothing", async () => {
+    const { team, finding } = await teamWithFinding();
+    // The Finding is merged into a second one: a Scan moves it, then a Lead marks it moved.
+    await findings.reconcile(scan(team, "scan-2", "2026-11-24T10:00:00Z", ["moved.json"]));
+    const candidate = (await findings.list(team)).find((f) => f.id !== finding.id)!;
+    await findings.markMoved(team, finding.id, {
+      actor: { kind: "person", id: LEAD },
+      reason: "Moved",
+      candidate: candidate.id,
+    });
+    expect((await findings.list(team)).find((f) => f.id === candidate.id)).toMatchObject({
+      moved_to: finding.id,
+    });
+    const before = await stored(team);
+
+    const answer = await propose(team, candidate.id, {
+      decision: "mark_false_positive",
+      reason: "r",
+    });
+
+    expect(answer).toEqual({
+      status: 409,
+      body: { error: expect.stringMatching(/it is merged into/) },
+    });
+    expect(await stored(team)).toEqual(before);
+  });
+});
+
+describe("a Proposal's bad input", () => {
+  it.each([
+    ["an accept without until", { decision: "accept", reason: "r" }],
+    [
+      "a mark_false_positive with until",
+      { decision: "mark_false_positive", reason: "r", until: nextWeek() },
+    ],
+    ["an until in the past", { decision: "accept", reason: "r", until: "2020-01-01T00:00:00Z" }],
+    ["a decision of reopen", { decision: "reopen", reason: "r" }],
+  ])("answers 400 for %s, and writes nothing", async (_name, body) => {
+    const { team, finding } = await teamWithFinding();
+    const before = await stored(team);
+
+    const answer = await propose(team, finding.id, body);
+
+    expect(answer).toEqual({ status: 400, body: { error: expect.any(String) } });
+    expect(await stored(team)).toEqual(before);
+  });
+
+  it("answers 400 for a blank reject reason, listing the field, and writes nothing", async () => {
+    const { team, proposal } = await pendingProposal();
+    const before = await stored(team);
+
+    const answer = await reject(team, proposal.id, { reason: "  \n " });
+
+    expect(answer).toEqual({ status: 400, body: { error: expect.stringMatching(/^reason: /) } });
+    expect(await stored(team)).toEqual(before);
+  });
+});

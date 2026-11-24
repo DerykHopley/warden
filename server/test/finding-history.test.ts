@@ -162,4 +162,91 @@ describe("finding_history's actor_kind", () => {
 
     expect(await rows()).toEqual(before);
   });
+
+  // 0006_proposals: the daily Job reopens an expired acceptance.
+  it("takes the daily Job", async () => {
+    await historyRow("job", "daily-expiry");
+
+    expect((await rows()).at(-1)).toMatchObject({ actor_kind: "job", actor_id: "daily-expiry" });
+  });
+});
+
+// 0006_proposals: a person's decision that approved a Proposal names it; nothing else may.
+describe("finding_history's proposal_id", () => {
+  beforeAll(async () => {
+    await withTeamAs.warden_app(team, (tx) =>
+      tx
+        .insertInto("proposals")
+        .values({
+          team_id: team,
+          id: "p-1",
+          finding_id: "f-1",
+          decision: "mark_false_positive",
+          reason: "A test fixture",
+          accepted_until: null,
+          requested_by_kind: "agent",
+          requested_by_id: "guard-bot",
+        })
+        .execute(),
+    );
+  });
+
+  const withProposal = (actor_kind: HistoryActorKind, actor_id: string) =>
+    withTeamAs.warden_app(team, (tx) =>
+      tx
+        .insertInto("finding_history")
+        .values({
+          team_id: team,
+          finding_id: "f-1",
+          status_before: "open",
+          status_after: "false_positive",
+          severity_before: "high",
+          severity_after: "high",
+          actor_kind,
+          actor_id,
+          reason: "A test fixture",
+          proposal_id: "p-1",
+        })
+        .execute(),
+    );
+
+  it.each([
+    ["job", "daily-expiry"],
+    ["scan", "scan-9"],
+    ["spot_run", "spot-9"],
+  ] as const)("refuses it on a %s row, and adds no row", async (kind, id) => {
+    const before = await rows();
+
+    await expect(withProposal(kind, id)).rejects.toThrow(/finding_history_proposal_check/);
+
+    expect(await rows()).toEqual(before);
+  });
+
+  it("takes it on a person's row", async () => {
+    await withProposal("person", "user_lead");
+
+    expect((await rows()).at(-1)).toMatchObject({ actor_kind: "person", proposal_id: "p-1" });
+  });
+
+  it("refuses a Proposal the Team doesn't have", async () => {
+    await expect(
+      withTeamAs.warden_app(team, (tx) =>
+        tx
+          .insertInto("finding_history")
+          .values({
+            team_id: team,
+            finding_id: "f-1",
+            status_before: "open",
+            status_after: "false_positive",
+            severity_before: "high",
+            severity_after: "high",
+            actor_kind: "person",
+            actor_id: "user_lead",
+            reason: "r",
+            proposal_id: "p-nowhere",
+          })
+          .execute(),
+      ),
+    ).rejects.toThrow(/foreign key/);
+  });
 });

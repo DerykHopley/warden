@@ -3,12 +3,15 @@
 // carry the contracts' types, which the migrations' check constraints match.
 import type { ColumnType, Generated, JSONColumnType } from "kysely";
 import type {
+  Actor,
   AssetKind,
   Control,
   Evidence,
   HistoryCauseKind,
   Location,
   Module,
+  ProposalDecision,
+  ProposalState,
   Role,
   Severity,
   Status,
@@ -18,9 +21,9 @@ import type {
 type Json<T extends object> = JSONColumnType<T, string, string>;
 
 /** What kind of run a Scan row records: a Scan or a Spot run. */
-export type RunKind = Exclude<HistoryCauseKind, "person">;
+export type RunKind = Exclude<HistoryCauseKind, "person" | "job">;
 
-/** Who caused a Finding's history row: the contracts' list, which 0005_person_decisions's check matches. */
+/** Who caused a Finding's history row: the contracts' list, which 0006_proposals's check matches. */
 export type HistoryActorKind = HistoryCauseKind;
 
 /** How a Role history row came about: the Team's first visit, an invited person's first visit, or a Role change. */
@@ -108,5 +111,28 @@ export interface Database {
     actor_kind: HistoryActorKind;
     actor_id: string;
     reason: string;
+    /** The Proposal a person's decision approved; null on every other row (0006_proposals). */
+    proposal_id: ColumnType<string | null, string | null | undefined, never>;
+  };
+
+  /**
+   * A decision an agent or a Member suggests (0006_proposals). Decided once, by a Lead, then kept: a trigger refuses
+   * any other update, and every delete and truncate.
+   */
+  proposals: {
+    team_id: string;
+    id: string;
+    finding_id: string;
+    decision: ProposalDecision;
+    reason: string;
+    /** Set exactly on an accept. */
+    accepted_until: ColumnType<Date | null, string | null, never>;
+    requested_by_kind: Actor["kind"];
+    requested_by_id: string;
+    requested_at: Generated<Date>;
+    state: Generated<ProposalState>;
+    decided_by: string | null;
+    decided_at: ColumnType<Date | null, never, Date>;
+    decided_reason: string | null;
   };
 }

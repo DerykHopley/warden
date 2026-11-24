@@ -4,6 +4,8 @@ import {
   HistoryBody,
   HistoryEntryBody,
   MarkMovedBody,
+  Proposal,
+  ProposeBody,
   ReasonBody,
 } from "../src/index.ts";
 import { expectRefused } from "./refused.ts";
@@ -66,6 +68,7 @@ describe("HistoryBody", () => {
     severity_after: "high",
     cause: { kind: "person", id: "user_lead" },
     reason: "Fixed next sprint",
+    proposal: null,
   };
 
   it("takes a person's entry and an opening entry", () => {
@@ -80,5 +83,99 @@ describe("HistoryBody", () => {
 
   it("refuses an agent as the cause", () => {
     expectRefused(HistoryEntryBody, { ...entry, cause: { kind: "agent", id: "a-1" } }, "kind");
+  });
+
+  it("takes the daily Job as a cause", () => {
+    const expired = { ...entry, cause: { kind: "job", id: "daily-expiry" } };
+    expect(HistoryEntryBody.parse(expired)).toEqual(expired);
+  });
+
+  it("takes the Proposal a person's decision approved, with an agent as who asked", () => {
+    const approved = {
+      ...entry,
+      proposal: { id: "p-1", requested_by: { kind: "agent", id: "guard-bot" } },
+    };
+    expect(HistoryEntryBody.parse(approved)).toEqual(approved);
+  });
+
+  it("refuses an entry without its proposal field", () => {
+    const withoutProposal: Record<string, unknown> = { ...entry };
+    delete withoutProposal.proposal;
+    expectRefused(HistoryEntryBody, withoutProposal, "proposal");
+  });
+});
+
+describe("ProposeBody", () => {
+  it("takes an accept with a later until, and a mark_false_positive without one", () => {
+    const until = tomorrow();
+    expect(ProposeBody.parse({ decision: "accept", reason: "Next sprint", until })).toEqual({
+      decision: "accept",
+      reason: "Next sprint",
+      until,
+    });
+    expect(ProposeBody.parse({ decision: "mark_false_positive", reason: "A fixture" })).toEqual({
+      decision: "mark_false_positive",
+      reason: "A fixture",
+    });
+  });
+
+  it.each([
+    ["an accept without until", { decision: "accept", reason: "r" }, "until"],
+    [
+      "a mark_false_positive with until",
+      { decision: "mark_false_positive", reason: "r", until: tomorrow() },
+      "until",
+    ],
+    [
+      "an until in the past",
+      {
+        decision: "accept",
+        reason: "r",
+        until: new Date(Date.now() - 3600 * 1000).toISOString(),
+      },
+      "until",
+    ],
+    ["a decision of reopen", { decision: "reopen", reason: "r" }, "decision"],
+    ["a blank reason", { decision: "mark_false_positive", reason: "  " }, "reason"],
+    [
+      "an actor",
+      { decision: "mark_false_positive", reason: "r", actor: { kind: "agent", id: "a" } },
+      "actor",
+    ],
+  ])("refuses %s", (_name, body, field) => {
+    expectRefused(ProposeBody, body, field);
+  });
+});
+
+describe("Proposal", () => {
+  const proposal = {
+    id: "p-1",
+    finding_id: "f-1",
+    decision: "accept",
+    reason: "Next sprint",
+    until: "2026-12-01T00:00:00Z",
+    requested_by: { kind: "person", id: "user_member" },
+    requested_at: "2026-11-24T10:00:00Z",
+    state: "pending",
+    decided_by: null,
+    decided_at: null,
+    decided_reason: null,
+  };
+
+  it("takes a pending Proposal and a rejected one, an until in the past included", () => {
+    const rejected = {
+      ...proposal,
+      until: "2020-01-01T00:00:00Z",
+      state: "rejected",
+      decided_by: "user_lead",
+      decided_at: "2026-11-24T11:00:00Z",
+      decided_reason: "Fix it now",
+    };
+    expect(Proposal.parse(proposal)).toEqual(proposal);
+    expect(Proposal.parse(rejected)).toEqual(rejected);
+  });
+
+  it("refuses a state it doesn't know", () => {
+    expectRefused(Proposal, { ...proposal, state: "withdrawn" }, "state");
   });
 });

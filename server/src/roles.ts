@@ -5,8 +5,9 @@
 // - warden_migrate owns the schema and every table, and runs the migrations.
 // - warden_app is what request and job code connects as: bound by row-level security, owns nothing, and is a member
 //   of no other role, so it can't `set role` its way out.
-// - warden_admin bypasses row-level security, for the few deliberate cross-Team tasks. Only a user that has
-//   BYPASSRLS can grant it, so on Cloud SQL warden_admin is made without it, with a warning.
+// - warden_admin is the daily Job's way to list Team ids (ADR 0009): no BYPASSRLS anywhere, here as on Cloud SQL, so
+//   it reads only what 0006_proposals's policy and column grant on `teams` allow. A superuser runner takes BYPASSRLS
+//   away from one that has it; a runner that can't (Cloud SQL's `postgres`) warns instead.
 //
 // Only those three (and the database's owner) may connect to the database: PUBLIC loses CONNECT on it.
 //
@@ -15,8 +16,8 @@
 // set, each on its own database, so neither set can connect to the other's. Run by hand with the wrong set, it refuses
 // a database that belongs to the other set before changing anything (see refuseOtherSet).
 //
-// Passwords: WARDEN_APP_PASSWORD and WARDEN_MIGRATE_PASSWORD, when set (printable ASCII), become warden_app's and
-// warden_migrate's, sent as SCRAM-SHA-256 verifiers made here. Unset, no password is set, and one already set is left:
+// Passwords: WARDEN_APP_PASSWORD, WARDEN_MIGRATE_PASSWORD and WARDEN_ADMIN_PASSWORD, when set (printable ASCII),
+// become warden_app's, warden_migrate's and warden_admin's, sent as SCRAM-SHA-256 verifiers made here. Unset, no password is set, and one already set is left:
 // compose and CI use trust auth. No password reaches Postgres, a log line or an error.
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import pg from "pg";
@@ -35,7 +36,7 @@ export type CreateRolesOptions = {
   /** Every role set: a database that belongs to one other than `names` is refused. The live and the preview set
    * unless given; tests pass their own. */
   sets?: readonly DatabaseRoleNames[];
-  passwords?: { app?: string; migrate?: string };
+  passwords?: { app?: string; migrate?: string; admin?: string };
   logger?: Logger;
 };
 
@@ -65,6 +66,7 @@ export async function createRoles(
 ): Promise<void> {
   checkPassword(names.app, passwords.app);
   checkPassword(names.migrate, passwords.migrate);
+  checkPassword(names.admin, passwords.admin);
   await refuseOtherSet(
     pool,
     names,
@@ -76,23 +78,13 @@ export async function createRoles(
     name: string;
     superuser: boolean;
     bypassrls: boolean;
-    adminBypassrls: boolean;
   }>(
-    `select current_user as name, rolsuper as superuser, rolbypassrls as bypassrls,
-            coalesce((select rolbypassrls from pg_roles where rolname = $1), false) as "adminBypassrls"
+    `select current_user as name, rolsuper as superuser, rolbypassrls as bypassrls
        from pg_roles where rolname = current_user`,
-    [names.admin],
   );
   if (!runner) throw new Error("the user running roles isn't in pg_roles");
   // Postgres lets only a superuser, or a role that has BYPASSRLS itself, give BYPASSRLS or take it away.
-  const canGrantBypass = runner.superuser || runner.bypassrls;
-  // Warned only when warden_admin will end without it: one that already has it keeps it.
-  if (!canGrantBypass && !runner.adminBypassrls) {
-    logger.warn(`${names.admin} gets no BYPASSRLS: ${runner.name} can't grant it`, {
-      role: names.admin,
-      user: runner.name,
-    });
-  }
+  const canChangeBypass = runner.superuser || runner.bypassrls;
 
   const plain: Attributes = {
     rolcanlogin: true,
@@ -103,10 +95,24 @@ export async function createRoles(
   };
   await ensureRole(pool, names.migrate, plain);
   await ensureRole(pool, names.app, plain);
-  // Without the right to grant it, warden_admin's BYPASSRLS is left as it is: none when it's new.
-  const adminAttributes: Attributes = { ...plain, rolbypassrls: true };
-  if (!canGrantBypass) delete adminAttributes.rolbypassrls;
-  await ensureRole(pool, names.admin, adminAttributes);
+  // warden_admin has no BYPASSRLS either: one policy lets it list Team ids (0006_proposals). A runner that may not
+  // take BYPASSRLS away (Cloud SQL's `postgres`) leaves it as it is: none when the role is new, as there. One that
+  // has it still is warned about.
+  const plainButBypass: Attributes = { ...plain };
+  delete plainButBypass.rolbypassrls;
+  await ensureRole(pool, names.admin, canChangeBypass ? plain : plainButBypass);
+  if (!canChangeBypass) {
+    const { rows } = await pool.query<{ bypassrls: boolean }>(
+      "select rolbypassrls as bypassrls from pg_roles where rolname = $1",
+      [names.admin],
+    );
+    if (rows[0]?.bypassrls) {
+      logger.warn(
+        `${names.admin} keeps BYPASSRLS: ${runner.name} can't take it away; run roles as a superuser`,
+        { role: names.admin, user: runner.name },
+      );
+    }
+  }
 
   const [migrate, app, admin] = [names.migrate, names.app, names.admin].map(pg.escapeIdentifier);
   // warden_app may not become any other role, however it got a membership.
@@ -124,6 +130,7 @@ export async function createRoles(
 
   await setPassword(pool, names.app, passwords.app);
   await setPassword(pool, names.migrate, passwords.migrate);
+  await setPassword(pool, names.admin, passwords.admin);
 }
 
 /** Throws, before anything is changed, when the database belongs to one of the `others` sets: that set's migration
@@ -313,6 +320,7 @@ async function main(logger: Logger): Promise<number> {
       passwords: {
         app: process.env.WARDEN_APP_PASSWORD || undefined,
         migrate: process.env.WARDEN_MIGRATE_PASSWORD || undefined,
+        admin: process.env.WARDEN_ADMIN_PASSWORD || undefined,
       },
     });
     logger.info("roles ready", { roles: Object.values(names) });

@@ -3,16 +3,19 @@
 // comes in through `createFindings`, wired by the start-up file.
 import { randomUUID } from "node:crypto";
 import {
+  Actor,
   assetKey,
   Observation,
   problemKey,
+  ProposeBody,
+  ReasonBody,
   Scan,
   SpotRun,
-  type Actor,
   type Asset,
   type Finding,
   type HistoryCauseKind,
   type Module,
+  type Proposal,
   type RuleId,
   type Severity,
   type Status,
@@ -27,6 +30,8 @@ import {
   type DecisionCall,
   type DecisionInput,
 } from "./decisions.ts";
+import { applyExpiry } from "./expiry.ts";
+import { applyApprove, applyPropose, applyReject } from "./proposals.ts";
 import { applyRun, type MoveRule, type ReconcileOutcome } from "./reconcile.ts";
 import { fromRow, isoDateTime, loadFinding } from "./rows.ts";
 
@@ -37,6 +42,8 @@ export {
   type DecisionCall,
   type DecisionInput,
 } from "./decisions.ts";
+export { DAILY_EXPIRY } from "./expiry.ts";
+export { ProposalDecided, ProposalNotFound } from "./proposals.ts";
 export type { MoveRule, ReconcileOutcome } from "./reconcile.ts";
 export { sameAsset } from "./rows.ts";
 
@@ -48,10 +55,15 @@ export interface HistoryEntry {
   status_after: Status;
   severity_before: Severity | null;
   severity_after: Severity;
-  /** What caused it: the Scan or Spot run, or the person whose named decision it was. Never an agent. */
+  /** What caused it: the Scan or Spot run, the person whose named decision it was, or the Job. Never an agent. */
   cause: { kind: HistoryCauseKind; id: string };
   reason: string;
+  /** The Proposal the person's decision approved, and who asked for it; null for any other change. */
+  proposal: { id: string; requested_by: Actor } | null;
 }
+
+/** What `propose` takes: who asks (a person or an agent), and the decision they suggest. */
+export type ProposeInput = ProposeBody & { requester: Actor };
 
 /**
  * One named decision: who decided (a person), and the call's input, checked against its contracts schema (a reason
@@ -112,6 +124,34 @@ export interface Findings {
   markMoved: DecisionMethod<"markMoved">;
   /** False positive or Accepted to Open. */
   reopen: DecisionMethod<"reopen">;
+
+  // Proposals (ADR 0005, ADR 0008): an agent or a person suggests accept or mark_false_positive; a Lead decides.
+
+  /**
+   * Stores a pending Proposal and changes no Finding. Throws a zod error for bad input (an `until` exactly on an
+   * accept, later than now), and FindingNotFound or DecisionRefused when the decision would be refused on the Finding
+   * now; nothing is written then. No Lead check: anyone in the Team, or an agent, may propose.
+   */
+  propose(team: string, findingId: string, input: ProposeInput): Promise<Proposal>;
+  /**
+   * Makes the Proposal's decision as `actor`, a person, through the named call's own checks (the Lead recheck, the
+   * Status rules, an accept's until still later than now), and marks it approved, in one transaction. Throws for an
+   * agent before anything is read; ProposalNotFound, ProposalDecided, NotALead, DecisionRefused; nothing is written
+   * after any of them.
+   */
+  approveProposal(team: string, proposalId: string, input: { actor: Actor }): Promise<Proposal>;
+  /** Marks the Proposal rejected by `actor`, a Lead, with their reason. The Finding doesn't change; no history row. */
+  rejectProposal(
+    team: string,
+    proposalId: string,
+    input: { actor: Actor; reason: string },
+  ): Promise<Proposal>;
+
+  /**
+   * The daily Job's work for one Team: every Accepted Finding whose until is at or before `now` reopens, with a `job`
+   * history row. Returns the reopened ids; run again with the same `now`, it changes nothing.
+   */
+  expireAcceptances(team: string, now: Date): Promise<string[]>;
 }
 
 export function createFindings({
@@ -153,6 +193,27 @@ export function createFindings({
     confirmFix: decision("confirmFix"),
     markMoved: decision("markMoved"),
     reopen: decision("reopen"),
+
+    async propose(team, findingId, { requester, ...body }) {
+      const who = Actor.parse(requester);
+      const checked = ProposeBody.parse(body);
+      return withTeam(team, (tx) => applyPropose(tx, team, findingId, who, checked));
+    },
+
+    async approveProposal(team, proposalId, { actor }) {
+      const person = personOf(actor);
+      return withTeam(team, (tx) => applyApprove(tx, team, proposalId, person));
+    },
+
+    async rejectProposal(team, proposalId, { actor, reason }) {
+      const person = personOf(actor);
+      const checked = ReasonBody.parse({ reason });
+      return withTeam(team, (tx) => applyReject(tx, team, proposalId, person, checked.reason));
+    },
+
+    expireAcceptances(team, now) {
+      return withTeam(team, (tx) => applyExpiry(tx, team, now));
+    },
 
     async report(value) {
       const run = SpotRun.parse(value);
@@ -211,10 +272,14 @@ export function createFindings({
       return withTeam(team, async (tx) => {
         if (!(await loadFinding(tx, team, findingId))) throw new FindingNotFound(findingId);
         const rows = await tx
-          .selectFrom("finding_history")
-          .selectAll()
-          .where("finding_id", "=", findingId)
-          .orderBy("id")
+          .selectFrom("finding_history as h")
+          .leftJoin("proposals as p", (join) =>
+            join.onRef("p.team_id", "=", "h.team_id").onRef("p.id", "=", "h.proposal_id"),
+          )
+          .selectAll("h")
+          .select(["p.requested_by_kind", "p.requested_by_id"])
+          .where("h.finding_id", "=", findingId)
+          .orderBy("h.id")
           .execute();
         return rows.map((row) => ({
           at: isoDateTime(row.at),
@@ -224,6 +289,13 @@ export function createFindings({
           severity_after: row.severity_after,
           cause: { kind: row.actor_kind, id: row.actor_id },
           reason: row.reason,
+          proposal:
+            row.proposal_id === null
+              ? null
+              : {
+                  id: row.proposal_id,
+                  requested_by: { kind: row.requested_by_kind!, id: row.requested_by_id! },
+                },
         }));
       });
     },
