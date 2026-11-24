@@ -4,6 +4,7 @@
 // button that opened it. The server checks the Role on every call (ADR 0008): the card only hides what a Role can't do.
 import {
   atLeast,
+  type Decision,
   type Finding,
   type PendingProposal,
   type ProposalDecision,
@@ -18,12 +19,13 @@ import {
   decisionsFor,
   earliestUntil,
   endOfDay,
+  FINDING_GONE,
+  mergeableCandidates,
   proposalsFor,
   propose,
   rejectProposal,
   type ActionResult,
-  type Decision,
-  type DecisionCall,
+  type DecisionRequest,
 } from "./decisions.ts";
 import {
   ASSET_KIND_WORDS,
@@ -72,7 +74,7 @@ const PROPOSE_LABELS: Record<ProposalDecision, string> = {
 };
 
 /** What the done line says after a decision. */
-function doneWords(call: DecisionCall): string {
+function doneWords(call: DecisionRequest): string {
   switch (call.decision) {
     case "accept":
       return `Accepted until ${dayWords(call.body.until)}.`;
@@ -90,13 +92,16 @@ function doneWords(call: DecisionCall): string {
 const REFUSED = {
   leadOnly: "Only a Lead or an Admin can decide this. Your Role may have changed.",
   proposeForbidden: "Warden refused this: your Team or Role may have changed.",
-  findingGone: "This Finding is no longer in your Team.",
+  findingGone: FINDING_GONE,
   findingChanged: "This Finding changed since you opened it. Look again before deciding.",
   proposalGone: "This Proposal is no longer in your Team.",
   proposalChanged:
     "This Proposal was decided already, or its Finding changed. The list is refreshed.",
   notAnswering: "Warden's server isn't answering. Your reason is kept: try again.",
 };
+
+/** The server's words as one sentence: ending with a full stop, once. */
+const sentence = (words: string) => `${words.trim().replace(/[.!?]$/, "")}.`;
 
 /** What a form holds while it's open: kept as typed after a refusal. */
 type Draft = { reason: string; until: string; candidate: string | null };
@@ -123,6 +128,8 @@ export function DetailCard(props: {
   onRetryProposals: () => void;
   /** A decision or an approval changed the Finding (or may have): the page asks for it again. */
   onFindingChanged: () => void;
+  /** The server has no such Finding in the Team (404): the page says so, past the card, and asks again. */
+  onFindingGone: () => void;
   /** A call changed the Proposals (or may have): the panel asks for them again. */
   onProposalsChanged: () => void;
   /** The server said the person's Role is too low: ask who they are again. */
@@ -137,19 +144,29 @@ export function DetailCard(props: {
   const lead = role !== null && atLeast(role, "lead");
   const decisions = lead ? decisionsFor(finding) : [];
   const proposes = role === "member" ? proposalsFor(finding) : [];
+  const proposalsState =
+    props.proposals === "loading"
+      ? "loading"
+      : props.proposals.kind === "proposals"
+        ? "listed"
+        : "failed";
   const pending =
     props.proposals !== "loading" && props.proposals.kind === "proposals"
       ? props.proposals.proposals.filter((p) => p.finding_id === finding.id)
       : [];
+  const mergeable = mergeableCandidates(finding, props.candidates);
 
   const [form, setForm] = useState<Action | null>(null);
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const [running, setRunning] = useState<string | null>(null);
   const [line, setLine] = useState<Line | null>(null);
+  /** Counts the forms that closed because their action went away; each moves focus once, in the effect below. */
+  const [closedAway, setClosedAway] = useState(0);
   const runningNow = useRef(false);
   const cardRef = useRef<HTMLElement>(null);
   /** What takes focus once the next render lands: the line, the open form's reason, or an opener (by its key). */
   const focusNext = useRef<string | null>(null);
+  const refocused = useRef(0);
 
   // A form whose action the card no longer offers closes: the Finding's Status changed (a 409, then the page's new
   // answer), the person's Role was lowered, or the Proposal left the list. Its refusal line stays, in the card.
@@ -158,13 +175,28 @@ export function DetailCard(props: {
     (form.kind === "decide" && decisions.includes(form.decision)) ||
     (form.kind === "propose" && proposes.includes(form.decision)) ||
     (form.kind === "reject" && lead && pending.some((p) => p.id === form.proposal));
-  if (!offered) setForm(null);
+  if (!offered) {
+    setForm(null);
+    setClosedAway((n) => n + 1);
+  }
 
   useEffect(() => {
     const target = focusNext.current;
     const card = cardRef.current;
     focusNext.current = null;
-    if (target === null || card === null) return;
+    if (card === null) return;
+    // Focus that sat in a form which went away would fall to <body>: it goes to the line, or the first button left.
+    if (closedAway !== refocused.current) {
+      refocused.current = closedAway;
+      const active = document.activeElement;
+      if (target === null && (active === null || active === document.body)) {
+        (
+          card.querySelector<HTMLElement>(".card-line") ??
+          card.querySelector<HTMLElement>("[data-opener]")
+        )?.focus();
+      }
+    }
+    if (target === null) return;
     const element =
       target === "line"
         ? card.querySelector<HTMLElement>(".card-line")
@@ -197,14 +229,16 @@ export function DetailCard(props: {
   /** One call at a time: its control is busy while it runs, and a second press sends nothing. */
   async function run<T>(action: Action, call: () => Promise<ActionResult<T>>, onDone: () => void) {
     if (runningNow.current) return;
+    const key = keyOf(action);
     runningNow.current = true;
-    setRunning(keyOf(action));
+    setRunning(key);
     setLine(null);
     const result = await call();
     runningNow.current = false;
     setRunning(null);
     if (result.kind === "done") {
-      setForm(null);
+      // Only its own form closes: another one the person opened stays, with what they typed.
+      setForm((open) => (open !== null && keyOf(open) === key ? null : open));
       onDone();
     } else {
       refused(result, action);
@@ -219,20 +253,32 @@ export function DetailCard(props: {
         props.onSessionEnded();
         return;
       case "invalid":
-        text = `Warden refused this: ${result.error.replace(/\.$/, "")}.`;
+        text = `Warden refused this: ${sentence(result.error)}`;
         break;
       case "forbidden":
         text = action.kind === "propose" ? REFUSED.proposeForbidden : REFUSED.leadOnly;
         props.refreshMe();
         break;
       case "not-found":
-      case "conflict":
         if (onProposal) {
-          text = result.kind === "not-found" ? REFUSED.proposalGone : REFUSED.proposalChanged;
+          text = REFUSED.proposalGone;
           props.onProposalsChanged();
+          props.onFindingChanged();
         } else {
-          text = result.kind === "not-found" ? REFUSED.findingGone : REFUSED.findingChanged;
+          // The card goes as the page asks again: the page says why.
+          text = REFUSED.findingGone;
+          props.onFindingGone();
         }
+        break;
+      case "conflict":
+        // The server's words when its body has them (a Team not opened, a Proposal stale since it was asked).
+        text =
+          result.error !== null
+            ? sentence(result.error)
+            : onProposal
+              ? REFUSED.proposalChanged
+              : REFUSED.findingChanged;
+        if (onProposal) props.onProposalsChanged();
         props.onFindingChanged();
         break;
       case "not-answering":
@@ -293,7 +339,7 @@ export function DetailCard(props: {
     }
   }
 
-  function decisionCall(decision: Decision, reason: string): DecisionCall {
+  function decisionCall(decision: Decision, reason: string): DecisionRequest {
     switch (decision) {
       case "accept":
         return { decision, body: { reason, until: endOfDay(draft.until) } };
@@ -326,7 +372,7 @@ export function DetailCard(props: {
     if (draft.reason.trim() === "") return false;
     if (asksUntil(action) && (draft.until === "" || draft.until < earliest)) return false;
     if (asksCandidate(action)) {
-      return props.candidates.some((candidate) => candidate.id === draft.candidate);
+      return mergeable.some((candidate) => candidate.id === draft.candidate);
     }
     return true;
   }
@@ -340,7 +386,7 @@ export function DetailCard(props: {
         submitLabel={submitLabel}
         findingId={finding.id}
         until={asksUntil(action) ? earliest : null}
-        candidates={asksCandidate(action) ? props.candidates : null}
+        candidates={asksCandidate(action) ? mergeable : null}
         draft={draft}
         onDraft={(change) => setDraft((old) => ({ ...old, ...change }))}
         ready={ready(action)}
@@ -445,7 +491,7 @@ export function DetailCard(props: {
         </p>
       )}
       {cardLine?.kind === "refused" && (
-        <p className="card-line refused" role="alert">
+        <p className="card-line refused" role="alert" tabIndex={-1}>
           {cardLine.text}
         </p>
       )}
@@ -457,6 +503,7 @@ export function DetailCard(props: {
                 key={decision}
                 action={{ kind: "decide", decision }}
                 label={decisionLabel(decision, finding)}
+                waiting={running !== null}
                 onOpen={open}
               />
             ))}
@@ -465,6 +512,7 @@ export function DetailCard(props: {
                 key={decision}
                 action={{ kind: "propose", decision }}
                 label={PROPOSE_LABELS[decision]}
+                waiting={running !== null}
                 onOpen={open}
               />
             ))}
@@ -472,7 +520,7 @@ export function DetailCard(props: {
         ))}
       <Proposals
         findingId={finding.id}
-        proposals={props.proposals}
+        state={proposalsState}
         pending={pending}
         onRetry={props.onRetryProposals}
       >
@@ -492,7 +540,7 @@ export function DetailCard(props: {
                       type="button"
                       className="primary"
                       data-opener={`approve:${proposal.id}`}
-                      disabled={running === `approve:${proposal.id}`}
+                      disabled={running !== null}
                       aria-busy={running === `approve:${proposal.id}` ? "true" : undefined}
                       onClick={() => approve(proposal)}
                     >
@@ -502,6 +550,7 @@ export function DetailCard(props: {
                   <OpenerButton
                     action={{ kind: "reject", proposal: proposal.id }}
                     label="Reject"
+                    waiting={running !== null}
                     onOpen={open}
                   />
                 </div>
@@ -513,13 +562,22 @@ export function DetailCard(props: {
   );
 }
 
-/** A secondary button that opens its action's form; Cancel puts focus back on it, found by `data-opener`. */
-function OpenerButton(props: { action: Action; label: string; onOpen: (action: Action) => void }) {
+/**
+ * A secondary button that opens its action's form; Cancel puts focus back on it, found by `data-opener`. It waits
+ * (disabled) while any of the card's calls runs.
+ */
+function OpenerButton(props: {
+  action: Action;
+  label: string;
+  waiting: boolean;
+  onOpen: (action: Action) => void;
+}) {
   return (
     <button
       type="button"
       className="secondary"
       data-opener={keyOf(props.action)}
+      disabled={props.waiting}
       onClick={() => props.onOpen(props.action)}
     >
       {props.label}
@@ -634,13 +692,14 @@ function askedBy(
  */
 function Proposals(props: {
   findingId: string;
-  proposals: ProposalsResult | "loading";
+  /** Loading, failed (any refusal), or listed: then `pending` holds the focused Finding's. */
+  state: "loading" | "failed" | "listed";
   pending: PendingProposal[];
   onRetry: () => void;
   children: (proposal: PendingProposal) => ReactNode;
 }) {
-  if (props.proposals === "loading") return null;
-  if (props.proposals.kind !== "proposals") {
+  if (props.state === "loading") return null;
+  if (props.state === "failed") {
     return (
       <p className="proposals-failed">
         <span className="muted">Couldn't load Proposals</span>

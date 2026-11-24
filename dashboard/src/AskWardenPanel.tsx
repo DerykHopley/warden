@@ -259,6 +259,7 @@ export function AskWardenPanel(props: {
               context.clearFocus();
             }}
             onFindingChanged={context.onFindingChanged}
+            onFindingGone={context.onFindingGone}
             onProposalsChanged={proposals.refresh}
             refreshMe={props.refreshMe}
             onSessionEnded={onSessionEnded}

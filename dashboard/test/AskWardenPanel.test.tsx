@@ -406,6 +406,29 @@ describe("a Lead's decision in the detail card", () => {
   });
 });
 
+describe("a decision on a Finding the Team no longer has", () => {
+  it("says so on the page, where it outlives the card", async () => {
+    const answers = [demoFindings, demoFindings.filter((f) => f.id !== ID.lodash)];
+    open("/findings?status=all", {
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      findings: () =>
+        json(200, { team: TEAM, findings: answers.length > 1 ? answers.shift() : answers[0] }),
+      findingAction: () => json(404, { error: "No such Finding" }),
+    });
+    await userEvent.click(
+      within(await screen.findByRole("table")).getByRole("button", { name: /^lodash 4\.17\.20/ }),
+    );
+    await userEvent.click(within(card()).getByRole("button", { name: "Mark False positive" }));
+    const form = within(within(card()).getByRole("form", { name: "Mark False positive" }));
+    await userEvent.type(form.getByRole("textbox", { name: "Reason" }), "A test fixture");
+    await userEvent.click(form.getByRole("button", { name: "Mark False positive" }));
+
+    await vi.waitFor(() => expect(queryCard()).not.toBeInTheDocument());
+    const notice = within(screen.getByRole("main")).getByRole("alert");
+    expect(notice).toHaveTextContent("This Finding is no longer in your Team.");
+  });
+});
+
 describe("the card's ✕", () => {
   it("removes finding= from the URL, the selection's aria-current and the card, and leaves the panel open", async () => {
     open(`/findings?severity=high`);

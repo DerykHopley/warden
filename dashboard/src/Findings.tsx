@@ -13,6 +13,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { askAboutTeam } from "./api.ts";
 import type { PageProps } from "./App.tsx";
+import { FINDING_GONE } from "./decisions.ts";
 import {
   ASSET_KIND_WORDS,
   LEVEL_WORDS,
@@ -118,26 +119,50 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
   const { setContext, open: openPanel } = panel;
   const { status, severity, module } = shown;
   const { refresh } = list;
+  // A decision on a Finding the Team no longer has: said on the page, as People says a person who left, since the
+  // card goes once the list comes back without it.
+  const [gone, setGone] = useState(false);
+  const onFindingGone = useCallback(() => {
+    setGone(true);
+    refresh();
+  }, [refresh]);
   useEffect(() => {
     setContext({
       view: findingsViewWords({ status, severity, module }),
       focus: focusedFinding,
       clearFocus,
       onFindingChanged: refresh,
+      onFindingGone,
       candidates,
     });
-  }, [setContext, status, severity, module, focusedFinding, clearFocus, refresh, candidates]);
+  }, [
+    setContext,
+    status,
+    severity,
+    module,
+    focusedFinding,
+    clearFocus,
+    refresh,
+    onFindingGone,
+    candidates,
+  ]);
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);
 
   /** Selecting a Finding replaces the address's entry (the effect above writes it), and opens a closed panel. */
   const select = (id: string) => {
+    setGone(false);
     setView({ ...shown, finding: id });
     openPanel();
   };
 
   return (
     <>
+      {gone && (
+        <p className="notice" role="alert">
+          {FINDING_GONE}
+        </p>
+      )}
       {list.result === "loading" && <p className="muted">Loading Findings…</p>}
       {list.result !== "loading" && <CallRefused result={list.result} onRetry={list.retry} />}
       {list.result !== "loading" && <TeamRefused result={list.result} />}

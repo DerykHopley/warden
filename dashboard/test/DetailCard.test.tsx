@@ -71,6 +71,7 @@ function show(
     onClear: vi.fn(),
     onRetry: vi.fn(),
     onFindingChanged: vi.fn(),
+    onFindingGone: vi.fn(),
     onProposalsChanged: vi.fn(),
     refreshMe: vi.fn(),
     onSessionEnded: vi.fn(),
@@ -87,6 +88,7 @@ function show(
       onClear={calls.onClear}
       onRetryProposals={calls.onRetry}
       onFindingChanged={calls.onFindingChanged}
+      onFindingGone={calls.onFindingGone}
       onProposalsChanged={calls.onProposalsChanged}
       refreshMe={calls.refreshMe}
       onSessionEnded={calls.onSessionEnded}
@@ -513,7 +515,8 @@ describe("a Member's Proposal", () => {
   ])(
     "a %s shows its line, keeps the reason and runs what it says",
     async (_why, status, line, runs) => {
-      serve({ findingAction: () => json(status, { error: "Refused" }) });
+      // No `error` in the body: a 409 then falls back to the dashboard's own line.
+      serve({ findingAction: () => json(status, {}) });
       const shown = show(OPEN, listed([]), { role: "member" });
       const form = await openForm(shown.card, "Propose False positive");
       await fill(form, "A test fixture");
@@ -524,6 +527,21 @@ describe("a Member's Proposal", () => {
       expect(shown[runs]).toHaveBeenCalledOnce();
     },
   );
+
+  it("a 409 whose body says why shows the server's words: a Team its Admin hasn't opened", async () => {
+    serve({
+      findingAction: () => json(409, { error: "Your Team's Admin must open Warden first" }),
+    });
+    const { card } = show(OPEN, listed([]), { role: "member" });
+    const form = await openForm(card, "Propose False positive");
+    await fill(form, "A test fixture");
+    await userEvent.click(form.getByRole("button", { name: "Propose" }));
+
+    expect(await form.findByRole("alert")).toHaveTextContent(
+      /^Your Team's Admin must open Warden first\.$/,
+    );
+    expect(reasonField(form)).toHaveValue("A test fixture");
+  });
 });
 
 describe("a Lead's decision", () => {
@@ -584,6 +602,43 @@ describe("a Lead's decision", () => {
     expect(sent(`/api/findings/${ID}/mark-moved`)).toEqual([
       { reason: "The same rule moved", candidate: SECOND },
     ]);
+  });
+
+  it("Mark moved offers only the candidates the server would merge: Open, not merged, same module, Rule and Asset", async () => {
+    const id = (n: number) => `c${n}c${n}c${n}c${n}-0000-4000-8000-00000000000${n}`;
+    const refused = [
+      finding(id(1), { status: "fixed" }),
+      finding(id(2), { status: "fixed", moved_to: ID }),
+      finding(id(3), { rule_id: "guard/agent-can-push-main" }),
+      finding(id(4), { asset: { kind: "repo", ref: "https://github.com/acme/other" } }),
+      finding(id(5), { asset: { kind: "product", ref: "https://github.com/acme/shop-web" } }),
+      finding(id(6), { module: "patch" }),
+    ];
+    const focused = finding(ID, {
+      status: "fixed",
+      unconfirmed_fix: { candidates: [OTHER, ...refused.map((f) => f.id)] },
+    });
+    const { card } = show(focused, listed([]), {
+      role: "lead",
+      candidates: [...refused, CANDIDATE],
+    });
+    const form = await openForm(card, "Mark moved");
+
+    expect(form.getAllByRole("radio").map((radio) => radio.getAttribute("value"))).toEqual([OTHER]);
+  });
+
+  it("Mark moved with none of its candidates mergeable says so and can't be sent", async () => {
+    const focused = finding(ID, { status: "fixed", unconfirmed_fix: { candidates: [SECOND] } });
+    const { card } = show(focused, listed([]), {
+      role: "lead",
+      candidates: [finding(SECOND, { status: "fixed" })],
+    });
+    const form = await openForm(card, "Mark moved");
+
+    expect(form.queryByRole("radio")).not.toBeInTheDocument();
+    expect(
+      form.getByText("The candidate isn't in this view's list. Reload to see it."),
+    ).toBeInTheDocument();
   });
 
   it("Mark moved with no candidate in the list says so and can't be sent", async () => {
@@ -691,7 +746,9 @@ describe("a Lead's decision", () => {
     },
   );
 
-  it.each<[string, () => Response, string, "refreshMe" | "onFindingChanged" | null]>([
+  it.each<
+    [string, () => Response, string, "refreshMe" | "onFindingChanged" | "onFindingGone" | null]
+  >([
     [
       "400",
       () => json(400, { error: "reason: Too big: expected string to have <=2000 characters" }),
@@ -708,12 +765,21 @@ describe("a Lead's decision", () => {
       "404",
       () => json(404, { error: "No such Finding" }),
       "This Finding is no longer in your Team.",
+      "onFindingGone",
+    ],
+    [
+      "409 with no reason in its body",
+      () => json(409, {}),
+      "This Finding changed since you opened it. Look again before deciding.",
       "onFindingChanged",
     ],
     [
-      "409",
-      () => json(409, { error: "markFalsePositive takes a Finding that is open or accepted" }),
-      "This Finding changed since you opened it. Look again before deciding.",
+      "409 with the server's reason",
+      () =>
+        json(409, {
+          error: "markFalsePositive refused: the Finding is false_positive, and it changed",
+        }),
+      "markFalsePositive refused: the Finding is false_positive, and it changed.",
       "onFindingChanged",
     ],
     [
@@ -741,16 +807,14 @@ describe("a Lead's decision", () => {
 
       expect(await form.findByRole("alert")).toHaveTextContent(line);
       expect(reasonField(form)).toHaveValue("A test fixture");
-      for (const call of ["refreshMe", "onFindingChanged"] as const) {
+      for (const call of ["refreshMe", "onFindingChanged", "onFindingGone"] as const) {
         expect(shown[call]).toHaveBeenCalledTimes(call === runs ? 1 : 0);
       }
     },
   );
 
-  it("a 409 after which the Finding's new Status no longer offers the decision closes the form and shows the new Status's row", async () => {
-    serve({
-      findingAction: () => json(409, { error: "accept takes a Finding that is open or accepted" }),
-    });
+  it("a 409 after which the Finding's new Status no longer offers the decision closes the form, shows the new Status's row, and moves focus to the line", async () => {
+    serve({ findingAction: () => json(409, {}) });
     const { card, update } = show(OPEN, listed([]), { role: "lead" });
     const form = await openForm(card, "Accept");
     await fill(form);
@@ -761,9 +825,22 @@ describe("a Lead's decision", () => {
 
     expect(card.queryByRole("form")).not.toBeInTheDocument();
     expect(rowButtons(card)).toEqual(["Reopen"]);
-    expect(card.getByRole("alert")).toHaveTextContent(
+    const line = card.getByRole("alert");
+    expect(line).toHaveTextContent(
       "This Finding changed since you opened it. Look again before deciding.",
     );
+    expect(line).toHaveFocus();
+  });
+
+  it("a form that closes because its Proposal left the list, with no line, moves focus to the first button left", async () => {
+    const { card, update } = show(OPEN, listed([proposal({ id: "p-gone" })]), { role: "lead" });
+    const form = await openForm(card, "Reject");
+    await userEvent.type(reasonField(form), "Half typed");
+
+    update(OPEN, listed([]));
+
+    expect(card.queryByRole("form")).not.toBeInTheDocument();
+    expect(card.getByRole("button", { name: "Accept" })).toHaveFocus();
   });
 
   it("a session-ended answer signs the person out", async () => {
@@ -871,7 +948,8 @@ describe("a Lead's Approve and Reject", () => {
     ["a 404 on approve", "Approve", 404, "This Proposal is no longer in your Team."],
     ["a 404 on reject", "Reject", 404, "This Proposal is no longer in your Team."],
   ])("%s shows its line and asks the Proposals again", async (_why, button, status, line) => {
-    serve({ proposalAction: () => json(status, { error: "Refused" }) });
+    // No `error` in the body: a 409 then falls back to the dashboard's own line.
+    serve({ proposalAction: () => json(status, {}) });
     const shown = show(OPEN, listed([fresh]), { role: "lead" });
     if (button === "Approve") {
       await userEvent.click(shown.card.getByRole("button", { name: "Approve" }));
@@ -883,5 +961,38 @@ describe("a Lead's Approve and Reject", () => {
 
     expect(await shown.card.findByRole("alert")).toHaveTextContent(line);
     expect(shown.onProposalsChanged).toHaveBeenCalledOnce();
+  });
+
+  it("a 409 on approve whose body says why shows the server's words: the Finding changed since it was asked", async () => {
+    const why =
+      "accept refused: the Finding is open, and it changed since the Proposal was asked (at 2026-11-24T12:31:00.000Z): ask again";
+    serve({ proposalAction: () => json(409, { error: why }) });
+    const { card } = show(OPEN, listed([fresh]), { role: "lead" });
+    await userEvent.click(card.getByRole("button", { name: "Approve" }));
+
+    expect(await card.findByRole("alert")).toHaveTextContent(`${why}.`);
+  });
+
+  it("a finished call closes only its own form: an Approve on B leaves the Reject form on A and its text", async () => {
+    const answer = deferred<Response>();
+    serve({ proposalAction: () => answer.promise });
+    const a = proposal({ id: "p-a", reason: "A's reason" });
+    const b = proposal({ id: "p-b", reason: "B's reason" });
+    const { card } = show(OPEN, listed([a, b]), { role: "lead" });
+    const [itemA, itemB] = proposalItems(card);
+    await userEvent.click(within(itemA!).getByRole("button", { name: "Reject" }));
+    await userEvent.type(reasonField(formNamed(card, "Reject")), "Half typed");
+
+    await userEvent.click(within(itemB!).getByRole("button", { name: "Approve" }));
+    // While it runs, every other opener and Approve or Reject waits.
+    for (const name of ["Accept", "Mark False positive", "Reject"]) {
+      for (const button of card.getAllByRole("button", { name })) {
+        if (button.closest("form") === null) expect(button).toBeDisabled();
+      }
+    }
+    answer.resolve((await decided!("p-b", "approve", undefined)) as Response);
+
+    expect(await card.findByRole("status")).toHaveTextContent("Proposal approved.");
+    expect(reasonField(formNamed(card, "Reject"))).toHaveValue("Half typed");
   });
 });

@@ -23,6 +23,13 @@ export type Status = z.infer<typeof Status>;
 /** An id Warden or a module gave: a Finding, a Team, a Scan or a Spot run. */
 export const Id = z.string().min(1).max(200);
 
+/** Who made a change: a person or an agent. */
+export const Actor = z.strictObject({
+  kind: z.enum(["person", "agent"]),
+  id: Id,
+});
+export type Actor = z.infer<typeof Actor>;
+
 /**
  * Text a person reads: at least one character that isn't whitespace. A pattern, so the JSON Schema carries it, and an
  * explicit class rather than `\S`, whose meaning differs between regex engines (Rust's `\s` leaves out U+FEFF). The

@@ -3,6 +3,8 @@
 // Until a person picks, sent as the end of that day in their own time zone. The server checks the Role on every call
 // (ADR 0008): the card only hides what a Role can't do.
 import {
+  Decision,
+  DECISION_TAKES,
   Finding,
   Proposal,
   type AcceptBody,
@@ -13,25 +15,19 @@ import {
 } from "@warden/contracts";
 import { callWarden, parsed, type GetToken, type Refused } from "./api.ts";
 
-/** A Lead's named decisions on a Finding. */
-export type Decision = "accept" | "mark_false_positive" | "confirm_fix" | "mark_moved" | "reopen";
-
 /**
- * The decisions a Lead may take on `finding` now, in the card's order: the Status rule the server checks. A Finding
- * merged into another (`moved_to` set) takes none.
+ * The decisions a Lead may take on `finding` now, in the card's order: the Status rule the server checks (the
+ * contracts' DECISION_TAKES). A Finding merged into another takes none; confirm fix and mark moved need an Unconfirmed
+ * fix.
  */
 export function decisionsFor(finding: Finding): Decision[] {
   if (finding.moved_to !== null) return [];
-  switch (finding.status) {
-    case "open":
-      return ["accept", "mark_false_positive"];
-    case "accepted":
-      return ["accept", "mark_false_positive", "reopen"];
-    case "false_positive":
-      return ["reopen"];
-    case "fixed":
-      return finding.unconfirmed_fix === null ? [] : ["confirm_fix", "mark_moved"];
-  }
+  return Decision.options.filter(
+    (decision) =>
+      DECISION_TAKES[decision].includes(finding.status) &&
+      ((decision !== "confirm_fix" && decision !== "mark_moved") ||
+        finding.unconfirmed_fix !== null),
+  );
 }
 
 /** The Proposals a Member may make on `finding` now: the decisions a Proposal may hold that its Status allows. */
@@ -42,6 +38,9 @@ export function proposalsFor(finding: Finding): ProposalDecision[] {
   );
 }
 
+/** A 404 on a decision or a Proposal of one: the card says it, and the Findings page too, past the card. */
+export const FINDING_GONE = "This Finding is no longer in your Team.";
+
 /** A call's answer: what the server answered on success, or why it refused. */
 export type ActionResult<T> =
   | { kind: "done"; answer: T }
@@ -51,17 +50,35 @@ export type ActionResult<T> =
   | { kind: "forbidden" }
   /** 404: the Team has no Finding or Proposal with that id. */
   | { kind: "not-found" }
-  /** 409: the Finding's Status doesn't take it, or the Proposal was decided already or is stale. */
-  | { kind: "conflict" }
+  /**
+   * 409: the Finding's Status doesn't take it, the Proposal was decided already or is stale, or the Team's Admin
+   * hasn't opened Warden; `error` is the server's words for which, null when its body has none.
+   */
+  | { kind: "conflict"; error: string | null }
   | Refused;
 
-/** A 400's `error`: the server's list of the fields its schema refused. */
-async function refusedFields(res: Response): Promise<string> {
+/** A refusal's `error`: the server's words for it, or null when its body has none. */
+async function serverError(res: Response): Promise<string | null> {
   const body: unknown = await res.json().catch(() => null);
   const error =
     typeof body === "object" && body !== null ? (body as { error?: unknown }).error : null;
-  return typeof error === "string" && error.trim() !== "" ? error : "the request";
+  return typeof error === "string" && error.trim() !== "" ? error : null;
 }
+
+/**
+ * The candidates Mark moved may merge into `finding`, as the server checks them: Open, not merged into another, and
+ * with the Finding's own module, Rule and Asset.
+ */
+export const mergeableCandidates = (finding: Finding, candidates: readonly Finding[]) =>
+  candidates.filter(
+    (candidate) =>
+      candidate.status === "open" &&
+      candidate.moved_to === null &&
+      candidate.module === finding.module &&
+      candidate.rule_id === finding.rule_id &&
+      candidate.asset.kind === finding.asset.kind &&
+      candidate.asset.ref === finding.asset.ref,
+  );
 
 /** POSTs `body` (none when undefined) to `path`; a success whose body doesn't parse by `schema` is not answering. */
 async function post<T>(
@@ -74,13 +91,13 @@ async function post<T>(
   if (!(res instanceof Response)) return res;
   switch (res.status) {
     case 400:
-      return { kind: "invalid", error: await refusedFields(res) };
+      return { kind: "invalid", error: (await serverError(res)) ?? "the request" };
     case 403:
       return { kind: "forbidden" };
     case 404:
       return { kind: "not-found" };
     case 409:
-      return { kind: "conflict" };
+      return { kind: "conflict", error: await serverError(res) };
   }
   const answer = await parsed(res, schema);
   return answer === undefined ? { kind: "not-answering" } : { kind: "done", answer };
@@ -95,7 +112,7 @@ const DECISION_PATHS: Record<Decision, string> = {
 };
 
 /** A decision and its body, typed by the contracts schema its route parses. */
-export type DecisionCall =
+export type DecisionRequest =
   | { decision: "accept"; body: AcceptBody }
   | { decision: "mark_moved"; body: MarkMovedBody }
   | { decision: "mark_false_positive" | "confirm_fix" | "reopen"; body: ReasonBody };
@@ -104,7 +121,7 @@ const findingPath = (id: string) => `/api/findings/${encodeURIComponent(id)}`;
 const proposalPath = (id: string) => `/api/proposals/${encodeURIComponent(id)}`;
 
 /** A Lead's decision on the Finding `id`: answers the Finding as changed (mark moved: the old one, now Open). */
-export const decide = (getToken: GetToken, id: string, { decision, body }: DecisionCall) =>
+export const decide = (getToken: GetToken, id: string, { decision, body }: DecisionRequest) =>
   post(getToken, `${findingPath(id)}/${DECISION_PATHS[decision]}`, body, Finding);
 
 /** A Member's (or anyone's) Proposal on the Finding `id`: answers the Proposal, pending. */

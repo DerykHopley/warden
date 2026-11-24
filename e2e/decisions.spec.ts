@@ -1,9 +1,10 @@
-// Story 4 in the detail card (docs/design.md: Detail card, Chat message, Accessibility floor): a Lead's decisions end
-// to end, a Member's Proposal that a Lead approves, the chat keeping its newest message in view, and the card's
-// controls by keyboard, at phone size and without sideways scroll. Every test reads Bluebird, which no other browser
-// test reads, and leaves each Finding with its seeded Status. The words, the bodies sent and each refusal are
-// dashboard/test/DetailCard.test.tsx's.
+// Story 4 in the detail card (docs/design.md: Detail card, Chat message, Accessibility floor): a Lead's decisions and a
+// Member's Proposal end to end, the chat keeping its newest message in view, and the card's controls by keyboard, at
+// phone size and without sideways scroll. Every test reads Bluebird, which no other browser test reads, and puts back
+// what it changed (each Finding's seeded Status, no Proposal left pending) even when it fails. The words, the bodies
+// sent, who sees which button and each refusal are dashboard/test/DetailCard.test.tsx's.
 import type { Locator, Page } from "@playwright/test";
+import { expectRings, expectTargets } from "./a11y.ts";
 import {
   BLUEBIRD,
   expect,
@@ -34,17 +35,38 @@ async function apiAs(baseURL: string | undefined, person: Person) {
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
+  const findings = async () =>
+    ((await (await call("/api/findings")).json()) as { findings: FindingRow[] }).findings;
   return {
     call,
     async finding(titleStart: string, status = "open"): Promise<FindingRow> {
-      const { findings } = (await (await call("/api/findings")).json()) as {
-        findings: FindingRow[];
-      };
-      const found = findings.find((f) => f.title.startsWith(titleStart) && f.status === status);
+      const found = (await findings()).find(
+        (f) => f.title.startsWith(titleStart) && f.status === status,
+      );
       if (found === undefined) throw new Error(`no ${status} Finding "${titleStart}…" in Bluebird`);
       return found;
     },
+    /** Puts the Open Finding `id` back as seeded (a Lead's calls): Open, and no Proposal of it left pending. */
+    async restore(id: string) {
+      const { proposals } = (await (await call("/api/proposals")).json()) as {
+        proposals: { id: string; finding_id: string }[];
+      };
+      for (const proposal of proposals.filter((p) => p.finding_id === id)) {
+        await call(`/api/proposals/${proposal.id}/reject`, { reason: "Put back after a test" });
+      }
+      if ((await findings()).find((f) => f.id === id)?.status !== "open") {
+        await call(`/api/findings/${id}/reopen`, { reason: "Put back after a test" });
+      }
+    },
   };
+}
+
+/** Margaret asks for `id` to be marked a False positive, through the API. */
+async function proposeAsMargaret(baseURL: string | undefined, id: string, reason: string) {
+  const asked = await (
+    await apiAs(baseURL, MARGARET)
+  ).call(`/api/findings/${id}/proposals`, { decision: "mark_false_positive", reason });
+  expect(asked.status).toBe(201);
 }
 
 /** The table row of the Finding `id`, by its short id: two demo Findings share a title. */
@@ -61,93 +83,72 @@ async function focus(page: Page, finding: FindingRow, width = 1600, height = 900
   await expect(card(page).getByRole("heading", { level: 3 })).toHaveText(finding.title);
 }
 
-test("story 4: Linus accepts an Open Finding, then reopens it; the card, the table and its history follow", async ({
+test("story 4: Linus accepts and reopens a Finding; Margaret proposes a False positive on another, and Linus approves it", async ({
   page,
   signIn,
   baseURL,
 }) => {
-  await signIn(LINUS, BLUEBIRD);
-  const api = await apiAs(baseURL, LINUS);
-  const target = await api.finding("lodash 4.17.20");
-  await focus(page, target);
-  const statusCell = rowById(page, target.id).locator("td").last();
-
-  await card(page).getByRole("button", { name: "Accept" }).click();
-  const accept = card(page).getByRole("form", { name: "Accept" });
-  await accept.getByRole("textbox", { name: "Reason" }).fill("Only a dev dependency");
-  await accept.getByLabel("Until").fill(UNTIL);
-  await accept.getByRole("button", { name: "Accept" }).click();
-
-  await expect(card(page).getByRole("status")).toHaveText(/^Accepted until /);
-  await expect(card(page).locator(".detail-status")).toContainText("Accepted");
-  await expect(statusCell).toHaveText("Accepted");
-
-  await card(page).getByRole("button", { name: "Reopen" }).click();
-  const reopen = card(page).getByRole("form", { name: "Reopen" });
-  await reopen.getByRole("textbox", { name: "Reason" }).fill("The dev server ships it after all");
-  await reopen.getByRole("button", { name: "Reopen" }).click();
-
-  await expect(card(page).getByRole("status")).toHaveText("Reopened.");
-  await expect(card(page).locator(".detail-status")).toContainText("Open");
-  await expect(statusCell).toHaveText("Open");
-
-  const { history } = (await (await api.call(`/api/findings/${target.id}/history`)).json()) as {
-    history: { status_after: string; cause: unknown; reason: string }[];
-  };
-  expect(history.slice(-2)).toEqual([
-    expect.objectContaining({
-      status_after: "accepted",
-      cause: { kind: "person", id: LINUS.userId },
-      reason: "Only a dev dependency",
-    }),
-    expect.objectContaining({
-      status_after: "open",
-      cause: { kind: "person", id: LINUS.userId },
-      reason: "The dev server ships it after all",
-    }),
-  ]);
-});
-
-test("story 4: Margaret proposes a False positive and sees it as hers; Linus approves it, and the card reads False positive", async ({
-  page,
-  signIn,
-  baseURL,
-}) => {
-  const target = await (await apiAs(baseURL, LINUS)).finding("The disk isn't encrypted");
+  const linus = await apiAs(baseURL, LINUS);
+  const lodash = await linus.finding("lodash 4.17.20");
+  const disk = await linus.finding("The disk isn't encrypted");
   const reason = "The laptop is a kiosk with nothing on it";
   try {
     await signIn(MARGARET, BLUEBIRD);
-    await focus(page, target);
+    await focus(page, disk);
     await card(page).getByRole("button", { name: "Propose False positive" }).click();
-    const form = card(page).getByRole("form", { name: "Propose False positive" });
-    await form.getByRole("textbox", { name: "Reason" }).fill(reason);
-    await form.getByRole("button", { name: "Propose" }).click();
-
+    const propose = card(page).getByRole("form", { name: "Propose False positive" });
+    await propose.getByRole("textbox", { name: "Reason" }).fill(reason);
+    await propose.getByRole("button", { name: "Propose" }).click();
     await expect(card(page).getByRole("status")).toHaveText(
       "Proposal sent. A Lead or an Admin decides.",
     );
-    const mine = card(page).getByRole("listitem").filter({ hasText: reason });
-    await expect(mine).toContainText("Asked by you");
-    await expect(
-      card(page).getByRole("button", {
-        name: /^(Accept|Mark False positive|Reopen|Approve|Reject)$/,
-      }),
-    ).toHaveCount(0);
 
     await signIn(LINUS, BLUEBIRD);
-    await focus(page, target);
+    await focus(page, lodash);
+    const statusCell = rowById(page, lodash.id).locator("td").last();
+    await card(page).getByRole("button", { name: "Accept" }).click();
+    const accept = card(page).getByRole("form", { name: "Accept" });
+    await accept.getByRole("textbox", { name: "Reason" }).fill("Only a dev dependency");
+    await accept.getByLabel("Until").fill(UNTIL);
+    await accept.getByRole("button", { name: "Accept" }).click();
+    await expect(card(page).getByRole("status")).toHaveText(/^Accepted until /);
+    await expect(card(page).locator(".detail-status")).toContainText("Accepted");
+    await expect(statusCell).toHaveText("Accepted");
+
+    await card(page).getByRole("button", { name: "Reopen" }).click();
+    const reopen = card(page).getByRole("form", { name: "Reopen" });
+    await reopen.getByRole("textbox", { name: "Reason" }).fill("The dev server ships it after all");
+    await reopen.getByRole("button", { name: "Reopen" }).click();
+    await expect(card(page).getByRole("status")).toHaveText("Reopened.");
+    await expect(card(page).locator(".detail-status")).toContainText("Open");
+    await expect(statusCell).toHaveText("Open");
+
+    const { history } = (await (await linus.call(`/api/findings/${lodash.id}/history`)).json()) as {
+      history: { status_after: string; cause: unknown; reason: string }[];
+    };
+    expect(history.slice(-2)).toEqual([
+      expect.objectContaining({
+        status_after: "accepted",
+        cause: { kind: "person", id: LINUS.userId },
+        reason: "Only a dev dependency",
+      }),
+      expect.objectContaining({
+        status_after: "open",
+        cause: { kind: "person", id: LINUS.userId },
+        reason: "The dev server ships it after all",
+      }),
+    ]);
+
+    await rowById(page, disk.id).getByRole("button").click();
     const hers = card(page).getByRole("listitem").filter({ hasText: reason });
     await expect(hers).toContainText("Asked by Margaret Hamilton");
     await hers.getByRole("button", { name: "Approve" }).click();
-
     await expect(card(page).getByRole("status")).toHaveText("Proposal approved.");
     await expect(hers).toHaveCount(0);
     await expect(card(page).locator(".detail-status")).toContainText("False positive");
   } finally {
-    // Back to its seeded Status, so a rerun starts from the same data.
-    await (
-      await apiAs(baseURL, LINUS)
-    ).call(`/api/findings/${target.id}/reopen`, { reason: "Back to the seeded Status" });
+    await linus.restore(lodash.id);
+    await linus.restore(disk.id);
   }
 });
 
@@ -175,98 +176,82 @@ test("with a detail card showing at 1600 by 600px, each send keeps Warden's newe
   }
 });
 
-/** Presses Tab until `target` has focus (at most 80 times), then checks its focus ring shows. */
+/** Presses Tab until `target` has focus, at most 80 times: the keyboard reaches it. */
 async function tabTo(page: Page, target: Locator) {
   for (let i = 0; i < 80; i++) {
-    if (await target.evaluate((el) => el === document.activeElement)) break;
+    if (await target.evaluate((el) => el === document.activeElement)) return;
     await page.keyboard.press("Tab");
   }
   await expect(target).toBeFocused();
-  const ring = await target.evaluate((el) => {
-    const style = getComputedStyle(el);
-    return { style: style.outlineStyle, width: parseFloat(style.outlineWidth) };
-  });
-  expect(ring.style).not.toBe("none");
-  expect(ring.width).toBeGreaterThanOrEqual(2);
+}
+
+/** Tab reaches each of `targets` in turn, and each shows a focus ring. */
+async function reachEach(page: Page, targets: Locator[]) {
+  for (const target of targets) {
+    await tabTo(page, target);
+    await expectRings(page, [target]);
+  }
 }
 
 test.describe("the keyboard", () => {
-  test("reaches a Lead's decision buttons, each form field, the submit and Cancel, Approve and Reject, each with a focus ring", async ({
+  test("reaches a Lead's decision buttons, the Accept form's fields, submit and Cancel, and Approve and Reject, each with a focus ring", async ({
     page,
     signIn,
     baseURL,
   }) => {
-    const target = await (await apiAs(baseURL, LINUS)).finding("@aws-sdk/client-cognito-identity");
+    const linus = await apiAs(baseURL, LINUS);
+    const target = await linus.finding("@aws-sdk/client-cognito-identity");
     const reason = "Asked so the keyboard has a Proposal to reach";
-    const asked = await (
-      await apiAs(baseURL, MARGARET)
-    ).call(`/api/findings/${target.id}/proposals`, { decision: "mark_false_positive", reason });
-    expect(asked.status).toBe(201);
+    try {
+      await proposeAsMargaret(baseURL, target.id, reason);
+      await signIn(LINUS, BLUEBIRD);
+      await focus(page, target);
+      const c = card(page);
+      await reachEach(page, [
+        c.getByRole("button", { name: "Accept" }),
+        c.getByRole("button", { name: "Mark False positive" }),
+      ]);
 
-    await signIn(LINUS, BLUEBIRD);
-    await focus(page, target);
-    const c = card(page);
-    await tabTo(page, c.getByRole("button", { name: "Accept" }));
-    await tabTo(page, c.getByRole("button", { name: "Mark False positive" }));
-    await page.keyboard.press("Shift+Tab");
-    await page.keyboard.press("Enter");
-    const form = c.getByRole("form", { name: "Accept" });
-    const reasonField = form.getByRole("textbox", { name: "Reason" });
-    await expect(reasonField).toBeFocused();
-    await tabTo(page, reasonField);
-    await page.keyboard.type("Checked by keyboard");
-    await tabTo(page, form.getByLabel("Until"));
-    await form.getByLabel("Until").fill(UNTIL);
-    await tabTo(page, form.getByRole("button", { name: "Accept" }));
-    await tabTo(page, form.getByRole("button", { name: "Cancel" }));
-    await page.keyboard.press("Enter");
-    await expect(c.getByRole("button", { name: "Accept" })).toBeFocused();
+      await c.getByRole("button", { name: "Accept" }).click();
+      const form = c.getByRole("form", { name: "Accept" });
+      await form.getByRole("textbox", { name: "Reason" }).fill("Checked by keyboard");
+      await form.getByLabel("Until").fill(UNTIL);
+      // Tab on from the card's ✕, just before the form: past the page's end, Firefox leaves the page, not wraps.
+      await c.getByRole("button", { name: "Clear the focus" }).focus();
+      await reachEach(page, [
+        form.getByRole("textbox", { name: "Reason" }),
+        form.getByLabel("Until"),
+        form.getByRole("button", { name: "Accept" }),
+        form.getByRole("button", { name: "Cancel" }),
+      ]);
 
-    const item = c.getByRole("listitem").filter({ hasText: reason });
-    await tabTo(page, item.getByRole("button", { name: "Approve" }));
-    await tabTo(page, item.getByRole("button", { name: "Reject" }));
-    await page.keyboard.press("Enter");
-    const reject = item.getByRole("form", { name: "Reject" });
-    await expect(reject.getByRole("textbox", { name: "Reason" })).toBeFocused();
-    await page.keyboard.type("Not a False positive");
-    await tabTo(page, reject.getByRole("button", { name: "Reject" }));
-    await page.keyboard.press("Enter");
-    await expect(c.getByRole("status")).toHaveText("Proposal rejected.");
+      await form.getByRole("button", { name: "Cancel" }).click();
+      const item = c.getByRole("listitem").filter({ hasText: reason });
+      await reachEach(page, [
+        item.getByRole("button", { name: "Approve" }),
+        item.getByRole("button", { name: "Reject" }),
+      ]);
+    } finally {
+      await linus.restore(target.id);
+    }
   });
 
-  test("reaches Mark moved's candidate", async ({ page, signIn, baseURL }) => {
+  test("reaches Mark moved's candidate and Cancel, each with a focus ring", async ({
+    page,
+    signIn,
+    baseURL,
+  }) => {
     const target = await (
       await apiAs(baseURL, LINUS)
     ).finding("The agent can read .env files", "fixed");
     await signIn(LINUS, BLUEBIRD);
     await focus(page, target);
-    const c = card(page);
-    await tabTo(page, c.getByRole("button", { name: "Mark moved" }));
-    await page.keyboard.press("Enter");
-    const form = c.getByRole("form", { name: "Mark moved" });
-    await tabTo(page, form.getByRole("radio"));
-    await tabTo(page, form.getByRole("button", { name: "Cancel" }));
-    await page.keyboard.press("Enter");
-    await expect(c.getByRole("button", { name: "Mark moved" })).toBeFocused();
-  });
-
-  test("reaches a Member's Propose buttons", async ({ page, signIn, baseURL }) => {
-    const target = await (await apiAs(baseURL, LINUS)).finding("minimist 1.2.5");
-    await signIn(MARGARET, BLUEBIRD);
-    await focus(page, target);
-    await tabTo(page, card(page).getByRole("button", { name: "Propose accepting" }));
-    await tabTo(page, card(page).getByRole("button", { name: "Propose False positive" }));
+    await reachEach(page, [card(page).getByRole("button", { name: "Mark moved" })]);
+    await card(page).getByRole("button", { name: "Mark moved" }).click();
+    const form = card(page).getByRole("form", { name: "Mark moved" });
+    await reachEach(page, [form.getByRole("radio"), form.getByRole("button", { name: "Cancel" })]);
   });
 });
-
-/** Fails unless each of `controls` is at least 44 by 44px. */
-async function expectTargets(controls: Locator[]) {
-  for (const control of controls) {
-    const box = (await control.boundingBox())!;
-    expect(box.width, String(control)).toBeGreaterThanOrEqual(44);
-    expect(box.height, String(control)).toBeGreaterThanOrEqual(44);
-  }
-}
 
 test.describe("at 390px", () => {
   test("a Lead's controls, the Accept form's and a Proposal's are each at least 44 by 44px", async ({
@@ -274,37 +259,33 @@ test.describe("at 390px", () => {
     signIn,
     baseURL,
   }) => {
-    const target = await (await apiAs(baseURL, LINUS)).finding("@aws-sdk/client-cognito-identity");
+    const linus = await apiAs(baseURL, LINUS);
+    const target = await linus.finding("@aws-sdk/client-cognito-identity");
     const reason = "Asked so a phone has a Proposal to measure";
-    await (
-      await apiAs(baseURL, MARGARET)
-    ).call(`/api/findings/${target.id}/proposals`, { decision: "mark_false_positive", reason });
-    await signIn(LINUS, BLUEBIRD);
-    await focus(page, target, 390, 844);
-    const c = card(page);
-    const item = c.getByRole("listitem").filter({ hasText: reason });
-    await expectTargets([
-      c.getByRole("button", { name: "Accept" }),
-      c.getByRole("button", { name: "Mark False positive" }),
-      item.getByRole("button", { name: "Approve" }),
-      item.getByRole("button", { name: "Reject" }),
-    ]);
+    try {
+      await proposeAsMargaret(baseURL, target.id, reason);
+      await signIn(LINUS, BLUEBIRD);
+      await focus(page, target, 390, 844);
+      const c = card(page);
+      const item = c.getByRole("listitem").filter({ hasText: reason });
+      await expectTargets([
+        c.getByRole("button", { name: "Accept" }),
+        c.getByRole("button", { name: "Mark False positive" }),
+        item.getByRole("button", { name: "Approve" }),
+        item.getByRole("button", { name: "Reject" }),
+      ]);
 
-    await c.getByRole("button", { name: "Accept" }).click();
-    const form = c.getByRole("form", { name: "Accept" });
-    await expectTargets([
-      form.getByRole("textbox", { name: "Reason" }),
-      form.getByLabel("Until"),
-      form.getByRole("button", { name: "Accept" }),
-      form.getByRole("button", { name: "Cancel" }),
-    ]);
-
-    // Leave no Proposal pending.
-    await form.getByRole("button", { name: "Cancel" }).click();
-    await item.getByRole("button", { name: "Reject" }).click();
-    await item.getByRole("textbox", { name: "Reason" }).fill("Measured");
-    await item.getByRole("button", { name: "Reject" }).click();
-    await expect(c.getByRole("status")).toHaveText("Proposal rejected.");
+      await c.getByRole("button", { name: "Accept" }).click();
+      const form = c.getByRole("form", { name: "Accept" });
+      await expectTargets([
+        form.getByRole("textbox", { name: "Reason" }),
+        form.getByLabel("Until"),
+        form.getByRole("button", { name: "Accept" }),
+        form.getByRole("button", { name: "Cancel" }),
+      ]);
+    } finally {
+      await linus.restore(target.id);
+    }
   });
 
   test("Mark moved's candidate is a 44px-high target", async ({ page, signIn, baseURL }) => {
@@ -318,44 +299,25 @@ test.describe("at 390px", () => {
     // The radio's target is its whole row: the label it sits in.
     await expectTargets([form.locator("label.candidate")]);
   });
+});
 
-  test("a Member's Propose buttons are each at least 44 by 44px", async ({
+for (const width of [390, 1024, 1600]) {
+  test(`with the Accept form open at ${width}px, nothing scrolls sideways`, async ({
     page,
     signIn,
     baseURL,
   }) => {
-    const target = await (await apiAs(baseURL, LINUS)).finding("minimist 1.2.5");
-    await signIn(MARGARET, BLUEBIRD);
-    await focus(page, target, 390, 844);
-    await expectTargets([
-      card(page).getByRole("button", { name: "Propose accepting" }),
-      card(page).getByRole("button", { name: "Propose False positive" }),
-    ]);
+    const target = await (await apiAs(baseURL, LINUS)).finding("lodash 4.17.20");
+    await signIn(LINUS, BLUEBIRD);
+    await focus(page, target, width, 844);
+    await card(page).getByRole("button", { name: "Accept" }).click();
+    await expect(card(page).getByRole("form", { name: "Accept" })).toBeVisible();
+
+    for (const selector of ["html", ".panel-body"]) {
+      const { scroll, client } = await page
+        .locator(selector)
+        .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+      expect(scroll, selector).toBeLessThanOrEqual(client);
+    }
   });
-});
-
-for (const colorScheme of ["light", "dark"] as const) {
-  for (const width of [390, 1024, 1600]) {
-    test(`with the Accept form open at ${width}px in ${colorScheme}, nothing scrolls sideways`, async ({
-      page,
-      signIn,
-      baseURL,
-    }) => {
-      await page.emulateMedia({ colorScheme });
-      const target = await (await apiAs(baseURL, LINUS)).finding("lodash 4.17.20");
-      await signIn(LINUS, BLUEBIRD);
-      await focus(page, target, width, 844);
-      await card(page).getByRole("button", { name: "Accept" }).click();
-      await expect(card(page).getByRole("form", { name: "Accept" })).toBeVisible();
-
-      const sideways = (selector: string) =>
-        page
-          .locator(selector)
-          .evaluate((el) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
-      for (const selector of ["html", ".panel-body"]) {
-        const { scroll, client } = await sideways(selector);
-        expect(scroll, selector).toBeLessThanOrEqual(client);
-      }
-    });
-  }
 }

@@ -1,7 +1,8 @@
 // docs/design.md, Accessibility floor, on the Findings page and its Ask Warden panel: the keyboard reaches each card,
 // filter tab and row (the button in its title cell), then the panel's controls, in order, and leaves them; focus shows a
 // visible ring; and touch targets are at least 44 by 44px at phone width.
-import type { Locator, Page } from "@playwright/test";
+import type { Page } from "@playwright/test";
+import { expectRings, expectTargets } from "./a11y.ts";
 import { expect, GRACE, test } from "./session.ts";
 
 test.beforeEach(async ({ signIn }) => {
@@ -105,26 +106,6 @@ test("Tab reaches the open panel's controls after the page's, in order, and then
   ]);
 });
 
-/** Focuses `target` from the keyboard (from the control before it), and reads its outline. */
-async function ring(page: Page, target: Locator) {
-  await target.focus();
-  await page.keyboard.press("Shift+Tab");
-  await page.keyboard.press("Tab");
-  await expect(target).toBeFocused();
-  return target.evaluate((el) => {
-    const style = getComputedStyle(el);
-    return { style: style.outlineStyle, width: parseFloat(style.outlineWidth) };
-  });
-}
-
-async function expectRings(page: Page, targets: Locator[]) {
-  for (const target of targets) {
-    const { style, width } = await ring(page, target);
-    expect(style, await target.evaluate((el) => el.outerHTML.slice(0, 80))).toBe("solid");
-    expect(width).toBeGreaterThanOrEqual(2);
-  }
-}
-
 test("a focused card, filter tab, row, Level line link and Overview link each show a visible ring", async ({
   page,
 }) => {
@@ -138,7 +119,7 @@ test("a focused card, filter tab, row, Level line link and Overview link each sh
   ]);
 });
 
-test("the panel's button, Pin, ✕, divider, card's ✕, input and Send each show a visible ring", async ({
+test("the panel's button, Pin, ✕, divider, card's ✕, a Member's Propose buttons, input and Send each show a visible ring", async ({
   page,
 }) => {
   await open(page, 1400);
@@ -150,6 +131,8 @@ test("the panel's button, Pin, ✕, divider, card's ✕, input and Send each sho
     panel.getByRole("button", { name: "Pin" }),
     panel.getByRole("button", { name: "Close Ask Warden" }),
     panel.getByRole("button", { name: "Clear the focus" }),
+    panel.getByRole("button", { name: "Propose accepting" }),
+    panel.getByRole("button", { name: "Propose False positive" }),
     panel.getByRole("textbox", { name: "Message" }),
     panel.getByRole("button", { name: "Send" }),
   ]);
@@ -178,12 +161,11 @@ test("at 390px, every card, filter tab, row, page link and the Level line's link
   }
 });
 
-test("at 390px, the panel's button, ✕, card's ✕, input and Send are each at least 44 by 44px", async ({
+test("at 390px, the panel's button, ✕, card's ✕, a Member's Propose buttons, input and Send are each at least 44 by 44px", async ({
   page,
 }) => {
   await open(page, 390);
-  const targets = [page.getByRole("button", { name: "Ask Warden" })];
-  const sizes = [await targets[0]!.boundingBox()];
+  await expectTargets([page.getByRole("button", { name: "Ask Warden" })]);
 
   // Pin and the divider aren't offered under 1100px: an open panel fills the screen.
   await page.locator(".finding-card").first().click();
@@ -191,17 +173,12 @@ test("at 390px, the panel's button, ✕, card's ✕, input and Send are each at 
   await expect(panel).toHaveAttribute("data-shown", "full-screen");
   await expect(panel.getByRole("button", { name: "Pin" })).toHaveCount(0);
   await expect(panel.getByRole("separator")).toHaveCount(0);
-  for (const target of [
+  await expectTargets([
     panel.getByRole("button", { name: "Close Ask Warden" }),
     panel.getByRole("button", { name: "Clear the focus" }),
+    panel.getByRole("button", { name: "Propose accepting" }),
+    panel.getByRole("button", { name: "Propose False positive" }),
     panel.getByRole("textbox", { name: "Message" }),
     panel.getByRole("button", { name: "Send" }),
-  ]) {
-    sizes.push(await target.boundingBox());
-  }
-  expect(sizes).toHaveLength(5);
-  for (const size of sizes) {
-    expect(size!.width).toBeGreaterThanOrEqual(44);
-    expect(size!.height).toBeGreaterThanOrEqual(44);
-  }
+  ]);
 });

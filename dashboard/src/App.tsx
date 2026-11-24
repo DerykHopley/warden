@@ -205,6 +205,7 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
     focus: null,
     clearFocus: nothingToDo,
     onFindingChanged: nothingToDo,
+    onFindingGone: nothingToDo,
     candidates: [],
   };
 

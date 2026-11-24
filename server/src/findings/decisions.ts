@@ -6,8 +6,10 @@ import {
   AcceptBody,
   Actor,
   atLeast,
+  DECISION_TAKES,
   MarkMovedBody,
   ReasonBody,
+  type Decision as ContractDecision,
   type Finding,
   type Status,
 } from "@warden/contracts";
@@ -81,14 +83,20 @@ export function personOf(actor: Actor): string {
   return checked.id;
 }
 
-/** Which Statuses each call takes. Every call refuses a Finding merged into another. */
-const ALLOWED_FROM: Record<DecisionCall, readonly Status[]> = {
-  accept: ["open", "accepted"],
-  markFalsePositive: ["open", "accepted"],
-  confirmFix: ["fixed"],
-  markMoved: ["fixed"],
-  reopen: ["false_positive", "accepted"],
+/** The contracts' Decision each named call makes. */
+const DECISION_OF: Record<DecisionCall, ContractDecision> = {
+  accept: "accept",
+  markFalsePositive: "mark_false_positive",
+  confirmFix: "confirm_fix",
+  markMoved: "mark_moved",
+  reopen: "reopen",
 };
+
+/**
+ * Which Statuses each call takes: the contracts' table, which the dashboard offers its buttons by too. Every call
+ * refuses a Finding merged into another.
+ */
+const allowedFrom = (call: DecisionCall): readonly Status[] => DECISION_TAKES[DECISION_OF[call]];
 
 export const notAccepted = { accepted_reason: null, accepted_until: null } as const;
 
@@ -123,7 +131,7 @@ export async function findingFor(
   if (!finding) throw new FindingNotFound(id);
   const refuse = (why: string) => new DecisionRefused(call, finding.status, why);
   if (finding.moved_to !== null) throw refuse(`it is merged into ${finding.moved_to}`);
-  const allowed = ALLOWED_FROM[call];
+  const allowed = allowedFrom(call);
   if (!allowed.includes(finding.status)) {
     throw refuse(`${call} takes a Finding that is ${allowed.join(" or ")}`);
   }
