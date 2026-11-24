@@ -6,6 +6,7 @@ import type {
   AssetKind,
   Control,
   Evidence,
+  HistoryCauseKind,
   Location,
   Module,
   Role,
@@ -16,8 +17,11 @@ import type {
 /** A jsonb column written as a JSON string and read back parsed. */
 type Json<T extends object> = JSONColumnType<T, string, string>;
 
-/** Who caused a history row, for now: a Scan or a Spot run. */
-export type RunKind = "scan" | "spot_run";
+/** What kind of run a Scan row records: a Scan or a Spot run. */
+export type RunKind = Exclude<HistoryCauseKind, "person">;
+
+/** Who caused a Finding's history row: the contracts' list, which 0005_person_decisions's check matches. */
+export type HistoryActorKind = HistoryCauseKind;
 
 /** How a Role history row came about: the Team's first visit, an invited person's first visit, or a Role change. */
 export type RoleChange = "created_team" | "joined" | "changed";
@@ -101,7 +105,7 @@ export interface Database {
     status_after: Status;
     severity_before: Severity | null;
     severity_after: Severity;
-    actor_kind: RunKind;
+    actor_kind: HistoryActorKind;
     actor_id: string;
     reason: string;
   };

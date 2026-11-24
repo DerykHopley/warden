@@ -20,7 +20,9 @@ const PREFIX = "warden_test_";
 const STALE_AFTER_SECONDS = 3600;
 
 /** A new database with the roles in place and the migration role as its owner, and a way to drop it. `connection`
- * reaches the superuser; left empty, the PG* variables do. `names` is the role set: the live one by default. */
+ * reaches the superuser; left empty, the PG* variables do. `names` is the role set: the live one by default.
+ * Creating or dropping a database waits on a Postgres checkpoint, which took over vitest's 5 s default in full runs:
+ * each test or hook that creates or drops one passes a 30 s timeout (`30_000`), and the other tests keep the default. */
 export async function createTestDatabase(
   connection: pg.PoolConfig = {},
   names: DatabaseRoleNames = DATABASE_ROLE_NAMES,

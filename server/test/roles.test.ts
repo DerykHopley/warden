@@ -147,8 +147,8 @@ describe("the roles script run twice by a user with CREATEROLE that isn't a supe
     fixture = await cloudSqlLike();
     await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
     await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
-  });
-  afterAll(() => fixture.drop());
+  }, 30_000);
+  afterAll(() => fixture.drop(), 30_000);
 
   it("hands public to the migration role", async () => {
     const { rows } = await fixture.asRunner.query(
@@ -192,8 +192,8 @@ describe("the roles script run by a user that can't grant BYPASSRLS, once the ad
     await superuser.query(`alter role ${fixture.names.admin} bypassrls`);
     fixture.lines.length = 0;
     await createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger });
-  });
-  afterAll(() => fixture.drop());
+  }, 30_000);
+  afterAll(() => fixture.drop(), 30_000);
 
   it("leaves the admin role's BYPASSRLS on, and logs no warning about it", async () => {
     const { rows } = await superuser.query("select rolbypassrls from pg_roles where rolname = $1", [
@@ -218,8 +218,8 @@ describe("the roles script given passwords", () => {
       logger: fixture.logger,
       passwords,
     });
-  });
-  afterAll(() => fixture.drop());
+  }, 30_000);
+  afterAll(() => fixture.drop(), 30_000);
 
   it("checks a verifier as a login would", async () => {
     // Postgres's own verifier, from a password it hashed itself: the check passes it, and fails another password.
@@ -305,7 +305,7 @@ describe("the roles script failing to set a password", () => {
     } finally {
       await fixture.drop();
     }
-  });
+  }, 30_000);
 
   it("refuses a password that isn't printable ASCII, without echoing it", async () => {
     const fixture = await cloudSqlLike();
@@ -325,7 +325,7 @@ describe("the roles script failing to set a password", () => {
     } finally {
       await fixture.drop();
     }
-  });
+  }, 30_000);
 });
 
 /**
@@ -390,8 +390,8 @@ describe("the roles script and who may connect", () => {
   let fixture: Awaited<ReturnType<typeof twoSets>>;
   beforeAll(async () => {
     fixture = await twoSets();
-  });
-  afterAll(() => fixture?.drop());
+  }, 30_000);
+  afterAll(() => fixture?.drop(), 30_000);
 
   const canConnect = async (role: string, database: string) => {
     const { rows } = await superuser.query<{ can: boolean }>(
@@ -485,7 +485,7 @@ describe("the roles script and stray memberships of the app role", () => {
       await superuser.query(`reset role`);
       await fixture.drop();
     }
-  });
+  }, 30_000);
 
   it("throws naming the app role when one can't be revoked", async () => {
     const fixture = await cloudSqlLike();
@@ -504,5 +504,5 @@ describe("the roles script and stray memberships of the app role", () => {
     } finally {
       await fixture.drop();
     }
-  });
+  }, 30_000);
 });

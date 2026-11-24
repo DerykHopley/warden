@@ -41,7 +41,7 @@ describe("the roles script on a database of the other role set", () => {
 
   beforeAll(async () => {
     for (const names of sets) databases.set(names, await createTestDatabase({}, names));
-  });
+  }, 30_000);
   afterAll(async () => {
     for (const database of databases.values()) await database.drop();
     for (const names of sets) {
@@ -49,7 +49,7 @@ describe("the roles script on a database of the other role set", () => {
         await superuser.query(`drop role if exists ${role}`);
       }
     }
-  });
+  }, 30_000);
 
   it.each([
     ["preview", "live", preview, live],

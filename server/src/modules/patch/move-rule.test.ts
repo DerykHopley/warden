@@ -59,6 +59,15 @@ describe("Patch's move rule", () => {
     expect(patchMoveRule(fixed, elsewhere)).toBe(false);
   });
 
+  it("doesn't match the same CVE under another Rule", () => {
+    const location = dependency("lodash-es", "CVE-2021-23337");
+    const otherRule = finding("f-2", location, {
+      rule_id: "patch/end-of-life",
+      fingerprint: fingerprint("patch/end-of-life", location),
+    });
+    expect(patchMoveRule(fixed, otherRule)).toBe(false);
+  });
+
   it("doesn't match when neither names a vulnerability", () => {
     const bare = finding("f-1", dependency("lodash"), { status: "fixed" });
     expect(patchMoveRule(bare, finding("f-2", dependency("lodash-es")))).toBe(false);

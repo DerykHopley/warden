@@ -8,18 +8,35 @@ import {
   problemKey,
   Scan,
   SpotRun,
+  type Actor,
   type Asset,
   type Finding,
+  type HistoryCauseKind,
   type Module,
   type RuleId,
   type Severity,
   type Status,
 } from "@warden/contracts";
-import type { RunKind } from "../schema.ts";
 import type { WithTeam } from "../with-team.ts";
+import {
+  applyDecision,
+  DECISION_INPUT,
+  FindingNotFound,
+  personOf,
+  type Decision,
+  type DecisionCall,
+  type DecisionInput,
+} from "./decisions.ts";
 import { applyRun, type MoveRule, type ReconcileOutcome } from "./reconcile.ts";
-import { fromRow, isoDateTime } from "./rows.ts";
+import { fromRow, isoDateTime, loadFinding } from "./rows.ts";
 
+export {
+  DecisionRefused,
+  FindingNotFound,
+  NotALead,
+  type DecisionCall,
+  type DecisionInput,
+} from "./decisions.ts";
 export type { MoveRule, ReconcileOutcome } from "./reconcile.ts";
 export { sameAsset } from "./rows.ts";
 
@@ -31,13 +48,20 @@ export interface HistoryEntry {
   status_after: Status;
   severity_before: Severity | null;
   severity_after: Severity;
-  /**
-   * What caused it: for now, the Scan or Spot run. Not an Actor, which the glossary keeps for a person or an agent;
-   * slice 8 adds those.
-   */
-  cause: { kind: RunKind; id: string };
+  /** What caused it: the Scan or Spot run, or the person whose named decision it was. Never an agent. */
+  cause: { kind: HistoryCauseKind; id: string };
   reason: string;
 }
+
+/**
+ * One named decision: who decided (a person), and the call's input, checked against its contracts schema (a reason
+ * of 1 to 2,000 characters, not only whitespace, and an `until` or a `candidate` where the call takes one).
+ */
+export type DecisionMethod<C extends DecisionCall> = (
+  team: string,
+  id: string,
+  input: DecisionInput<C> & { actor: Actor },
+) => Promise<Finding>;
 
 /** What a module's scan callback gets: `saw` reports one Observation. */
 export interface ScanRecorder {
@@ -66,8 +90,28 @@ export interface Findings {
   ): Promise<ReconcileOutcome>;
   /** The Team's Findings, each parsed with Finding v1, so they come back read-only. */
   list(team: string): Promise<Finding[]>;
-  /** One Finding's history, oldest first; empty for a Finding the Team doesn't have. */
+  /** One Finding's history, oldest first. Throws FindingNotFound for an id the Team doesn't have. */
   history(team: string, findingId: string): Promise<HistoryEntry[]>;
+
+  // A person's named decisions. Each throws for an agent Actor before anything is read, a zod error for bad input,
+  // NotALead when, under the Team's lock, the person isn't a Lead (any more), FindingNotFound for an id the Team
+  // doesn't have, and DecisionRefused for a Status the call doesn't take; after any of them nothing is written. Each
+  // returns the Finding as changed, parsed with Finding v1.
+
+  /** Open or Accepted (renewing) to Accepted, until `until`, which must be later than now. */
+  accept: DecisionMethod<"accept">;
+  /** Open or Accepted to False positive. */
+  markFalsePositive: DecisionMethod<"markFalsePositive">;
+  /** Clears a Fixed Finding's Unconfirmed fix; it stays Fixed and its candidates stay as they are. */
+  confirmFix: DecisionMethod<"confirmFix">;
+  /**
+   * Merges `candidate`, an Open Finding its Unconfirmed fix lists, with the same module, Rule and Asset, into this
+   * Fixed one: the candidate is Fixed with `moved_to` this id, and this one reopens with its id and first Scan, at the
+   * candidate's location. Any other Unconfirmed fix stops listing the candidate. Returns this one.
+   */
+  markMoved: DecisionMethod<"markMoved">;
+  /** False positive or Accepted to Open. */
+  reopen: DecisionMethod<"reopen">;
 }
 
 export function createFindings({
@@ -89,8 +133,26 @@ export function createFindings({
     );
   };
 
+  /**
+   * The named call `call`: the person first (an agent throws before anything is read), then the input against the
+   * call's schema in DECISION_INPUT, then the decision itself.
+   */
+  const decision =
+    <C extends DecisionCall>(call: C): DecisionMethod<C> =>
+    async (team, id, { actor, ...input }) => {
+      const person = personOf(actor);
+      const checked = { call, ...DECISION_INPUT[call].parse(input) } as Decision;
+      return withTeam(team, (tx) => applyDecision(tx, team, id, person, checked));
+    };
+
   return {
     reconcile,
+
+    accept: decision("accept"),
+    markFalsePositive: decision("markFalsePositive"),
+    confirmFix: decision("confirmFix"),
+    markMoved: decision("markMoved"),
+    reopen: decision("reopen"),
 
     async report(value) {
       const run = SpotRun.parse(value);
@@ -147,6 +209,7 @@ export function createFindings({
 
     history(team, findingId) {
       return withTeam(team, async (tx) => {
+        if (!(await loadFinding(tx, team, findingId))) throw new FindingNotFound(findingId);
         const rows = await tx
           .selectFrom("finding_history")
           .selectAll()

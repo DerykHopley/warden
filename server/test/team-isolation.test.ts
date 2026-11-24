@@ -98,11 +98,11 @@ beforeAll(async () => {
     ["b3", "note"],
     ["b4", "note"],
   ]);
-});
+}, 30_000);
 
 afterAll(async () => {
   for (const end of ends.splice(0).reverse()) await end();
-});
+}, 30_000);
 
 const aNotes = () => [notes.a1, notes.a2, notes.a3].sort();
 

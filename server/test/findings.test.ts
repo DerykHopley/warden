@@ -5,7 +5,12 @@ import { randomUUID } from "node:crypto";
 import { fingerprint, Finding, type Observation, type Scan, type SpotRun } from "@warden/contracts";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import { createFindings, type Findings, type ScanRecorder } from "../src/findings/index.ts";
+import {
+  createFindings,
+  FindingNotFound,
+  type Findings,
+  type ScanRecorder,
+} from "../src/findings/index.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
@@ -526,6 +531,6 @@ describe("two Teams", () => {
       expect(new Set(rows.map((row) => row.team_id))).toEqual(new Set([b]));
     }
     expect((await findings.list(b)).map((f) => f.team)).toEqual([b]);
-    expect(await findings.history(b, aFinding!.id)).toEqual([]);
+    await expect(findings.history(b, aFinding!.id)).rejects.toBeInstanceOf(FindingNotFound);
   });
 });

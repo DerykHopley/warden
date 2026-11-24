@@ -3,15 +3,23 @@ import type { HttpBindings } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {
+  AcceptBody,
   atLeast,
+  MarkMovedBody,
+  ReasonBody,
   RoleChangeBody,
+  type Actor,
+  type Finding,
   type HealthBody,
+  type HistoryBody,
   type MeBody,
   type MembersBody,
   type TeamMember,
   type Role,
 } from "@warden/contracts";
+import type { z } from "zod";
 import type { Session, VerifySessionToken } from "./auth.ts";
+import { DecisionRefused, FindingNotFound, NotALead, type Findings } from "./findings/index.ts";
 import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
 import { securityHeaders } from "./security-headers.ts";
@@ -22,6 +30,8 @@ export type AppDeps = {
   verifySessionToken: VerifySessionToken;
   /** Each person's Role in their Team, through withTeam on the server's pool. */
   members: Members;
+  /** The Findings module, with each module's move rule, through withTeam on the server's pool. */
+  findings: Findings;
   /** Config's `behindCloudRun`: there the client's address is the last X-Forwarded-For entry; elsewhere the socket's. */
   behindCloudRun: boolean;
   checkHealth: () => Promise<HealthBody>;
@@ -48,6 +58,13 @@ const ROLE_TOO_LOW = "Your Role can't do this";
 
 function memberBody(member: TeamMemberRow): TeamMember {
   return { userId: member.userId, role: member.role, joinedAt: member.joinedAt.toISOString() };
+}
+
+/** A body a schema refused, as one line: each issue's field and message. */
+function refusedBody(error: z.ZodError): string {
+  return error.issues
+    .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
+    .join("; ");
 }
 
 export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
@@ -192,6 +209,64 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
           error: result.error,
         });
         return c.json({ error: "Clerk didn't take the change; nothing changed" }, 502);
+    }
+  });
+
+  /**
+   * What a Findings call's refusal answers: 404 for an id the Team doesn't have (another Team's included), 409 for a
+   * Status the decision doesn't take, 403 for a person no longer a Lead under the Team's lock. Nothing was written in
+   * any of them. Anything else, a zod error included (stored or derived data that broke Finding v1), is thrown on to
+   * the logged 500, which shows no schema text: only the route's own body parse answers 400.
+   */
+  function findingRefusal(c: Context<AppEnv>, error: unknown): Response {
+    if (error instanceof FindingNotFound) return c.json({ error: "No such Finding" }, 404);
+    if (error instanceof DecisionRefused) return c.json({ error: error.message }, 409);
+    if (error instanceof NotALead) return c.json({ error: ROLE_TOO_LOW }, 403);
+    throw error;
+  }
+
+  /**
+   * A Lead's named decision on one Finding (story 4): the body parsed with its contracts schema, the Team and the
+   * Actor taken from the session, never the request. Answers the Finding as changed.
+   */
+  function decisionRoute<Body>(
+    path: string,
+    schema: z.ZodType<Body>,
+    decide: (team: string, id: string, input: Body & { actor: Actor }) => Promise<Finding>,
+  ) {
+    app.post(`/api/findings/:id/${path}`, requireRole("lead"), async (c) => {
+      // A body that isn't JSON parses as undefined, which every schema refuses.
+      const parsed = schema.safeParse(await c.req.json().catch(() => undefined));
+      if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
+      const actor: Actor = { kind: "person", id: c.get("session").userId };
+      try {
+        return c.json(await decide(c.get("team"), c.req.param("id"), { ...parsed.data, actor }));
+      } catch (error) {
+        return findingRefusal(c, error);
+      }
+    });
+  }
+
+  const { findings } = deps;
+  decisionRoute("accept", AcceptBody, (team, id, input) => findings.accept(team, id, input));
+  decisionRoute("false-positive", ReasonBody, (team, id, input) =>
+    findings.markFalsePositive(team, id, input),
+  );
+  decisionRoute("confirm-fix", ReasonBody, (team, id, input) =>
+    findings.confirmFix(team, id, input),
+  );
+  decisionRoute("mark-moved", MarkMovedBody, (team, id, input) =>
+    findings.markMoved(team, id, input),
+  );
+  decisionRoute("reopen", ReasonBody, (team, id, input) => findings.reopen(team, id, input));
+
+  // Any person in the Team reads a Finding's history, oldest first.
+  app.get("/api/findings/:id/history", requireRole("member"), async (c) => {
+    try {
+      const history = await findings.history(c.get("team"), c.req.param("id"));
+      return c.json({ history } satisfies HistoryBody);
+    } catch (error) {
+      return findingRefusal(c, error);
     }
   });
 

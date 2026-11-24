@@ -11,7 +11,7 @@ const silent = createLogger(() => {});
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-});
+}, 30_000);
 
 /** A fresh database with every shipped migration, and a pool on it as warden_migrate. */
 async function migratedDatabase(): Promise<{ name: string; pool: pg.Pool }> {
@@ -27,7 +27,7 @@ describe("findUnprotectedTables", () => {
     const { pool } = await migratedDatabase();
 
     expect(await findUnprotectedTables(pool)).toEqual([]);
-  });
+  }, 30_000);
 
   it("names a table whose policies don't keep warden_app to the Team, or that aren't there", async () => {
     const { pool } = await migratedDatabase();
@@ -90,7 +90,7 @@ describe("findUnprotectedTables", () => {
       "not_forced",
       "team_read_any_write",
     ]);
-  });
+  }, 30_000);
 
   it("names a table whose Team policy has a permissive policy beside it that doesn't read the Team", async () => {
     const { pool } = await migratedDatabase();
@@ -118,7 +118,7 @@ describe("findUnprotectedTables", () => {
     `);
 
     expect(await findUnprotectedTables(pool)).toEqual(["app_reads_any", "everyone_any"]);
-  });
+  }, 30_000);
 
   // A policy for a role the app role is a member of applies to the app role. Shown on a test-named app role given to
   // the check, as giving warden_app a membership would change it for every other test file running at once.
@@ -158,7 +158,7 @@ describe("findUnprotectedTables", () => {
       "direct_group_reads_any",
       "indirect_group_reads_any",
     ]);
-  });
+  }, 30_000);
 
   it("names a table in a schema other than public, schema-qualified", async () => {
     const { name, pool } = await migratedDatabase();
@@ -178,7 +178,7 @@ describe("findUnprotectedTables", () => {
     `);
 
     expect(await findUnprotectedTables(pool)).toEqual(["other.rows"]);
-  });
+  }, 30_000);
 
   it("leaves warden_app usage on no schema but public, pg_catalog and information_schema", async () => {
     const { name } = await migratedDatabase();
@@ -199,7 +199,7 @@ describe("findUnprotectedTables", () => {
     `);
 
     expect(rows.map((row) => row.nspname)).toEqual(["information_schema", "pg_catalog", "public"]);
-  });
+  }, 30_000);
 
   it("names a materialized view and a foreign table, which row-level security doesn't cover", async () => {
     const { name, pool } = await migratedDatabase();
@@ -217,5 +217,5 @@ describe("findUnprotectedTables", () => {
     await pool.query("create materialized view team_totals as select id from teams");
 
     expect(await findUnprotectedTables(pool)).toEqual(["remote_rows", "team_totals"]);
-  });
+  }, 30_000);
 });

@@ -13,7 +13,7 @@ const superuser = createPool(
 const made: string[] = [];
 afterEach(async () => {
   for (const name of made.splice(0)) await superuser.query(`drop database if exists ${name}`);
-});
+}, 30_000);
 afterAll(() => superuser.end());
 
 async function makeDatabase(name: string) {
@@ -24,6 +24,14 @@ async function makeDatabase(name: string) {
 async function exists(name: string) {
   const { rows } = await superuser.query("select 1 from pg_database where datname = $1", [name]);
   return rows.length === 1;
+}
+
+/** Every database with the tests' prefix, so a failure shows what was there. */
+async function testDatabases() {
+  const { rows } = await superuser.query<{ datname: string }>(
+    "select datname from pg_database where starts_with(datname, 'warden_test_') order by datname",
+  );
+  return rows.map((row) => row.datname);
 }
 
 async function roleExists(name: string) {
@@ -44,10 +52,18 @@ describe("dropStaleTestDatabases and dropStaleTestRoles", () => {
 
     await dropStaleTestDatabases();
 
-    expect(await exists(stale)).toBe(false);
-    expect(await exists(untimed)).toBe(false);
-    expect(await exists(recent)).toBe(true);
-  });
+    // One comparison of what was seen, so a failure names each database and whether it was still there.
+    const seen = {
+      [`stale ${stale}`]: await exists(stale),
+      [`untimed ${untimed}`]: await exists(untimed),
+      [`recent ${recent}`]: await exists(recent),
+    };
+    expect(seen, `test databases left: ${(await testDatabases()).join(", ")}`).toEqual({
+      [`stale ${stale}`]: false,
+      [`untimed ${untimed}`]: false,
+      [`recent ${recent}`]: true,
+    });
+  }, 30_000);
 
   it("drops test roles over an hour old, and keeps recent ones and ones the tests didn't name", async () => {
     const twoHoursAgo = Math.floor(Date.now() / 1000) - 2 * 3600;
@@ -83,5 +99,5 @@ describe("dropStaleTestDatabases and dropStaleTestRoles", () => {
     await dropStaleTestDatabases();
 
     for (const name of theirs) expect(await exists(name), name).toBe(true);
-  });
+  }, 30_000);
 });

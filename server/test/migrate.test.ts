@@ -17,7 +17,7 @@ const silent = createLogger(() => {});
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-});
+}, 30_000);
 
 async function freshDatabase() {
   const database = await createTestDatabase();
@@ -60,7 +60,7 @@ describe("pnpm migrate", () => {
     expect(second.code, second.output).toBe(0);
     expect(second.output).not.toContain('"message":"applied"');
     expect(await appliedMigrations(database.pool)).toEqual(shipped);
-  });
+  }, 30_000);
 
   it("exits 1 for a WARDEN_DATABASE_ROLES it doesn't know, before connecting", async () => {
     const result = await runInServer(["pnpm", "--silent", "migrate"], {
@@ -88,7 +88,7 @@ describe("pnpm migrate", () => {
       "select to_regclass('kysely_migration') is not null as tracked",
     );
     expect(rows[0]).toEqual({ tracked: false });
-  });
+  }, 30_000);
 });
 
 describe("the migration runner", () => {
@@ -113,7 +113,7 @@ describe("the migration runner", () => {
     const { rows } = await database.pool.query("select name from ran order by id");
     expect(rows.map((row) => row.name)).toEqual(order);
     expect(await appliedMigrations(database.pool)).toEqual(order);
-  });
+  }, 30_000);
 
   it("reads back applied migrations with equal times in the same byte order", async () => {
     const database = await freshDatabase();
@@ -130,7 +130,7 @@ describe("the migration runner", () => {
     );
 
     expect(result).toEqual({ applied: ["0002_next"] });
-  });
+  }, 30_000);
 
   it("rolls back a failing file, names it, exits non-zero and applies no later file", async () => {
     const database = await freshDatabase();
@@ -150,7 +150,7 @@ describe("the migration runner", () => {
     );
     expect(rows[0]).toEqual({ good: true, half_made: false, later: false });
     expect(await appliedMigrations(database.pool)).toEqual(["0001_good"]);
-  });
+  }, 30_000);
 
   it("exits non-zero with the driver's error when the database can't be reached", async () => {
     const result = await migrateProcess(migrationsFolder({ "0001_any.sql": "select 1;" }), {
@@ -204,7 +204,7 @@ describe("the migration runner for another role set", () => {
         expect(rows[0], `${privilege} on ${table}`).toEqual({ own: true, live: false });
       }
     }
-  });
+  }, 30_000);
 });
 
 describe("the first migration's grants", () => {

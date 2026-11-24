@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
+import type { HistoryActorKind } from "../src/schema.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs, type DatabaseRole } from "./databases.ts";
 
@@ -123,5 +124,42 @@ describe("finding_history is append-only", () => {
     );
 
     expect((await rows()).map((row) => row.actor_id)).toEqual(["scan-1", "scan-2"]);
+  });
+});
+
+// 0005_person_decisions: a person's named decision is history too (ADR 0005); an agent only proposes, so never.
+describe("finding_history's actor_kind", () => {
+  const historyRow = (actor_kind: string, actor_id: string) =>
+    withTeamAs.warden_app(team, (tx) =>
+      tx
+        .insertInto("finding_history")
+        .values({
+          team_id: team,
+          finding_id: "f-1",
+          status_before: "open",
+          status_after: "false_positive",
+          severity_before: "high",
+          severity_after: "high",
+          actor_kind: actor_kind as HistoryActorKind,
+          actor_id,
+          reason: "The file is a test fixture",
+        })
+        .execute(),
+    );
+
+  it("takes a person", async () => {
+    await historyRow("person", "user_lead");
+
+    expect((await rows()).at(-1)).toMatchObject({ actor_kind: "person", actor_id: "user_lead" });
+  });
+
+  it("refuses an agent, and adds no row", async () => {
+    const before = await rows();
+
+    await expect(historyRow("agent", "agent-1")).rejects.toThrow(
+      /finding_history_actor_kind_check/,
+    );
+
+    expect(await rows()).toEqual(before);
   });
 });
