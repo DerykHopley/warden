@@ -5,6 +5,7 @@ import { createClerkClient } from "@clerk/backend";
 import { serve } from "@hono/node-server";
 import { createApp } from "./app.ts";
 import { createClerkVerifier } from "./auth.ts";
+import { clerkOrganizations } from "./clerk-organizations.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } from "./database.ts";
 import { createLogger } from "./log.ts";
@@ -71,11 +72,8 @@ const app = createApp({
   verifySessionToken: createClerkVerifier(config.clerk),
   members: createMembers({
     withTeam: createWithTeam(pool),
-    clerkOrganizations: {
-      setMembershipRole: async (change) => {
-        await clerk.organizations.updateOrganizationMembership(change);
-      },
-    },
+    clerkOrganizations: clerkOrganizations(clerk.organizations),
+    logger,
   }),
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),

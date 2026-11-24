@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Member, MembersBody, RoleChangeBody } from "../src/index.ts";
+import { MembersBody, RoleChangeBody, TeamMember } from "../src/index.ts";
 import { expectRefused } from "./refused.ts";
 
 const member = { userId: "user_a", role: "lead", joinedAt: "2026-11-24T10:00:00.000Z" };
@@ -14,7 +14,7 @@ describe("MembersBody", () => {
   });
 
   it("refuses a joinedAt that isn't a timestamp", () => {
-    expectRefused(Member, { ...member, joinedAt: "yesterday" }, "joinedAt");
+    expectRefused(TeamMember, { ...member, joinedAt: "yesterday" }, "joinedAt");
   });
 });
 

@@ -82,7 +82,7 @@ export async function seedTeam(
 const noDatabase = () => Promise.reject(new Error("this test app has no database: pass withTeam"));
 const noMembers: Members = { open: noDatabase, list: noDatabase, changeRole: noDatabase };
 
-/** A Clerk seam for a test that never changes an Admin: any call fails it. */
+/** A Clerk seam for a test that doesn't look at Clerk: every call is refused (a Role change answers 502; a join logs it). */
 const noClerk: ClerkOrganizations = {
   setMembershipRole: () =>
     Promise.reject(new Error("this test app has no Clerk: pass clerkOrganizations")),
@@ -99,12 +99,15 @@ export function testApp(options: {
   checkHealth?: () => Promise<HealthBody>;
   withTeam?: WithTeam;
   clerkOrganizations?: ClerkOrganizations;
+  /** How long the members module waits for Clerk; short in a test of Clerk not answering. */
+  clerkTimeoutMs?: number;
   mount?: MountRoutes;
 }) {
   const lines: string[] = [];
+  const logger = createLogger((line) => lines.push(line));
   const app = createApp(
     {
-      logger: createLogger((line) => lines.push(line)),
+      logger,
       verifySessionToken: createClerkVerifier({
         secretKey: "unused-in-tests",
         jwtKey: options.publicPem,
@@ -114,6 +117,8 @@ export function testApp(options: {
         ? createMembers({
             withTeam: options.withTeam,
             clerkOrganizations: options.clerkOrganizations ?? noClerk,
+            logger,
+            clerkTimeoutMs: options.clerkTimeoutMs,
           })
         : noMembers,
       behindCloudRun: true,

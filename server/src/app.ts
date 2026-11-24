@@ -7,13 +7,13 @@ import {
   RoleChangeBody,
   type HealthBody,
   type MeBody,
-  type Member,
   type MembersBody,
+  type TeamMember,
   type Role,
 } from "@warden/contracts";
 import type { Session, VerifySessionToken } from "./auth.ts";
 import type { Logger } from "./log.ts";
-import type { Members, TeamMember } from "./members.ts";
+import type { Members, TeamMemberRow } from "./members.ts";
 import { securityHeaders } from "./security-headers.ts";
 import { clientAddress, createSignInLimit } from "./sign-in-limit.ts";
 
@@ -44,9 +44,9 @@ export type RequireRole = (role: Role) => MiddlewareHandler<AppEnv>;
 export type MountRoutes = (app: Hono<AppEnv>, requireRole: RequireRole) => void;
 
 const TEAM_NOT_CREATED = "Your Team's Admin must open Warden first";
-const BAD_ROLE_BODY = 'Send JSON with a role of "member", "lead" or "admin"';
+const ROLE_TOO_LOW = "Your Role can't do this";
 
-function memberBody(member: TeamMember): Member {
+function memberBody(member: TeamMemberRow): TeamMember {
   return { userId: member.userId, role: member.role, joinedAt: member.joinedAt.toISOString() };
 }
 
@@ -132,7 +132,7 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     const opened = await openSession(c);
     if (opened instanceof Response) return opened;
     if (opened.team === null) return c.json({ error: "Choose a Team first" }, 403);
-    if (!atLeast(opened.role, needed)) return c.json({ error: "Your Role can't do this" }, 403);
+    if (!atLeast(opened.role, needed)) return c.json({ error: ROLE_TOO_LOW }, 403);
     c.set("session", opened.session);
     c.set("team", opened.team);
     c.set("role", opened.role);
@@ -161,13 +161,11 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
   // An Admin gives a person a Role (story 2). Clerk's org:admin follows a change to or from Admin.
   app.put("/api/team/members/:userId/role", requireRole("admin"), async (c) => {
-    let parsed: ReturnType<typeof RoleChangeBody.safeParse>;
-    try {
-      parsed = RoleChangeBody.safeParse(await c.req.json());
-    } catch {
-      return c.json({ error: BAD_ROLE_BODY }, 400);
+    // A body that isn't JSON parses as undefined, which the schema refuses like a bad role.
+    const parsed = RoleChangeBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) {
+      return c.json({ error: 'Send JSON with a role of "member", "lead" or "admin"' }, 400);
     }
-    if (!parsed.success) return c.json({ error: BAD_ROLE_BODY }, 400);
 
     const team = c.get("team");
     const userId = c.req.param("userId");
@@ -183,6 +181,8 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
         return c.json(memberBody(result.member));
       case "no_such_member":
         return c.json({ error: "No such member" }, 404);
+      case "not_admin":
+        return c.json({ error: ROLE_TOO_LOW }, 403);
       case "last_admin":
         return c.json({ error: "A Team needs at least one Admin" }, 409);
       case "clerk_refused":
