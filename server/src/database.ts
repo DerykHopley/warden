@@ -32,62 +32,156 @@ export const DATABASE_ROLE_NAMES = {
 /** Why a database role may not serve requests: it can get around row-level security. */
 export type DatabaseRoleRefusal = { role: string; reason: string };
 
+/** How long a new connection waits for its role check before it's closed. */
+const ROLE_CHECK_TIMEOUT_MS = 5000;
+
+/** What makes a role able to get around row-level security, as the check's query names it, with how it reads. A
+ * table's owner isn't bound by its policies unless they're forced; the schema's or the database's owner, and the
+ * migration role, can make or take over tables, so they own them as soon as there are any. */
+const BYPASS_REASONS = {
+  superuser: "is a superuser",
+  bypassrls: "has BYPASSRLS",
+  "table owner": "owns a table in public",
+  "schema owner": "owns the schema public",
+  "database owner": "owns the database",
+  "migration role": "is the migration role",
+} as const;
+
 // The connected role and every role it can become through membership (any grant counts: one with only the admin
-// option can grant itself the rest), with the first that is a superuser, has BYPASSRLS, or owns a table in public
-// (a table's owner isn't bound by its policies unless they're forced). The role itself comes first.
+// option can grant itself the rest), with the first that can get around row-level security, and why. The role itself
+// comes first. $1 is the migration role's name.
 const BYPASSING_ROLE_SQL = `
 with recursive reachable (oid) as (
   select oid from pg_roles where rolname = current_user
   union
   select m.roleid from pg_auth_members m join reachable on m.member = reachable.oid
 )
-select current_user as role, r.rolname as via, r.rolsuper as superuser, r.rolbypassrls as bypassrls
-  from reachable join pg_roles r on r.oid = reachable.oid
- where r.rolsuper or r.rolbypassrls
-    or exists (
-      select from pg_class c
-       where c.relowner = r.oid and c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p')
-    )
- order by r.rolname = current_user desc, r.rolname
+select * from (
+  select current_user as role, r.rolname as via,
+         case
+           when r.rolsuper then 'superuser'
+           when r.rolbypassrls then 'bypassrls'
+           when exists (
+             select from pg_class c
+              where c.relowner = r.oid and c.relnamespace = 'public'::regnamespace and c.relkind in ('r', 'p')
+           ) then 'table owner'
+           when exists (select from pg_namespace n where n.nspname = 'public' and n.nspowner = r.oid)
+             then 'schema owner'
+           when exists (select from pg_database d where d.datname = current_database() and d.datdba = r.oid)
+             then 'database owner'
+           when r.rolname = $1 then 'migration role'
+         end as why
+    from reachable join pg_roles r on r.oid = reachable.oid
+) found
+ where why is not null
+ order by via = role desc, via
  limit 1`;
 
 /** Whether the role `client` connected as can get around row-level security, and why; undefined when it can't. */
 export async function checkDatabaseRole(
   client: Pick<pg.ClientBase, "query">,
+  timeoutMs = ROLE_CHECK_TIMEOUT_MS,
 ): Promise<DatabaseRoleRefusal | undefined> {
-  const { rows } = await client.query<{
-    role: string;
-    via: string;
-    superuser: boolean;
-    bypassrls: boolean;
-  }>(BYPASSING_ROLE_SQL);
-  const found = rows[0];
-  if (!found) return undefined;
-  const what = found.superuser
-    ? "a superuser"
-    : found.bypassrls
-      ? "BYPASSRLS"
-      : "a table in public";
-  const holds = found.superuser ? "is" : found.bypassrls ? "has" : "owns";
-  const reason =
-    found.via === found.role
-      ? `${found.role} ${holds} ${what}`
-      : `${found.role} can become ${found.via}, which ${holds} ${what}`;
-  return { role: found.role, reason };
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("the database didn't answer the role check in time")),
+      timeoutMs,
+    );
+  });
+  try {
+    // On a timeout the query is left running; the guard's throw closes its connection.
+    const { rows } = await Promise.race([
+      client.query<{ role: string; via: string; why: keyof typeof BYPASS_REASONS }>(
+        BYPASSING_ROLE_SQL,
+        [DATABASE_ROLE_NAMES.migrate],
+      ),
+      timeout,
+    ]);
+    const found = rows[0];
+    if (!found) return undefined;
+    const what = BYPASS_REASONS[found.why];
+    const reason =
+      found.via === found.role
+        ? `${found.role} ${what}`
+        : `${found.role} can become ${found.via}, which ${what}`;
+    return { role: found.role, reason };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The role check itself failed (it didn't answer in time, or its query failed): nothing is known about the role. */
+export class DatabaseRoleCheckError extends Error {
+  override name = "DatabaseRoleCheckError";
 }
 
 /**
  * The pool's `onConnect`: every new connection checks its role before any query runs on it, and `refuse` is told
- * when the role can get around row-level security. A check that fails throws, so the connection is closed unused.
+ * when the role can get around row-level security. A refusal, or a check that fails or takes longer than
+ * `timeoutMs`, throws, so the pool closes the connection unused.
  */
-export function guardDatabaseRole(refuse: (refusal: DatabaseRoleRefusal) => void) {
+export function guardDatabaseRole(
+  refuse: (refusal: DatabaseRoleRefusal) => void,
+  { timeoutMs = ROLE_CHECK_TIMEOUT_MS } = {},
+) {
   return async (client: pg.ClientBase) => {
-    const refusal = await checkDatabaseRole(client);
+    let refusal: DatabaseRoleRefusal | undefined;
+    try {
+      refusal = await checkDatabaseRole(client, timeoutMs);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new DatabaseRoleCheckError(`database role check failed: ${message}`, { cause: error });
+    }
     if (refusal) {
       refuse(refusal);
       throw new Error(`database role refused: ${refusal.reason}`);
     }
   };
+}
+
+/** Why the start-up connection failed: the database isn't there (yet), it refused the login, the role check
+ * failed, or something else. */
+export type ConnectionFailure = "unreachable" | "login refused" | "role check failed" | "other";
+
+/** Node's codes for a host, port or socket that can't be reached. */
+const UNREACHABLE_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  // The Cloud SQL socket isn't there yet.
+  "ENOENT",
+]);
+
+/** pg's own errors for a connection that timed out, or closed before it was ready. */
+const UNREACHABLE_MESSAGES = new Set([
+  "Connection terminated due to connection timeout",
+  "Connection terminated unexpectedly",
+]);
+
+/** Postgres's codes for a login it refuses: a wrong password, an unknown role, an unknown database. */
+const LOGIN_REFUSED_CODES = new Set(["28P01", "28000", "3D000"]);
+
+export function connectionFailure(error: unknown): ConnectionFailure {
+  if (error instanceof DatabaseRoleCheckError) return "role check failed";
+  if (error instanceof pg.DatabaseError) {
+    return LOGIN_REFUSED_CODES.has(error.code ?? "") ? "login refused" : "other";
+  }
+  if (!(error instanceof Error)) return "other";
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string" && UNREACHABLE_CODES.has(code)) return "unreachable";
+  if (UNREACHABLE_MESSAGES.has(error.message)) return "unreachable";
+  // Each address of a host that has several (localhost's ::1 and 127.0.0.1) failed.
+  if (error instanceof AggregateError && error.errors.length > 0) {
+    return error.errors.every((inner) => connectionFailure(inner) === "unreachable")
+      ? "unreachable"
+      : "other";
+  }
+  return "other";
 }
 
 type Queryable = {

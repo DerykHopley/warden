@@ -5,7 +5,7 @@ import { serve } from "@hono/node-server";
 import { createApp } from "./app.ts";
 import { createClerkVerifier } from "./auth.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
-import { createHealthCheck, createPool, guardDatabaseRole } from "./database.ts";
+import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } from "./database.ts";
 import { createLogger } from "./log.ts";
 import { createShutdown } from "./shutdown.ts";
 
@@ -36,11 +36,30 @@ const pool = createPool(logger, {
   }),
 });
 // Connect once now, so a wrong role stops the server at start. When the database can't be reached yet, the server
-// stays up (the health check answers 503) and the first connection that succeeds runs the check.
+// stays up (the health check answers 503) and the first connection that succeeds runs the check. A login the
+// database refuses won't put itself right, so it stops the server too.
 pool.query("select 1").catch((error: unknown) => {
-  logger.warn("database unreachable at start; the role is checked on the first connection", {
-    error,
-  });
+  switch (connectionFailure(error)) {
+    case "unreachable":
+      logger.warn("database unreachable at start; the role is checked on the first connection", {
+        error,
+      });
+      return;
+    case "login refused":
+      logger.error("Warden can't start: the database refused the login", {
+        user: process.env.PGUSER,
+        error,
+      });
+      process.exit(1);
+      return;
+    case "role check failed":
+      logger.error("database role check failed at start; it runs again on the next connection", {
+        error,
+      });
+      return;
+    case "other":
+      logger.error("database connection failed at start", { error });
+  }
 });
 const app = createApp({
   logger,
