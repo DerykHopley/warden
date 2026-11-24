@@ -477,9 +477,16 @@ assert_equal "ADC with another quota project: it changes nothing" "" "$(changes)
 # GOOGLE_APPLICATION_CREDENTIALS comes before gcloud's file, as it does for the proxy.
 adc_file "$scratch/adc-elsewhere.json" other-project
 real_run adc-env-other-quota fresh GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-elsewhere.json"
-assert_equal "GOOGLE_APPLICATION_CREDENTIALS with another quota project: exit 1" 1 "$code"
 assert_line "GOOGLE_APPLICATION_CREDENTIALS with another quota project: names the fix" "$fix" "$out"
-assert_equal "GOOGLE_APPLICATION_CREDENTIALS with another quota project: it changes nothing" "" "$(changes)"
+
+# A credentials file that isn't valid JSON: it stops, and never echoes the file, which holds secrets.
+# (A stray token: Node's JSON.parse quotes the input back in its error.)
+printf '{"client_secret":"marker-adc-secret" x}\n' >"$scratch/adc-malformed.json"
+real_run adc-malformed fresh GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-malformed.json"
+assert_equal "a malformed credentials file: exit 1" 1 "$code"
+assert_no_line "a malformed credentials file: none of it is printed" "marker-adc-secret" "$out"
+assert_line "a malformed credentials file: says it isn't valid JSON" "isn't valid JSON" "$out"
+assert_equal "a malformed credentials file: it changes nothing" "" "$(changes)"
 
 ADC_QUOTA=$project real_run adc-same-quota fresh
 [[ $code == 0 ]] || fail "ADC whose quota project is the target: the run failed: $out"

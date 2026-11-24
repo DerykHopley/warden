@@ -180,13 +180,22 @@ github_repository() {
 # The quota project in the application-default credentials, or nothing when they set none. No gcloud command prints
 # it: it's the credentials file's quota_project_id, which gcloud and Google's client libraries (the proxy's) read
 # from GOOGLE_APPLICATION_CREDENTIALS when set, otherwise from gcloud's config folder (CLOUDSDK_CONFIG, or
-# ~/.config/gcloud). No file (credentials from a metadata server): nothing.
+# ~/.config/gcloud). No file (credentials from a metadata server): nothing. A file that isn't valid JSON fails with
+# that alone: JSON.parse's own error quotes the file, which holds secrets (client_secret, refresh_token).
 adc_quota_project() {
   local config=${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}
   local file=${GOOGLE_APPLICATION_CREDENTIALS:-$config/application_default_credentials.json}
   if [[ ! -f $file ]]; then return 0; fi
   node -e '
-    const quota = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).quota_project_id;
+    const file = process.argv[1];
+    let credentials;
+    try {
+      credentials = JSON.parse(require("node:fs").readFileSync(file, "utf8"));
+    } catch {
+      process.stderr.write(`gcp-setup: the application-default credentials file ${file} isn'\''t valid JSON\n`);
+      process.exit(1);
+    }
+    const quota = credentials?.quota_project_id;
     if (typeof quota === "string") process.stdout.write(quota);
   ' "$file"
 }
@@ -229,7 +238,7 @@ preflight() {
   # The proxy bills its Cloud SQL Admin API calls to the credentials' quota project: another project, where that API
   # may be off, refuses them, and the roles step fails with a bare ECONNRESET.
   if ! quota=$(adc_quota_project); then
-    echo "gcp-setup: couldn't read the application-default credentials' quota project; the error is above" >&2
+    echo "gcp-setup: couldn't read the application-default credentials' quota project; nothing was changed" >&2
     exit 1
   fi
   if [[ -n $quota && $quota != "$project" ]]; then
@@ -358,22 +367,25 @@ run_roles() {
     admin_password=$(gcloud secrets versions access latest --secret="$admin_secret" --project="$project")
   fi
   note "the $set roles, on $database"
-  # Its output is kept to look for the refused login, and printed as it was.
+  # Its output is kept to look for the refused login: printed on stdout when it succeeds, and on stderr, above the
+  # script's own error, when it fails.
   output=$(WARDEN_DATABASE_ROLES=$set PGHOST=127.0.0.1 PGPORT=$PROXY_PORT PGUSER=postgres PGDATABASE=$database \
     PGPASSWORD=$postgres_password WARDEN_APP_PASSWORD=$app_password WARDEN_MIGRATE_PASSWORD=$migrate_password \
     WARDEN_ADMIN_PASSWORD=$admin_password node "$ROOT/server/src/roles.ts" 2>&1) || status=$?
-  if [[ -n $output ]]; then printf '%s\n' "$output"; fi
-  if [[ $status != 0 ]]; then
-    echo "gcp-setup: the roles step failed for the $set set on $database (exit $status);" \
-      "the roles script's error is above" >&2
-    if [[ $output =~ 28P01|password\ authentication\ failed ]]; then
-      # shellcheck disable=SC2016 # printed for the owner to paste: the secret is read then, not here
-      echo "gcp-setup: the postgres password doesn't match the secret warden-db-password;" \
-        "reset it with this command, then run this script again:" >&2
-      printf '  %s\n' "gcloud sql users set-password postgres --instance=$instance --project=$project"' --password="$(gcloud secrets versions access latest --secret=warden-db-password --project='"$project"')"' >&2
-    fi
-    exit "$status"
+  if [[ $status == 0 ]]; then
+    if [[ -n $output ]]; then printf '%s\n' "$output"; fi
+    return 0
   fi
+  if [[ -n $output ]]; then printf '%s\n' "$output" >&2; fi
+  echo "gcp-setup: the roles step failed for the $set set on $database (exit $status);" \
+    "the roles script's error is above" >&2
+  if [[ $output =~ 28P01|password\ authentication\ failed ]]; then
+    # shellcheck disable=SC2016 # printed for the owner to paste: the secret is read then, not here
+    echo "gcp-setup: the postgres password doesn't match the secret warden-db-password;" \
+      "reset it with this command, then run this script again:" >&2
+    printf '  %s\n' "gcloud sql users set-password postgres --instance=$instance --project=$project"' --password="$(gcloud secrets versions access latest --secret=warden-db-password --project='"$project"')"' >&2
+  fi
+  exit "$status"
 }
 
 main() {
