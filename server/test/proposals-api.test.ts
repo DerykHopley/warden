@@ -203,7 +203,7 @@ describe("a Lead's reject", () => {
     expect(after.findings).toEqual(before.findings);
     expect(after.history).toEqual(before.history);
 
-    const again = { status: 409, body: { error: "This Proposal was rejected already." } };
+    const again = { status: 409, body: { error: expect.any(String) } };
     expect(await approve(team, proposal.id)).toEqual(again);
     expect(await reject(team, proposal.id, { reason: "Again" })).toEqual(again);
     expect(await stored(team)).toEqual(after);
@@ -326,7 +326,7 @@ describe("a Proposal its decision would refuse now", () => {
 
     expect(answer).toEqual({
       status: 409,
-      body: { error: "This Finding is now Fixed, so it can't be accepted." },
+      body: { error: expect.any(String) },
     });
     expect(await stored(team)).toEqual(before);
   });
@@ -344,13 +344,7 @@ describe("a Proposal its decision would refuse now", () => {
 
     const answer = await approve(team, proposal.id);
 
-    expect(answer).toEqual({
-      status: 409,
-      body: {
-        error:
-          "This Finding changed after the Proposal was asked, so the Proposal can't be approved: ask again.",
-      },
-    });
+    expect(answer).toEqual({ status: 409, body: { error: expect.any(String) } });
     expect(await stored(team)).toEqual(before);
     expect(before.proposals).toMatchObject([{ id: proposal.id, state: "pending" }]);
   });

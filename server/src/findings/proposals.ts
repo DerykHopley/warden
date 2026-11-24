@@ -40,9 +40,9 @@ export class ProposalNotFound extends Error {
  */
 export class ProposalDecided extends Error {
   readonly proposalId: string;
-  readonly state: Proposal["state"];
+  readonly state: Exclude<Proposal["state"], "pending">;
 
-  constructor(proposalId: string, state: Proposal["state"]) {
+  constructor(proposalId: string, state: Exclude<Proposal["state"], "pending">) {
     super(`This Proposal was ${state} already.`);
     this.name = "ProposalDecided";
     this.proposalId = proposalId;

@@ -13,18 +13,12 @@ import {
 import type pg from "pg";
 import { ZodError } from "zod";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import {
-  createFindings,
-  DecisionRefused,
-  FindingNotFound,
-  NotALead,
-  type Findings,
-} from "../src/findings/index.ts";
+import { createFindings, FindingNotFound, NotALead, type Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
-import { seedTeam } from "./helpers.ts";
+import { refusal, seedTeam } from "./helpers.ts";
 import { poolAs } from "./databases.ts";
 
 let pool: pg.Pool;
@@ -298,10 +292,10 @@ describe("a named decision on a Status its call doesn't allow", () => {
       const { id, candidate } = await make(team);
       const before = await stored(team);
 
-      const refused = await calls[call](team, id, lead, candidate).catch((error: unknown) => error);
-
-      expect(refused).toBeInstanceOf(DecisionRefused);
-      expect((refused as Error).message).toBe(words);
+      expect(await refusal(calls[call](team, id, lead, candidate))).toEqual({
+        name: "DecisionRefused",
+        message: words,
+      });
       expect(await stored(team)).toEqual(before);
     },
   );
@@ -322,10 +316,10 @@ describe("a named decision on a Status its call doesn't allow", () => {
     const merged = await given(team, { status: "fixed", moved_to: into.id });
     const before = await stored(team);
 
-    const refused = await calls[call](team, merged.id, lead, into.id).catch((e: unknown) => e);
-
-    expect(refused).toBeInstanceOf(DecisionRefused);
-    expect((refused as Error).message).toBe(words);
+    expect(await refusal(calls[call](team, merged.id, lead, into.id))).toEqual({
+      name: "DecisionRefused",
+      message: words,
+    });
     expect(await stored(team)).toEqual(before);
   });
 });

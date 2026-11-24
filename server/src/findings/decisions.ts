@@ -9,6 +9,7 @@ import {
   DECISION_TAKES,
   MarkMovedBody,
   ReasonBody,
+  STATUS_WORDS,
   type Decision as ContractDecision,
   type Finding,
   type Status,
@@ -63,12 +64,10 @@ export class DecisionRefused extends Error {
   }
 }
 
-/** A Status as a refusal says it (GLOSSARY.md): "This Finding is now …". */
-const STATUS_WORDS: Record<Status, string> = {
-  open: "Open",
-  fixed: "Fixed",
-  accepted: "Accepted",
-  false_positive: "a False positive",
+/** A Status as a refusal's sentence says it: the contracts' words, with "a" before False positive. */
+const STATUS_IN_SENTENCE: Record<Status, string> = {
+  ...STATUS_WORDS,
+  false_positive: `a ${STATUS_WORDS.false_positive}`,
 };
 
 /** What a refused call can't do, as a refusal ends: "…, so …". */
@@ -155,7 +154,7 @@ export async function findingFor(
   team: string,
   id: string,
   call: DecisionCall,
-): Promise<{ finding: Finding; refuse: (why: string) => DecisionRefused }> {
+): Promise<{ finding: Finding; refuse: (words: string) => DecisionRefused }> {
   const finding = await loadFinding(tx, team, id);
   if (!finding) throw new FindingNotFound(id);
   const refuse = (words: string) => new DecisionRefused(call, finding.status, words);
@@ -165,8 +164,8 @@ export async function findingFor(
   if (!allowedFrom(call).includes(finding.status)) {
     throw refuse(
       LEAVES[call] === finding.status
-        ? `This Finding is ${STATUS_WORDS[finding.status]} already.`
-        : `This Finding is now ${STATUS_WORDS[finding.status]}, so ${CANT[call]}.`,
+        ? `This Finding is ${STATUS_IN_SENTENCE[finding.status]} already.`
+        : `This Finding is now ${STATUS_IN_SENTENCE[finding.status]}, so ${CANT[call]}.`,
     );
   }
   return { finding, refuse };
@@ -281,7 +280,7 @@ export async function applyLockedDecision(
       }
       if (candidate.status !== "open") {
         throw refuse(
-          `The chosen Finding is ${STATUS_WORDS[candidate.status]}, not Open, ${CANT_MERGE}`,
+          `The chosen Finding is ${STATUS_IN_SENTENCE[candidate.status]}, not Open, ${CANT_MERGE}`,
         );
       }
       // The old Finding keeps its module, Rule and Asset, so it can only take a problem with the same three.
