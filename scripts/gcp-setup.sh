@@ -180,17 +180,28 @@ github_repository() {
 # The quota project in the application-default credentials, or nothing when they set none. No gcloud command prints
 # it: it's the credentials file's quota_project_id, which gcloud and Google's client libraries (the proxy's) read
 # from GOOGLE_APPLICATION_CREDENTIALS when set, otherwise from gcloud's config folder (CLOUDSDK_CONFIG, or
-# ~/.config/gcloud). No file (credentials from a metadata server): nothing. A file that isn't valid JSON fails with
-# that alone: JSON.parse's own error quotes the file, which holds secrets (client_secret, refresh_token).
+# ~/.config/gcloud). No file in gcloud's folder (credentials from a metadata server): nothing. A file
+# GOOGLE_APPLICATION_CREDENTIALS names that doesn't exist, one it can't read, and one that isn't valid JSON each fail
+# with that alone: JSON.parse's own error quotes the file, which holds secrets (client_secret, refresh_token).
 adc_quota_project() {
   local config=${CLOUDSDK_CONFIG:-$HOME/.config/gcloud}
   local file=${GOOGLE_APPLICATION_CREDENTIALS:-$config/application_default_credentials.json}
-  if [[ ! -f $file ]]; then return 0; fi
+  if [[ -n ${GOOGLE_APPLICATION_CREDENTIALS:-} && ! -e $file ]]; then
+    echo "gcp-setup: the file GOOGLE_APPLICATION_CREDENTIALS names doesn't exist: $file" >&2
+    return 1
+  fi
+  if [[ ! -e $file ]]; then return 0; fi
   node -e '
     const file = process.argv[1];
-    let credentials;
+    let text, credentials;
     try {
-      credentials = JSON.parse(require("node:fs").readFileSync(file, "utf8"));
+      text = require("node:fs").readFileSync(file, "utf8");
+    } catch {
+      process.stderr.write(`gcp-setup: can'\''t read ${file}, the application-default credentials file\n`);
+      process.exit(1);
+    }
+    try {
+      credentials = JSON.parse(text);
     } catch {
       process.stderr.write(`gcp-setup: the application-default credentials file ${file} isn'\''t valid JSON\n`);
       process.exit(1);
@@ -241,7 +252,15 @@ preflight() {
     echo "gcp-setup: couldn't read the application-default credentials' quota project; nothing was changed" >&2
     exit 1
   fi
-  if [[ -n $quota && $quota != "$project" ]]; then
+  # GOOGLE_CLOUD_QUOTA_PROJECT comes before the file's quota project: the proxy's Google auth library takes it first.
+  if [[ -n ${GOOGLE_CLOUD_QUOTA_PROJECT:-} ]]; then
+    if [[ $GOOGLE_CLOUD_QUOTA_PROJECT != "$project" ]]; then
+      echo "gcp-setup: GOOGLE_CLOUD_QUOTA_PROJECT is $GOOGLE_CLOUD_QUOTA_PROJECT, not $project, and the" \
+        "Cloud SQL Auth Proxy bills its calls there before the credentials' quota project, so they would be" \
+        "refused; unset it, or set it to $project. Nothing was changed." >&2
+      exit 1
+    fi
+  elif [[ -n $quota && $quota != "$project" ]]; then
     echo "gcp-setup: the application-default credentials' quota project is $quota, not $project," \
       "so the Cloud SQL Auth Proxy's calls would be refused; run" \
       "gcloud auth application-default set-quota-project $project first. Nothing was changed." >&2
