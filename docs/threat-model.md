@@ -173,7 +173,7 @@ settled on ticket #5.
 | J5 | Spending runs away | D | An outside attacker; a developer; a looping run | The month's budget gone | Three limits: the $15 cap on the OpenRouter key; per-Team limits that count every spending path (chat, Judge, retries, Scans), with a test for each path; a call budget per run | Guard spec | Designed | SD spending cap, per-Team limits, call budget |
 | J6 | Event content kept or trained on by a model provider | I | The model provider | A Team's content outside Warden's retention | Routing only to Zero Data Retention endpoints, with training off, on the account and per request; the local-model option sends nothing to OpenRouter (`data.md`) | Guard spec | Designed | SD local-model option, SD data.md lists what leaves |
 | J7 | The Judge's input kept in Langfuse | I | Anyone with Langfuse access | Event content kept beyond 7 days | A Judge call's trace holds metadata only: model, tokens, cost, timing, outcome | Guard spec | Designed | ADR 0007, #5 d2 |
-| J8 | A flagged session's evidence questioned later | R | A developer; an assessor | The Finding can't be checked against what the Judge saw | The Finding keeps the masked events the Judge used and a SHA-256 hash of the redacted events it read, in order | Guard spec | Designed | ADR 0007, #5 d4 |
+| J8 | A flagged session's evidence questioned later | R | A developer; an assessor | The Finding can't be checked against what the Judge saw | The Finding keeps the masked events the Judge used and a SHA-256 hash of the redacted events it read, in order | Slice 6, #11 (format); Guard spec (keeping it) | Built in part: the evidence format, the masked events and the events hash in `SessionEvidence` (slice 6, #11). Designed: keeping it on a Judge's Finding (Guard spec) | ADR 0007, #5 d4 |
 
 ### Dashboard and API (built in part, #4; Roles in slice 5)
 
@@ -197,7 +197,7 @@ settled on ticket #5.
 | D3 | A foreign key reveals another Team's rows | I | A person in another Team | Learning that another Team's rows exist | Foreign keys carry the Team: `(team_id, id)` | Slice 4, and every later table | Designed: every Team-owned table. Proven on a test-only table (case 12, #12) | ADR 0006 |
 | D4 | The app's connection bypasses the policies | E | A bug in Warden; the operator | Policies don't apply | Separate roles: the app role (bound by the policies), the migration role, and the admin role, used from one marked place in the code. Checked on the real Cloud SQL that the app role is bound | Slice 4; slice 1b for the Cloud SQL check | Built in part: the three roles, warden_app without BYPASSRLS or membership (slice 4a, #10); the admin role from one marked place, `withAdmin` (slice 4b, #12). Designed: the Cloud SQL check (slice 1b) | ADR 0006 |
 | D5 | A pooled connection carries a Team into its next use | I | A bug in Warden | One request sees another Team's rows | `withTeam` sets the Team for one transaction only | Slice 4 | Built: with a test on a one-connection pool (slice 4b, #12) | ADR 0006 |
-| D6 | History edited to hide a decision | T, R | The app role; a bug | Audit evidence changed | Status history and Role history are append-only, enforced in Postgres (a trigger or grants), with a test that an update or delete fails | Slice 5 (Role history), slice 7 (Status history) | Designed | SD append-only |
+| D6 | History edited to hide a decision | T, R | The app role; a bug | Audit evidence changed | Status history and Role history are append-only, enforced in Postgres (a trigger or grants), with a test that an update or delete fails | Slice 5 (Role history), slice 7 (Status history) | Built in part: Status history, where a trigger refuses update, delete and truncate from every role and warden_app has no update or delete grant, with a test of each (slice 7, #22). Designed: Role history (slice 5) | SD append-only |
 | D7 | The database reached from the internet | I, S | Outside attacker | Direct access to every Team | Cloud SQL is reached only through Cloud Run's Cloud SQL connection, as Warden's service account; no public authorized networks | Slice 1b | Designed | SD least-privilege service account |
 
 ### Secrets and the release (slice 1b, #4)
@@ -285,13 +285,13 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 | Outside text as tagged data, never instructions | J1 | Designed: Guard spec |
 | Text that reads like instructions is flagged | J2 | Designed: Guard spec |
 | An injection fixture with a test that the app ignores it | J3 | Designed: Guard spec |
-| A test that Team B can't read or change Team A's Findings | A6, D1 | Designed: slices 4 and 7 |
+| A test that Team B can't read or change Team A's Findings | A6, D1 | Built: slices 4b (#12, the attack cases) and 7 (#22, Findings, history and Scans) |
 | Roles kept server-side, never trusted from the client | A4 | Designed: slice 5 |
-| Redaction on output and in logs; secret values never stored, only masked | L1, A3, H8; `data.md`, Data minimisation | Built: logs and 500 bodies (slice 1a, #4). Designed: events (Guard spec), evidence (slice 6) |
+| Redaction on output and in logs; secret values never stored, only masked | L1, A3, H8; `data.md`, Data minimisation | Built: logs and 500 bodies (slice 1a, #4); evidence (slice 6, #11). Designed: events (Guard spec) |
 | A retention period and a way to delete | H9; `data.md`, Retention and deletion | Decided: slice 2 (this document). Designed: the drop job (Guard spec); Team deletion (not yet planned) |
 | `docs/data.md` lists what leaves the machine | `data.md`, What leaves the machine | Built: slice 2 (this document) |
 | A local-model option for the Judge | J6; `data.md`, What leaves the machine | Designed: Guard spec |
-| Append-only history enforced in Postgres, with a test | D6 | Designed: slices 5 and 7 |
+| Append-only history enforced in Postgres, with a test | D6 | Built: Status history (slice 7, #22). Designed: Role history (slice 5) |
 | Secrets: keyring and `.envrc` locally, Secret Manager on the host | R1, R2 | Built: keyring and `.envrc` (slice 1a, #4). Designed: Secret Manager (slice 1b) |
 
 ## Open questions
