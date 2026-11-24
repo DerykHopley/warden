@@ -1,5 +1,6 @@
 // The app shell's header and its Team: the Team's name from Clerk, the Role from /api/me, and an Organization switch.
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.tsx";
 import { callsTo, deferred, fetchMock, json, serve } from "./fake-api.ts";
@@ -19,37 +20,94 @@ afterEach(() => vi.unstubAllGlobals());
 
 const header = () => within(screen.getByRole("banner"));
 const me = (team: string | null, role: string | null) =>
-  json(200, { userId: "user_1", team, role });
+  json(200, { userId: "user_1", team, role, level: team === null ? null : "quick" });
+
+const overview = (team = "org_a") =>
+  json(200, {
+    team,
+    level: "quick",
+    last_scan_at: null,
+    has_findings: false,
+    period_days: 30,
+    open_at_start: 0,
+    open_now: 0,
+    fix_rate: { fixed: 0, of: 0 },
+  });
+
+const headerLinks = () =>
+  header()
+    .getAllByRole("link")
+    .map((link) => [link.textContent, link.getAttribute("href")]);
 
 describe("the landing page by Role", () => {
-  it.each(["member", "lead", "admin"])(
-    "at /, takes a %s to Findings, with the header's links Findings then People",
+  it("at /, takes a Member to Findings without a new history entry, with the header's links Findings, Overview, People", async () => {
+    clerk.auth.orgId = "org_a";
+    serve({
+      me: () => me("org_a", "member"),
+      findings: () => json(200, { team: "org_a", findings: [] }),
+    });
+    const entries = history.length;
+    render(<App />);
+
+    expect(
+      await screen.findByText("No Findings yet: they appear after the first Scan."),
+    ).toBeInTheDocument();
+    expect(location.pathname).toBe("/findings");
+    expect(history.length).toBe(entries);
+    expect(headerLinks()).toEqual([
+      ["Findings", "/findings"],
+      ["Overview", "/overview"],
+      ["People", "/people"],
+    ]);
+    expect(header().getByRole("link", { name: "Findings" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(header().getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
+    expect(header().getByRole("link", { name: "People" })).not.toHaveAttribute("aria-current");
+  });
+
+  it.each(["lead", "admin"])(
+    "at /, takes a %s to Overview without a new history entry, its header link current",
     async (role) => {
       clerk.auth.orgId = "org_a";
-      serve({
-        me: () => me("org_a", role),
-        findings: () => json(200, { team: "org_a", findings: [] }),
-      });
+      serve({ me: () => me("org_a", role), overview: () => overview() });
       const entries = history.length;
       render(<App />);
 
       expect(
-        await screen.findByText("No Findings yet: they appear after the first Scan."),
+        await screen.findByText("No Findings yet: the trend starts after the first Scan."),
       ).toBeInTheDocument();
-      expect(location.pathname).toBe("/findings");
+      expect(screen.getByRole("heading", { level: 1, name: "Overview" })).toBeInTheDocument();
+      expect(location.pathname).toBe("/overview");
       expect(history.length).toBe(entries);
-      const links = header().getAllByRole("link");
-      expect(links.map((link) => [link.textContent, link.getAttribute("href")])).toEqual([
+      expect(headerLinks()).toEqual([
         ["Findings", "/findings"],
+        ["Overview", "/overview"],
         ["People", "/people"],
       ]);
-      expect(header().getByRole("link", { name: "Findings" })).toHaveAttribute(
+      expect(header().getByRole("link", { name: "Overview" })).toHaveAttribute(
         "aria-current",
         "page",
       );
-      expect(header().getByRole("link", { name: "People" })).not.toHaveAttribute("aria-current");
+      expect(header().getByRole("link", { name: "Findings" })).not.toHaveAttribute("aria-current");
+      expect(callsTo("/api/findings")).toHaveLength(0);
     },
   );
+
+  it("on Overview, the Ask Warden panel talks about the page, with no detail card", async () => {
+    window.history.replaceState(null, "", "/overview");
+    clerk.auth.orgId = "org_a";
+    serve({ me: () => me("org_a", "admin"), overview: () => overview() });
+    render(<App />);
+    await screen.findByText("No Findings yet: the trend starts after the first Scan.");
+
+    await userEvent.click(screen.getByRole("button", { name: "Ask Warden" }));
+
+    const panel = within(screen.getByRole("complementary", { name: "Ask Warden" }));
+    expect(panel.getByText(/^Talking about:/)).toHaveTextContent(/^Talking about: view: Overview$/);
+    expect(panel.queryAllByRole("region")).toEqual([]);
+  });
 
   it("at /, shows the shell's waiting line and no page while /api/me hasn't answered", async () => {
     clerk.auth.orgId = "org_a";

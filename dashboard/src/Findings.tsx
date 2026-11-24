@@ -2,12 +2,20 @@
 // cards ("Start here"), then every Finding that matches the view in a table, with filter tabs. The view lives in the
 // URL: a filter pushes a history entry, so Back and Forward step through views; selecting a Finding replaces the
 // entry, so a reload or a shared link selects it again.
-import { FindingsView, findingsViewPath, Module, Severity, type Finding } from "@warden/contracts";
+import {
+  FindingsView,
+  findingsViewPath,
+  Module,
+  Severity,
+  type Finding,
+  type Level,
+} from "@warden/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { askAboutTeam } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import {
   ASSET_KIND_WORDS,
+  LEVEL_WORDS,
   MODULE_WORDS,
   SEVERITY_WORDS,
   STATUS_WORDS,
@@ -123,6 +131,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
       {list.result !== "loading" && <TeamRefused result={list.result} />}
       {findings !== null && (
         <>
+          {me.level !== null && <LevelLine level={me.level} />}
           <h1 className="summary-line">{summaryLine(findings)}</h1>
           <TopFive findings={topFive(findings)} focused={focused} onSelect={select} />
           {findings.length > 0 && (
@@ -159,6 +168,15 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
         </>
       )}
     </>
+  );
+}
+
+/** The Team's Level, one quiet line above the summary, linking to the journey on Overview. */
+function LevelLine({ level }: { level: Level }) {
+  return (
+    <p className="level-line">
+      Level: {LEVEL_WORDS[level]} · <a href="/overview">see the journey</a>
+    </p>
   );
 }
 

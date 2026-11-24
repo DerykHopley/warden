@@ -61,7 +61,7 @@ describe("a Team's first visit", () => {
 
     expect(await me("user_founder", team, "admin")).toEqual({
       status: 200,
-      body: { userId: "user_founder", team, role: "admin" },
+      body: { userId: "user_founder", team, role: "admin", level: "quick" },
     });
 
     expect(await stored(team)).toEqual({
@@ -101,7 +101,7 @@ describe("a Team's first visit", () => {
     for (const answer of answers) {
       expect(answer).toEqual({
         status: 200,
-        body: { userId: "user_founder", team, role: "admin" },
+        body: { userId: "user_founder", team, role: "admin", level: "quick" },
       });
     }
     const { teams, members, history } = await stored(team);
@@ -118,11 +118,11 @@ describe("an invited person's first visit", () => {
 
     expect(await me("user_invited", team, "admin")).toEqual({
       status: 200,
-      body: { userId: "user_invited", team, role: "member" },
+      body: { userId: "user_invited", team, role: "member", level: "quick" },
     });
     expect(await me("user_invited", team, "admin")).toEqual({
       status: 200,
-      body: { userId: "user_invited", team, role: "member" },
+      body: { userId: "user_invited", team, role: "member", level: "quick" },
     });
 
     const { members, history } = await stored(team);
@@ -178,7 +178,12 @@ describe("an invited person's first visit", () => {
       const res = await open();
 
       expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ userId: "user_clerk_admin", team, role: "member" });
+      expect(await res.json()).toEqual({
+        userId: "user_clerk_admin",
+        team,
+        role: "member",
+        level: "quick",
+      });
       expect(calls).toEqual([
         { organizationId: team, userId: "user_clerk_admin", role: "org:member" },
       ]);
@@ -219,6 +224,7 @@ describe("an invited person's first visit", () => {
       userId: "user_lead",
       team,
       role: "lead",
+      level: "quick",
     });
   });
 });
@@ -238,7 +244,12 @@ describe("GET /api/me without an active Organization", () => {
     });
 
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ userId: "user_solo", team: null, role: null });
+    expect(await res.json()).toEqual({
+      userId: "user_solo",
+      team: null,
+      role: null,
+      level: null,
+    });
     expect(teamsReached).toEqual([]);
   });
 });
@@ -266,11 +277,13 @@ describe("Team B and Team A", () => {
       userId: "user_both",
       team: b,
       role: "member",
+      level: "quick",
     });
     expect((await me("user_both", a, "member")).body).toEqual({
       userId: "user_both",
       team: a,
       role: "admin",
+      level: "quick",
     });
   });
 });

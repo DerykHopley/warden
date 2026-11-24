@@ -16,6 +16,7 @@ import {
   type HistoryBody,
   type MeBody,
   type MembersBody,
+  type OverviewBody,
   type Proposal,
   type ProposalsBody,
   type TeamMember,
@@ -27,10 +28,12 @@ import {
   DecisionRefused,
   FindingNotFound,
   NotALead,
+  OVERVIEW_PERIOD_DAYS,
   ProposalDecided,
   ProposalNotFound,
   type Findings,
 } from "./findings/index.ts";
+import { teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
 import { securityHeaders } from "./security-headers.ts";
@@ -172,13 +175,15 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     return c.json(body, body.status === "ok" ? 200 : 503);
   });
 
-  // Opening Warden creates or joins the Team, and answers the person's Team and Role (both null with no Team).
+  // Opening Warden creates or joins the Team, and answers the person's Team, Role and the Team's Level (each null with
+  // no Team). The Findings page's Level line reads it here, so it needs no call of its own.
   app.get("/api/me", async (c) => {
     const opened = await openSession(c);
     if (opened instanceof Response) return opened;
     const { session, team } = opened;
     const role = team === null ? null : opened.role;
-    return c.json({ userId: session.userId, team, role } satisfies MeBody);
+    const level = team === null ? null : teamLevel();
+    return c.json({ userId: session.userId, team, role, level } satisfies MeBody);
   });
 
   // The Team is always the session's, never the request's: row-level security through withTeam shows only its rows.
@@ -321,6 +326,18 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     const team = c.get("team");
     const list = await findings.list(team);
     return c.json({ team, findings: list } satisfies FindingsBody);
+  });
+
+  // Any person in the Team reads its Level and trend (story 10): the Overview.
+  app.get("/api/overview", requireRole("member"), async (c) => {
+    const team = c.get("team");
+    const numbers = await findings.overview(team, OVERVIEW_PERIOD_DAYS);
+    return c.json({
+      team,
+      level: teamLevel(),
+      period_days: OVERVIEW_PERIOD_DAYS,
+      ...numbers,
+    } satisfies OverviewBody);
   });
 
   // Any person in the Team reads its pending Proposals, oldest first, each marked stale when its Finding has changed

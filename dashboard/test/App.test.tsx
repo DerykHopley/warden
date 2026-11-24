@@ -87,7 +87,7 @@ describe("App", () => {
   it("asks the server who the person is with their session token, and signs out from the header", async () => {
     signIn();
     serve({
-      me: () => json(200, { userId: "user_1", team: "org_1", role: "admin" }),
+      me: () => json(200, { userId: "user_1", team: "org_1", role: "admin", level: "quick" }),
       findings: () => json(200, { team: "org_1", findings: [] }),
     });
     render(<App />);
@@ -127,7 +127,7 @@ describe("App", () => {
     signOut();
     rerender(<App />);
 
-    serve({ me: () => json(200, { userId: "user_again", team: null, role: null }) });
+    serve({ me: () => json(200, { userId: "user_again", team: null, role: null, level: null }) });
     signIn("sess_2", null);
     rerender(<App />);
     expect(
@@ -156,7 +156,7 @@ describe("App", () => {
       me: () => {
         answered += 1;
         if (answered === 1) throw new TypeError("Failed to fetch");
-        return json(200, { userId: "user_1", team: "org_1", role: "member" });
+        return json(200, { userId: "user_1", team: "org_1", role: "member", level: "quick" });
       },
       findings: () => json(200, { team: "org_1", findings: [] }),
     });

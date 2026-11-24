@@ -2,6 +2,7 @@
 // hands over. One zod schema gives both the type and the check. The dashboard bundles this entry point, so nothing
 // here may touch the file system; the reconcile cases load from `@warden/contracts/reconcile-cases`.
 import { z } from "zod";
+import { Level } from "./findings-view.ts";
 
 export * from "./finding.ts";
 export { fingerprint } from "./fingerprint.ts";
@@ -29,13 +30,14 @@ export function atLeast(has: Role, needed: Role): boolean {
 
 /**
  * `GET /api/me`: the signed-in person, as the server read them from their Clerk session token, with their Team (the
- * token's active Clerk Organization id) and their Role in it from Warden's own table. Both are null when the token
- * has no active Organization.
+ * token's active Clerk Organization id), their Role in it from Warden's own table, and the Team's Level. Each is null
+ * when the token has no active Organization.
  */
 export const MeBody = z.object({
   userId: z.string().min(1),
   team: z.string().min(1).nullable(),
   role: Role.nullable(),
+  level: Level.nullable(),
 });
 export type MeBody = z.infer<typeof MeBody>;
 
