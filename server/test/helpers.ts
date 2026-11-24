@@ -6,8 +6,11 @@ import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
 import type { HealthBody, Role } from "@warden/contracts";
 import { createApp, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
+import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createLogger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
+import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
@@ -78,9 +81,21 @@ export async function seedTeam(
   });
 }
 
-/** Members for a test that never reaches the database: any call fails it. */
+/** Members and Findings for a test that never reaches the database: any call fails it. */
 const noDatabase = () => Promise.reject(new Error("this test app has no database: pass withTeam"));
 const noMembers: Members = { open: noDatabase, list: noDatabase, changeRole: noDatabase };
+const noFindings: Findings = {
+  reconcile: noDatabase,
+  report: noDatabase,
+  scan: noDatabase,
+  list: noDatabase,
+  history: noDatabase,
+  accept: noDatabase,
+  markFalsePositive: noDatabase,
+  confirmFix: noDatabase,
+  markMoved: noDatabase,
+  reopen: noDatabase,
+};
 
 /** A Clerk seam for a test that doesn't look at Clerk: every call is refused (a Role change answers 502; a join logs it). */
 const noClerk: ClerkOrganizations = {
@@ -90,7 +105,8 @@ const noClerk: ClerkOrganizations = {
 
 /**
  * The app with a real Clerk verifier over `publicPem`, and the log lines it writes. With `withTeam`, the real members
- * module on it, calling `clerkOrganizations` (a fake) to keep Clerk's org:admin in step. It runs as on Cloud Run, so
+ * module on it, calling `clerkOrganizations` (a fake) to keep Clerk's org:admin in step, and the real Findings module
+ * with Guard's and Patch's move rules, as the start-up file wires them. It runs as on Cloud Run, so
  * a test picks the client's address with an X-Forwarded-For header. `mount` adds throwaway routes, behind the app's
  * own middleware.
  */
@@ -121,6 +137,12 @@ export function testApp(options: {
             clerkTimeoutMs: options.clerkTimeoutMs,
           })
         : noMembers,
+      findings: options.withTeam
+        ? createFindings({
+            withTeam: options.withTeam,
+            moveRules: { guard: guardMoveRule, patch: patchMoveRule },
+          })
+        : noFindings,
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),
       frontendApiHost: FRONTEND_API_HOST,

@@ -21,7 +21,7 @@ import {
 } from "@warden/contracts";
 import type { HistoryActorKind } from "../schema.ts";
 import type { WithTeam } from "../with-team.ts";
-import { applyDecision, personOf, type Decision } from "./decisions.ts";
+import { applyDecision, FindingNotFound, personOf, type Decision } from "./decisions.ts";
 import { applyRun, type MoveRule, type ReconcileOutcome } from "./reconcile.ts";
 import { fromRow, isoDateTime } from "./rows.ts";
 
@@ -75,7 +75,7 @@ export interface Findings {
   ): Promise<ReconcileOutcome>;
   /** The Team's Findings, each parsed with Finding v1, so they come back read-only. */
   list(team: string): Promise<Finding[]>;
-  /** One Finding's history, oldest first; empty for a Finding the Team doesn't have. */
+  /** One Finding's history, oldest first. Throws FindingNotFound for an id the Team doesn't have. */
   history(team: string, findingId: string): Promise<HistoryEntry[]>;
 
   // A person's named decisions. Each throws for an agent Actor before anything is read, a zod error for bad input,
@@ -196,6 +196,13 @@ export function createFindings({
 
     history(team, findingId) {
       return withTeam(team, async (tx) => {
+        const finding = await tx
+          .selectFrom("findings")
+          .select("id")
+          .where("team_id", "=", team)
+          .where("id", "=", findingId)
+          .executeTakeFirst();
+        if (!finding) throw new FindingNotFound(findingId);
         const rows = await tx
           .selectFrom("finding_history")
           .selectAll()
