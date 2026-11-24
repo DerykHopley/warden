@@ -25,6 +25,31 @@ The module that proves compliance: policies, controls, gaps and evidence for an 
 The group that owns Assets and sees their Findings. Each Asset belongs to exactly one Team.
 _Avoid_: org, organization, tenant, customer
 
+**Role**:
+What a person may do in one Team: Member, Lead or Admin. Each Role includes the one below it. Everyone in a Team
+sees every page; a Role decides what they may change, and which page opens first.
+_Avoid_: permission level, access level
+
+**Member**:
+A Role: sees everything, asks the chat, starts Spot runs and opens Fix PRs. Can only propose Accepted or False
+positive.
+_Avoid_: viewer, developer (as a Role)
+
+**Lead**:
+A Role: also makes the decisions a person must make: accepts risk, marks False positives, confirms or moves fixes,
+reopens Findings, approves Proposals and reviews Verdicts.
+_Avoid_: reviewer, compliance lead, approver
+
+**Admin**:
+A Role: also controls what Warden may collect and change: people and their Roles, the hook token, the GitHub write
+grant, the Privacy tier, the Baseline, the Catalogues, retention, deleting data, and turning developer names on. A
+Team always has at least one Admin.
+_Avoid_: owner
+
+**Assessor**:
+A person outside the Team who may read its evidence for a limited time, such as a TISAX assessor. Not built yet.
+_Avoid_: auditor (for this), guest
+
 **Scan**:
 One run of a Baseline over some of a Team's Assets. A Scan marks a Finding Fixed only if it covered that Asset
 with that Rule and didn't see the problem. Patch's CVE refresh is a Scan (its Assets are Products). Scans are
@@ -88,7 +113,8 @@ Where a Finding stands: Open, Fixed, Accepted or False positive. Every change na
 Who made a change: a person or an agent. An agent can't set Accepted or False positive; it makes a Proposal.
 
 **Proposal**:
-A decision an agent suggests, such as accepting a Finding. It waits until a person approves or rejects it.
+A decision an agent suggests, such as accepting a Finding. It waits until a person with the right Role approves or
+rejects it, and keeps both who asked for it and who approved it.
 _Avoid_: suggestion, draft decision
 
 **Fix rate**:
