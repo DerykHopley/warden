@@ -8,12 +8,23 @@
 // - warden_admin bypasses row-level security, for the few deliberate cross-Team tasks. Only a user that has
 //   BYPASSRLS can grant it, so on Cloud SQL warden_admin is made without it, with a warning.
 //
+// Only those three (and the database's owner) may connect to the database: PUBLIC loses CONNECT on it.
+//
+// WARDEN_DATABASE_ROLES picks the set (see databaseRoleNames): the live one above by default, or `preview` for the
+// warden_preview database, whose warden_preview_* roles do the same three jobs. The setup script runs it once per
+// set, each on its own database, so neither set can connect to the other's.
+//
 // Passwords: WARDEN_APP_PASSWORD and WARDEN_MIGRATE_PASSWORD, when set (printable ASCII), become warden_app's and
 // warden_migrate's, sent as SCRAM-SHA-256 verifiers made here. Unset, no password is set, and one already set is left:
 // compose and CI use trust auth. No password reaches Postgres, a log line or an error.
 import { createHash, createHmac, pbkdf2Sync, randomBytes } from "node:crypto";
 import pg from "pg";
-import { createPool, DATABASE_ROLE_NAMES, type DatabaseRoleNames } from "./database.ts";
+import {
+  createPool,
+  DATABASE_ROLE_NAMES,
+  databaseRoleNames,
+  type DatabaseRoleNames,
+} from "./database.ts";
 import { createLogger, type Logger } from "./log.ts";
 
 export type CreateRolesOptions = {
@@ -94,8 +105,34 @@ export async function createRoles(
   await pool.query(`alter schema public owner to ${migrate}`);
   await pool.query(`grant usage on schema public to ${app}, ${admin}`);
 
+  await restrictConnect(pool, [names.migrate, names.app, names.admin]);
+
   await setPassword(pool, names.app, passwords.app);
   await setPassword(pool, names.migrate, passwords.migrate);
+}
+
+/** Only `roles` (and the database's owner) may connect to the database the roles script runs on: PUBLIC loses
+ * Postgres's default CONNECT, so a role of the other set can't connect to it. A user that may not revoke it (it isn't
+ * the owner, or a member of the owning role, as Cloud SQL's `postgres` is) only gets a warning from Postgres: checked
+ * after, and thrown naming the database. */
+async function restrictConnect(pool: RolesConnection, roles: string[]) {
+  const {
+    rows: [current],
+  } = await pool.query<{ database: string }>("select current_database() as database");
+  if (!current) throw new Error("the database running roles has no name");
+  const database = pg.escapeIdentifier(current.database);
+  await pool.query(`revoke connect on database ${database} from public`);
+  await pool.query(
+    `grant connect on database ${database} to ${roles.map(pg.escapeIdentifier).join(", ")}`,
+  );
+  const { rows } = await pool.query<{ open: boolean }>(
+    "select has_database_privilege('public', current_database(), 'CONNECT') as open",
+  );
+  if (rows[0]?.open) {
+    throw new Error(
+      `PUBLIC can still connect to ${current.database}; revoke it as the database's owner`,
+    );
+  }
 }
 
 // A role is created or altered only when it differs from what's wanted, and only in the attributes that differ: roles
@@ -207,22 +244,34 @@ async function revokeMemberships(pool: RolesConnection, app: string) {
   }
 }
 
-if (import.meta.main) {
-  const logger = createLogger();
+async function main(logger: Logger): Promise<number> {
+  let names: DatabaseRoleNames;
+  try {
+    names = databaseRoleNames(process.env);
+  } catch (error) {
+    logger.error("creating the roles failed", { error });
+    return 1;
+  }
   const pool = createPool(logger, { max: 1 });
   try {
     await createRoles(pool, {
+      names,
       logger,
       passwords: {
         app: process.env.WARDEN_APP_PASSWORD || undefined,
         migrate: process.env.WARDEN_MIGRATE_PASSWORD || undefined,
       },
     });
-    logger.info("roles ready", { roles: Object.values(DATABASE_ROLE_NAMES) });
+    logger.info("roles ready", { roles: Object.values(names) });
+    return 0;
   } catch (error) {
     logger.error("creating the roles failed", { error });
-    process.exitCode = 1;
+    return 1;
   } finally {
     await pool.end();
   }
+}
+
+if (import.meta.main) {
+  process.exitCode = await main(createLogger());
 }

@@ -1,5 +1,9 @@
 // The migration runner: plain SQL files in server/migrations, applied in file-name order by Kysely's Migrator, as
-// warden_migrate (PGUSER=warden_migrate; any other user is refused). Forwards only: no down migrations.
+// the role set's migration role (PGUSER=warden_migrate; any other user is refused). Forwards only: no down migrations.
+//
+// WARDEN_DATABASE_ROLES picks the set (see databaseRoleNames): live by default, or `preview` for the warden_preview
+// database, where the run is as warden_preview_migrate and each whole-word warden_migrate, warden_app and
+// warden_admin in a file's text becomes the preview set's name. The files themselves name the live roles.
 //
 // Row-level security on Team-owned tables is forced, so it binds warden_migrate too (ADR 0006): a data migration
 // over Team-owned rows sees and writes none unless it sets `warden.team_id`, once per Team (see 0002_teams.sql).
@@ -12,23 +16,44 @@ import { fileURLToPath } from "node:url";
 import { Kysely, PostgresDialect, sql } from "kysely";
 import { Migrator, type Migration, type MigrationProvider } from "kysely/migration";
 import type pg from "pg";
-import { createPool } from "./database.ts";
+import {
+  createPool,
+  DATABASE_ROLE_NAMES,
+  databaseRoleNames,
+  type DatabaseRoleNames,
+} from "./database.ts";
 import { createLogger, type Logger } from "./log.ts";
 
 /** Where the migrations live, here and in the image. */
 export const MIGRATIONS_FOLDER = fileURLToPath(new URL("../migrations", import.meta.url));
 
-/** The only user migrations run as: it owns the schema, and the default grants follow its tables. */
-const MIGRATION_ROLE = "warden_migrate";
+/** The live role names, each as a whole word: not part of a longer identifier (`warden_app_x`, `x_warden_app`). */
+const LIVE_ROLE_NAME = new RegExp(
+  `(?<![\\w$])(${Object.values(DATABASE_ROLE_NAMES).join("|")})(?![\\w$])`,
+  "g",
+);
 
-/** Each `.sql` file in `folder` as one migration, named by its file name without `.sql`. */
-export function sqlFileMigrations(folder: string): MigrationProvider {
+/** A migration's text with each whole-word live role name swapped for `names`' own. */
+export function withRoleNames(text: string, names: DatabaseRoleNames): string {
+  const swap: Record<string, string> = {
+    [DATABASE_ROLE_NAMES.migrate]: names.migrate,
+    [DATABASE_ROLE_NAMES.app]: names.app,
+    [DATABASE_ROLE_NAMES.admin]: names.admin,
+  };
+  return text.replace(LIVE_ROLE_NAME, (name) => swap[name] ?? name);
+}
+
+/** Each `.sql` file in `folder` as one migration, named by its file name without `.sql`, naming `names`' roles. */
+export function sqlFileMigrations(
+  folder: string,
+  names: DatabaseRoleNames = DATABASE_ROLE_NAMES,
+): MigrationProvider {
   return {
     async getMigrations() {
       const files = (await readdir(folder)).filter((file) => file.endsWith(".sql"));
       const migrations: Record<string, Migration> = {};
       for (const file of files) {
-        const text = await readFile(join(folder, file), "utf8");
+        const text = withRoleNames(await readFile(join(folder, file), "utf8"), names);
         migrations[file.slice(0, -".sql".length)] = {
           up: async (db) => {
             await sql.raw(text).execute(db);
@@ -56,17 +81,21 @@ export type MigrateResult = {
  * One `migrateUp` per file, not `migrateToLatest`: on Postgres, Kysely runs every pending migration in one
  * transaction, so a failing file would also undo the good files before it.
  */
-export async function migrate(pool: pg.Pool, folder = MIGRATIONS_FOLDER): Promise<MigrateResult> {
-  // Only warden_migrate's tables get the default grants, so any other user would make tables the app can't use (or,
-  // as a superuser, tables nobody else owns).
+export async function migrate(
+  pool: pg.Pool,
+  folder = MIGRATIONS_FOLDER,
+  names: DatabaseRoleNames = DATABASE_ROLE_NAMES,
+): Promise<MigrateResult> {
+  // Only the migration role's tables get the default grants, so any other user would make tables the app can't use
+  // (or, as a superuser, tables nobody else owns).
   try {
     const { rows } = await pool.query<{ user: string }>('select current_user as "user"');
     const user = rows[0]?.user;
-    if (user !== MIGRATION_ROLE) {
+    if (user !== names.migrate) {
       return {
         applied: [],
         error: new Error(
-          `migrations run as ${MIGRATION_ROLE}, not ${user}: set PGUSER=${MIGRATION_ROLE}`,
+          `migrations run as ${names.migrate}, not ${user}: set PGUSER=${names.migrate}`,
         ),
       };
     }
@@ -77,7 +106,7 @@ export async function migrate(pool: pg.Pool, folder = MIGRATIONS_FOLDER): Promis
   const db = new Kysely<unknown>({ dialect: new PostgresDialect({ pool }) });
   const migrator = new Migrator({
     db,
-    provider: sqlFileMigrations(folder),
+    provider: sqlFileMigrations(folder, names),
     // Kysely sorts the files by bytes but breaks ties between applied migrations with localeCompare; one order for
     // both, whatever the locale.
     nameComparator: (a, b) => (a < b ? -1 : a > b ? 1 : 0),
@@ -103,9 +132,16 @@ export function failureMessage({ applied, failed }: MigrateResult): string {
 }
 
 async function main(logger: Logger, folder: string): Promise<number> {
+  let names: DatabaseRoleNames;
+  try {
+    names = databaseRoleNames(process.env);
+  } catch (error) {
+    logger.error("migrating failed before any migration ran", { error });
+    return 1;
+  }
   const pool = createPool(logger, { max: 1 });
   try {
-    const result = await migrate(pool, folder);
+    const result = await migrate(pool, folder, names);
     const { applied, failed, error } = result;
     for (const migration of applied) logger.info("applied", { migration });
     if (error !== undefined) {

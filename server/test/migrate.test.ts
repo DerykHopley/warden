@@ -1,4 +1,5 @@
-// The migration runner: file-name order, nothing new on a second run, a failing file, the wrong user, no database.
+// The migration runner: file-name order, nothing new on a second run, a failing file, the wrong user, no database, an
+// unknown role set, and another role set's roles.
 // Each case gets a fresh database; the grants case uses the suite's migrated one. Cases that assert the exit code or
 // the output run it as its own process; the rest call `migrate` directly.
 import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
@@ -6,10 +7,17 @@ import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, inject, it } from "vitest";
+import {
+  createPool,
+  PREVIEW_DATABASE_ROLE_NAMES,
+  type DatabaseRoleNames,
+} from "../src/database.ts";
+import { createLogger } from "../src/log.ts";
 import { MIGRATIONS_FOLDER, migrate } from "../src/migrate.ts";
-import { createTestDatabase, poolAs, runInServer } from "./databases.ts";
+import { createTestDatabase, poolAs, runInServer, testName } from "./databases.ts";
 import { closedPort } from "./ports.ts";
 
+const silent = createLogger(() => {});
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
@@ -56,6 +64,20 @@ describe("pnpm migrate", () => {
     expect(second.code, second.output).toBe(0);
     expect(second.output).not.toContain('"message":"applied"');
     expect(await appliedMigrations(database.pool)).toEqual(shipped);
+  });
+
+  it("exits 1 for a WARDEN_DATABASE_ROLES it doesn't know, before connecting", async () => {
+    const result = await runInServer(["pnpm", "--silent", "migrate"], {
+      WARDEN_DATABASE_ROLES: "staging",
+      PGHOST: "127.0.0.1",
+      PGPORT: String(await closedPort()),
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain(
+      'WARDEN_DATABASE_ROLES must be live or preview, not \\"staging\\"',
+    );
+    expect(result.output).not.toMatch(/ECONNREFUSED/);
   });
 
   it("refuses to run as any user but warden_migrate, applying nothing", async () => {
@@ -144,6 +166,61 @@ describe("the migration runner", () => {
 
     expect(result.code).not.toBe(0);
     expect(result.output).toContain("ECONNREFUSED");
+  });
+});
+
+describe("the migration runner for another role set", () => {
+  /** A fresh database made for a role set under test names (roles belong to the whole Postgres server, and the
+   * preview set's real names are the role check's to test), with a pool as that set's migration role. */
+  async function freshDatabaseFor() {
+    const base = testName();
+    const names: DatabaseRoleNames = {
+      migrate: `${base}_migrate`,
+      app: `${base}_app`,
+      admin: `${base}_admin`,
+    };
+    cleanups.push(async () => {
+      const superuser = createPool(silent, { max: 1 });
+      try {
+        for (const role of [names.app, names.admin, names.migrate]) {
+          await superuser.query(`drop role if exists ${role}`);
+        }
+      } finally {
+        await superuser.end();
+      }
+    });
+    const database = await createTestDatabase({}, names);
+    cleanups.push(database.drop);
+    const pool = createPool(silent, { user: names.migrate, database: database.name, max: 1 });
+    cleanups.push(() => pool.end());
+    return { names, pool };
+  }
+
+  it("applies every shipped migration, granting that set's app role the tables and the live app role nothing", async () => {
+    const { names, pool } = await freshDatabaseFor();
+
+    expect(await migrate(pool, MIGRATIONS_FOLDER, names)).toEqual({ applied: shipped });
+
+    for (const table of ["teams", "findings"]) {
+      for (const privilege of ["select", "insert", "update", "delete"]) {
+        const { rows } = await pool.query(
+          "select has_table_privilege($1, $2, $3) as own, has_table_privilege('warden_app', $2, $3) as live",
+          [names.app, `public.${table}`, privilege],
+        );
+        expect(rows[0], `${privilege} on ${table}`).toEqual({ own: true, live: false });
+      }
+    }
+  });
+
+  it("refuses warden_migrate for the preview set, naming the preview migration role", async () => {
+    const database = await freshDatabase();
+
+    const result = await migrate(database.pool, MIGRATIONS_FOLDER, PREVIEW_DATABASE_ROLE_NAMES);
+
+    expect(result.applied).toEqual([]);
+    expect((result.error as Error).message).toBe(
+      "migrations run as warden_preview_migrate, not warden_migrate: set PGUSER=warden_preview_migrate",
+    );
   });
 });
 

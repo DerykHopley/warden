@@ -2,7 +2,12 @@
 // check that failed, or something else.
 import pg from "pg";
 import { describe, expect, it } from "vitest";
-import { connectionFailure, DatabaseRoleCheckError } from "./database.ts";
+import {
+  connectionFailure,
+  DatabaseRoleCheckError,
+  databaseRoleNames,
+  PREVIEW_DATABASE_ROLE_NAMES,
+} from "./database.ts";
 
 function systemError(code: string) {
   return Object.assign(new Error(`connect ${code} 127.0.0.1:5432`), { code });
@@ -47,4 +52,38 @@ describe("connectionFailure", () => {
     expect(connectionFailure(postgresError("53300", "too many connections"))).toBe("other");
     expect(connectionFailure(new Error("something new"))).toBe("other");
   });
+});
+
+describe("databaseRoleNames", () => {
+  it.each([
+    ["unset", {}],
+    ["empty", { WARDEN_DATABASE_ROLES: "" }],
+    ["live", { WARDEN_DATABASE_ROLES: "live" }],
+  ])("gives the live set when WARDEN_DATABASE_ROLES is %s", (_, env) => {
+    expect(databaseRoleNames(env)).toEqual({
+      migrate: "warden_migrate",
+      app: "warden_app",
+      admin: "warden_admin",
+    });
+  });
+
+  it("gives the preview set for preview", () => {
+    expect(databaseRoleNames({ WARDEN_DATABASE_ROLES: "preview" })).toEqual(
+      PREVIEW_DATABASE_ROLE_NAMES,
+    );
+    expect(PREVIEW_DATABASE_ROLE_NAMES).toEqual({
+      migrate: "warden_preview_migrate",
+      app: "warden_preview_app",
+      admin: "warden_preview_admin",
+    });
+  });
+
+  it.each(["staging", "Live", "PREVIEW", " live"])(
+    "throws for %j, naming the variable and the two allowed values",
+    (value) => {
+      expect(() => databaseRoleNames({ WARDEN_DATABASE_ROLES: value })).toThrow(
+        `WARDEN_DATABASE_ROLES must be live or preview, not "${value}"`,
+      );
+    },
+  );
 });

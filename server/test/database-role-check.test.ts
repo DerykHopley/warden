@@ -1,6 +1,6 @@
 // The server's database role. checkDatabaseRole, with a pool per role, refuses a role that can get around row-level
 // security: a superuser, a role with BYPASSRLS, the owner of a table, of the schema or of the database, the migration
-// role, or one that can become any of them. Then the real process: refusing warden_admin, serving as warden_app, a
+// role (of either set), or one that can become any of them. Then the real process: refusing warden_admin, serving as warden_app, a
 // database that answers only after the server started, and a login the database refuses.
 import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type pg from "pg";
@@ -92,7 +92,8 @@ describe("checkDatabaseRole", () => {
 });
 
 // As on Cloud SQL, where the admin role is made without BYPASSRLS: refused by its name. Under test names, as the
-// suite's warden_admin has BYPASSRLS and roles belong to the whole Postgres server.
+// suite's warden_admin has BYPASSRLS and roles belong to the whole Postgres server. On the plain database: the suite's
+// own refuses a login by any role outside the live set.
 describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
   const names = { migrate: "warden_migrate", admin: `${base}_admin` };
   const admin = names.admin;
@@ -106,7 +107,7 @@ describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
   });
 
   async function checkNamed(role: string) {
-    const pool = createPool(silent, { user: role, database, max: 1 });
+    const pool = createPool(silent, { user: role, database: plainDatabase, max: 1 });
     try {
       return await checkDatabaseRole(pool, { names });
     } finally {
@@ -123,6 +124,29 @@ describe("checkDatabaseRole, with an admin role that has no BYPASSRLS", () => {
       role: member,
       reason: `${member} can become ${admin}, which is the admin role`,
     });
+  });
+});
+
+// The preview set's migration and admin roles, by their real names (the check's default names are what's under
+// test), each owning nothing and without BYPASSRLS, as on Cloud SQL. On the plain database: the suite's own refuses
+// a login by any role outside the live set.
+describe("checkDatabaseRole, with the preview set's migration and admin roles", () => {
+  const previewRoles = ["warden_preview_migrate", "warden_preview_admin"];
+  beforeAll(async () => {
+    for (const role of previewRoles) {
+      await superuser.query(`drop role if exists ${role}`);
+      await superuser.query(`create role ${role} login nobypassrls`);
+    }
+  });
+  afterAll(async () => {
+    for (const role of previewRoles) await superuser.query(`drop role if exists ${role}`);
+  });
+
+  it.each([
+    ["warden_preview_migrate", "warden_preview_migrate is the migration role"],
+    ["warden_preview_admin", "warden_preview_admin is the admin role"],
+  ])("refuses %s by name", async (role, reason) => {
+    expect(await check(role, plainDatabase)).toEqual({ role, reason });
   });
 });
 
