@@ -13,6 +13,7 @@
     "lint": "eslint .",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "e2e": "pnpm --filter @warden/e2e e2e",
     "design-lint": "python3 scripts/design-lint.py dashboard/src",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

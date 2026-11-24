@@ -2,3 +2,4 @@ packages:
   - contracts
   - server
   - dashboard
+  - e2e

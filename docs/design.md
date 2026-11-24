@@ -91,6 +91,9 @@ Warden runs both in a small desktop-app window and on a wide browser screen, so 
 | Page links | default, hover, focus, current (accent, bold, underlined) |
 | People table row | default; under 640px name and Role only; a message under the Role after a refused change (words, `role="alert"`) |
 | Role picker | default, hover, focus, disabled, busy; an Admin's only: everyone else sees the Role as a word |
+| Clerk-load notice | "Loading…" while Clerk loads; after 10 s, or at once when Clerk reports it failed to load, "Sign-in couldn't load. An ad blocker or a lost connection can stop it." with a Try again button that reloads the page |
+| Summary line (Findings) | one line in the heading font: "7 open Findings, 2 Critical" ("1 open Finding"; no Critical part when none is); "Nothing open." with none open; "No Findings yet: they appear after the first Scan." with none at all |
+| Findings page waiting and empty states | waiting ("Loading Findings…"); not answering (with Retry), too many attempts, no Team, Team not opened, as on People; none open (no "Start here"); no Findings at all (summary line only); an empty view (one row, "Nothing matches this view.") |
 | Severity pill | Critical, High, Medium, Low (word always shown) |
 | Finding card (top 5) | default, hover, focus, selected (accent border) |
 | Findings table row | default, hover, focus, selected; Unconfirmed fix flag |

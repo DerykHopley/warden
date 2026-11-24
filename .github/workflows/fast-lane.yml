@@ -72,6 +72,12 @@ jobs:
         run: pnpm --filter @warden/server test
       - name: vitest (dashboard)
         run: pnpm --filter @warden/dashboard test
+      - name: Playwright's Chromium
+        run: pnpm --filter @warden/e2e exec playwright install --with-deps chromium
+      - name: Browser tests (Playwright, Chromium only)
+        # The real server on a throwaway database of the job's Postgres, serving the dashboard built in Vite's e2e mode,
+        # where a stand-in replaces Clerk: no Clerk keys or network. The full lane adds the other browsers.
+        run: pnpm e2e
       - name: Design lint
         run: pnpm design-lint
       - name: Script tests (scripts/test/*.test.sh)

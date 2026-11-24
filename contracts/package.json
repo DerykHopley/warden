@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./reconcile-cases": "./src/reconcile-cases.ts"
+    "./reconcile-cases": "./src/reconcile-cases.ts",
+    "./demo": "./src/demo.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

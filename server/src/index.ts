@@ -27,7 +27,10 @@ try {
   process.exit(1);
 }
 
-const dashboardDir = fileURLToPath(new URL("../../dashboard/dist", import.meta.url));
+// The built dashboard: `dashboard/dist` unless WARDEN_DASHBOARD_DIR names another build (the browser tests' own).
+const dashboardDir =
+  process.env.WARDEN_DASHBOARD_DIR ||
+  fileURLToPath(new URL("../../dashboard/dist", import.meta.url));
 // Every new connection checks the role first; one that can get around row-level security stops the server before
 // anything is answered from it.
 const pool = createPool(logger, {

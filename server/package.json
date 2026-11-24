@@ -8,6 +8,7 @@
     "roles": "node src/roles.ts",
     "migrate": "node src/migrate.ts",
     "expire": "PGUSER=warden_app node src/daily-expiry.ts",
+    "seed": "PGUSER=warden_app node src/seed.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },

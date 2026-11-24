@@ -19,6 +19,9 @@ node_modules/
 dist/
 .vite/
 coverage/
+# Playwright's output (e2e/)
+test-results/
+playwright-report/
 
 # Editors and OS
 .DS_Store

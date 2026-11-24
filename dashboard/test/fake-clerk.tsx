@@ -1,5 +1,6 @@
 // A stand-in for @clerk/react's hooks and components, so the dashboard's tests drive sign-in, the active
 // Organization and its memberships without Clerk. A test file mocks the package with this module and changes `clerk`.
+import type { ReactNode } from "react";
 import { vi } from "vitest";
 
 type Membership = {
@@ -12,6 +13,8 @@ type Membership = {
 };
 
 export const clerk = {
+  /** Clerk's load status, as `<ClerkFailed>` reads it: `error` when Clerk reported that it failed to load. */
+  status: "ready" as "loading" | "error" | "ready",
   auth: {
     isLoaded: true,
     isSignedIn: false as boolean,
@@ -28,6 +31,8 @@ export const clerk = {
 };
 
 export function resetClerk() {
+  clerk.status = "ready";
+  clerk.auth.isLoaded = true;
   clerk.auth.isSignedIn = false;
   clerk.auth.sessionId = null;
   clerk.auth.orgId = null;
@@ -50,6 +55,10 @@ export const useOrganization = () => {
 };
 
 export const SignIn = () => <div>Clerk sign-in</div>;
+
+/** As Clerk's: its children only once Clerk reports that it failed to load. */
+export const ClerkFailed = ({ children }: { children?: ReactNode }) =>
+  clerk.status === "error" ? children : null;
 
 export const OrganizationSwitcher = (props: Record<string, unknown>) => {
   clerk.switcherProps.push(props);
