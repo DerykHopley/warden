@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, inject, it, vi } from "vitest";
 import type pg from "pg";
 import { checkDatabaseRole, createPool, guardDatabaseRole } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
-import { createTestDatabase, DATABASE_TIMEOUT_MS, testName } from "./databases.ts";
+import { createTestDatabase, testName } from "./databases.ts";
 import { testPublishableKey } from "./helpers.ts";
 import { closedPort, gatedProxy } from "./ports.ts";
 import { logEntries, startServer, waitForListening } from "./server-process.ts";
@@ -43,12 +43,12 @@ beforeAll(async () => {
   } finally {
     await onPlain.end();
   }
-}, DATABASE_TIMEOUT_MS);
+}, 30_000);
 afterAll(async () => {
   await superuser.query(`drop database if exists ${plainDatabase} with (force)`);
   for (const role of testRoles) await superuser.query(`drop role if exists ${role}`);
   await superuser.end();
-}, DATABASE_TIMEOUT_MS);
+}, 30_000);
 
 /** checkDatabaseRole on a connection as `role` to `on`. */
 async function check(role: string, on = database) {
@@ -78,18 +78,14 @@ describe("checkDatabaseRole", () => {
     expect(await check(role, on)).toEqual({ role, reason });
   });
 
-  it(
-    "refuses warden_migrate on a database with no tables yet",
-    { timeout: DATABASE_TIMEOUT_MS },
-    async () => {
-      const fresh = await createTestDatabase();
-      try {
-        expect(await check("warden_migrate", fresh.name)).toMatchObject({ role: "warden_migrate" });
-      } finally {
-        await fresh.drop();
-      }
-    },
-  );
+  it("refuses warden_migrate on a database with no tables yet", async () => {
+    const fresh = await createTestDatabase();
+    try {
+      expect(await check("warden_migrate", fresh.name)).toMatchObject({ role: "warden_migrate" });
+    } finally {
+      await fresh.drop();
+    }
+  }, 30_000);
 
   it("passes warden_app", async () => {
     expect(await check("warden_app")).toBeUndefined();

@@ -5,15 +5,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { findUnprotectedTables } from "../src/unprotected-tables.ts";
-import { createMigratedTestDatabase, DATABASE_TIMEOUT_MS, poolAs, testName } from "./databases.ts";
+import { createMigratedTestDatabase, poolAs, testName } from "./databases.ts";
 
 const silent = createLogger(() => {});
 const cleanups: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
-}, DATABASE_TIMEOUT_MS);
-/** For a test that makes a fresh database: every test here does. */
-const createsDatabase = { timeout: DATABASE_TIMEOUT_MS };
+}, 30_000);
 
 /** A fresh database with every shipped migration, and a pool on it as warden_migrate. */
 async function migratedDatabase(): Promise<{ name: string; pool: pg.Pool }> {
@@ -25,18 +23,15 @@ async function migratedDatabase(): Promise<{ name: string; pool: pg.Pool }> {
 }
 
 describe("findUnprotectedTables", () => {
-  it("finds no unprotected table after every shipped migration", createsDatabase, async () => {
+  it("finds no unprotected table after every shipped migration", async () => {
     const { pool } = await migratedDatabase();
 
     expect(await findUnprotectedTables(pool)).toEqual([]);
-  });
+  }, 30_000);
 
-  it(
-    "names a table whose policies don't keep warden_app to the Team, or that aren't there",
-    createsDatabase,
-    async () => {
-      const { pool } = await migratedDatabase();
-      await pool.query(`
+  it("names a table whose policies don't keep warden_app to the Team, or that aren't there", async () => {
+    const { pool } = await migratedDatabase();
+    await pool.query(`
       create table no_rls (team_id text);
 
       create table not_forced (team_id text);
@@ -87,23 +82,19 @@ describe("findUnprotectedTables", () => {
         using (team_id = current_setting('warden.team_id', true));
     `);
 
-      expect(await findUnprotectedTables(pool)).toEqual([
-        "admin_only_policy",
-        "no_rls",
-        "no_team_in_policies",
-        "no_write_policy",
-        "not_forced",
-        "team_read_any_write",
-      ]);
-    },
-  );
+    expect(await findUnprotectedTables(pool)).toEqual([
+      "admin_only_policy",
+      "no_rls",
+      "no_team_in_policies",
+      "no_write_policy",
+      "not_forced",
+      "team_read_any_write",
+    ]);
+  }, 30_000);
 
-  it(
-    "names a table whose Team policy has a permissive policy beside it that doesn't read the Team",
-    createsDatabase,
-    async () => {
-      const { pool } = await migratedDatabase();
-      const teamTable = (name: string) => `
+  it("names a table whose Team policy has a permissive policy beside it that doesn't read the Team", async () => {
+    const { pool } = await migratedDatabase();
+    const teamTable = (name: string) => `
       create table ${name} (team_id text);
       alter table ${name} enable row level security;
       alter table ${name} force row level security;
@@ -111,7 +102,7 @@ describe("findUnprotectedTables", () => {
         using (team_id = current_setting('warden.team_id', true))
         with check (team_id = current_setting('warden.team_id', true));
     `;
-      await pool.query(`
+    await pool.query(`
       ${teamTable("app_reads_any")}
       create policy app_reads_any_all on app_reads_any for select to warden_app using (true);
 
@@ -126,31 +117,27 @@ describe("findUnprotectedTables", () => {
       create policy admin_reads_any_all on admin_reads_any for select to warden_admin using (true);
     `);
 
-      expect(await findUnprotectedTables(pool)).toEqual(["app_reads_any", "everyone_any"]);
-    },
-  );
+    expect(await findUnprotectedTables(pool)).toEqual(["app_reads_any", "everyone_any"]);
+  }, 30_000);
 
   // A policy for a role the app role is a member of applies to the app role. Shown on a test-named app role given to
   // the check, as giving warden_app a membership would change it for every other test file running at once.
-  it(
-    "counts a policy for a role an app role is a member of, directly or indirectly",
-    createsDatabase,
-    async () => {
-      const superuser = createPool(silent, { max: 1 });
-      const base = testName();
-      const [app, middle, readers] = [`${base}_app`, `${base}_middle`, `${base}_readers`];
-      // Pushed before the database's cleanups, so it runs after them (cleanups run in reverse): no policy still names
-      // the roles when they're dropped.
-      cleanups.push(async () => {
-        await superuser.query(`drop role if exists ${app}; drop role if exists ${middle}`);
-        await superuser.query(`drop role if exists ${readers}`);
-        await superuser.end();
-      });
-      await superuser.query(`create role ${app} login; create role ${middle} nologin`);
-      await superuser.query(`create role ${readers} nologin`);
-      await superuser.query(`grant ${readers} to ${middle}; grant ${middle} to ${app}`);
-      const { pool } = await migratedDatabase();
-      const teamTable = (table: string) => `
+  it("counts a policy for a role an app role is a member of, directly or indirectly", async () => {
+    const superuser = createPool(silent, { max: 1 });
+    const base = testName();
+    const [app, middle, readers] = [`${base}_app`, `${base}_middle`, `${base}_readers`];
+    // Pushed before the database's cleanups, so it runs after them (cleanups run in reverse): no policy still names
+    // the roles when they're dropped.
+    cleanups.push(async () => {
+      await superuser.query(`drop role if exists ${app}; drop role if exists ${middle}`);
+      await superuser.query(`drop role if exists ${readers}`);
+      await superuser.end();
+    });
+    await superuser.query(`create role ${app} login; create role ${middle} nologin`);
+    await superuser.query(`create role ${readers} nologin`);
+    await superuser.query(`grant ${readers} to ${middle}; grant ${middle} to ${app}`);
+    const { pool } = await migratedDatabase();
+    const teamTable = (table: string) => `
       create table ${table} (team_id text);
       alter table ${table} enable row level security;
       alter table ${table} force row level security;
@@ -158,7 +145,7 @@ describe("findUnprotectedTables", () => {
         using (team_id = current_setting('warden.team_id', true))
         with check (team_id = current_setting('warden.team_id', true));
     `;
-      await pool.query(`
+    await pool.query(`
       ${teamTable("direct_group_reads_any")}
       create policy direct_group_reads_any_all on direct_group_reads_any for select to ${middle} using (true);
 
@@ -167,14 +154,13 @@ describe("findUnprotectedTables", () => {
         using (true);
     `);
 
-      expect(await findUnprotectedTables(pool, [app])).toEqual([
-        "direct_group_reads_any",
-        "indirect_group_reads_any",
-      ]);
-    },
-  );
+    expect(await findUnprotectedTables(pool, [app])).toEqual([
+      "direct_group_reads_any",
+      "indirect_group_reads_any",
+    ]);
+  }, 30_000);
 
-  it("names a table in a schema other than public, schema-qualified", createsDatabase, async () => {
+  it("names a table in a schema other than public, schema-qualified", async () => {
     const { name, pool } = await migratedDatabase();
     const superuser = createPool(
       createLogger(() => {}),
@@ -192,56 +178,44 @@ describe("findUnprotectedTables", () => {
     `);
 
     expect(await findUnprotectedTables(pool)).toEqual(["other.rows"]);
-  });
+  }, 30_000);
 
-  it(
-    "leaves warden_app usage on no schema but public, pg_catalog and information_schema",
-    createsDatabase,
-    async () => {
-      const { name } = await migratedDatabase();
-      const superuser = createPool(
-        createLogger(() => {}),
-        { database: name, max: 1 },
-      );
-      cleanups.push(() => superuser.end());
-      await superuser.query("create schema other; create table other.rows (team_id text)");
-      const app = poolAs("warden_app", name);
-      cleanups.push(() => app.end());
+  it("leaves warden_app usage on no schema but public, pg_catalog and information_schema", async () => {
+    const { name } = await migratedDatabase();
+    const superuser = createPool(
+      createLogger(() => {}),
+      { database: name, max: 1 },
+    );
+    cleanups.push(() => superuser.end());
+    await superuser.query("create schema other; create table other.rows (team_id text)");
+    const app = poolAs("warden_app", name);
+    cleanups.push(() => app.end());
 
-      const { rows } = await app.query<{ nspname: string }>(`
+    const { rows } = await app.query<{ nspname: string }>(`
       select nspname from pg_namespace
        where has_schema_privilege(oid, 'usage')
          and nspname !~ '^pg_(toast_)?temp_'
        order by nspname
     `);
 
-      expect(rows.map((row) => row.nspname)).toEqual([
-        "information_schema",
-        "pg_catalog",
-        "public",
-      ]);
-    },
-  );
+    expect(rows.map((row) => row.nspname)).toEqual(["information_schema", "pg_catalog", "public"]);
+  }, 30_000);
 
-  it(
-    "names a materialized view and a foreign table, which row-level security doesn't cover",
-    createsDatabase,
-    async () => {
-      const { name, pool } = await migratedDatabase();
-      // A foreign data wrapper needs the superuser (the PG* user).
-      const superuser = createPool(
-        createLogger(() => {}),
-        { database: name, max: 1 },
-      );
-      cleanups.push(() => superuser.end());
-      await superuser.query(`
+  it("names a materialized view and a foreign table, which row-level security doesn't cover", async () => {
+    const { name, pool } = await migratedDatabase();
+    // A foreign data wrapper needs the superuser (the PG* user).
+    const superuser = createPool(
+      createLogger(() => {}),
+      { database: name, max: 1 },
+    );
+    cleanups.push(() => superuser.end());
+    await superuser.query(`
       create foreign data wrapper test_fdw;
       create server test_server foreign data wrapper test_fdw;
       create foreign table remote_rows (team_id text) server test_server;
     `);
-      await pool.query("create materialized view team_totals as select id from teams");
+    await pool.query("create materialized view team_totals as select id from teams");
 
-      expect(await findUnprotectedTables(pool)).toEqual(["remote_rows", "team_totals"]);
-    },
-  );
+    expect(await findUnprotectedTables(pool)).toEqual(["remote_rows", "team_totals"]);
+  }, 30_000);
 });

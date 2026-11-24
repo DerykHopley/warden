@@ -9,7 +9,7 @@ import { createLogger } from "../src/log.ts";
 import type { Database } from "../src/schema.ts";
 import { createWithAdmin } from "../src/with-admin.ts";
 import { createWithTeam } from "../src/with-team.ts";
-import { createMigratedTestDatabase, DATABASE_TIMEOUT_MS, poolAs } from "./databases.ts";
+import { createMigratedTestDatabase, poolAs } from "./databases.ts";
 import { closedPort } from "./ports.ts";
 
 /** `Database` plus the test-only table; it never goes in `Database`. */
@@ -98,11 +98,11 @@ beforeAll(async () => {
     ["b3", "note"],
     ["b4", "note"],
   ]);
-}, DATABASE_TIMEOUT_MS);
+}, 30_000);
 
 afterAll(async () => {
   for (const end of ends.splice(0).reverse()) await end();
-}, DATABASE_TIMEOUT_MS);
+}, 30_000);
 
 const aNotes = () => [notes.a1, notes.a2, notes.a3].sort();
 
