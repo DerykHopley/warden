@@ -161,6 +161,7 @@ table { border-collapse:collapse; width:100%; }
 .friendly .D-side { background:var(--bg); } .friendly .D-detail { background:var(--surface); margin:12px; border-radius:var(--radius); box-shadow:var(--shadow); flex:1; }
 .friendly .D-chat { background:var(--surface); margin:0 12px 12px; border:0; border-radius:var(--radius); box-shadow:var(--shadow); }
 /* E: one panel, closed / floating / pinned */
+.E-app:not(.pinned) { display:block; }
 .E-app .D-main { margin:0 auto; max-width:1480px; }
 .E-app.pinned { display:grid; grid-template-columns:minmax(0,1fr) 6px var(--pw,400px); }
 .E-app.pinned .D-main { margin:0; }
