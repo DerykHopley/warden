@@ -119,7 +119,9 @@ sets.
 **Before you run it** you need a Google Cloud project with billing, and on your machine:
 
 - the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install), signed in, with application-default
-  credentials for the Cloud SQL Auth Proxy (`gcloud auth application-default login`);
+  credentials for the Cloud SQL Auth Proxy (`gcloud auth application-default login`). Their quota project must be
+  this project, or unset: the proxy's calls are billed there, and another project refuses them. The script checks it
+  first; to set it, run `gcloud auth application-default set-quota-project <project-id>`;
 - the [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/sql-proxy#install), `cloud-sql-proxy`, on
   your `PATH` (`gcloud components install cloud-sql-proxy` installs it);
 - Node 24, and the server's dependencies installed (`pnpm install` in this repository): the script runs
@@ -130,6 +132,10 @@ And these, made by hand:
 - a Cloud SQL for PostgreSQL 17 instance in `europe-west1`;
 - the secrets `warden-db-password` (the instance's `postgres` user's password), `warden-clerk-secret`,
   `warden-clerk-publishable` and `warden-clerk-jwt-key`.
+
+The `postgres` user's password must be the latest version of `warden-db-password`: the roles step logs in with it.
+When they differ, the script says so and prints the `gcloud sql users set-password` command that sets it from the
+secret.
 
 **Two sets of identities.** Live (`main`) and owner previews (`preview/*` branches) each get their own service
 accounts and their own database roles, with their own passwords. A preview runs on the `warden-preview` service and
