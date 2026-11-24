@@ -5,10 +5,11 @@ export type MeResult =
   { kind: "signed-in"; userId: string } | { kind: "session-ended" } | { kind: "not-answering" };
 
 export async function fetchMe(getToken: () => Promise<string | null>): Promise<MeResult> {
-  const token = await getToken();
-  if (token === null) return { kind: "session-ended" };
   let res: Response;
   try {
+    // Offline, Clerk can't refresh the token either: that's not answering too, never a page stuck checking.
+    const token = await getToken();
+    if (token === null) return { kind: "session-ended" };
     res = await fetch("/api/me", { headers: { Authorization: `Bearer ${token}` } });
   } catch {
     return { kind: "not-answering" };

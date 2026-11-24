@@ -30,14 +30,20 @@ beforeEach(() => {
   clerk.auth.isSignedIn = false;
   clerk.auth.sessionId = null;
   clerk.auth.signOut = vi.fn(async () => {});
+  clerk.auth.getToken = async () => "session-token";
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => vi.unstubAllGlobals());
 
-function signIn() {
+function signIn(sessionId = "sess_1") {
   clerk.auth.isSignedIn = true;
-  clerk.auth.sessionId = "sess_1";
+  clerk.auth.sessionId = sessionId;
+}
+
+function signOut() {
+  clerk.auth.isSignedIn = false;
+  clerk.auth.sessionId = null;
 }
 
 const json = (status: number, body: unknown) =>
@@ -66,28 +72,49 @@ describe("App", () => {
     expect(clerk.auth.signOut).toHaveBeenCalled();
   });
 
-  it("shows the session-ended message with the sign-in on a 401", async () => {
-    signIn();
-    fetchMock.mockResolvedValue(json(401, { error: "Not signed in" }));
-    render(<App />);
-
-    expect(await screen.findByText("Your session has ended: sign in again")).toBeInTheDocument();
-    expect(screen.getByText("Clerk sign-in")).toBeInTheDocument();
-    expect(clerk.auth.signOut).toHaveBeenCalled();
-  });
-
-  it("keeps the session-ended message once Clerk has signed the person out", async () => {
+  it("on a 401, signs the person out, then shows the session-ended message with the sign-in", async () => {
     signIn();
     fetchMock.mockResolvedValue(json(401, { error: "Not signed in" }));
     const { rerender } = render(<App />);
-    await screen.findByText("Your session has ended: sign in again");
 
-    clerk.auth.isSignedIn = false;
-    clerk.auth.sessionId = null;
+    // While Clerk still holds the session, the sign-in doesn't mount.
+    expect(await screen.findByText("Signing you out…")).toBeInTheDocument();
+    expect(screen.queryByText("Clerk sign-in")).not.toBeInTheDocument();
+    expect(clerk.auth.signOut).toHaveBeenCalled();
+
+    signOut();
     rerender(<App />);
 
     expect(screen.getByText("Your session has ended: sign in again")).toBeInTheDocument();
     expect(screen.getByText("Clerk sign-in")).toBeInTheDocument();
+  });
+
+  it("forgets the ended session once a new one signs in", async () => {
+    signIn();
+    fetchMock.mockResolvedValueOnce(json(401, { error: "Not signed in" }));
+    const { rerender } = render(<App />);
+    await screen.findByText("Signing you out…");
+    signOut();
+    rerender(<App />);
+
+    fetchMock.mockResolvedValueOnce(json(200, { userId: "user_again" }));
+    signIn("sess_2");
+    rerender(<App />);
+    expect(await screen.findByText("user_again")).toBeInTheDocument();
+
+    signOut();
+    rerender(<App />);
+    expect(screen.getByText("Clerk sign-in")).toBeInTheDocument();
+    expect(screen.queryByText("Your session has ended: sign in again")).not.toBeInTheDocument();
+  });
+
+  it("shows the not-answering message when Clerk can't give a token", async () => {
+    signIn();
+    clerk.auth.getToken = () => Promise.reject(new Error("offline"));
+    render(<App />);
+
+    expect(await screen.findByText("Warden's server isn't answering")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("shows the not-answering message and retries when the server can't be reached", async () => {

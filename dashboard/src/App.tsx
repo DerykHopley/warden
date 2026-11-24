@@ -4,26 +4,31 @@ import { fetchMe, type MeResult } from "./me.ts";
 
 export function App() {
   const { isLoaded, isSignedIn, sessionId, signOut } = useAuth();
-  // The session the server turned down. Kept after Clerk signs the person out, so the sign-in page says why;
-  // a new sign-in has a new session id, so it no longer matches.
+  // The session the server turned down. Kept after Clerk signs the person out, so the sign-in page says why,
+  // and forgotten once a different session signs in.
   const [endedSession, setEndedSession] = useState<string | null>(null);
+  if (isSignedIn && sessionId && endedSession !== null && sessionId !== endedSession) {
+    setEndedSession(null);
+  }
 
   const onSessionEnded = useCallback(() => {
     setEndedSession(sessionId ?? "");
-    void signOut();
+    signOut().catch(() => {});
   }, [sessionId, signOut]);
 
-  if (!isLoaded) {
-    return (
-      <main className="page">
-        <p className="muted">Loading…</p>
-      </main>
-    );
-  }
-  if (!isSignedIn || sessionId === endedSession) {
-    return <SignInPage sessionEnded={endedSession !== null} />;
-  }
+  if (!isLoaded) return <Notice text="Loading…" />;
+  // Clerk's sign-in doesn't mount while Clerk still holds the session it is ending.
+  if (isSignedIn && sessionId === endedSession) return <Notice text="Signing you out…" />;
+  if (!isSignedIn) return <SignInPage sessionEnded={endedSession !== null} />;
   return <SignedInPage onSessionEnded={onSessionEnded} onSignOut={() => void signOut()} />;
+}
+
+function Notice({ text }: { text: string }) {
+  return (
+    <main className="page">
+      <p className="muted">{text}</p>
+    </main>
+  );
 }
 
 function SignInPage({ sessionEnded }: { sessionEnded: boolean }) {
@@ -55,6 +60,7 @@ function SignedInPage(props: { onSessionEnded: () => void; onSignOut: () => void
     };
   }, [getToken, onSessionEnded, attempt]);
 
+  const notAnswering = me !== "checking" && me.kind === "not-answering";
   const retry = () => {
     setMe("checking");
     setAttempt((n) => n + 1);
@@ -71,20 +77,25 @@ function SignedInPage(props: { onSessionEnded: () => void; onSignOut: () => void
             Your user id, as Warden's server read it: <code>{me.userId}</code>
           </p>
         )}
-        {me !== "checking" && me.kind === "not-answering" && (
+        {notAnswering && (
           <p className="notice" role="alert">
             Warden's server isn't answering
           </p>
         )}
         <div className="actions">
-          <button type="button" className="primary" onClick={props.onSignOut}>
-            Sign out
-          </button>
-          {me !== "checking" && me.kind === "not-answering" && (
-            <button type="button" className="secondary" onClick={retry}>
+          {notAnswering && (
+            <button type="button" className="primary" onClick={retry}>
               Retry
             </button>
           )}
+          {/* One main action per screen: while the server isn't answering, that's Retry. */}
+          <button
+            type="button"
+            className={notAnswering ? "secondary" : "primary"}
+            onClick={props.onSignOut}
+          >
+            Sign out
+          </button>
         </div>
       </div>
     </main>
