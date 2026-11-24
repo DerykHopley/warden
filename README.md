@@ -53,14 +53,26 @@ a role with `BYPASSRLS`, or one that can become such a role or a table's owner. 
 When the database can't be reached at start, it stays up and checks the role on the first connection that
 succeeds.
 
-`pnpm --filter @warden/server seed <team-id>` fills one Team with demo Findings, so the Findings page has
-something to show: 11 Findings from Guard and Patch on a Repo, a Product, a Device and an Agent session, 7 of them
-Open (2 Critical), 2 Fixed (one an Unconfirmed fix), 1 Accepted and 1 False positive. The Team id is its Clerk
-Organization id (`org_…`, the Organization switcher's Manage screen shows it), and the Team's Admin must have opened
-Warden in it first. It runs as `warden_app`, writes only through the Findings module (Scans, a Spot run, and two
-decisions made as the Team's oldest Admin or Lead), and leaves a Team that already has Findings as it is. For an owner
-preview, run `node server/src/seed.ts <team-id>` with the `PG*` variables pointing at the preview database through the
-Cloud SQL Auth Proxy, as `warden_preview_app` with its password.
+`WARDEN_SEED_DEMO=1 pnpm --filter @warden/server seed <team-id>` fills one Team with demo Findings, so the Findings
+page has something to show: 11 Findings from Guard and Patch on a Repo, a Product, a Device and an Agent session, 7
+of them Open (2 Critical), 2 Fixed (one an Unconfirmed fix), 1 Accepted and 1 False positive. The data lives in
+`@warden/contracts/demo`, which the dashboard's tests read too. The Team id is its Clerk Organization id (`org_…`, the
+Organization switcher's Manage screen shows it), and the Team's Admin must have opened Warden in it first. It runs as
+`warden_app` and writes only through the Findings module (Scans, a Spot run, and two decisions made as the Team's
+oldest Admin or Lead). Run again, it says the Team is already seeded. It exits 1, writing nothing, for a Team with
+Findings of its own, and for one whose demo Findings aren't as it leaves them (a seed cut short); one seed runs per
+Team at a time.
+
+It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database (a `PGHOST` other than `127.0.0.1`,
+`localhost` or `::1`, or any `PGPASSWORD`), `WARDEN_SEED_DEMO` must be the database's name, and the live database,
+`warden`, is always refused. For an owner preview, through the Cloud SQL Auth Proxy:
+
+```sh
+cloud-sql-proxy --port 5433 <project-id>:europe-west1:<instance> &
+PGHOST=127.0.0.1 PGPORT=5433 PGDATABASE=warden_preview PGUSER=warden_preview_app \
+  PGPASSWORD="$(gcloud secrets versions access latest --secret warden-db-preview-app-password)" \
+  WARDEN_SEED_DEMO=warden_preview node server/src/seed.ts <team-id>
+```
 
 `pnpm --filter @warden/server expire` runs the daily Job once against the compose database: as `warden_app`, with
 `warden_admin` listing the Teams, it reopens every Accepted Finding whose expiry has passed, and logs one summary

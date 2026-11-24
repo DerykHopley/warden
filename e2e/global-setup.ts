@@ -106,27 +106,37 @@ export default async function globalSetup() {
       "--emptyOutDir",
     ]);
 
-    const port = await freePort();
-    const origin = `http://127.0.0.1:${port}`;
     const db = {
       PGHOST: postgres.host,
       PGPORT: postgres.port,
       PGUSER: "warden_app",
       PGDATABASE: database.name,
     };
-    const server = await startServer({
-      ...db,
-      PORT: String(port),
-      // Never used: the stand-in's tokens are checked with CLERK_JWT_KEY, and no test changes an Admin's Role.
-      CLERK_SECRET_KEY: "sk_test_unused_by_the_browser_tests",
-      CLERK_JWT_KEY: await exportSPKI(publicKey),
-      VITE_CLERK_PUBLISHABLE_KEY: `pk_test_${Buffer.from(`${FRONTEND_API_HOST}$`).toString("base64")}`,
-      CLERK_AUTHORIZED_PARTIES: origin,
-      WARDEN_DASHBOARD_DIR: dashboard,
-    });
+    const jwtKey = await exportSPKI(publicKey);
+    // A free port can be taken by another process before the server binds it: then once more, on another.
+    let server: Awaited<ReturnType<typeof startServer>> | undefined;
+    let origin = "";
+    for (let attempt = 1; server === undefined; attempt++) {
+      const port = await freePort();
+      origin = `http://127.0.0.1:${port}`;
+      try {
+        server = await startServer({
+          ...db,
+          PORT: String(port),
+          // Never used: the stand-in's tokens are checked with CLERK_JWT_KEY, and no test changes an Admin's Role.
+          CLERK_SECRET_KEY: "sk_test_unused_by_the_browser_tests",
+          CLERK_JWT_KEY: jwtKey,
+          VITE_CLERK_PUBLISHABLE_KEY: `pk_test_${Buffer.from(`${FRONTEND_API_HOST}$`).toString("base64")}`,
+          CLERK_AUTHORIZED_PARTIES: origin,
+          WARDEN_DASHBOARD_DIR: dashboard,
+        });
+      } catch (error) {
+        if (attempt > 1 || !String(error).includes("EADDRINUSE")) throw error;
+      }
+    }
     cleanup.push(async () => {
-      server.child.kill();
-      await server.exited;
+      server!.child.kill();
+      await server!.exited;
     });
 
     // Opening Warden as each Team's Admin creates the Team; Grace's first visit joins Acme as a Member.
@@ -141,7 +151,10 @@ export default async function globalSetup() {
     await open(GRACE, ACME, "member");
     await open(BLUEBIRD.admin, BLUEBIRD, "admin");
     for (const team of [ACME, BLUEBIRD]) {
-      await run(process.execPath, ["server/src/seed.ts", team.id], db);
+      await run(process.execPath, ["server/src/seed.ts", team.id], {
+        ...db,
+        WARDEN_SEED_DEMO: database.name,
+      });
     }
 
     process.env.E2E_BASE_URL = origin;
