@@ -1,20 +1,38 @@
 // A person's named decisions on a Finding (ADR 0005): accept, mark a False positive, confirm a fix, mark one moved,
-// reopen. Each runs inside one `withTeam` transaction under the same per-Team lock as reconcile, and writes one
-// history row per changed Finding naming the person and their reason. An agent never decides: it only proposes.
-import { Actor, type Finding, type Status } from "@warden/contracts";
-import type { Transaction } from "kysely";
+// reopen. Each runs inside one `withTeam` transaction under the same per-Team lock as reconcile, rechecks there that
+// the person is still a Lead, and writes one history row per changed Finding naming the person and their reason. An
+// agent never decides: it only proposes.
+import {
+  AcceptBody,
+  Actor,
+  atLeast,
+  MarkMovedBody,
+  ReasonBody,
+  type Finding,
+  type Status,
+} from "@warden/contracts";
+import { sql, type Transaction } from "kysely";
+import type { z } from "zod";
 import type { Database } from "../schema.ts";
 import { lockTeamFindings } from "./reconcile.ts";
-import { fromRow, toRow } from "./rows.ts";
+import { fromRow, loadFinding, sameAsset, toRow } from "./rows.ts";
 
-/** The named calls, as `Findings` names them. */
-export type DecisionCall = "accept" | "markFalsePositive" | "confirmFix" | "markMoved" | "reopen";
+/** Each named call, as `Findings` names it, and the contracts schema its input is checked against (the API's too). */
+export const DECISION_INPUT = {
+  accept: AcceptBody,
+  markFalsePositive: ReasonBody,
+  confirmFix: ReasonBody,
+  markMoved: MarkMovedBody,
+  reopen: ReasonBody,
+} as const;
+
+export type DecisionCall = keyof typeof DECISION_INPUT;
+
+/** What a named call takes besides its Actor. */
+export type DecisionInput<C extends DecisionCall> = z.infer<(typeof DECISION_INPUT)[C]>;
 
 /** A decision's call and what it needs, already checked. */
-export type Decision =
-  | { call: "accept"; reason: string; until: string }
-  | { call: "markFalsePositive" | "confirmFix" | "reopen"; reason: string }
-  | { call: "markMoved"; reason: string; candidate: string };
+export type Decision = { [C in DecisionCall]: { call: C } & DecisionInput<C> }[DecisionCall];
 
 /** The Finding id isn't one the Team has: another Team's id counts the same. */
 export class FindingNotFound extends Error {
@@ -37,6 +55,20 @@ export class DecisionRefused extends Error {
     this.name = "DecisionRefused";
     this.call = call;
     this.status = status;
+  }
+}
+
+/**
+ * Under the Team's lock, the person isn't a Lead or Admin in the Team (any more): a Role change may have committed
+ * while the decision waited. Nothing was written.
+ */
+export class NotALead extends Error {
+  readonly person: string;
+
+  constructor(person: string) {
+    super(`${person} isn't a Lead in this Team`);
+    this.name = "NotALead";
+    this.person = person;
   }
 }
 
@@ -69,7 +101,18 @@ export async function applyDecision(
   decision: Decision,
 ): Promise<Finding> {
   await lockTeamFindings(tx, team);
-  const finding = await load(tx, team, id);
+  // requireRole read the Role before the lock; a change that committed since may have taken it. `for share` holds
+  // the row, so a Role change waits for this decision rather than slipping in after the check.
+  const member = await tx
+    .selectFrom("team_members")
+    .select("role")
+    .where("team_id", "=", team)
+    .where("user_id", "=", person)
+    .forShare()
+    .executeTakeFirst();
+  if (!member || !atLeast(member.role, "lead")) throw new NotALead(person);
+
+  const finding = await loadFinding(tx, team, id);
   if (!finding) throw new FindingNotFound(id);
   const refuse = (why: string) => new DecisionRefused(decision.call, finding.status, why);
   if (finding.moved_to !== null) throw refuse(`it is merged into ${finding.moved_to}`);
@@ -80,6 +123,8 @@ export async function applyDecision(
 
   /** The Findings to write, in order: markMoved frees the candidate's Fingerprint before the old Finding takes it. */
   const changes: { before: Finding; after: Finding }[] = [];
+  /** Other Findings whose Unconfirmed fix named a candidate merged away: no Status changes, so no history row. */
+  const untouchedStatus: Finding[] = [];
   switch (decision.call) {
     case "accept":
       changes.push({
@@ -110,7 +155,7 @@ export async function applyDecision(
       if (!finding.unconfirmed_fix.candidates.includes(decision.candidate)) {
         throw refuse(`${decision.candidate} isn't one of its candidates`);
       }
-      const candidate = await load(tx, team, decision.candidate);
+      const candidate = await loadFinding(tx, team, decision.candidate);
       if (!candidate || candidate.status !== "open" || candidate.moved_to !== null) {
         const state = !candidate
           ? "gone"
@@ -118,6 +163,15 @@ export async function applyDecision(
             ? `merged into ${candidate.moved_to}`
             : candidate.status;
         throw refuse(`its candidate ${decision.candidate} is ${state}, not open`);
+      }
+      // The old Finding keeps its module, Rule and Asset, so it can only take a problem with the same three.
+      const differs = [
+        candidate.module !== finding.module && "module",
+        candidate.rule_id !== finding.rule_id && "Rule",
+        !sameAsset(candidate.asset, finding.asset) && "Asset",
+      ].filter(Boolean);
+      if (differs.length > 0) {
+        throw refuse(`its candidate ${decision.candidate} has another ${differs.join(" and ")}`);
       }
       changes.push({
         before: candidate,
@@ -137,11 +191,28 @@ export async function applyDecision(
           last_seen_scan: candidate.last_seen_scan,
         },
       });
+      // The candidate is merged now: no other Finding's Unconfirmed fix may still offer it.
+      const naming = await tx
+        .selectFrom("findings")
+        .selectAll()
+        .where("team_id", "=", team)
+        .where("id", "<>", finding.id)
+        .where(
+          sql<boolean>`unconfirmed_fix -> 'candidates' @> ${JSON.stringify([candidate.id])}::jsonb`,
+        )
+        .execute();
+      for (const other of naming.map(fromRow)) {
+        const rest = other.unconfirmed_fix!.candidates.filter((c) => c !== candidate.id);
+        untouchedStatus.push({
+          ...other,
+          unconfirmed_fix: rest.length > 0 ? { candidates: rest } : null,
+        });
+      }
       break;
     }
   }
 
-  for (const { after } of changes) {
+  for (const after of [...changes.map((change) => change.after), ...untouchedStatus]) {
     const { team_id, id: changedId, ...fields } = toRow(after);
     await tx
       .updateTable("findings")
@@ -166,15 +237,5 @@ export async function applyDecision(
       })),
     )
     .execute();
-  return (await load(tx, team, id))!;
-}
-
-async function load(tx: Transaction<Database>, team: string, id: string) {
-  const row = await tx
-    .selectFrom("findings")
-    .selectAll()
-    .where("team_id", "=", team)
-    .where("id", "=", id)
-    .executeTakeFirst();
-  return row && fromRow(row);
+  return (await loadFinding(tx, team, id))!;
 }

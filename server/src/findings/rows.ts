@@ -1,6 +1,6 @@
 // A Finding as a `findings` row and back. The filtered fields are columns; the nested ones are jsonb.
 import { Finding, type Asset } from "@warden/contracts";
-import type { Insertable, Selectable } from "kysely";
+import type { Insertable, Selectable, Transaction } from "kysely";
 import type { Database } from "../schema.ts";
 
 export type FindingRow = Selectable<Database["findings"]>;
@@ -62,3 +62,18 @@ export function fromRow(row: FindingRow): Finding {
 }
 
 export const sameAsset = (a: Asset, b: Asset) => a.kind === b.kind && a.ref === b.ref;
+
+/** The Team's Finding with this id, parsed with Finding v1; undefined when the Team has none. */
+export async function loadFinding(
+  tx: Transaction<Database>,
+  team: string,
+  id: string,
+): Promise<Finding | undefined> {
+  const row = await tx
+    .selectFrom("findings")
+    .selectAll()
+    .where("team_id", "=", team)
+    .where("id", "=", id)
+    .executeTakeFirst();
+  return row && fromRow(row);
+}

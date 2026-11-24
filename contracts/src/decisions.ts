@@ -23,15 +23,19 @@ export type AcceptBody = z.infer<typeof AcceptBody>;
 export const MarkMovedBody = z.strictObject({ reason: DecisionReason, candidate: Id });
 export type MarkMovedBody = z.infer<typeof MarkMovedBody>;
 
+/** What caused a history entry: a Scan, a Spot run, or a person's named decision. Never an agent: it only proposes. */
+export const HistoryCauseKind = z.enum(["scan", "spot_run", "person"]);
+export type HistoryCauseKind = z.infer<typeof HistoryCauseKind>;
+
 /** One change in a Finding's history. Its cause is the Scan or Spot run, or the person who decided; never an agent. */
 export const HistoryEntryBody = z.strictObject({
-  at: z.iso.datetime(),
+  at: DateTime,
   /** Null when this entry opened the Finding. */
   status_before: Status.nullable(),
   status_after: Status,
   severity_before: Severity.nullable(),
   severity_after: Severity,
-  cause: z.strictObject({ kind: z.enum(["scan", "spot_run", "person"]), id: Id }),
+  cause: z.strictObject({ kind: HistoryCauseKind, id: Id }),
   reason: z.string().min(1),
 });
 export type HistoryEntryBody = z.infer<typeof HistoryEntryBody>;

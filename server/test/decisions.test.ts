@@ -17,12 +17,14 @@ import {
   createFindings,
   DecisionRefused,
   FindingNotFound,
+  NotALead,
   type Findings,
 } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
+import { seedTeam } from "./helpers.ts";
 import { poolAs } from "./databases.ts";
 
 let pool: pg.Pool;
@@ -43,15 +45,22 @@ afterAll(async () => {
 });
 
 const app = { kind: "repo", ref: "https://github.com/example/app" } as const;
+const api = { kind: "repo", ref: "https://github.com/example/api" } as const;
 const ENV = "guard/agent-can-read-env";
+const MCP = "guard/mcp-server-unpinned";
 const lead: Actor = { kind: "person", id: "user_lead" };
+const member: Actor = { kind: "person", id: "user_member" };
 const agent: Actor = { kind: "agent", id: "agent-1" };
 const reason = "Decided in the weekly review";
 const nextWeek = () => new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
 
+/** A new Team with a Lead (`lead`) and a Member (`member`). */
 async function newTeam(): Promise<string> {
   const team = `org_decisions_${randomUUID()}`;
-  await withTeam(team, (tx) => tx.insertInto("teams").values({ id: team }).execute());
+  await seedTeam(withTeam, team, [
+    [lead.id, "lead"],
+    [member.id, "member"],
+  ]);
   return team;
 }
 
@@ -163,6 +172,27 @@ describe("a named decision on a Status its call doesn't allow", () => {
         return { id: old.id, candidate: moved.id };
       },
     ],
+    [
+      "markMoved with a candidate under another Rule",
+      "markMoved",
+      async (t) => {
+        const location = { kind: "file", path: "other-rule.json" } as const;
+        const { old, moved } = await unconfirmedFix(t, {
+          rule_id: MCP,
+          location,
+          fingerprint: fingerprint(MCP, location),
+        });
+        return { id: old.id, candidate: moved.id };
+      },
+    ],
+    [
+      "markMoved with a candidate on another Asset",
+      "markMoved",
+      async (t) => {
+        const { old, moved } = await unconfirmedFix(t, { asset: api });
+        return { id: old.id, candidate: moved.id };
+      },
+    ],
     ["reopen on an Open Finding", "reopen", (t) => given(t)],
     ["reopen on a Fixed Finding", "reopen", (t) => given(t, { status: "fixed" })],
   ];
@@ -209,20 +239,64 @@ describe("a named decision on a Finding the Team doesn't have", () => {
 });
 
 describe("a named decision with bad input", () => {
-  it.each([
-    ["an until that isn't later than now", { reason, until: new Date().toISOString() }],
-    ["a blank reason", { reason: "   ", until: nextWeek() }],
-    ["a 2,001-character reason", { reason: "x".repeat(2001), until: nextWeek() }],
-  ])("throws a zod error for %s, and writes nothing", async (_name, input) => {
+  // The rules themselves are the contracts' (contracts/test/decisions.test.ts); this shows the module applies them.
+  it("throws a zod error, and writes nothing", async () => {
     const team = await newTeam();
     const finding = await given(team);
     const before = await stored(team);
 
-    await expect(findings.accept(team, finding.id, { actor: lead, ...input })).rejects.toThrow(
-      ZodError,
-    );
+    await expect(
+      findings.accept(team, finding.id, { actor: lead, reason: "   ", until: nextWeek() }),
+    ).rejects.toThrow(ZodError);
 
     expect(await stored(team)).toEqual(before);
+  });
+});
+
+describe("a named decision by a person who isn't a Lead under the lock", () => {
+  it.each([
+    ["a Member", member],
+    ["someone not in the Team", { kind: "person", id: "user_stranger" } as Actor],
+  ])("by %s throws NotALead, and writes nothing", async (_name, actor) => {
+    const team = await newTeam();
+    const finding = await given(team);
+    const before = await stored(team);
+
+    await expect(
+      findings.markFalsePositive(team, finding.id, { actor, reason }),
+    ).rejects.toBeInstanceOf(NotALead);
+
+    expect(await stored(team)).toEqual(before);
+  });
+});
+
+describe("markMoved and the other Unconfirmed fixes naming its candidate", () => {
+  it("takes the merged candidate off every other Finding's candidates, and clears a list left empty", async () => {
+    const team = await newTeam();
+    const candidate = await given(team);
+    const other = await given(team);
+    const old = await given(team, {
+      status: "fixed",
+      unconfirmed_fix: { candidates: [candidate.id] },
+    });
+    const sharing = await given(team, {
+      status: "fixed",
+      unconfirmed_fix: { candidates: [candidate.id, other.id] },
+    });
+    const only = await given(team, {
+      status: "fixed",
+      unconfirmed_fix: { candidates: [candidate.id] },
+    });
+
+    await findings.markMoved(team, old.id, { actor: lead, reason, candidate: candidate.id });
+
+    const after = new Map((await findings.list(team)).map((f) => [f.id, f]));
+    expect(after.get(sharing.id)).toMatchObject({
+      status: "fixed",
+      unconfirmed_fix: { candidates: [other.id] },
+    });
+    expect(after.get(only.id)).toMatchObject({ status: "fixed", unconfirmed_fix: null });
+    expect(after.get(candidate.id)).toMatchObject({ status: "fixed", moved_to: old.id });
   });
 });
 

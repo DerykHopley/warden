@@ -17,9 +17,9 @@ import {
   type TeamMember,
   type Role,
 } from "@warden/contracts";
-import { ZodError, type z } from "zod";
+import type { z } from "zod";
 import type { Session, VerifySessionToken } from "./auth.ts";
-import { DecisionRefused, FindingNotFound, type Findings } from "./findings/index.ts";
+import { DecisionRefused, FindingNotFound, NotALead, type Findings } from "./findings/index.ts";
 import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
 import { securityHeaders } from "./security-headers.ts";
@@ -61,7 +61,7 @@ function memberBody(member: TeamMemberRow): TeamMember {
 }
 
 /** A body a schema refused, as one line: each issue's field and message. */
-function refusedBody(error: ZodError): string {
+function refusedBody(error: z.ZodError): string {
   return error.issues
     .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
     .join("; ");
@@ -214,12 +214,14 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
   /**
    * What a Findings call's refusal answers: 404 for an id the Team doesn't have (another Team's included), 409 for a
-   * Status the decision doesn't take, 400 for input the module refused. Nothing was written in any of them.
+   * Status the decision doesn't take, 403 for a person no longer a Lead under the Team's lock. Nothing was written in
+   * any of them. Anything else, a zod error included (stored or derived data that broke Finding v1), is thrown on to
+   * the logged 500, which shows no schema text: only the route's own body parse answers 400.
    */
   function findingRefusal(c: Context<AppEnv>, error: unknown): Response {
     if (error instanceof FindingNotFound) return c.json({ error: "No such Finding" }, 404);
     if (error instanceof DecisionRefused) return c.json({ error: error.message }, 409);
-    if (error instanceof ZodError) return c.json({ error: refusedBody(error) }, 400);
+    if (error instanceof NotALead) return c.json({ error: ROLE_TOO_LOW }, 403);
     throw error;
   }
 

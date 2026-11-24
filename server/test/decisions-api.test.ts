@@ -17,24 +17,29 @@ import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./
 
 let key: CryptoKey;
 let pool: pg.Pool;
+/** Its own pool, to hold a Team's Findings lock and read pg_locks while the app's connections wait. */
+let probe: pg.Pool;
 let withTeam: WithTeam;
 let findings: Findings;
 let app: Hono<AppEnv>;
+let lines: string[];
 
 beforeAll(async () => {
   const { privateKey, publicPem } = await testKey();
   key = privateKey;
   pool = poolAs("warden_app", inject("testDatabase"));
+  probe = poolAs("warden_app", inject("testDatabase"));
   withTeam = createWithTeam(pool);
   findings = createFindings({
     withTeam,
     moveRules: { guard: guardMoveRule, patch: patchMoveRule },
   });
-  ({ app } = testApp({ publicPem, withTeam }));
+  ({ app, lines } = testApp({ publicPem, withTeam }));
 });
 
 afterAll(async () => {
   await pool.end();
+  await probe.end();
 });
 
 const repo = { kind: "repo", ref: "https://github.com/example/app" } as const;
@@ -305,5 +310,91 @@ describe("Team B and Team A's Finding", () => {
 
     expect(await stored(a)).toEqual(before);
     expect((await findings.list(a)).map((f: Finding) => f.status)).toEqual(["open"]);
+  });
+});
+
+/** Resolves once a transaction is waiting for `team`'s Findings lock (the one reconcile and decisions take). */
+async function queuedBehindFindingsLock(team: string) {
+  for (let tries = 0; tries < 100; tries++) {
+    const { rows } = await probe.query<{ waiting: number }>(
+      `select count(*)::int as waiting from pg_locks
+        where locktype = 'advisory' and not granted and objsubid = 1
+          and ((classid::bigint << 32) | objid::bigint) = hashtextextended($1, 0)`,
+      [team],
+    );
+    if (rows[0]!.waiting > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("the decision never queued behind the Team's Findings lock");
+}
+
+describe("a Lead demoted while their decision waits on the lock", () => {
+  it("gets 403, and nothing is written", async () => {
+    // The probe holds the Team's Findings lock, so the Lead's decision passes requireRole and then waits for it. The
+    // Lead is demoted meanwhile; under the lock the decision reads them as a Member.
+    const { team, finding } = await teamWithFinding();
+    const holder = await probe.connect();
+    try {
+      await holder.query("begin");
+      await holder.query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))", [team]);
+
+      const decision = post(`/api/findings/${finding.id}/false-positive`, team, { reason: "r" });
+      await queuedBehindFindingsLock(team);
+      await withTeam(team, (tx) =>
+        tx
+          .updateTable("team_members")
+          .set({ role: "member" })
+          .where("user_id", "=", LEAD)
+          .execute(),
+      );
+      const before = await stored(team);
+      await holder.query("commit");
+
+      expect(await decision).toEqual({ status: 403, body: { error: "Your Role can't do this" } });
+      expect(await stored(team)).toEqual(before);
+    } finally {
+      holder.release();
+    }
+  });
+});
+
+describe("a stored Finding that Finding v1 refuses", () => {
+  it("answers a decision with a logged 500 that shows no schema text, and writes nothing", async () => {
+    const { team } = await teamWithFinding();
+    // Written past toRow: a blank title, which the table allows and Finding v1 doesn't.
+    await withTeam(team, (tx) =>
+      tx
+        .insertInto("findings")
+        .values({
+          team_id: team,
+          id: "f-broken",
+          asset_kind: "repo",
+          asset_ref: repo.ref,
+          module: "guard",
+          rule_id: ENV,
+          fingerprint: `${ENV}|file:broken.json`,
+          location: JSON.stringify({ kind: "file", path: "broken.json" }),
+          severity: "high",
+          title: "   ",
+          evidence: JSON.stringify({ summary: "s" }),
+          control: null,
+          status: "open",
+          unconfirmed_fix: null,
+          accepted_reason: null,
+          accepted_until: null,
+          first_seen_scan: "scan-0",
+          last_seen_scan: "scan-0",
+          moved_to: null,
+        })
+        .execute(),
+    );
+    const before = await stored(team);
+    const logged = lines.length;
+
+    const answer = await post(`/api/findings/f-broken/false-positive`, team, { reason: "r" });
+
+    expect(answer).toEqual({ status: 500, body: { error: "Internal server error" } });
+    expect(lines.slice(logged).join("\n")).toContain("unhandled error");
+    expect(await stored(team)).toEqual(before);
   });
 });

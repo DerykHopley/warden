@@ -77,6 +77,16 @@ export async function runCase(
 
   await withTeam(team, async (tx) => {
     await tx.insertInto("teams").values({ id: team }).execute();
+    // A decision is a Lead's (rechecked under the Team's lock): each person a case names decides as one.
+    const people = new Set(
+      c.steps.flatMap((step) => (step.step === "decision" ? [step.actor.id] : [])),
+    );
+    for (const user_id of people) {
+      await tx
+        .insertInto("team_members")
+        .values({ team_id: team, user_id, role: "lead" })
+        .execute();
+    }
     if (c.given.findings.length > 0) {
       await tx.insertInto("findings").values(c.given.findings.map(toRow)).execute();
     }
