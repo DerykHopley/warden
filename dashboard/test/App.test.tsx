@@ -58,7 +58,9 @@ describe("App", () => {
 
   it("shows the email, the user id the server returned and sign-out when signed in", async () => {
     signIn();
-    fetchMock.mockResolvedValue(json(200, { userId: "user_from_server" }));
+    fetchMock.mockResolvedValue(
+      json(200, { userId: "user_from_server", team: "org_1", role: "admin" }),
+    );
     render(<App />);
 
     expect(screen.getByRole("heading", { name: "Warden" })).toBeInTheDocument();
@@ -97,7 +99,7 @@ describe("App", () => {
     signOut();
     rerender(<App />);
 
-    fetchMock.mockResolvedValueOnce(json(200, { userId: "user_again" }));
+    fetchMock.mockResolvedValueOnce(json(200, { userId: "user_again", team: null, role: null }));
     signIn("sess_2");
     rerender(<App />);
     expect(await screen.findByText("user_again")).toBeInTheDocument();
@@ -120,12 +122,54 @@ describe("App", () => {
   it("shows the not-answering message and retries when the server can't be reached", async () => {
     signIn();
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    fetchMock.mockResolvedValueOnce(json(200, { userId: "user_after_retry" }));
+    fetchMock.mockResolvedValueOnce(
+      json(200, { userId: "user_after_retry", team: "org_1", role: "member" }),
+    );
     render(<App />);
 
     expect(await screen.findByText("Warden's server isn't answering")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("user_after_retry")).toBeInTheDocument();
     expect(screen.queryByText("Warden's server isn't answering")).not.toBeInTheDocument();
+  });
+
+  it("on a 409, says the Team's Admin must open Warden first, and keeps the person signed in", async () => {
+    signIn();
+    fetchMock.mockResolvedValue(json(409, { error: "Your Team's Admin must open Warden first" }));
+    render(<App />);
+
+    expect(
+      await screen.findByText(
+        "Your Team's Admin must open Warden first. Try again once they have.",
+      ),
+    ).toBeInTheDocument();
+    expect(clerk.auth.signOut).not.toHaveBeenCalled();
+    expect(screen.queryByText("Warden's server isn't answering")).not.toBeInTheDocument();
+  });
+
+  it("on a 429, says how long to wait from Retry-After, and keeps the person signed in", async () => {
+    signIn();
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Too many sign-in attempts" }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": "37" },
+      }),
+    );
+    render(<App />);
+
+    expect(
+      await screen.findByText("Too many sign-in attempts. Try again in 37 seconds."),
+    ).toBeInTheDocument();
+    expect(clerk.auth.signOut).not.toHaveBeenCalled();
+  });
+
+  it("on a 429 without Retry-After, says to try again in a minute", async () => {
+    signIn();
+    fetchMock.mockResolvedValue(json(429, { error: "Too many sign-in attempts" }));
+    render(<App />);
+
+    expect(
+      await screen.findByText("Too many sign-in attempts. Try again in a minute."),
+    ).toBeInTheDocument();
   });
 });

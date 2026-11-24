@@ -155,3 +155,11 @@ With connectors required, `gcloud sql connect` stops working. To reach the datab
 
 `Dockerfile` builds the dashboard (it needs `VITE_CLERK_PUBLISHABLE_KEY` as a build argument and fails without it)
 and runs the server as the non-root `node` user on `PORT`. The server reads the same variables at run time.
+
+On Cloud Run (where Cloud Run sets `K_SERVICE`), the server also needs `CLERK_AUTHORIZED_PARTIES`: the dashboard
+origins Warden is served from, comma-separated, such as `https://warden-abc123-ew.a.run.app`. A Clerk session token
+signs someone in only when it was made for one of them, so a token from another app on the same Clerk instance is
+refused. Without it there the server stops at start, naming the variable. Locally it defaults to the dashboard's
+`http://localhost:5173`. Cloud Run also decides the client address the sign-in limit counts: the last
+`X-Forwarded-For` entry, which holds while Warden is reached at its own run.app URL; a load balancer in front would
+need that changed (`docs/threat-model.md`, A5).
