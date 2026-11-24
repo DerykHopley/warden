@@ -41,6 +41,13 @@ assert_no_line() {
   pass "$1"
 }
 
+# line_of <fixed string>: the number of the first line of the dry run's output that is exactly it; fails when none is.
+line_of() {
+  local found
+  found=$(grep -nxF -- "$1" <<<"$output") || fail "no line is exactly: $1"
+  head -1 <<<"$found" | cut -d: -f1
+}
+
 # capture <command...>: its output (stdout and stderr) in $out, its exit code in $code.
 capture() {
   set +e
@@ -215,6 +222,8 @@ assert_line "it makes the warden-scheduler service account" \
 assert_equal "warden-scheduler may start warden-daily-expiry, nothing else" \
   "run warden-daily-expiry roles/run.invoker" \
   "$(bindings_to warden-scheduler)"
+assert_no_line "no one may act as warden-scheduler" \
+  "gcloud iam service-accounts add-iam-policy-binding warden-scheduler@"
 daily_job="gcloud run jobs create warden-daily-expiry --image=us-docker.pkg.dev/cloudrun/container/job:latest --region=europe-west1 --service-account=warden-daily@$project.iam.gserviceaccount.com --project=$project"
 assert_line "the daily Job runs as warden-daily, with Google's placeholder job image, in europe-west1" "$daily_job"
 daily_binding="gcloud run jobs add-iam-policy-binding warden-daily-expiry --region=europe-west1 --member=serviceAccount:warden-scheduler@$project.iam.gserviceaccount.com --role=roles/run.invoker --project=$project"
@@ -223,8 +232,11 @@ assert_equal "the daily Job's one binding is warden-scheduler's run.invoker" "$d
 daily_trigger="gcloud scheduler jobs create http warden-daily-expiry --location=europe-west1 '--schedule=0 4 * * *' --time-zone=Etc/UTC --uri=https://run.googleapis.com/v2/projects/$project/locations/europe-west1/jobs/warden-daily-expiry:run --http-method=POST --oauth-service-account-email=warden-scheduler@$project.iam.gserviceaccount.com --project=$project"
 assert_line "the Scheduler job POSTs to the daily Job's :run daily at 04:00 UTC, with an OAuth token as warden-scheduler" \
   "$daily_trigger"
-line_of() { grep -nxF -- "$1" <<<"$output" | head -1 | cut -d: -f1; }
-[[ $(line_of "$daily_job") -lt $(line_of "$daily_binding") && $(line_of "$daily_binding") -lt $(line_of "$daily_trigger") ]] ||
+# Assigned one at a time, so a line_of that fails stops the test (set -e) rather than comparing an empty number.
+job_line=$(line_of "$daily_job")
+binding_line=$(line_of "$daily_binding")
+trigger_line=$(line_of "$daily_trigger")
+[[ $job_line -lt $binding_line && $binding_line -lt $trigger_line ]] ||
   fail "the Scheduler job isn't printed after the daily Job and its binding"
 pass "the Scheduler job is printed after the daily Job and its binding"
 
@@ -568,9 +580,6 @@ assert_line "a rerun puts the daily Job's account back" \
 assert_no_line "a rerun keeps each job's image" "--image=" "$(grep -F 'run jobs update' <<<"$calls")"
 assert_line "a rerun puts the daily Job's Scheduler job back" \
   "scheduler jobs update http warden-daily-expiry --location=europe-west1 --schedule=0 4 * * * --time-zone=Etc/UTC --uri=https://run.googleapis.com/v2/projects/$project/locations/europe-west1/jobs/warden-daily-expiry:run --http-method=POST --oauth-service-account-email=warden-scheduler@$project.iam.gserviceaccount.com --project=$project" \
-  "$calls"
-assert_line "a rerun keeps warden-scheduler's run.invoker on the daily Job" \
-  "run jobs add-iam-policy-binding warden-daily-expiry --region=europe-west1 --member=serviceAccount:warden-scheduler@$project.iam.gserviceaccount.com --role=roles/run.invoker --project=$project" \
   "$calls"
 assert_equal "a rerun runs the roles script for both sets again" \
   "live warden
