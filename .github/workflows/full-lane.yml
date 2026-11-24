@@ -13,9 +13,12 @@ on:
       - .github/workflows/full-lane.yml
       - e2e/playwright.config.ts
 
-# A newer push to a PR replaces its older run; a by-hand or a called run goes to the end.
+# A newer push to a PR replaces its older run. A by-hand or a called run has a group of its own (its run's id), so it
+# runs to the end beside any other. GitHub applies a called workflow's concurrency too, with the caller's github
+# context: with one group per ref, every merge's release would share one, and GitHub keeps one waiting run per group,
+# so a third quick merge would cancel the second's waiting full lane.
 concurrency:
-  group: full-lane-${{ github.ref }}-${{ github.event_name }}
+  group: full-lane-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:

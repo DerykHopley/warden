@@ -13,7 +13,9 @@ permissions:
   contents: read
 
 jobs:
-  # Outside the release lock: full lanes for several merges run side by side.
+  # Outside the release lock: full lanes for several merges run side by side. GitHub applies the called workflows'
+  # concurrency with this run's github context, so full-lane.yml and fast-lane.yml give a called run a group of its
+  # own (this run's id); a group per ref would queue them, and a third merge would cancel the second's waiting lane.
   full-lane:
     name: Full lane
     uses: ./.github/workflows/full-lane.yml
