@@ -1,22 +1,53 @@
 // Runs one reconcile case (contracts/README.md, "The reconcile cases") against the real Findings module: the case's
-// Team becomes one of its own, `given` goes straight into `findings`, each step goes through `reconcile` or `report`,
-// and the Team's Findings are compared with `expect`, refs resolved.
+// Team becomes one of its own, `given` goes straight into `findings`, each step goes through `reconcile`, `report`
+// or the named decision call, and the Team's Findings are compared with `expect`, refs resolved.
 import { randomUUID } from "node:crypto";
-import type { ExpectedFinding, Finding, FindingRef, ReconcileCase } from "@warden/contracts";
+import type {
+  ExpectedFinding,
+  Finding,
+  FindingRef,
+  ReconcileCase,
+  ReconcileStep,
+} from "@warden/contracts";
 import type { Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
-/** The steps only slice 8 builds: a person's named decisions and the daily expiry job. */
-const SLICE_8_STEPS = new Set(["decision", "expire"]);
+/** The steps only slice 8b builds: the daily expiry job. */
+const SLICE_8B_STEPS = new Set(["expire"]);
 
-/** Whether the runner runs a case now, or lists it as todo: only a case with a slice 8 step waits. */
+/** Whether the runner runs a case now, or lists it as todo: only a case with a slice 8b step waits. */
 export function planCase(c: ReconcileCase): { run: true } | { run: false; todo: string } {
   const waiting = [
-    ...new Set(c.steps.map((step) => step.step).filter((step) => SLICE_8_STEPS.has(step))),
+    ...new Set(c.steps.map((step) => step.step).filter((step) => SLICE_8B_STEPS.has(step))),
   ];
   if (waiting.length === 0) return { run: true };
-  return { run: false, todo: `needs slice 8 for its ${waiting.join(" and ")} step` };
+  return { run: false, todo: `needs slice 8b for its ${waiting.join(" and ")} step` };
+}
+
+type DecisionStep = Extract<ReconcileStep, { step: "decision" }>;
+
+/** A case's decision step through the Findings module's named call, its refs resolved to Finding ids. */
+function decide(
+  findings: Findings,
+  team: string,
+  step: DecisionStep,
+  resolve: (ref: FindingRef) => string,
+) {
+  const id = resolve(step.finding);
+  const input = { actor: step.actor, reason: step.reason };
+  switch (step.decision) {
+    case "accept":
+      return findings.accept(team, id, { ...input, until: step.until! });
+    case "mark_false_positive":
+      return findings.markFalsePositive(team, id, input);
+    case "confirm_fix":
+      return findings.confirmFix(team, id, input);
+    case "mark_moved":
+      return findings.markMoved(team, id, { ...input, candidate: resolve(step.candidate!) });
+    case "reopen":
+      return findings.reopen(team, id, input);
+  }
 }
 
 /** The case with every `team` field set to `team`: history can't be deleted, so each case gets a Team of its own. */
@@ -52,9 +83,14 @@ export async function runCase(
   });
 
   const labels = new Map<string, string>();
+  const resolve = (ref: FindingRef) => ("id" in ref ? ref.id : labels.get(ref.new)!);
   for (const [i, step] of c.steps.entries()) {
+    if (step.step === "decision") {
+      await decide(findings, team, step, resolve);
+      continue;
+    }
     if (step.step !== "scan" && step.step !== "spot_run") {
-      throw new Error(`step ${i} is a ${step.step} step, which needs slice 8`);
+      throw new Error(`step ${i} is a ${step.step} step, which needs slice 8b`);
     }
     const outcome =
       step.step === "scan"
@@ -69,7 +105,6 @@ export async function runCase(
     }
   }
 
-  const resolve = (ref: FindingRef) => ("id" in ref ? ref.id : labels.get(ref.new)!);
   const listed = new Map((await findings.list(team)).map((finding) => [finding.id, finding]));
   const result: CaseResult = { expected: {}, actual: {} };
   for (const expectation of c.expect) {

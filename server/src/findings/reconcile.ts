@@ -59,6 +59,14 @@ interface Change {
   reason: string;
 }
 
+/**
+ * One change to a Team's Findings at a time, a reconcile or a person's decision, held until the transaction ends: two
+ * at once give what the same two give one after the other.
+ */
+export async function lockTeamFindings(tx: Transaction<Database>, team: string): Promise<void> {
+  await sql`select pg_advisory_xact_lock(hashtextextended(${team}::text, 0))`.execute(tx);
+}
+
 export async function applyRun(
   tx: Transaction<Database>,
   run: Run,
@@ -72,8 +80,7 @@ export async function applyRun(
     alreadyApplied: false,
   };
 
-  // One reconcile per Team at a time, so two at once give what the same two give one after the other.
-  await sql`select pg_advisory_xact_lock(hashtextextended(${run.team}::text, 0))`.execute(tx);
+  await lockTeamFindings(tx, run.team);
 
   const applied = await tx
     .selectFrom("scans")

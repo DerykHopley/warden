@@ -1,6 +1,6 @@
 // The reconcile cases against the real thing (ADR 0005): every case in contracts/reconcile-cases/ runs through
 // `createFindings` on the suite's shared database, as warden_app, with Guard's and Patch's move rules wired in as
-// the start-up file will wire them. A case with a decision or expire step waits for slice 8 and shows as todo.
+// the start-up file wires them. A case with an expire step waits for slice 8b and shows as todo.
 import { loadReconcileCases } from "@warden/contracts/reconcile-cases";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";

@@ -1,0 +1,180 @@
+// A person's named decisions on a Finding (ADR 0005): accept, mark a False positive, confirm a fix, mark one moved,
+// reopen. Each runs inside one `withTeam` transaction under the same per-Team lock as reconcile, and writes one
+// history row per changed Finding naming the person and their reason. An agent never decides: it only proposes.
+import { Actor, type Finding, type Status } from "@warden/contracts";
+import type { Transaction } from "kysely";
+import type { Database } from "../schema.ts";
+import { lockTeamFindings } from "./reconcile.ts";
+import { fromRow, toRow } from "./rows.ts";
+
+/** The named calls, as `Findings` names them. */
+export type DecisionCall = "accept" | "markFalsePositive" | "confirmFix" | "markMoved" | "reopen";
+
+/** A decision's call and what it needs, already checked. */
+export type Decision =
+  | { call: "accept"; reason: string; until: string }
+  | { call: "markFalsePositive" | "confirmFix" | "reopen"; reason: string }
+  | { call: "markMoved"; reason: string; candidate: string };
+
+/** The Finding id isn't one the Team has: another Team's id counts the same. */
+export class FindingNotFound extends Error {
+  readonly findingId: string;
+
+  constructor(findingId: string) {
+    super(`No Finding ${findingId} in this Team`);
+    this.name = "FindingNotFound";
+    this.findingId = findingId;
+  }
+}
+
+/** The call isn't allowed on the Finding as it is now. Nothing was written. */
+export class DecisionRefused extends Error {
+  readonly call: DecisionCall;
+  readonly status: Status;
+
+  constructor(call: DecisionCall, status: Status, why: string) {
+    super(`${call} refused: the Finding is ${status}, and ${why}`);
+    this.name = "DecisionRefused";
+    this.call = call;
+    this.status = status;
+  }
+}
+
+/** The person an Actor names. An agent throws, before anything is read: it only proposes. */
+export function personOf(actor: Actor): string {
+  const checked = Actor.parse(actor);
+  if (checked.kind !== "person") {
+    throw new Error("a decision needs a person: an agent only proposes (ADR 0005)");
+  }
+  return checked.id;
+}
+
+/** Which Statuses each call takes. Every call refuses a Finding merged into another. */
+const ALLOWED_FROM: Record<DecisionCall, readonly Status[]> = {
+  accept: ["open", "accepted"],
+  markFalsePositive: ["open", "accepted"],
+  confirmFix: ["fixed"],
+  markMoved: ["fixed"],
+  reopen: ["false_positive", "accepted"],
+};
+
+const notAccepted = { accepted_reason: null, accepted_until: null } as const;
+
+/** Applies one decision by `person` to the Team's Finding `id`, and returns it as changed (markMoved: the old one). */
+export async function applyDecision(
+  tx: Transaction<Database>,
+  team: string,
+  id: string,
+  person: string,
+  decision: Decision,
+): Promise<Finding> {
+  await lockTeamFindings(tx, team);
+  const finding = await load(tx, team, id);
+  if (!finding) throw new FindingNotFound(id);
+  const refuse = (why: string) => new DecisionRefused(decision.call, finding.status, why);
+  if (finding.moved_to !== null) throw refuse(`it is merged into ${finding.moved_to}`);
+  const allowed = ALLOWED_FROM[decision.call];
+  if (!allowed.includes(finding.status)) {
+    throw refuse(`${decision.call} takes a Finding that is ${allowed.join(" or ")}`);
+  }
+
+  /** The Findings to write, in order: markMoved frees the candidate's Fingerprint before the old Finding takes it. */
+  const changes: { before: Finding; after: Finding }[] = [];
+  switch (decision.call) {
+    case "accept":
+      changes.push({
+        before: finding,
+        after: {
+          ...finding,
+          status: "accepted",
+          accepted_reason: decision.reason,
+          accepted_until: decision.until,
+        },
+      });
+      break;
+    case "markFalsePositive":
+      changes.push({
+        before: finding,
+        after: { ...finding, status: "false_positive", ...notAccepted },
+      });
+      break;
+    case "reopen":
+      changes.push({ before: finding, after: { ...finding, status: "open", ...notAccepted } });
+      break;
+    case "confirmFix":
+      if (finding.unconfirmed_fix === null) throw refuse("it has no Unconfirmed fix to confirm");
+      changes.push({ before: finding, after: { ...finding, unconfirmed_fix: null } });
+      break;
+    case "markMoved": {
+      if (finding.unconfirmed_fix === null) throw refuse("it has no Unconfirmed fix to move");
+      if (!finding.unconfirmed_fix.candidates.includes(decision.candidate)) {
+        throw refuse(`${decision.candidate} isn't one of its candidates`);
+      }
+      const candidate = await load(tx, team, decision.candidate);
+      if (!candidate || candidate.status !== "open" || candidate.moved_to !== null) {
+        const state = !candidate
+          ? "gone"
+          : candidate.moved_to !== null
+            ? `merged into ${candidate.moved_to}`
+            : candidate.status;
+        throw refuse(`its candidate ${decision.candidate} is ${state}, not open`);
+      }
+      changes.push({
+        before: candidate,
+        after: { ...candidate, status: "fixed", moved_to: finding.id },
+      });
+      changes.push({
+        before: finding,
+        after: {
+          ...finding,
+          status: "open",
+          unconfirmed_fix: null,
+          location: candidate.location,
+          fingerprint: candidate.fingerprint,
+          title: candidate.title,
+          evidence: candidate.evidence,
+          severity: candidate.severity,
+          last_seen_scan: candidate.last_seen_scan,
+        },
+      });
+      break;
+    }
+  }
+
+  for (const { after } of changes) {
+    const { team_id, id: changedId, ...fields } = toRow(after);
+    await tx
+      .updateTable("findings")
+      .set(fields)
+      .where("team_id", "=", team_id)
+      .where("id", "=", changedId)
+      .execute();
+  }
+  await tx
+    .insertInto("finding_history")
+    .values(
+      changes.map(({ before, after }) => ({
+        team_id: team,
+        finding_id: after.id,
+        status_before: before.status,
+        status_after: after.status,
+        severity_before: before.severity,
+        severity_after: after.severity,
+        actor_kind: "person" as const,
+        actor_id: person,
+        reason: decision.reason,
+      })),
+    )
+    .execute();
+  return (await load(tx, team, id))!;
+}
+
+async function load(tx: Transaction<Database>, team: string, id: string) {
+  const row = await tx
+    .selectFrom("findings")
+    .selectAll()
+    .where("team_id", "=", team)
+    .where("id", "=", id)
+    .executeTakeFirst();
+  return row && fromRow(row);
+}
