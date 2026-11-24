@@ -38,8 +38,8 @@ Cloud Scheduler. Nothing long runs in the service after it answers, and nothing 
   failed and is retried. A Scan's writes commit together at the end (ADR 0005: a crash inside the callback writes
   nothing), so a killed attempt leaves nothing half-done. A Scan that can't finish in an hour is split into several
   Scans, as ADR 0005 already says.
-- **Secrets and who may start it.** Each job runs as Warden's own runtime service account (slice 1b), never the
-  default compute account. It reads secrets through `--set-secrets` from Secret Manager, pinned to a version (Cloud
+- **Secrets and who may start it.** Each job runs as its own Warden service account, never the default compute
+  account: the daily Job as `warden-daily`. It reads secrets through `--set-secrets` from Secret Manager, pinned to a version (Cloud
   Run's advice), with `roles/secretmanager.secretAccessor` on each secret it needs. Who may start each job:
   - Warden's service account, with `roles/run.jobsExecutorWithOverrides` on the Scan job only. `roles/run.invoker`
     can't pass overrides.
@@ -47,7 +47,9 @@ Cloud Scheduler. Nothing long runs in the service after it answers, and nothing 
     (`warden-daily-expiry`) only. Scheduler starts it without overrides, and `run.invoker` holds `run.jobs.run`
     (the limits table below), so it needs nothing wider than that: narrower than `run.jobsExecutorWithOverrides`.
     `scripts/gcp-setup.sh` makes the account, the job, the binding and the Scheduler job (#52).
-  - No one else. People start Scans through Warden's API, which checks their Role.
+  - These are the only accounts bound on the jobs themselves. Accounts with `roles/run.developer` on the project,
+    such as `warden-deploy`, and the project's owner also hold `run.jobs.run` (the roles page in the limits table
+    below), so they can start either job too. People start Scans through Warden's API, which checks their Role.
 - **No callback endpoint.** Nothing calls into Warden's public service from a queue, so no endpoint has to refuse a
   caller without a Google OIDC token. Option B would have needed one (below).
 
@@ -144,11 +146,11 @@ report after tear-down (#14).
   Jobs are part of Cloud Run, already chosen. The Cloud Tasks API was turned on for the spike only and isn't used;
   the owner may turn it off.
 - **Who builds what:**
-  - Slice 8 builds the daily expiry job, its entry point and its Scheduler trigger.
+  - The daily expiry job: #36 built its code and entry point, #52 its Scheduler trigger (in the setup script), and
+    #24 the release step that updates its image on each release (`scripts/cloud-run-deploy.sh`, release mode).
   - The first spec that starts Scans from a request (the Guard spec, with its scanners) builds the Scan job and the
-    queued-Scan row in Cloud SQL.
+    queued-Scan row in Cloud SQL, and adds the Scan job to the release step.
   - The Scan id check is already built (slice 7, #22).
-  - Slice 1b's release pipeline needs a step that updates the jobs' images on each release.
 - **`docs/data.md` gains a row,** added by whichever of those lands first: "Cloud Run job executions: each
   execution's env override (a Scan id and a Team id; none for the daily job) and its logs, kept as Cloud Run keeps
   executions". How long Cloud Run keeps executions is unverified; that slice checks it.

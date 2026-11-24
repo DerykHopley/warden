@@ -155,7 +155,7 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 | Service accounts | none has a key. See the table below |
 | Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches. The provider maps each token to its repository id and branch kind (`attribute.deploy`, such as `<repo-id>:main`): only this repository's `main` tokens may act as `warden-deploy`, and only its `preview/*` tokens as `warden-preview-deploy`, so a token from another repository can never match, even through another provider in the pool |
 | The services and the job | Cloud Run services `warden` (as `warden-run`, at most 2 instances) and `warden-preview` (as `warden-preview-run`, at most 1 instance), each public with Google's placeholder image, and the Cloud Run job `warden-migrate-preview` (as `warden-preview-migrate`, with Google's placeholder job image). The script makes them because the deploy accounts can't make a service public, and `warden-preview-deploy`'s roles are on the preview service and job themselves. Run again, it puts each one's service account, instance limit and public access back, keeping the image it runs. Sign-in is Clerk's job |
-| The daily Job and its trigger | the Cloud Run job `warden-daily-expiry` (as `warden-daily`, with Google's placeholder job image until a release gives it Warden's), which only `warden-scheduler` may start (`roles/run.invoker` on that Job); then the Cloud Scheduler job `warden-daily-expiry` in `europe-west1`, which runs it daily at `0 4 * * *` (`Etc/UTC`, after the 03:00 backup) by a `POST` to the Job's `:run` URL with an OAuth token as `warden-scheduler`. Run again, it puts the Job's service account back, keeping its image, and updates the Scheduler job to these values. Cloud Scheduler is free for up to 3 jobs per billing account |
+| The daily Job and its trigger | the Cloud Run job `warden-daily-expiry` (as `warden-daily`, with Google's placeholder job image until a release gives it Warden's). The only account bound on the Job is `warden-scheduler` (`roles/run.invoker`, which holds `run.jobs.run`); accounts with `roles/run.developer` on the project, such as `warden-deploy`, and the project's owner can start it too, as Google's [Cloud Run IAM roles](https://docs.cloud.google.com/run/docs/reference/iam/roles) give each of them `run.jobs.run`. Then the Cloud Scheduler job `warden-daily-expiry` in `europe-west1`, which runs it daily at `0 4 * * *` (`Etc/UTC`, after the 03:00 backup) by a `POST` to the Job's `:run` URL with an OAuth token as `warden-scheduler`. Run again, it puts the Job's service account back, keeping its image, and updates the Scheduler job to these values. Cloud Scheduler is free for up to 3 jobs per billing account |
 
 **The service accounts and what each may do:**
 
@@ -163,12 +163,12 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 |---|---|---|
 | `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key` |
 | `warden-migrate` | the live migration job | Cloud SQL client; read `warden-db-app-password` and `warden-db-migrate-password`. Not the `postgres` password |
-| `warden-daily` | the daily expiry Job `warden-daily-expiry` (the setup script makes it; #24's release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-db-admin-password`. The only account that reads the admin password, so the server can't list Teams |
+| `warden-daily` | the daily expiry Job `warden-daily-expiry` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-db-admin-password`. The only account that reads the admin password, so the server can't list Teams |
 | `warden-deploy` | GitHub Actions on `main` | Cloud Run developer on the project; writer on the `warden` repository; act as `warden-run`, `warden-migrate` and `warden-daily`. Reads no secret |
 | `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key` |
 | `warden-preview-migrate` | the `warden-migrate-preview` job | Cloud SQL client; read `warden-db-preview-migrate-password` only |
 | `warden-preview-deploy` | GitHub Actions on `preview/*` | Cloud Run developer on the `warden-preview` service and the `warden-migrate-preview` job only, never the project; writer on the `warden-preview` repository only; act as `warden-preview-run` and `warden-preview-migrate` only. Reads no secret |
-| `warden-scheduler` | Cloud Scheduler | may start `warden-daily-expiry` (`roles/run.invoker` on that Job), nothing else; reads no secret |
+| `warden-scheduler` | Cloud Scheduler | start `warden-daily-expiry` (`roles/run.invoker` on that Job), nothing else; reads no secret. The only account bound on the Job; `roles/run.developer` on the project (`warden-deploy`) and the project's owner also hold `run.jobs.run` |
 
 Previews still share the one Clerk secret key with live for now.
 
@@ -286,7 +286,7 @@ behind it: an older waiting preview is cancelled (the run shows it) and must be 
 of the deploy step's log and on the run's summary page. Sign-in uses Clerk's development instance.
 
 **Secrets are pinned.** The revision and the job read their passwords and Clerk keys from Secret Manager by version
-number, never `latest`. The numbers live in `secret_version` in `scripts/cloud-run-deploy.sh`. To move one: add the
+number, never `latest`. The numbers live in `secret_version` in `scripts/lib/cloud-run.sh`. To move one: add the
 new version (`gcloud secrets versions add <secret> --data-file=-`), change its number there in a PR, merge it, then
 push a preview. Disable the old version only after no running revision reads it.
 
@@ -299,3 +299,106 @@ counted).
 
 The preview's data stays in `warden_preview`: seed it as "Local setup" shows. Old tags and revisions aren't cleaned
 up yet.
+
+## Releasing
+
+Every merge to `main` releases Warden to the live `warden` service. It needs Google Cloud set up first (above), with
+the repository variables `GCP_PROJECT_ID`, `GCP_DEPLOY_SA`, `GCP_WIF_PROVIDER`, `CLOUD_SQL_CONNECTION` and
+`VITE_CLERK_PUBLISHABLE_KEY`. Without any of the five, a release deploys nothing and the run stays green, with a
+notice naming each missing variable (a rollback needs the first four).
+
+**What a release does** (`.github/workflows/release.yml`, then `scripts/cloud-run-deploy.sh <image> release`):
+
+1. **Full lane:** every test in every browser (`full-lane.yml`, called through `workflow_call`). A red full lane
+   releases nothing.
+2. **Build** the image, then sign in to Google Cloud through Workload Identity Federation (no key) as
+   `warden-deploy`, and push it to the `warden` repository as
+   `europe-west1-docker.pkg.dev/<project-id>/warden/warden:<commit>`.
+3. **Migrate:** deploy the `warden-migrate` job with the image, as `warden-migrate`, run
+   `node server/src/migrate.ts` on `warden` as `warden_migrate`, and wait for it. A failed migration stops the
+   release before any revision exists.
+4. **Deploy:** a `warden` revision named `warden-rel-<sha7>-<run>-<attempt>`, as `warden-run`, tagged `candidate`, with **no
+   traffic**. Every release sets the revision's env vars and secrets afresh; its `CLERK_AUTHORIZED_PARTIES` is each
+   URL Cloud Run gives the service.
+5. **Health gate:** call `/api/health` on the tag's URL (`https://candidate---warden-<project-number>.europe-west1.run.app`)
+   for up to about 90 seconds until it answers 200. If it never does, the release fails and the revision gets no
+   traffic.
+6. **Traffic:** 100% of the service's traffic to that revision, by its name. The same call tags the release it took
+   the traffic from `previous` (a tag moves no traffic), which is where a rollback goes by default. So only a
+   revision that served is ever tagged `previous`: one whose health gate failed never is. When the revision it took
+   the traffic from isn't a release (after a rollback by name to another revision), the same call removes the
+   `previous` tag instead, so a rollback never goes to a stale release.
+7. **The daily Job:** `warden-daily-expiry` gets the same image and its settings afresh (`node
+   server/src/daily-expiry.ts`, as `warden-daily`, one retry, its two passwords pinned), so the Job and the service
+   run the same code. The Cloud Scheduler job that starts it isn't changed. If this step fails, the run fails after
+   the traffic has moved, naming the Job: dispatch the release again, or set the image by hand (below).
+
+**One at a time, and never backwards.** Only the deploy job (steps 2 to 7) holds the `release` lock; full lanes run
+side by side. A running deploy is never cancelled. While one runs, GitHub keeps only the newest waiting behind it: an
+older waiting one shows as cancelled. Since full lanes finish in any order, the deploy script first compares this
+commit with the serving release's (the `<sha7>` in its `warden-rel-` name, looked up in `main`'s history, which the
+workflow checks out whole):
+
+- this commit isn't on `main`: the run fails, before anything changes;
+- a release of a newer commit is serving: the run skips, exits green, and says so;
+- a release of this same commit is serving (a re-run after step 7 failed): only the daily Job is set (step 7);
+- otherwise (an older release serves, or a revision that isn't a release, or one whose commit isn't in the
+  history): it releases. So a good commit still releases when a newer one never does (its full lane failed, or it
+  skipped CI).
+
+To release again without a merge (to retry a failed one), run "Release" by hand from `main`
+(`gh workflow run release.yml --ref main`), or re-run the failed run: the revision name ends in the run's attempt,
+so a re-run makes a new revision.
+
+**Releases and rollbacks.** A rollback has its own lock (`rollback`), so a waiting rollback and a waiting release
+never cancel each other, and the two can run at the same time. A rollback reads the serving revision when it starts
+(and with `from`, stops if it isn't that one), then again just before it moves the traffic: if a release moved the
+traffic meanwhile, it stops with traffic unchanged, and you dispatch it again if it's still wanted. A release that
+starts after a rollback moved the traffic releases forward from it, as any merge to `main` does.
+
+Secrets are pinned as for previews: see "Secrets are pinned" in "Owner previews" above. The live service reads
+`warden-db-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key`; the migration job
+`warden-db-migrate-password`; the daily Job `warden-db-app-password` and `warden-db-admin-password`. A new version
+reaches them with the next release after the PR that moves its number.
+
+**Roll back** with the "Rollback" workflow, by hand from `main`, which runs `scripts/cloud-run-rollback.sh
+[revision]`. **During an incident, name both revisions**: the one to go back to, and the one you saw serving. Then
+nothing changes if a release lands before the rollback starts:
+
+```sh
+gh workflow run rollback.yml --ref main -f revision=<revision to go back to> -f from=<revision serving now>
+```
+
+With no `revision`, it goes back to the release tagged `previous` (step 6 above). In order, it:
+
+1. tags the revision `rollback` and waits for `https://rollback---warden-<project-number>.europe-west1.run.app/api/health`
+   to answer 200. If it never does, it stops there and traffic stays where it is;
+2. reads the serving revision again, and stops with traffic unchanged if a release moved it meanwhile; otherwise
+   moves 100% of `warden`'s traffic to it, by name;
+3. gives `warden-daily-expiry` that revision's image by its digest (the one Cloud Run resolved when it deployed the
+   revision, not the movable `:<commit>` tag), with the Job's whole configuration set afresh by the same function a
+   release uses (`update_daily_job` in `scripts/lib/cloud-run.sh`), so with today's pinned secret versions;
+4. checks that the service's own `/api/health` answers 200, and fails the run otherwise.
+
+It fails before changing anything when no release is tagged `previous` (or that one is already serving, as after a
+rollback), when traffic is split and no revision is named, when the revision isn't one of `warden`'s, or when the
+serving revision isn't the `from` one. To roll back by hand instead:
+
+```sh
+gcloud run revisions list --service warden --region europe-west1
+gcloud run services update-traffic warden --to-revisions=<revision>=100 --region europe-west1
+gcloud run revisions describe <revision> --region europe-west1 --format='value(status.imageDigest)'
+gcloud run jobs update warden-daily-expiry --image=<that digest> --region europe-west1
+```
+
+**The schema stays.** Migrations only run forwards, so a rollback keeps the newer schema, and the earlier code runs
+against it. The next merge to `main` releases forward again.
+
+**Run the daily Job by hand:** `gcloud run jobs execute warden-daily-expiry --region europe-west1 --wait`. Cloud
+Scheduler runs it daily at 04:00 UTC; `gcloud scheduler jobs run warden-daily-expiry --location europe-west1` starts
+that trigger now.
+
+**Logs:** the workflow runs on GitHub (Actions, "Release" and "Rollback"); the migration job's and the daily Job's
+executions (`gcloud run jobs executions list --job warden-migrate --region europe-west1`, and the same with
+`--job warden-daily-expiry`) and their logs; and the service's own logs in Cloud Logging
+(`gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="warden"'`).

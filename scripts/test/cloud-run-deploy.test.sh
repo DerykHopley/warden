@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The Cloud Run deploy script, preview mode: real runs against a stub gcloud and a stub curl, first on PATH, which
-# record every call and answer as each case sets, so nothing reaches Google and no credentials are needed. Stops at
-# the first failed assertion, exiting 1.
+# The Cloud Run deploy script, preview and release modes: real runs against a stub gcloud and a stub curl, first on
+# PATH, which record every call and answer as each case sets, so nothing reaches Google and no credentials are needed.
+# Stops at the first failed assertion, exiting 1.
 # Run from anywhere: scripts/test/cloud-run-deploy.test.sh
 set -euo pipefail
 
@@ -10,10 +10,11 @@ deploy="$root/scripts/cloud-run-deploy.sh"
 project=test-project
 connection="$project:europe-west1:test-db"
 image="europe-west1-docker.pkg.dev/$project/warden-preview/warden:abc1234def5678"
+release_image="europe-west1-docker.pkg.dev/$project/warden/warden:abc1234def5678"
 publishable=pk_test_Y2ktcGxhY2Vob2xkZXIuY2xlcmsuYWNjb3VudHMuZGV2JA
-# The two URLs the stub reports for warden-preview: the deterministic one (status.url) and the older hash one.
-url_new=https://warden-preview-123456789012.europe-west1.run.app
-url_old=https://warden-preview-abcdefghij-ew.a.run.app
+# The stub reports two URLs for each service <s>: the deterministic one, https://<s>-123456789012.europe-west1.run.app
+# (status.url), and the older hash one, https://<s>-abcdefghij-ew.a.run.app (in the run.googleapis.com/urls
+# annotation).
 
 fail() {
   printf 'FAIL: %s\n' "$1" >&2
@@ -42,27 +43,72 @@ assert_no_match() {
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
+# A checkout like the release workflow's: main is c1 → c2 → c3 in a bare origin, and side, off c1, is on no branch of
+# origin. The script runs in it, and reads main's tip from origin.
+fixture_git() {
+  env -i HOME="$scratch" PATH=/usr/bin:/bin GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t \
+    GIT_COMMITTER_EMAIL=t@example.com git -C "$scratch/repo" "$@"
+}
+git init -q --bare "$scratch/origin.git"
+git init -q -b main "$scratch/repo"
+fixture_git remote add origin "$scratch/origin.git"
+fixture_git commit -q --allow-empty -m c1
+c1=$(fixture_git rev-parse HEAD)
+fixture_git commit -q --allow-empty -m c2
+c2=$(fixture_git rev-parse HEAD)
+fixture_git commit -q --allow-empty -m c3
+c3=$(fixture_git rev-parse HEAD)
+fixture_git push -q origin main
+fixture_git checkout -q -b side "$c1"
+fixture_git commit -q --allow-empty -m side
+side=$(fixture_git rev-parse HEAD)
+fixture_git checkout -q main
+# rel_of <commit>: a release revision of that commit, as a release names it.
+rel_of() { printf 'warden-rel-%s-9-1' "${1:0:7}"; }
+
 # A stub gcloud: records each call, one per line, and answers as FAKE_MIGRATION says (ok, or fail: the job's
 # execution fails the way `gcloud run jobs execute --wait` reports it). FAKE_DESCRIBE=fail makes reading the service
-# fail, as when the deploy account can't.
+# fail, as when the deploy account can't; FAKE_DESCRIBE=nourl describes a service with no URL at all (no status.url,
+# no annotation), as before its first revision is ready. FAKE_DAILY=fail makes updating the daily Job fail. The
+# service's traffic is all on FAKE_SERVING (default: a release revision, <service>-rel-0000000-11-1, of a commit
+# that isn't in the checkout), and FAKE_PREVIOUS, when set, is the revision tagged previous.
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
 printf 'gcloud %s\n' "$*" >>"$dir/calls"
 case "$*" in
-  "run services describe warden-preview "*)
-    if [[ ${FAKE_DESCRIBE-} == fail ]]; then
-      echo "ERROR: (gcloud.run.services.describe) PERMISSION_DENIED" >&2
-      exit 1
+  "run services describe "*)
+    service=$4
+    case ${FAKE_DESCRIBE-} in
+      fail)
+        echo "ERROR: (gcloud.run.services.describe) PERMISSION_DENIED" >&2
+        exit 1
+        ;;
+      nourl)
+        echo "{\"metadata\":{\"name\":\"$service\",\"annotations\":{}},\"status\":{}}"
+        exit 0
+        ;;
+    esac
+    new="https://$service-123456789012.europe-west1.run.app"
+    old="https://$service-abcdefghij-ew.a.run.app"
+    traffic="{\"revisionName\":\"${FAKE_SERVING:-$service-rel-0000000-11-1}\",\"percent\":100}"
+    if [[ -n ${FAKE_PREVIOUS-} ]]; then
+      traffic+=",{\"revisionName\":\"$FAKE_PREVIOUS\",\"tag\":\"previous\"}"
     fi
     cat <<JSON
-{"metadata":{"name":"warden-preview","annotations":{"run.googleapis.com/urls":"[\"$FAKE_URL_NEW\",\"$FAKE_URL_OLD\"]"}},
- "status":{"url":"$FAKE_URL_NEW"}}
+{"metadata":{"name":"$service","annotations":{"run.googleapis.com/urls":"[\"$new\",\"$old\"]"}},
+ "status":{"url":"$new","traffic":[$traffic]}}
 JSON
     ;;
   "run jobs execute "*)
     if [[ $FAKE_MIGRATION == fail ]]; then
       echo "ERROR: (gcloud.run.jobs.execute) The execution failed." >&2
+      exit 1
+    fi
+    ;;
+  "run jobs update warden-daily-expiry "*)
+    if [[ ${FAKE_DAILY-} == fail ]]; then
+      echo "ERROR: (gcloud.run.jobs.update) PERMISSION_DENIED" >&2
       exit 1
     fi
     ;;
@@ -77,15 +123,15 @@ printf '%s' "$FAKE_HEALTH"
 FAKE
 chmod +x "$scratch/gcloud" "$scratch/curl"
 
-# run_deploy <health> <migration> [VAR=value...] -- [arguments]: the script with only the stubs, /usr/bin and /bin on
-# PATH, the variables the workflow sets plus any given (VAR= unsets one), no wait between health tries. Its output
-# (stdout and stderr) is in $out, its exit code in $code, the stubs' calls in $calls. DEPLOY_SCRIPT runs another
-# copy of the script.
+# run_deploy <health> <migration> [VAR=value...] -- [arguments]: the script in the fixture checkout, with only the
+# stubs, /usr/bin and /bin on PATH, the variables the workflow sets (GITHUB_SHA main's tip, c3) plus any given (VAR=
+# unsets one), no wait between health tries. Its output (stdout and stderr) is in $out, its exit code in $code, the
+# stubs' calls in $calls. DEPLOY_SCRIPT runs another copy of the script.
 run_deploy() {
   local health=$1 migration=$2
   shift 2
   local vars=(GCP_PROJECT_ID="$project" CLOUD_SQL_CONNECTION="$connection" VITE_CLERK_PUBLISHABLE_KEY="$publishable"
-    GITHUB_SHA=abc1234def5678abc1234def5678abc1234def56 GITHUB_RUN_NUMBER=12 GITHUB_RUN_ATTEMPT=1)
+    GITHUB_SHA="$c3" GITHUB_RUN_NUMBER=12 GITHUB_RUN_ATTEMPT=1)
   while [[ $1 != -- ]]; do
     vars+=("$1")
     shift
@@ -93,9 +139,8 @@ run_deploy() {
   shift
   : >"$scratch/calls"
   set +e
-  out=$(env -i HOME="$scratch" PATH="$scratch:/usr/bin:/bin" FAKE_HEALTH="$health" FAKE_MIGRATION="$migration" \
-    FAKE_URL_NEW="$url_new" FAKE_URL_OLD="$url_old" HEALTH_INTERVAL=0 "${vars[@]}" bash "${DEPLOY_SCRIPT:-$deploy}" \
-    "$@" 2>&1)
+  out=$(cd "$scratch/repo" && env -i HOME="$scratch" PATH="$scratch:/usr/bin:/bin" FAKE_HEALTH="$health" \
+    FAKE_MIGRATION="$migration" HEALTH_INTERVAL=0 "${vars[@]}" bash "${DEPLOY_SCRIPT:-$deploy}" "$@" 2>&1)
   code=$?
   set -e
   calls=$(cat "$scratch/calls")
@@ -159,7 +204,7 @@ assert_no_match "no call names roles.ts or the postgres password" 'roles\.ts|war
 
 assert_line "the revision gets no traffic" " --no-traffic" "$service_deploy"
 assert_equal "the revision is tagged demo" demo "$(flag tag "$service_deploy")"
-assert_equal "the revision's suffix is pre-demo-<sha7>-<run>" pre-demo-abc1234-12-1 \
+assert_equal "the revision's suffix is pre-demo-<sha7>-<run>" "pre-demo-${c3:0:7}-12-1" \
   "$(flag revision-suffix "$service_deploy")"
 assert_equal "the revision runs the image" "$image" "$(flag image "$service_deploy")"
 assert_equal "the revision runs as warden-preview-run" "warden-preview-run@$project.iam.gserviceaccount.com" \
@@ -218,13 +263,189 @@ assert_line "with the service's URLs unreadable: says so" "couldn't read warden-
 assert_no_match "with the service's URLs unreadable: no job or revision is deployed" '^gcloud run (jobs )?deploy ' \
   "$calls"
 
+# --- The service reports no URL: jq reads a missing status.url as null, which is no URL ---
+for mode in "preview demo" release; do
+  # shellcheck disable=SC2086 # the mode and its name are two words
+  run_deploy 200 ok FAKE_DESCRIBE=nourl -- "$image" $mode
+  assert_equal "$mode, with the service reporting no URL: exit 1" 1 "$code"
+  assert_line "$mode, with the service reporting no URL: says so" "reports no URL" "$out"
+  assert_no_match "$mode, with the service reporting no URL: no job or revision is deployed" \
+    '^gcloud run (jobs )?deploy ' "$calls"
+done
+
+# --- A release, everything answering well ---
+run_deploy 200 ok -- "$release_image" release
+[[ $code == 0 ]] || fail "release against the stubs failed (exit $code): $out"
+pass "release against the stubs exits 0"
+
+job_deploy=$(call_of "gcloud run jobs deploy warden-migrate ")
+assert_equal "release: the migration job runs the image" "$release_image" "$(flag image "$job_deploy")"
+assert_equal "release: the migration job runs as warden-migrate" \
+  "warden-migrate@$project.iam.gserviceaccount.com" "$(flag service-account "$job_deploy")"
+assert_equal "release: the migration job has the Cloud SQL instance attached" "$connection" \
+  "$(flag set-cloudsql-instances "$job_deploy")"
+assert_equal "release: the migration job runs node server/src/migrate.ts only" "node server/src/migrate.ts" \
+  "$(flag command "$job_deploy") $(flag args "$job_deploy")"
+assert_equal "release: the migration job's plain values: the live set, as warden_migrate on warden" \
+  "PGHOST=/cloudsql/$connection
+WARDEN_DATABASE_ROLES=live
+PGUSER=warden_migrate
+PGDATABASE=warden" \
+  "$(gcloud_dict "$(flag set-env-vars "$job_deploy")")"
+job_secrets=$(gcloud_dict "$(flag set-secrets "$job_deploy")")
+[[ $job_secrets =~ ^PGPASSWORD=warden-db-migrate-password:[1-9][0-9]*$ ]] ||
+  fail "release: the migration job's only secret is PGPASSWORD, a pinned version of the migrate password: $job_secrets"
+pass "release: the migration job's only secret is PGPASSWORD, a pinned version of the migrate password"
+assert_line "release: the script waits for the migration job" "--wait" \
+  "$(call_of "gcloud run jobs execute warden-migrate ")"
+(($(line_no "gcloud run jobs deploy warden-migrate ") < $(line_no "gcloud run jobs execute warden-migrate "))) ||
+  fail "release: the job is run before it's deployed"
+(($(line_no "gcloud run jobs execute warden-migrate ") < $(line_no "gcloud run deploy warden "))) ||
+  fail "release: the revision is deployed before the migration job ends"
+pass "release: the migration job is deployed, then run and waited for, before the revision is deployed"
+assert_no_match "release: no call names roles.ts or the postgres password" 'roles\.ts|warden-db-password' "$calls"
+
+service_deploy=$(call_of "gcloud run deploy warden ")
+assert_line "release: the revision gets no traffic" " --no-traffic" "$service_deploy"
+assert_equal "release: the revision is tagged candidate" candidate "$(flag tag "$service_deploy")"
+assert_equal "release: the revision's suffix is rel-<sha7>-<run>-<attempt>" "rel-${c3:0:7}-12-1" \
+  "$(flag revision-suffix "$service_deploy")"
+assert_equal "release: the revision runs the image" "$release_image" "$(flag image "$service_deploy")"
+assert_equal "release: the revision runs as warden-run" "warden-run@$project.iam.gserviceaccount.com" \
+  "$(flag service-account "$service_deploy")"
+assert_equal "release: the revision has the Cloud SQL instance attached" "$connection" \
+  "$(flag set-cloudsql-instances "$service_deploy")"
+assert_no_match "release: neither the job nor the revision deploy uses an --update- flag" ' --update-' \
+  "$job_deploy"$'\n'"$service_deploy"
+assert_equal "release: the revision's plain values, CLERK_AUTHORIZED_PARTIES the service's two URLs comma-separated and intact" \
+  "PGHOST=/cloudsql/$connection
+PGUSER=warden_app
+PGDATABASE=warden
+VITE_CLERK_PUBLISHABLE_KEY=$publishable
+CLERK_AUTHORIZED_PARTIES=https://warden-123456789012.europe-west1.run.app,https://warden-abcdefghij-ew.a.run.app" \
+  "$(gcloud_dict "$(flag set-env-vars "$service_deploy")")"
+service_secrets=$(gcloud_dict "$(flag set-secrets "$service_deploy")")
+assert_equal "release: the revision's secrets: the app password and the two Clerk keys" \
+  "PGPASSWORD=warden-db-app-password
+CLERK_SECRET_KEY=warden-clerk-secret
+CLERK_JWT_KEY=warden-clerk-jwt-key" \
+  "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
+assert_equal "release: each of the revision's secrets is pinned to a version number" "" \
+  "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
+
+assert_line "release: the health gate calls /api/health on the candidate tag's URL" \
+  "https://candidate---warden-123456789012.europe-west1.run.app/api/health" "$(grep '^curl ' <<<"$calls")"
+traffic=$(call_of "gcloud run services update-traffic warden ")
+assert_equal "release: traffic moves, all of it, to the new revision by name" "warden-rel-${c3:0:7}-12-1=100" \
+  "$(flag to-revisions "$traffic")"
+assert_equal "release: the same call tags the release that was serving previous, for a rollback" \
+  "previous=warden-rel-0000000-11-1" "$(flag update-tags "$traffic")"
+assert_no_match "release: no call moves traffic to the latest revision" '--to-latest' "$calls"
+(($(line_no "curl ") < $(line_no "gcloud run services update-traffic"))) ||
+  fail "release: traffic moves before the health gate answers"
+pass "release: traffic moves after the health gate's 200"
+
+daily=$(call_of "gcloud run jobs update warden-daily-expiry ")
+(($(line_no "gcloud run services update-traffic") < $(line_no "gcloud run jobs update warden-daily-expiry "))) ||
+  fail "release: the daily Job is updated before traffic moves"
+pass "release: the daily Job is updated after traffic moves"
+assert_equal "release: the daily Job runs the release's image" "$release_image" "$(flag image "$daily")"
+assert_equal "release: the daily Job runs as warden-daily" "warden-daily@$project.iam.gserviceaccount.com" \
+  "$(flag service-account "$daily")"
+assert_equal "release: the daily Job runs node server/src/daily-expiry.ts" "node server/src/daily-expiry.ts" \
+  "$(flag command "$daily") $(flag args "$daily")"
+assert_equal "release: the daily Job has the Cloud SQL instance attached" "$connection" \
+  "$(flag set-cloudsql-instances "$daily")"
+assert_equal "release: the daily Job retries once" 1 "$(flag max-retries "$daily")"
+assert_equal "release: the daily Job's plain values: as warden_app on warden" \
+  "PGHOST=/cloudsql/$connection
+PGUSER=warden_app
+PGDATABASE=warden" \
+  "$(gcloud_dict "$(flag set-env-vars "$daily")")"
+daily_secrets=$(gcloud_dict "$(flag set-secrets "$daily")")
+assert_equal "release: the daily Job's secrets: the app password and the admin password" \
+  "PGPASSWORD=warden-db-app-password
+WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
+  "$(sed 's/:[^:]*$//' <<<"$daily_secrets")"
+assert_equal "release: each of the daily Job's secrets is pinned to a version number" "" \
+  "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$daily_secrets" || true)"
+
+assert_no_match "release: no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
+assert_no_match "release: no call names a preview service, job or account" 'warden-preview|warden-migrate-preview' \
+  "$calls"
+assert_line "release: after the traffic move, the script prints the service's URL" \
+  "https://warden-123456789012.europe-west1.run.app" "$out"
+
+# --- The first release, from Google's placeholder: no release to tag previous ---
+run_deploy 200 ok FAKE_SERVING=warden-00001-xyz -- "$release_image" release
+assert_equal "release from the placeholder: exit 0" 0 "$code"
+assert_no_match "release from the placeholder: the placeholder isn't tagged previous" '--update-tags' "$calls"
+assert_no_match "release from the placeholder, with no previous tag: no tag is removed" '--remove-tags' "$calls"
+
+# --- A release from a revision that isn't a release (after a rollback to it by name): a stale previous goes ---
+run_deploy 200 ok FAKE_SERVING=warden-00001-xyz FAKE_PREVIOUS="$(rel_of "$c1")" -- "$release_image" release
+assert_equal "release from a non-release with a stale previous: exit 0" 0 "$code"
+traffic=$(call_of "gcloud run services update-traffic warden ")
+assert_equal "release from a non-release with a stale previous: the same call removes the previous tag" previous \
+  "$(flag remove-tags "$traffic")"
+assert_no_match "release from a non-release with a stale previous: nothing is tagged previous" '--update-tags' \
+  "$traffic"
+
+# --- Which commit releases: only one on main, and only one newer than the serving release ---
+# A commit newer than the serving release releases, even when main's tip (c3) is newer still and never released (its
+# full lane failed, or it skipped CI).
+run_deploy 200 ok GITHUB_SHA="$c2" FAKE_SERVING="$(rel_of "$c1")" -- "$release_image" release
+assert_equal "c2, with c1 serving and c3 main's tip: exit 0" 0 "$code"
+assert_equal "c2, with c1 serving and c3 main's tip: releases c2" "warden-rel-${c2:0:7}-12-1=100" \
+  "$(flag to-revisions "$(call_of "gcloud run services update-traffic warden ")")"
+# An older commit than the serving release skips everything, and exits 0.
+run_deploy 200 ok GITHUB_SHA="$c2" FAKE_SERVING="$(rel_of "$c3")" -- "$release_image" release
+assert_equal "c2, with c3 serving: exit 0" 0 "$code"
+assert_line "c2, with c3 serving: says a newer commit is serving" "newer" "$out"
+assert_no_match "c2, with c3 serving: nothing is migrated, deployed, moved or updated" \
+  '^gcloud run (jobs (deploy|execute|update)|deploy|services update-traffic) ' "$calls"
+# The same commit as the serving release (a re-run after the daily Job's update failed): only the daily Job is set.
+run_deploy 200 ok GITHUB_SHA="$c2" FAKE_SERVING="$(rel_of "$c2")" -- "$release_image" release
+assert_equal "c2, with c2 serving: exit 0" 0 "$code"
+assert_line "c2, with c2 serving: says it's already serving" "already serving" "$out"
+assert_no_match "c2, with c2 serving: nothing is migrated, deployed or moved" \
+  '^gcloud run (jobs (deploy|execute)|deploy|services update-traffic) ' "$calls"
+assert_equal "c2, with c2 serving: the daily Job is set to the release's image" "$release_image" \
+  "$(flag image "$(call_of "gcloud run jobs update warden-daily-expiry ")")"
+# A commit that isn't on main stops before anything changes.
+run_deploy 200 ok GITHUB_SHA="$side" FAKE_SERVING="$(rel_of "$c1")" -- "$release_image" release
+assert_equal "a commit not on main: exit 1" 1 "$code"
+assert_line "a commit not on main: says so" "isn't on main" "$out"
+assert_no_match "a commit not on main: nothing is migrated or deployed" '^gcloud run (jobs )?deploy ' "$calls"
+
+# --- A release whose candidate never answers 200 ---
+run_deploy 503 ok -- "$release_image" release
+assert_equal "release, with the candidate answering 503: exit 1" 1 "$code"
+assert_no_match "release, with the candidate answering 503: no traffic moves" 'update-traffic' "$calls"
+assert_no_match "release, with the candidate answering 503: the daily Job isn't touched" 'warden-daily-expiry' "$calls"
+
+# --- A release whose migration fails ---
+run_deploy 200 fail -- "$release_image" release
+assert_equal "release, with the migration job failing: exit 1" 1 "$code"
+assert_no_match "release, with the migration job failing: no revision is deployed" '^gcloud run deploy ' "$calls"
+assert_no_match "release, with the migration job failing: no traffic moves" 'update-traffic' "$calls"
+
+# --- A release whose daily Job update fails: traffic has moved, and the run says the Job is behind ---
+run_deploy 200 ok FAKE_DAILY=fail -- "$release_image" release
+assert_equal "release, with the daily Job's update failing: exit 1" 1 "$code"
+assert_line "release, with the daily Job's update failing: traffic had moved" \
+  "gcloud run services update-traffic warden " "$calls"
+assert_line "release, with the daily Job's update failing: names the Job" "warden-daily-expiry" "$out"
+
 # --- A secret with no pinned version stops the deploy before the gcloud call that would name it ---
-# without_pin <secret>: a copy of the script whose version table has no row for that secret.
+# without_pin <secret>: a copy of the script and its library, whose version table has no row for that secret.
 without_pin() {
-  local copy="$scratch/deploy-without-$1.sh"
-  grep -vF -- "    $1) echo" "$deploy" >"$copy"
-  grep -qF -- "    $1) echo" "$copy" && fail "the copy still pins $1"
-  printf '%s' "$copy"
+  local dir="$scratch/without-$1"
+  mkdir -p "$dir/lib"
+  cp "$deploy" "$dir/cloud-run-deploy.sh"
+  grep -vF -- "    $1) echo" "$root/scripts/lib/cloud-run.sh" >"$dir/lib/cloud-run.sh"
+  grep -qF -- "    $1) echo" "$dir/lib/cloud-run.sh" && fail "the copy still pins $1"
+  printf '%s' "$dir/cloud-run-deploy.sh"
 }
 # Assigned first, so set -e stops the test when a copy can't be made.
 no_migrate_pin=$(without_pin warden-db-preview-migrate-password)
@@ -259,7 +480,7 @@ bad_input "a name ending in a hyphen" "$name_rule" -- "$image" preview demo-
 bad_input "preview with no name" "usage:" -- "$image" preview
 bad_input "no mode" "usage:" -- "$image"
 bad_input "no image" "usage:" --
-bad_input "release (not yet a mode)" "usage:" -- "$image" release
+bad_input "release with an extra argument" "usage:" -- "$image" release extra
 bad_input "deploy (not a mode)" "usage:" -- "$image" deploy demo
 bad_input "an extra argument" "usage:" -- "$image" preview demo extra
 bad_input "an unset CLOUD_SQL_CONNECTION" "CLOUD_SQL_CONNECTION" CLOUD_SQL_CONNECTION= -- "$image" preview demo

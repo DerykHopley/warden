@@ -1,9 +1,9 @@
 name: Full lane
 
 # Every test in every browser (CLAUDE.md, CI): the fast lane's checks, called as they are, with the browser tests in
-# Chromium, Firefox and WebKit alongside. By hand, through workflow_call (#24's release workflow will call it before
-# each deploy), and on a PR that changes this file or the browsers it runs. The nightly run and the run on each push
-# to main are paused until #24's release workflow calls this lane, to save the account's GitHub Actions minutes.
+# Chromium, Firefox and WebKit alongside. By hand, through workflow_call (release.yml calls it before each deploy, so
+# a merge to main runs it once, inside the release), and on a PR that changes this file or the browsers it runs. No
+# nightly run: it stays paused to save the account's GitHub Actions minutes (the owner's budget decision on #1).
 on:
   workflow_dispatch:
   workflow_call:
