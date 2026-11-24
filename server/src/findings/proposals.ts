@@ -13,7 +13,7 @@ import {
   type Decision,
   type DecisionCall,
 } from "./decisions.ts";
-import { lockTeamFindings } from "./reconcile.ts";
+import { lockTeamFindings, writtenAt } from "./reconcile.ts";
 import { isoDateTime } from "./rows.ts";
 
 /** The Proposal id isn't one the Team has: another Team's id counts the same. */
@@ -86,6 +86,7 @@ export async function applyPropose(
       accepted_until: body.decision === "accept" ? body.until : null,
       requested_by_kind: requester.kind,
       requested_by_id: requester.id,
+      requested_at: writtenAt,
     })
     .returningAll()
     .executeTakeFirstOrThrow();

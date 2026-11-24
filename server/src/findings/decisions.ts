@@ -14,7 +14,7 @@ import {
 import { sql, type Transaction } from "kysely";
 import type { z } from "zod";
 import type { Database } from "../schema.ts";
-import { lockTeamFindings } from "./reconcile.ts";
+import { lockTeamFindings, writtenAt } from "./reconcile.ts";
 import { fromRow, loadFinding, sameAsset, toRow } from "./rows.ts";
 
 /** Each named call, as `Findings` names it, and the contracts schema its input is checked against (the API's too). */
@@ -146,7 +146,8 @@ export async function applyDecision(
 /**
  * applyDecision's work, for a caller that already holds the Team's lock and has rechecked the Lead. With `proposal`,
  * the decision approves that Proposal: it is refused when the Finding has changed since the Proposal was asked (a
- * history row after its `requested_at`), and each history row it writes names the Proposal.
+ * history row after its `requested_at`, both written at `writtenAt`, so in the Team lock's order), and each history
+ * row it writes names the Proposal.
  */
 export async function applyLockedDecision(
   tx: Transaction<Database>,
@@ -290,6 +291,7 @@ export async function applyLockedDecision(
       changes.map(({ before, after }) => ({
         team_id: team,
         finding_id: after.id,
+        at: writtenAt,
         status_before: before.status,
         status_after: after.status,
         severity_before: before.severity,

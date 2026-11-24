@@ -4,7 +4,7 @@
 import { sql, type Transaction } from "kysely";
 import type { Database } from "../schema.ts";
 import { notAccepted } from "./decisions.ts";
-import { lockTeamFindings } from "./reconcile.ts";
+import { lockTeamFindings, writtenAt } from "./reconcile.ts";
 import { fromRow, isoDateTime, toRow } from "./rows.ts";
 
 /** The history rows' actor id: the Job that reopened the Finding. */
@@ -55,6 +55,7 @@ export async function applyExpiry(
       expired.map((finding) => ({
         team_id: team,
         finding_id: finding.id,
+        at: writtenAt,
         status_before: finding.status,
         status_after: "open" as const,
         severity_before: finding.severity,
