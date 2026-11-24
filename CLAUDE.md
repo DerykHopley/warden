@@ -40,7 +40,7 @@ Level: **Build**, review mode: **Throughput**, will become: **product**, phase: 
 
 These rules hold while a spec is open; with none open, they wait.
 
-- A spec holds at most **12 tickets**: about one day of review. A larger plan becomes two specs.
+- **A spec's size is what belongs together, not a count (on trial).** Stories that share a core change, or can't land alone, stay in one spec; stories that can land apart are their own spec. About 12 slices is the point to look for that split when the spec is drafted, never a stop while it builds.
 - **Tickets are written just in time (on trial).** The spec carries a `## Build order`: numbered slices, one line each, naming the user stories each delivers. `/rig:spec-open` writes it with the spec, `/rig:spec-build` writes it for a spec made another way, and a `rig:ticket-writer` writes each slice's ticket when a build slot frees up, against the code as it is then. `/to-tickets` isn't needed for a spec; tickets it wrote count as slices, rewritten in place when their turn comes.
 - Parallel implementers are the one other use of subagents: each ticket needs little from the others, so a fresh context per ticket loses nothing.
 - **`/rig:spec-build <spec>` builds a spec** (not Matt's `/implement-spec`, which merges locally and reviews once at the end): each ticket goes through the ticket loop below, its own PR into the spec's integration branch (`spec/<spec>-<slug>`) through the merge gate, and a `rig:verifier` on the merge commit. One PR then takes the spec into main and closes its tickets. In Factory mode, this is the queue: a spec's tickets are built by `/rig:spec-build`, never picked up from main on their own. Up to 3 tickets build at once, never two whose `Touches` lines share a file or area.
@@ -54,9 +54,9 @@ These rules hold while a spec is open; with none open, they wait.
   - a bug the spec's own code caused;
   - a prerequisite that makes the remaining tickets smaller, approved by the owner.
 - Everything else goes to a lane below, with a one-line answer: "Filed #N in `<lane>`. It isn't in the spec because …".
-- Bug tickets count toward the 12, so a spec that keeps finding its own bugs reaches the owner instead of never closing.
+- **A spec that keeps finding its own bugs comes back to the owner (on trial):** a bug slice is a bug the spec's own code caused (a verifier finding, or Ready feedback that is a bug). Past about 4 of them, each further one goes to the owner with the list so far: carry on, split the spec, or drop something. Size alone never stops a spec; a spec that isn't converging does.
 - When no slice can start and none is running, report why rather than wait.
-- When the owner says "put it in the spec", add it. Past 12 tickets, say so once ("Spec is now 13 of 12: split it, or drop something?") and let the owner choose.
+- When the owner says "put it in the spec", add it.
 - When the spec's last slice is done, `/rig:spec-build` runs `/rig:spec-close`'s Ready part: the stories verified, then a running copy for the owner to test (**Owner preview**, below). Blocking feedback becomes new slices before the merge, polish becomes Fix tickets after; after the owner's go, the agent merges the spec PR (in Learning mode the owner merges it, and the next spec-build run finds it) and Landed closes the spec and starts the next.
 
 ### Each ticket
