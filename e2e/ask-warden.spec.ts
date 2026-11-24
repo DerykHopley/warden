@@ -196,7 +196,8 @@ test("story 3: after Grace proposes on a seeded Finding, she sees the Proposal i
   await expect(card.getByRole("heading", { level: 3 })).toHaveText(target.title);
   const mine = card.getByRole("listitem").filter({ hasText: reason });
   await expect(mine).toContainText("Mark False positive");
-  await expect(mine).toContainText("Asked by Grace Hopper");
+  // Her own Proposal: "Asked by you" (#59).
+  await expect(mine).toContainText("Asked by you");
 });
 
 test.describe("motion", () => {

@@ -115,6 +115,12 @@ export type PanelContext = {
   focus: Finding | null;
   /** Clears the page's focus: the detail card's ✕. */
   clearFocus: () => void;
+  /** A decision or an approval in the detail card changed the focused Finding: the page asks for it again. */
+  onFindingChanged: () => void;
+  /** The server has no such Finding in the Team: the page says so, where it outlives the card, and asks again. */
+  onFindingGone: () => void;
+  /** The focused Finding's Unconfirmed-fix candidates, as the page's list holds them; empty without one. */
+  candidates: Finding[];
 };
 
 /** What the shell gives a page to talk to the panel. Both functions keep their identity across renders. */

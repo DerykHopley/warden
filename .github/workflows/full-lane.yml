@@ -1,24 +1,19 @@
 name: Full lane
 
 # Every test in every browser (CLAUDE.md, CI): the fast lane's checks, called as they are, with the browser tests in
-# Chromium, Firefox and WebKit alongside. Nightly, by hand, before each deploy (#24's release workflow will call it),
-# and on a PR that changes this file or the browsers it runs.
+# Chromium, Firefox and WebKit alongside. By hand, through workflow_call (#24's release workflow will call it before
+# each deploy), and on a PR that changes this file or the browsers it runs. The nightly run and the run on each push
+# to main are paused until #24's release workflow calls this lane, to save the account's GitHub Actions minutes.
 on:
-  schedule:
-    - cron: "17 3 * * *"
   workflow_dispatch:
   workflow_call:
-  # For now, after each merge to main. #24's release workflow calls this lane through workflow_call before each deploy,
-  # and then replaces this trigger: both would run it twice per merge.
-  push:
-    branches: [main]
   pull_request:
     branches: [main, "spec/**"]
     paths:
       - .github/workflows/full-lane.yml
       - e2e/playwright.config.ts
 
-# A newer push to a PR replaces its older run; a nightly, a by-hand, a push or a called run goes to the end.
+# A newer push to a PR replaces its older run; a by-hand or a called run goes to the end.
 concurrency:
   group: full-lane-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

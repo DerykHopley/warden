@@ -15,6 +15,7 @@ import {
   BLUEBIRD,
   FRONTEND_API_HOST,
   GRACE,
+  MARGARET,
   sessionToken,
   type Person,
   type Team,
@@ -139,7 +140,8 @@ export default async function globalSetup() {
       await server!.exited;
     });
 
-    // Opening Warden as each Team's Admin creates the Team; Grace's first visit joins Acme as a Member.
+    // Opening Warden as each Team's Admin creates the Team; Grace's first visit joins Acme as a Member, and Margaret's
+    // joins Bluebird as one.
     const open = async (person: Person, team: Team, role: "admin" | "member") => {
       const token = await sessionToken(privateKey, origin, person, team, role);
       const res = await fetch(`${origin}/api/me`, {
@@ -150,6 +152,7 @@ export default async function globalSetup() {
     await open(ACME.admin, ACME, "admin");
     await open(GRACE, ACME, "member");
     await open(BLUEBIRD.admin, BLUEBIRD, "admin");
+    await open(MARGARET, BLUEBIRD, "member");
     for (const team of [ACME, BLUEBIRD]) {
       await run(process.execPath, ["server/src/seed.ts", team.id], {
         ...db,

@@ -12,6 +12,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
+import type { Role } from "@warden/contracts";
 import { askAboutTeam, type GetToken } from "./api.ts";
 import { DetailCard } from "./DetailCard.tsx";
 import { shortId } from "./findings.ts";
@@ -109,6 +110,12 @@ export function AskWardenPanel(props: {
   getToken: GetToken;
   /** The active Team: an answer about another is asked again, never shown. */
   team: string | null;
+  /** The person's Role in the Team (null until /api/me answers): it picks the detail card's buttons. */
+  role: Role | null;
+  /** The signed-in person's user id: their own Proposals read "Asked by you". */
+  userId: string | null;
+  /** Ask /api/me again: the server said the person's Role is too low for a decision. */
+  refreshMe: () => void;
   onSessionEnded: () => void;
 }) {
   const { panel, context, getToken, team, onSessionEnded } = props;
@@ -137,6 +144,14 @@ export function AskWardenPanel(props: {
     [cardFocus, getToken, team],
   );
   const proposals = useWardenCall<ProposalsResult | typeof NOT_ASKED>(askProposals, onSessionEnded);
+
+  // A sent message and Warden's reply each jump the chat to its newest message's bottom edge, with no smooth scroll,
+  // so reduced motion needs nothing of its own. Opening the card or deciding in it doesn't scroll the chat.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (body !== null && messages.length > 0) body.scrollTop = body.scrollHeight;
+  }, [messages]);
 
   useEffect(() => {
     if (focusNext.current === "button") buttonRef.current?.focus();
@@ -227,18 +242,27 @@ export function AskWardenPanel(props: {
           ✕
         </button>
       </div>
-      <div className="panel-body">
+      <div className="panel-body" ref={bodyRef}>
         {context.focus !== null && (
           <DetailCard
             key={context.focus.id}
             finding={context.focus}
             proposals={proposalsShown}
             clerkUsers={clerkUsers}
+            role={props.role}
+            userId={props.userId}
+            getToken={getToken}
+            candidates={context.candidates}
             onRetryProposals={proposals.retry}
             onClear={() => {
               focusNext.current = "input";
               context.clearFocus();
             }}
+            onFindingChanged={context.onFindingChanged}
+            onFindingGone={context.onFindingGone}
+            onProposalsChanged={proposals.refresh}
+            refreshMe={props.refreshMe}
+            onSessionEnded={onSessionEnded}
           />
         )}
         <ol className="chat-messages" aria-label="Messages">
