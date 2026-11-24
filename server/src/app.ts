@@ -16,6 +16,7 @@ import {
   type HistoryBody,
   type MeBody,
   type MembersBody,
+  type OverviewBody,
   type Proposal,
   type ProposalsBody,
   type TeamMember,
@@ -31,6 +32,7 @@ import {
   ProposalNotFound,
   type Findings,
 } from "./findings/index.ts";
+import { OVERVIEW_PERIOD_DAYS, teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
 import { securityHeaders } from "./security-headers.ts";
@@ -321,6 +323,19 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     const team = c.get("team");
     const list = await findings.list(team);
     return c.json({ team, findings: list } satisfies FindingsBody);
+  });
+
+  // Any person in the Team reads its Level and trend (story 10): the Overview, and the Level line on Findings.
+  app.get("/api/overview", requireRole("member"), async (c) => {
+    const team = c.get("team");
+    const since = new Date(Date.now() - OVERVIEW_PERIOD_DAYS * 24 * 3600_000);
+    const numbers = await findings.overview(team, since);
+    return c.json({
+      team,
+      level: teamLevel(),
+      period_days: OVERVIEW_PERIOD_DAYS,
+      ...numbers,
+    } satisfies OverviewBody);
   });
 
   // Any person in the Team reads its pending Proposals, oldest first, each marked stale when its Finding has changed
