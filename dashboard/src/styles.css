@@ -173,6 +173,7 @@ button.secondary:hover:enabled,
 button:focus-visible,
 .role-picker:focus-visible,
 .page-links a:focus-visible,
+.level-line a:focus-visible,
 .panel-divider:focus-visible,
 .chat-input:focus-visible {
   outline: 3px solid var(--accent);
@@ -352,7 +353,8 @@ button[aria-busy="true"],
 }
 
 .start-here h2,
-.all-findings h2 {
+.all-findings h2,
+.audit h2 {
   margin: 32px 0 12px;
   font-family: var(--font-head);
   font-weight: 600;
@@ -628,6 +630,98 @@ button[aria-busy="true"],
     width: fit-content;
     margin: 4px 0 0;
   }
+}
+
+/* The Level line above the Findings summary: one quiet line, its link a 44px-high target. */
+.level-line {
+  margin: 0;
+  color: var(--muted);
+}
+
+.level-line a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent);
+  border-radius: var(--radius);
+}
+
+/* The Overview (story 10): the journey as three cards, the trend line, and "Are we ready for the audit?". Nothing here
+   moves. Under 640px the cards stack; from 640px three sit in a row. */
+.journey {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@container app-column (min-width: 640px) {
+  .journey {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* A journey card says its state in words; current adds the accent border, drawn a second pixel thick with a ring as a
+   selected Finding card's is. */
+.journey-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-wrap: anywhere;
+}
+
+.journey-card[data-state="current"] {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    var(--shadow);
+}
+
+.journey-level {
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.125rem;
+}
+
+.journey-adds,
+.journey-note {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* The bar: a quiet track, filled with the accent as far as the Level has come. Its value is also in aria-valuenow. */
+.journey-bar {
+  display: block;
+  height: 6px;
+  margin-top: 4px;
+  overflow: hidden;
+  background: var(--chip);
+  border-radius: 999px;
+}
+
+.journey-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.journey-state {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.trend-line {
+  margin: 24px 0 0;
+  font-family: var(--font-head);
+  font-size: 1.375rem;
 }
 
 /* The Ask Warden panel (docs/design.md: Side panel, Layout, Motion). Closed, it is a button over the page's bottom

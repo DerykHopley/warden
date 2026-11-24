@@ -90,6 +90,7 @@ const noFindings: Findings = {
   scan: noDatabase,
   list: noDatabase,
   history: noDatabase,
+  overview: noDatabase,
   accept: noDatabase,
   markFalsePositive: noDatabase,
   confirmFix: noDatabase,

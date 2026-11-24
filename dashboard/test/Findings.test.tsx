@@ -23,7 +23,7 @@ function open(url = "/findings", list: Finding[] = demoFindings, routes: Routes 
   serve({ findings: () => answer(list), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
-    me: { userId: "user_1", team: TEAM, role: "member" as const },
+    me: { userId: "user_1", team: TEAM, role: "member" as const, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
     panel: { setContext: vi.fn(), open: vi.fn() },
@@ -98,6 +98,24 @@ describe("the summary line and the top 5", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Start here" })).not.toBeInTheDocument();
+  });
+});
+
+describe("the Level line", () => {
+  it("reads Level: Quick · see the journey above the summary line, from /api/me's answer, with no call of its own", async () => {
+    open();
+    await screen.findByRole("table");
+    const line = screen.getByText(/^Level:/);
+
+    expect(line).toHaveTextContent(/^Level: Quick · see the journey$/);
+    expect(line).toHaveClass("level-line");
+    expect(within(line).getByRole("link", { name: "see the journey" })).toHaveAttribute(
+      "href",
+      "/overview",
+    );
+    const summary = screen.getByRole("heading", { level: 1 });
+    expect(line.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(callsTo("/api/overview")).toEqual([]);
   });
 });
 

@@ -2,6 +2,7 @@
 // its own ✕. Its fields, then its pending Proposals, each its own list item. Read-only here; a Lead's decision buttons
 // join the card and each Proposal later, so nothing in this markup assumes it stays read-only.
 import type { Finding, PendingProposal } from "@warden/contracts";
+import { dayAndTimeWords, dayWords } from "./date-words.ts";
 import {
   ASSET_KIND_WORDS,
   locationWords,
@@ -14,10 +15,6 @@ import { shortId } from "./findings.ts";
 import { personName, type ClerkUser } from "./person-name.ts";
 import type { ProposalsResult } from "./proposals.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
-
-const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
-const dayAndTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 
 export function DetailCard(props: {
   finding: Finding;
@@ -104,7 +101,7 @@ export function DetailCard(props: {
           <>
             <dt>Until</dt>
             <dd>
-              <time dateTime={finding.accepted_until}>{day(finding.accepted_until)}</time>
+              <time dateTime={finding.accepted_until}>{dayWords(finding.accepted_until)}</time>
             </dd>
           </>
         )}
@@ -171,14 +168,14 @@ function ProposalItem({
         {proposal.until !== null && (
           <>
             {" "}
-            until <time dateTime={proposal.until}>{day(proposal.until)}</time>
+            until <time dateTime={proposal.until}>{dayWords(proposal.until)}</time>
           </>
         )}
       </p>
       <p className="proposal-reason">{proposal.reason}</p>
       <p className="proposal-asked">
         Asked by {who},{" "}
-        <time dateTime={proposal.requested_at}>{dayAndTime(proposal.requested_at)}</time>
+        <time dateTime={proposal.requested_at}>{dayAndTimeWords(proposal.requested_at)}</time>
       </p>
       {proposal.stale && (
         <p className="proposal-stale">The Finding has changed since this was asked.</p>

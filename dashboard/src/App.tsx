@@ -1,5 +1,5 @@
 import { ClerkFailed, OrganizationSwitcher, SignIn, useAuth, useOrganization } from "@clerk/react";
-import type { Role } from "@warden/contracts";
+import type { Level, Role } from "@warden/contracts";
 import {
   useCallback,
   useEffect,
@@ -14,6 +14,7 @@ import { AskWardenPanel, usePanelState } from "./AskWardenPanel.tsx";
 import { FindingsPage } from "./Findings.tsx";
 import { landingPage } from "./landing.ts";
 import { fetchMe, type MeResult } from "./me.ts";
+import { OverviewPage } from "./Overview.tsx";
 import type { PagePanel, PanelContext } from "./panel.ts";
 import { PeoplePage } from "./People.tsx";
 import { ROLE_WORDS } from "./roles.ts";
@@ -105,8 +106,11 @@ function SignInPage({ sessionEnded }: { sessionEnded: boolean }) {
 /** What the shell gives each page. */
 export type PageProps = {
   getToken: GetToken;
-  /** The person signed in, and their Team (the active one) and Role in it, as /api/me last answered them. */
-  me: { userId: string; team: string | null; role: Role | null };
+  /**
+   * The person signed in, their Team (the active one) and Role in it, and the Team's Level, as /api/me last answered
+   * them.
+   */
+  me: { userId: string; team: string | null; role: Role | null; level: Level | null };
   onSessionEnded: () => void;
   /** Ask /api/me again, after a change that may have moved the person's own Role. */
   refreshMe: () => void;
@@ -122,6 +126,7 @@ const noFocusToClear = () => {};
  */
 const PAGES: { path: string; label: string; Page: ComponentType<PageProps> }[] = [
   { path: "/findings", label: "Findings", Page: FindingsPage },
+  { path: "/overview", label: "Overview", Page: OverviewPage },
   { path: "/people", label: "People", Page: PeoplePage },
 ];
 

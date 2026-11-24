@@ -58,7 +58,7 @@ const proposalsAnswer = (proposals: PendingProposal[] = [pending()], team = TEAM
 function open(url = "/findings", routes: Routes = {}) {
   window.history.replaceState(null, "", url);
   serve({
-    me: () => json(200, { userId: "user_grace", team: TEAM, role: "member" }),
+    me: () => json(200, { userId: "user_grace", team: TEAM, role: "member", level: "quick" }),
     findings: () => json(200, { team: TEAM, findings: demoFindings }),
     members: () => json(200, { members: [] }),
     proposals: () => proposalsAnswer(),
@@ -225,7 +225,7 @@ describe("an Organization switch", () => {
     clerk.orgNames.org_b = "Bluebird";
     const bluebird = demoFindings.map((f) => ({ ...f, id: `b-${f.id}`, team: "org_b" }));
     serve({
-      me: () => json(200, { userId: "user_grace", team: "org_b", role: "member" }),
+      me: () => json(200, { userId: "user_grace", team: "org_b", role: "member", level: "quick" }),
       findings: () => json(200, { team: "org_b", findings: bluebird }),
       proposals: () => proposalsAnswer([], "org_b"),
     });

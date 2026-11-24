@@ -2,7 +2,7 @@
 // (`/findings?status=fixed&severity=high&module=patch&finding=<id>`).
 import { z } from "zod";
 import { Proposal } from "./decisions.ts";
-import { Finding, Id, Module, Severity, Status } from "./finding.ts";
+import { DateTime, Finding, Id, Module, Severity, Status } from "./finding.ts";
 
 /**
  * `GET /api/findings`: every Finding of the session's Team, and that Team's id, so the page can tell an answer about a
@@ -10,6 +10,40 @@ import { Finding, Id, Module, Severity, Status } from "./finding.ts";
  */
 export const FindingsBody = z.object({ team: Id, findings: z.array(Finding) });
 export type FindingsBody = z.infer<typeof FindingsBody>;
+
+/**
+ * A Team's Level on the journey (GLOSSARY.md), read from what it has set up: Quick, then Standard (the agent hook and
+ * the Judge), then Audit-ready (Vouch's Policy and evidence). In order, lowest first.
+ */
+export const Level = z.enum(["quick", "standard", "audit_ready"]);
+export type Level = z.infer<typeof Level>;
+
+const Count = z.number().int().nonnegative();
+
+/**
+ * `GET /api/overview`: the session's Team (as in `FindingsBody`), its Level, its latest Scan, and the trend over the
+ * last `period_days`: Open Findings then and now, and the Fix rate (`fixed` of `of`, so never over 100%).
+ */
+export const OverviewBody = z.object({
+  team: Id,
+  level: Level,
+  /** The latest Scan's `started_at` (Spot runs don't count); null before the first Scan. */
+  last_scan_at: DateTime.nullable(),
+  /** Whether the Team has any Finding at all, whatever its Status. */
+  has_findings: z.boolean(),
+  period_days: z.number().int().positive(),
+  /** Findings Open at the start of the period. */
+  open_at_start: Count,
+  /** Findings Open now. */
+  open_now: Count,
+  /**
+   * `of`: Findings Open at the start, or opened or reopened during the period, each once. `fixed`: those of them that
+   * moved into Fixed during it and are still Fixed, with no Unconfirmed fix. A Finding merged into another counts in
+   * neither.
+   */
+  fix_rate: z.object({ fixed: Count, of: Count }),
+});
+export type OverviewBody = z.infer<typeof OverviewBody>;
 
 /**
  * A pending Proposal, and whether it is stale: its Finding has changed since it was asked (a history row later than

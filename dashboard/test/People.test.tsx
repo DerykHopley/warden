@@ -62,7 +62,7 @@ function renderPeople(role: Role, routes: Routes = {}) {
   serve({ members: () => json(200, members({ user_1: role })), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
-    me: { userId: "user_1", team: "org_a", role },
+    me: { userId: "user_1", team: "org_a", role, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
     panel: { setContext: vi.fn(), open: vi.fn() },
@@ -260,7 +260,7 @@ describe("People in the app", () => {
   function start(role: Role, routes: Routes = {}) {
     window.history.replaceState(null, "", "/people");
     serve({
-      me: () => json(200, { userId: "user_1", team: "org_a", role }),
+      me: () => json(200, { userId: "user_1", team: "org_a", role, level: "quick" }),
       members: () => json(200, members({ user_1: role })),
       ...routes,
     });
@@ -270,7 +270,7 @@ describe("People in the app", () => {
   it("an Admin who makes themselves Lead sees Lead in the header and loses the pickers", async () => {
     let myRole: Role = "admin";
     start("admin", {
-      me: () => json(200, { userId: "user_1", team: "org_a", role: myRole }),
+      me: () => json(200, { userId: "user_1", team: "org_a", role: myRole, level: "quick" }),
       changeRole: (_userId, body) => {
         myRole = (body as { role: Role }).role;
         return json(200, { userId: "user_1", role: myRole, joinedAt });
