@@ -145,7 +145,7 @@ confirms it.
   executions". How long Cloud Run keeps executions is unverified; that slice checks it.
 - **A Scan takes 15 to 29 s longer to start** than it would in-process. The dashboard shows a queued Scan as
   started, not done.
-- **A new word, "Job",** is proposed on #1 for the glossary, not added here.
+- **A new word, "Job",** is in GLOSSARY.md, accepted by the owner on #1.
 
 Spike code and results: branch `prototype/long-work-spike`, `spikes/long-work/` (the results are summarised in
 `spikes/long-work/results/README.md`).

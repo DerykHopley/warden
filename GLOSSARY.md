@@ -62,6 +62,12 @@ A run outside the Baseline, such as one Rule on demand, or the Judge over Agent 
 Findings but never marks one Fixed.
 _Avoid_: check run, ad-hoc scan
 
+**Job**:
+A run of Warden's work outside any request, as a Cloud Run Job execution. A Scan someone starts runs as one, and
+so do the daily expiry job, the CVE refresh and the Judge's sweep. Each carries one Team, except the daily jobs,
+which visit each Team in turn.
+_Avoid_: background task, worker
+
 **Finding**:
 One observed problem with one Asset, raised by one module. The same problem on three Assets is three Findings.
 _Avoid_: alert, issue, result
