@@ -7,7 +7,7 @@ import type { HealthBody, Role } from "@warden/contracts";
 import { createApp, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import { createLogger } from "../src/log.ts";
-import { createMembers, type Members } from "../src/members.ts";
+import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
@@ -79,19 +79,26 @@ export async function seedTeam(
 }
 
 /** Members for a test that never reaches the database: any call fails it. */
-const noMembers: Members = {
-  open: () => Promise.reject(new Error("this test app has no database: pass withTeam")),
+const noDatabase = () => Promise.reject(new Error("this test app has no database: pass withTeam"));
+const noMembers: Members = { open: noDatabase, list: noDatabase, changeRole: noDatabase };
+
+/** A Clerk seam for a test that never changes an Admin: any call fails it. */
+const noClerk: ClerkOrganizations = {
+  setMembershipRole: () =>
+    Promise.reject(new Error("this test app has no Clerk: pass clerkOrganizations")),
 };
 
 /**
  * The app with a real Clerk verifier over `publicPem`, and the log lines it writes. With `withTeam`, the real members
- * module on it. It runs as on Cloud Run, so a test picks the client's address with an X-Forwarded-For header.
- * `mount` adds throwaway routes, behind the app's own middleware.
+ * module on it, calling `clerkOrganizations` (a fake) to keep Clerk's org:admin in step. It runs as on Cloud Run, so
+ * a test picks the client's address with an X-Forwarded-For header. `mount` adds throwaway routes, behind the app's
+ * own middleware.
  */
 export function testApp(options: {
   publicPem: string;
   checkHealth?: () => Promise<HealthBody>;
   withTeam?: WithTeam;
+  clerkOrganizations?: ClerkOrganizations;
   mount?: MountRoutes;
 }) {
   const lines: string[] = [];
@@ -103,7 +110,12 @@ export function testApp(options: {
         jwtKey: options.publicPem,
         authorizedParties: [DASHBOARD_ORIGIN],
       }),
-      members: options.withTeam ? createMembers({ withTeam: options.withTeam }) : noMembers,
+      members: options.withTeam
+        ? createMembers({
+            withTeam: options.withTeam,
+            clerkOrganizations: options.clerkOrganizations ?? noClerk,
+          })
+        : noMembers,
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),
       frontendApiHost: FRONTEND_API_HOST,
