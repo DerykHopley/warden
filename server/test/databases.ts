@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import type pg from "pg";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
+import { migrate } from "../src/migrate.ts";
 import { createRoles } from "../src/roles.ts";
 
 /** A database role (not a person's Role in a Team). */
@@ -36,8 +37,36 @@ export async function createTestDatabase(connection: pg.PoolConfig = {}) {
   return { name, drop };
 }
 
+/** createTestDatabase, then every shipped migration as warden_migrate. A failed migration drops it and throws. */
+export async function createMigratedTestDatabase(connection: pg.PoolConfig = {}) {
+  const database = await createTestDatabase(connection);
+  const pool = createPool(logger, {
+    ...connection,
+    user: "warden_migrate",
+    database: database.name,
+    max: 1,
+  });
+  try {
+    const result = await migrate(pool);
+    if (result.error)
+      throw new Error("migrating the test database failed", { cause: result.error });
+  } catch (error) {
+    await database.drop();
+    throw error;
+  } finally {
+    await pool.end();
+  }
+  return database;
+}
+
+/** The names createTestDatabase makes: when, in seconds, then 12 hex digits. */
+const TIMED_NAME = /^warden_test_(\d+)_[0-9a-f]{12}$/;
+/** The names it made before names carried a time. */
+const UNTIMED_NAME = /^warden_test_[0-9a-f]{12}$/;
+
 /** Drops test databases made over an hour ago, or named before names carried a time: what a killed run left. A run
- * in progress (the suite takes seconds, CI stops at 10 minutes) keeps its own. */
+ * in progress (the suite takes seconds, CI stops at 10 minutes) keeps its own, and a database with the prefix that
+ * createTestDatabase didn't name is someone's own and stays. */
 export async function dropStaleTestDatabases(connection: pg.PoolConfig = {}): Promise<void> {
   const { rows } = await withPool(connection, (pool) =>
     pool.query<{ datname: string }>(
@@ -47,8 +76,10 @@ export async function dropStaleTestDatabases(connection: pg.PoolConfig = {}): Pr
   );
   const now = Math.floor(Date.now() / 1000);
   for (const { datname } of rows) {
-    const made = /^warden_test_(\d+)_[0-9a-f]+$/.exec(datname)?.[1];
-    if (made === undefined || now - Number(made) > STALE_AFTER_SECONDS) {
+    const made = TIMED_NAME.exec(datname)?.[1];
+    const stale =
+      made === undefined ? UNTIMED_NAME.test(datname) : now - Number(made) > STALE_AFTER_SECONDS;
+    if (stale) {
       await dropDatabase(connection, datname);
     }
   }
