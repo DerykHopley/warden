@@ -1,0 +1,41 @@
+# The database keeps Teams apart
+
+Every Team-owned table has Postgres row-level security. Each request and each background job runs in a
+transaction that sets its Team, and the policies only show and accept that Team's rows. The app connects as a role
+that can't bypass them. A query that forgets the Team still can't reach another Team's data.
+
+## How
+
+- **`withTeam(team, async (tx) => …)`** is the only way request and job code gets a database handle. It opens a
+  transaction and sets the Team for that transaction only, so a pooled connection carries nothing into its next use.
+- **No Team set means no rows:** reads return nothing and writes are refused.
+- **Policies on every Team-owned table, read and write,** with row-level security forced so the table owner is bound
+  too. A CI check fails when any table lacks it.
+- **Separate roles:** the app role (bound by the policies), a migration role, and an admin role for the few
+  deliberate cross-Team tasks (the dev page's totals), used from one marked place in the code.
+- **Foreign keys include the Team:** `(team_id, id)`, because Postgres checks foreign keys without the policies,
+  and a plain key would let Team A point at Team B's rows and learn they exist.
+- **Fields people filter on are real columns**, not JSON: a JSON filter lost its index under the policies.
+- **Vector search sets `hnsw.iterative_scan`:** without it, an HNSW search under the policies returned 1 to 6 of
+  10 results (nothing leaked; results went missing).
+- **LangGraph thread ids carry the Team** and are checked before a resume: the checkpointer's own tables have no
+  Team column.
+
+## Why
+
+A security product should be able to say a forgotten filter can't leak. Two designs were spiked against the same
+12 attack cases (2026-11-24): an app-level filter (13/13) and row-level security (14/14). Both kept Teams apart, but
+the app filter only holds while every query goes through its helper: code that got around it read every Team.
+Row-level security moves the risk from every query to every new table, and a CI check covers that. The thin
+`withTeam` helper keeps the app's code simple; the app filter's table-swapping trick, which leaned on query-builder
+internals, isn't needed.
+
+Spike code and cases: the capstone archive, `architecture/spikes/team-scoping/`.
+
+## Consequences
+
+- **Check on real Cloud SQL in the walking skeleton** that the app role is bound by the policies (unverified:
+  how the `cloudsqlsuperuser` setup affects table owners).
+- An empty result can mean "no Team set" as well as "nothing there": tests assert the Team is set, and `withTeam`
+  refuses an empty Team.
+- The local-first desktop app holds one Team, so it doesn't need the policies; it keeps the same `withTeam` shape.

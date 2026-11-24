@@ -27,8 +27,15 @@ _Avoid_: org, organization, tenant, customer
 
 **Scan**:
 One run of a Baseline over some of a Team's Assets. A Scan marks a Finding Fixed only if it covered that Asset
-with that Rule and didn't see the problem.
+with that Rule and didn't see the problem. Patch's CVE refresh is a Scan (its Assets are Products). Scans are
+reconciled in the order they started: where a newer Scan has already covered the same Asset and Rule, the older
+Scan's result for that Asset and Rule is dropped. The rest of it still counts.
 _Avoid_: check, audit
+
+**Spot run**:
+A run outside the Baseline, such as one Rule on demand, or the trace judge over Agent sessions. It can open
+Findings but never marks one Fixed.
+_Avoid_: check run, ad-hoc scan
 
 **Finding**:
 One observed problem with one Asset, raised by one module. The same problem on three Assets is three Findings.
@@ -45,7 +52,7 @@ Vouch recomputes Gaps from them. A Gap has no Status of its own: risk is accepte
 _Avoid_: missing control, Finding (for this)
 
 **Asset**:
-The thing a Finding is about. Its kind is one of Repo, Product, Device or Agent session.
+The thing a Finding is about. Its kind is one of Repo, Product, Device or Agent session. A new kind needs an ADR.
 
 **Repo**:
 A source code repository, named by its URL.
@@ -64,16 +71,29 @@ _Avoid_: app, service
 A developer's laptop, as reported by Guard's laptop script.
 
 **Fingerprint**:
-The Rule plus where the problem sits (a file path, a package, a CVE and package), without naming the Asset.
+The Rule plus where the problem sits (a file path, a package, a CVE and package), without naming the Asset or a
+package's version, so an upgrade isn't a new problem.
 Findings with the same Fingerprint are the same problem on different Assets. Within one Asset, the same
 Fingerprint in a later Scan is the same Finding.
 
 **Severity**:
-How bad a Finding is: Critical, High, Medium or Low. Patch maps CVSS bands onto it.
+How bad a Finding is: Critical, High, Medium or Low. Patch maps CVSS bands onto it. A change of Severity is
+kept in the Finding's history.
 _Avoid_: Info, priority, risk score
 
 **Status**:
-Where a Finding stands: Open, Fixed, Accepted or False positive.
+Where a Finding stands: Open, Fixed, Accepted or False positive. Every change names its Actor and reason.
+
+**Actor**:
+Who made a change: a person or an agent. An agent can't set Accepted or False positive; it makes a Proposal.
+
+**Proposal**:
+A decision an agent suggests, such as accepting a Finding. It waits until a person approves or rejects it.
+_Avoid_: suggestion, draft decision
+
+**Fix rate**:
+Confirmed fixes in a period, divided by the Findings open at its start plus those opened during it. The dashboard
+sets the period, e.g. 30 days. Unconfirmed fixes don't count.
 
 **Fixed**:
 The next scan no longer sees the Finding. Set only by a rescan, never by hand.
@@ -81,19 +101,25 @@ _Avoid_: resolved, closed
 
 **Accepted**:
 A person has accepted the risk, with a reason and an expiry date. "Not affected" (the vulnerable part isn't used)
-is one such reason. An agent may only propose it.
+is one such reason. An agent may only propose it. A daily job reopens every Accepted Finding whose expiry has
+passed, whether or not a Scan sees it. An Accepted Finding a Scan no longer sees is Fixed.
 _Avoid_: ignored, waived, suppressed
 
 **Unconfirmed fix**:
-A Fixed Finding whose Scan also opened a new Finding with the same Rule on the same Asset, so the problem may only
-have moved. A person confirms the fix, or marks it moved, which reopens it. Not a Status.
+A Fixed Finding whose Scan also opened a new Finding that may be the same problem moved. Each module says what
+"may have moved" means: for Guard, the same Rule on the same Asset; for Patch, the same CVE under a different
+package or version. A person confirms the fix, or marks it moved: the new Finding merges into the old one,
+which reopens with its id, age and history and takes the new location. Not a Status. Unconfirmed fixes don't
+count in the Fix rate.
 _Avoid_: suspect fix, moved (as a Status)
 
 **False positive**:
-A person has marked the Finding as wrong. An agent may only propose it. It feeds the eval.
+A person has marked the Finding as wrong. An agent may only propose it. It feeds the eval. A person can reopen
+it, with a reason.
 
 **Rule**:
-One check with an ID, such as `agent-can-read-env`. A Finding names the Rule that raised it.
+One check with an ID that starts with its module, such as `guard/agent-can-read-env` or
+`patch/known-vulnerability`. A Finding names the Rule that raised it.
 _Avoid_: guard rule, check (as a noun)
 
 **Pack**:
@@ -113,6 +139,7 @@ A requirement in a compliance standard (ISO 27001, TISAX). A Finding names one o
 
 **Agent session**:
 One run of an AI coding agent. It's the Asset when the judge flags agent behaviour. Its trace is the evidence.
+It never changes, so its Findings are never Fixed: they end as Accepted or False positive.
 _Avoid_: trace (as the Asset)
 
 ## Levels
