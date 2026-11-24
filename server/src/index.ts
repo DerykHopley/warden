@@ -7,7 +7,9 @@ import { createClerkVerifier } from "./auth.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } from "./database.ts";
 import { createLogger } from "./log.ts";
+import { createMembers } from "./members.ts";
 import { createShutdown } from "./shutdown.ts";
+import { createWithTeam } from "./with-team.ts";
 
 const logger = createLogger();
 
@@ -64,6 +66,9 @@ pool.query("select 1").catch((error: unknown) => {
 const app = createApp({
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
+  members: createMembers({ withTeam: createWithTeam(pool) }),
+  // Cloud Run sets K_SERVICE in every container it runs; there, Google's front end is the socket's peer.
+  behindCloudRun: process.env.K_SERVICE !== undefined,
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,
   dashboardDir: existsSync(`${dashboardDir}/index.html`) ? dashboardDir : undefined,

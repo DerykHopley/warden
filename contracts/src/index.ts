@@ -17,8 +17,18 @@ export const HealthBody = z.object({
 });
 export type HealthBody = z.infer<typeof HealthBody>;
 
-/** `GET /api/me`: the signed-in person, as the server read them from their Clerk session token. */
+/** A person's Role in one Team (ADR 0008). Each includes the one before it: a Lead can do what a Member can. */
+export const Role = z.enum(["member", "lead", "admin"]);
+export type Role = z.infer<typeof Role>;
+
+/**
+ * `GET /api/me`: the signed-in person, as the server read them from their Clerk session token, with their Team (the
+ * token's active Clerk Organization id) and their Role in it from Warden's own table. Both are null when the token
+ * has no active Organization.
+ */
 export const MeBody = z.object({
   userId: z.string().min(1),
+  team: z.string().min(1).nullable(),
+  role: Role.nullable(),
 });
 export type MeBody = z.infer<typeof MeBody>;

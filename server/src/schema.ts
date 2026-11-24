@@ -8,6 +8,7 @@ import type {
   Evidence,
   Location,
   Module,
+  Role,
   Severity,
   Status,
 } from "@warden/contracts";
@@ -18,11 +19,34 @@ type Json<T extends object> = JSONColumnType<T, string, string>;
 /** Who caused a history row, for now: a Scan or a Spot run. */
 export type RunKind = "scan" | "spot_run";
 
+/** How a Role history row came about: the Team's first visit, an invited person's first visit, or a Role change. */
+export type RoleChange = "created_team" | "joined" | "changed";
+
 export interface Database {
   /** One row per Team, keyed by its Clerk Organization id; every later Team-owned table points at it. */
   teams: {
     id: string;
     created_at: Generated<Date>;
+  };
+
+  /** Each person's Role in the Team, by Clerk user id (0004_team_members). Written only by the members module. */
+  team_members: {
+    team_id: string;
+    user_id: string;
+    role: Role;
+    joined_at: Generated<Date>;
+  };
+
+  /** Append-only: one row per Role change. A trigger refuses update, delete, truncate. */
+  role_history: {
+    team_id: string;
+    id: Generated<string>;
+    user_id: string;
+    role_before: Role | null;
+    role_after: Role;
+    change: RoleChange;
+    actor_id: string;
+    at: Generated<Date>;
   };
 
   /** One row per Finding, every Finding v1 field (0003_findings). Written only by the Findings module. */

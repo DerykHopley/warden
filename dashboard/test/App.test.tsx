@@ -58,7 +58,9 @@ describe("App", () => {
 
   it("shows the email, the user id the server returned and sign-out when signed in", async () => {
     signIn();
-    fetchMock.mockResolvedValue(json(200, { userId: "user_from_server" }));
+    fetchMock.mockResolvedValue(
+      json(200, { userId: "user_from_server", team: "org_1", role: "admin" }),
+    );
     render(<App />);
 
     expect(screen.getByRole("heading", { name: "Warden" })).toBeInTheDocument();
@@ -97,7 +99,7 @@ describe("App", () => {
     signOut();
     rerender(<App />);
 
-    fetchMock.mockResolvedValueOnce(json(200, { userId: "user_again" }));
+    fetchMock.mockResolvedValueOnce(json(200, { userId: "user_again", team: null, role: null }));
     signIn("sess_2");
     rerender(<App />);
     expect(await screen.findByText("user_again")).toBeInTheDocument();
@@ -120,7 +122,9 @@ describe("App", () => {
   it("shows the not-answering message and retries when the server can't be reached", async () => {
     signIn();
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
-    fetchMock.mockResolvedValueOnce(json(200, { userId: "user_after_retry" }));
+    fetchMock.mockResolvedValueOnce(
+      json(200, { userId: "user_after_retry", team: "org_1", role: "member" }),
+    );
     render(<App />);
 
     expect(await screen.findByText("Warden's server isn't answering")).toBeInTheDocument();

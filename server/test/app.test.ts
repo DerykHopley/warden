@@ -18,7 +18,7 @@ describe("GET /api/me", () => {
     const { app } = testApp({ publicPem });
     const res = await app.request("/api/me", bearer(await sessionToken(key, "user_abc")));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ userId: "user_abc" });
+    expect(await res.json()).toEqual({ userId: "user_abc", team: null, role: null });
   });
 
   it.each([
@@ -35,6 +35,56 @@ describe("GET /api/me", () => {
     expect(res.status).toBe(401);
     expect(res.headers.get("content-type")).toMatch(/application\/json/);
     expect(await res.json()).toEqual({ error: "Not signed in" });
+  });
+});
+
+describe("the sign-in limit", () => {
+  const from = (address: string, init: { headers?: Record<string, string> } = {}) => ({
+    ...init,
+    headers: { ...init.headers, "X-Forwarded-For": address },
+  });
+
+  it("answers an address's 21st failed sign-in in a minute 429 with Retry-After, before checking the token", async () => {
+    const { app } = testApp({ publicPem });
+    const bad = bearer(await sessionToken(otherKey, "user_abc"));
+    for (let failure = 1; failure <= 20; failure++) {
+      expect((await app.request("/api/me", from("203.0.113.7", bad))).status).toBe(401);
+    }
+
+    const held = await app.request("/api/me", from("203.0.113.7", bad));
+    expect(held.status).toBe(429);
+    expect(await held.json()).toEqual({ error: "Too many sign-in attempts" });
+    expect(Number(held.headers.get("retry-after"))).toBeGreaterThan(0);
+    // Before the token is checked: a good one from that address is held back too.
+    const good = bearer(await sessionToken(key, "user_abc"));
+    expect((await app.request("/api/me", from("203.0.113.7", good))).status).toBe(429);
+
+    expect((await app.request("/api/me", from("198.51.100.2", bad))).status).toBe(401);
+    expect((await app.request("/api/me", from("198.51.100.2", good))).status).toBe(200);
+  });
+
+  it("counts a forged leading X-Forwarded-For entry against the address Google appended", async () => {
+    const { app } = testApp({ publicPem });
+    const bad = bearer(await sessionToken(otherKey, "user_abc"));
+    for (let failure = 1; failure <= 20; failure++) {
+      await app.request("/api/me", from(`10.9.9.${failure}, 203.0.113.7`, bad));
+    }
+
+    expect((await app.request("/api/me", from("203.0.113.7", bad))).status).toBe(429);
+  });
+
+  it("doesn't count successful sign-ins, or hold back the health check", async () => {
+    const { app } = testApp({ publicPem });
+    const good = bearer(await sessionToken(key, "user_abc"));
+    for (let request = 0; request < 25; request++) {
+      expect((await app.request("/api/me", from("203.0.113.7", good))).status).toBe(200);
+    }
+
+    const bad = bearer(await sessionToken(otherKey, "user_abc"));
+    for (let failure = 0; failure < 21; failure++) {
+      await app.request("/api/me", from("203.0.113.8", bad));
+    }
+    expect((await app.request("/api/health", from("203.0.113.8"))).status).toBe(200);
   });
 });
 
