@@ -2,12 +2,20 @@
 // cards ("Start here"), then every Finding that matches the view in a table, with filter tabs. The view lives in the
 // URL: a filter pushes a history entry, so Back and Forward step through views; selecting a Finding replaces the
 // entry, so a reload or a shared link selects it again.
-import { FindingsView, findingsViewPath, Module, Severity, type Finding } from "@warden/contracts";
+import {
+  FindingsView,
+  findingsViewPath,
+  Module,
+  Severity,
+  type Finding,
+  type Level,
+} from "@warden/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { askAboutTeam } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import {
   ASSET_KIND_WORDS,
+  LEVEL_WORDS,
   MODULE_WORDS,
   SEVERITY_WORDS,
   STATUS_WORDS,
@@ -21,6 +29,7 @@ import {
   topFive,
   type FindingsResult,
 } from "./findings.ts";
+import { useOverview } from "./overview.ts";
 import { findingsViewWords } from "./panel.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
@@ -63,6 +72,12 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     [getToken, me.team],
   );
   const list = useWardenCall<FindingsResult>(listFindings, onSessionEnded);
+  // The Level line's call: while it waits, or when it fails, the line is absent and the page shows no error for it.
+  const overview = useOverview(getToken, me.team, onSessionEnded);
+  const level =
+    overview.result !== "loading" && overview.result.kind === "overview"
+      ? overview.result.body.level
+      : null;
   const [view, setView] = useState(viewInAddress);
 
   // Back and Forward bring back the view their entry's address names.
@@ -123,6 +138,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
       {list.result !== "loading" && <TeamRefused result={list.result} />}
       {findings !== null && (
         <>
+          {level !== null && <LevelLine level={level} />}
           <h1 className="summary-line">{summaryLine(findings)}</h1>
           <TopFive findings={topFive(findings)} focused={focused} onSelect={select} />
           {findings.length > 0 && (
@@ -159,6 +175,15 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
         </>
       )}
     </>
+  );
+}
+
+/** The Team's Level, one quiet line above the summary, linking to the journey on Overview. */
+function LevelLine({ level }: { level: Level }) {
+  return (
+    <p className="level-line">
+      Level: {LEVEL_WORDS[level]} · <a href="/overview">see the journey</a>
+    </p>
   );
 }
 

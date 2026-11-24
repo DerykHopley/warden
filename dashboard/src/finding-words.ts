@@ -1,6 +1,7 @@
 // A Finding's enums as the dashboard says them (GLOSSARY.md).
 import type {
   AssetKind,
+  Level,
   Location,
   Module,
   ProposalDecision,
@@ -20,6 +21,13 @@ export const STATUS_WORDS: Record<Status, string> = {
   fixed: "Fixed",
   accepted: "Accepted",
   false_positive: "False positive",
+};
+
+/** A Team's Level on the journey, as the Overview and the Findings page's Level line say it. */
+export const LEVEL_WORDS: Record<Level, string> = {
+  quick: "Quick",
+  standard: "Standard",
+  audit_ready: "Audit-ready",
 };
 
 export const MODULE_WORDS: Record<Module, string> = {

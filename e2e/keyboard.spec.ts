@@ -12,6 +12,7 @@ async function open(page: Page, width: number) {
   await page.setViewportSize({ width, height: 900 });
   await page.goto("/findings");
   await expect(page.locator(".findings-table tbody tr")).toHaveCount(7);
+  await expect(page.locator(".level-line")).toBeVisible();
 }
 
 /** What has focus, as a short name: a card's title, a tab's group and word, a row's title, or the tag. */
@@ -41,12 +42,13 @@ async function tabThrough(page: Page, times: number) {
   return reached;
 }
 
-test("Tab reaches each card, then each filter tab, then each row, in order, then the closed panel's button, and leaves", async ({
+test("Tab reaches the Level line's link, each card, then each filter tab, then each row, in order, then the closed panel's button, and leaves", async ({
   page,
 }) => {
   await open(page, 1024);
   await page.getByRole("button", { name: "Sign out" }).focus();
 
+  expect(await tabThrough(page, 1)).toEqual(["a:see the journey"]);
   const reached = await tabThrough(page, 5 + 14 + 7 + 2);
 
   const cards = await page.locator(".finding-card .card-title").allTextContents();
@@ -63,6 +65,17 @@ test("Tab reaches each card, then each filter tab, then each row, in order, then
   expect(reached.slice(19, 26)).toEqual(rows.map((title) => `row:${title}`));
   // After the last row, the closed Ask Warden panel's button; then focus leaves the page's controls.
   expect(reached.slice(26)).toEqual(["button:Ask Warden", "body"]);
+});
+
+test("Tab reaches the header's Overview link between Findings and People, and leaves it", async ({
+  page,
+}) => {
+  await open(page, 1024);
+  await page
+    .getByRole("navigation", { name: "Pages" })
+    .getByRole("link", { name: "Findings" })
+    .focus();
+  expect(await tabThrough(page, 2)).toEqual(["a:Overview", "a:People"]);
 });
 
 test("Tab reaches the open panel's controls after the page's, in order, and then leaves them", async ({
@@ -118,9 +131,13 @@ async function expectRings(page: Page, targets: Locator[]) {
   }
 }
 
-test("a focused card, filter tab and row each show a visible ring", async ({ page }) => {
+test("a focused card, filter tab, row, Level line link and Overview link each show a visible ring", async ({
+  page,
+}) => {
   await open(page, 1024);
   await expectRings(page, [
+    page.getByRole("link", { name: "see the journey" }),
+    page.getByRole("navigation", { name: "Pages" }).getByRole("link", { name: "Overview" }),
     page.locator(".finding-card").first(),
     page.locator(".filter-tab").nth(2),
     page.locator(".findings-table .finding-link").nth(1),
@@ -147,12 +164,12 @@ test("the panel's button, Pin, ✕, divider, card's ✕, input and Send each sho
   await expectRings(page, [panel.getByRole("separator", { name: "Resize Ask Warden" })]);
 });
 
-test("at 390px, every card, filter tab, row and page link is at least 44 by 44px", async ({
+test("at 390px, every card, filter tab, row, page link and the Level line's link is at least 44 by 44px", async ({
   page,
 }) => {
   await open(page, 390);
   const targets = page.locator(
-    ".finding-card, .filter-tab, .findings-table .finding-link, .page-links a, .app-header button",
+    ".finding-card, .filter-tab, .findings-table .finding-link, .page-links a, .app-header button, .level-line a",
   );
   const sizes = await targets.evaluateAll((all) =>
     all.map((el) => {
@@ -160,7 +177,7 @@ test("at 390px, every card, filter tab, row and page link is at least 44 by 44px
       return { what: el.textContent?.slice(0, 30), width: box.width, height: box.height };
     }),
   );
-  expect(sizes.length).toBe(5 + 14 + 7 + 2 + 1);
+  expect(sizes.length).toBe(5 + 14 + 7 + 3 + 1 + 1);
   for (const size of sizes) {
     expect(size.width, size.what).toBeGreaterThanOrEqual(44);
     expect(size.height, size.what).toBeGreaterThanOrEqual(44);

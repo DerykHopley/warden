@@ -14,6 +14,7 @@ import { AskWardenPanel, usePanelState } from "./AskWardenPanel.tsx";
 import { FindingsPage } from "./Findings.tsx";
 import { landingPage } from "./landing.ts";
 import { fetchMe, type MeResult } from "./me.ts";
+import { OverviewPage } from "./Overview.tsx";
 import type { PagePanel, PanelContext } from "./panel.ts";
 import { PeoplePage } from "./People.tsx";
 import { ROLE_WORDS } from "./roles.ts";
@@ -122,6 +123,7 @@ const noFocusToClear = () => {};
  */
 const PAGES: { path: string; label: string; Page: ComponentType<PageProps> }[] = [
   { path: "/findings", label: "Findings", Page: FindingsPage },
+  { path: "/overview", label: "Overview", Page: OverviewPage },
   { path: "/people", label: "People", Page: PeoplePage },
 ];
 

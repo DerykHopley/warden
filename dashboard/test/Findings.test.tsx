@@ -101,6 +101,68 @@ describe("the summary line and the top 5", () => {
   });
 });
 
+describe("the Level line", () => {
+  const overview = (team = TEAM) =>
+    json(200, {
+      team,
+      level: "quick",
+      last_scan_at: "2026-11-24T09:14:00Z",
+      period_days: 30,
+      open_at_start: 0,
+      open_now: 7,
+      fix_rate: { fixed: 1, of: 11 },
+    });
+  const levelLine = () => screen.queryByText(/^Level:/);
+
+  /** The page as it shows without a Level line: the summary, the cards and the table, and no notice. */
+  function expectPageUnchanged() {
+    expect(
+      screen.getByRole("heading", { level: 1, name: "7 open Findings, 2 Critical" }),
+    ).toBeInTheDocument();
+    expect(cards()).toHaveLength(5);
+    expect(rows()).toHaveLength(7);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  }
+
+  it("reads Level: Quick · see the journey above the summary line, the link going to Overview", async () => {
+    open("/findings", demoFindings, { overview: () => overview() });
+    await screen.findByRole("table");
+    const line = await screen.findByText(/^Level:/);
+
+    expect(line).toHaveTextContent(/^Level: Quick · see the journey$/);
+    expect(line).toHaveClass("level-line");
+    expect(within(line).getByRole("link", { name: "see the journey" })).toHaveAttribute(
+      "href",
+      "/overview",
+    );
+    const summary = screen.getByRole("heading", { level: 1 });
+    expect(line.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("is absent while /api/overview hasn't answered, and the rest of the page shows", async () => {
+    const late = deferred<Response>();
+    open("/findings", demoFindings, { overview: () => late.promise });
+    await screen.findByRole("table");
+
+    expect(levelLine()).not.toBeInTheDocument();
+    expectPageUnchanged();
+  });
+
+  it.each([
+    ["the server isn't answering", () => Promise.reject(new TypeError("Failed to fetch"))],
+    ["it answers 500", () => json(500, { error: "Internal server error" })],
+    ["it answers 409", () => json(409, { error: "Open it first" })],
+  ])("is absent when %s, with no error shown for it", async (_case, overviewAnswer) => {
+    open("/findings", demoFindings, { overview: overviewAnswer });
+    await screen.findByRole("table");
+    await vi.waitFor(() => expect(callsTo("/api/overview")).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(levelLine()).not.toBeInTheDocument();
+    expectPageUnchanged();
+  });
+});
+
 describe("the table", () => {
   it("lists the view's Findings with the Severity, Finding (title and Rule id), Asset and Status columns", async () => {
     open();

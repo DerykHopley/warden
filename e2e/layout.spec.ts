@@ -106,6 +106,64 @@ for (const scheme of SCHEMES) {
   }
 }
 
+/** Each journey card's left and top, rounded to whole pixels. */
+const journeyBoxes = (page: Page) =>
+  page.locator(".journey-card").evaluateAll((cards) =>
+    cards.map((card) => {
+      const box = card.getBoundingClientRect();
+      return { left: Math.round(box.left), top: Math.round(box.top) };
+    }),
+  );
+
+// The Overview: closed everywhere, pinned where pinning is offered (from 1100px). The journey cards stack under a
+// 640px column and sit three in a row from it.
+const OVERVIEW_PANEL: Record<(typeof WIDTHS)[number], ("closed" | "pinned")[]> = {
+  390: ["closed"],
+  1024: ["closed"],
+  1600: ["closed", "pinned"],
+};
+
+for (const scheme of SCHEMES) {
+  for (const width of WIDTHS) {
+    for (const state of OVERVIEW_PANEL[width]) {
+      test(`Overview at ${width}px in ${scheme}, with the panel ${state}: nothing scrolls sideways, and the journey cards fit`, async ({
+        page,
+      }) => {
+        await page.addInitScript(
+          (stored) => localStorage.setItem("warden.askWardenPanel", stored),
+          JSON.stringify({ mode: state, width: 680 }),
+        );
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme: scheme });
+        await page.goto("/overview");
+        await expect(page.locator(".journey-card")).toHaveCount(3);
+        await expect(page.locator(".trend-line")).toBeVisible();
+        if (state === "pinned") {
+          await expect(page.locator(".ask-warden")).toHaveAttribute("data-shown", "pinned");
+        }
+
+        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }));
+        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        const main = await page.locator("main.page").boundingBox();
+        expect(main!.width).toBeLessThanOrEqual(1480);
+
+        const boxes = await journeyBoxes(page);
+        if (width === 390) {
+          expect(new Set(boxes.map((b) => b.left)).size).toBe(1);
+          expect(new Set(boxes.map((b) => b.top)).size).toBe(3);
+        }
+        if (width === 1600) {
+          expect(new Set(boxes.map((b) => b.top)).size).toBe(1);
+          expect(new Set(boxes.map((b) => b.left)).size).toBe(3);
+        }
+      });
+    }
+  }
+}
+
 test("at 1100px with the panel pinned 680px wide, nothing scrolls sideways and the cards wrap to the page's column", async ({
   page,
 }) => {
