@@ -13,18 +13,12 @@ import {
 import type pg from "pg";
 import { ZodError } from "zod";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import {
-  createFindings,
-  DecisionRefused,
-  FindingNotFound,
-  NotALead,
-  type Findings,
-} from "../src/findings/index.ts";
+import { createFindings, FindingNotFound, NotALead, type Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
-import { seedTeam } from "./helpers.ts";
+import { refusal, seedTeam } from "./helpers.ts";
 import { poolAs } from "./databases.ts";
 
 let pool: pg.Pool;
@@ -138,22 +132,69 @@ describe("a named decision by an agent", () => {
 });
 
 describe("a named decision on a Status its call doesn't allow", () => {
-  /** Each case: the call, and the Finding (plus a candidate for markMoved) it's made on. */
-  const cases: [string, Call, (team: string) => Promise<{ id: string; candidate?: string }>][] = [
-    ["accept on a Fixed Finding", "accept", (t) => given(t, { status: "fixed" })],
-    ["accept on a False positive", "accept", (t) => given(t, { status: "false_positive" })],
+  /**
+   * Each case: the call, the Finding (plus a candidate for markMoved) it's made on, and the refusal's words exactly:
+   * the API's 409 and the detail card show them, so they use the glossary's words, with no id and no call name.
+   */
+  const cases: [
+    string,
+    Call,
+    (team: string) => Promise<{ id: string; candidate?: string }>,
+    string,
+  ][] = [
     [
-      "accept on a Finding merged into another",
+      "accept on a Fixed Finding",
       "accept",
-      async (t) => {
-        const into = await given(t);
-        return given(t, { status: "fixed", moved_to: into.id });
-      },
+      (t) => given(t, { status: "fixed" }),
+      "This Finding is now Fixed, so it can't be accepted.",
+    ],
+    [
+      "accept on a False positive",
+      "accept",
+      (t) => given(t, { status: "false_positive" }),
+      "This Finding is now a False positive, so it can't be accepted.",
+    ],
+    [
+      "markFalsePositive on a Fixed Finding",
+      "markFalsePositive",
+      (t) => given(t, { status: "fixed" }),
+      "This Finding is now Fixed, so it can't be marked a False positive.",
+    ],
+    [
+      "markFalsePositive on a False positive",
+      "markFalsePositive",
+      (t) => given(t, { status: "false_positive" }),
+      "This Finding is a False positive already.",
+    ],
+    [
+      "confirmFix on an Open Finding",
+      "confirmFix",
+      (t) => given(t),
+      "This Finding is now Open, so its fix can't be confirmed.",
+    ],
+    [
+      "confirmFix on an Accepted Finding",
+      "confirmFix",
+      (t) => given(t, { status: "accepted", accepted_reason: reason, accepted_until: nextWeek() }),
+      "This Finding is now Accepted, so its fix can't be confirmed.",
     ],
     [
       "confirmFix on a Fixed Finding with no Unconfirmed fix",
       "confirmFix",
       (t) => given(t, { status: "fixed" }),
+      "This Finding has no Unconfirmed fix to confirm.",
+    ],
+    [
+      "markMoved on a False positive",
+      "markMoved",
+      (t) => given(t, { status: "false_positive" }),
+      "This Finding is now a False positive, so it can't be marked moved.",
+    ],
+    [
+      "markMoved on a Fixed Finding with no Unconfirmed fix",
+      "markMoved",
+      (t) => given(t, { status: "fixed" }),
+      "This Finding has no Unconfirmed fix to mark moved.",
     ],
     [
       "markMoved with a candidate it doesn't list",
@@ -163,6 +204,7 @@ describe("a named decision on a Status its call doesn't allow", () => {
         const other = await given(t);
         return { id: old.id, candidate: other.id };
       },
+      "The chosen Finding isn't one of this Unconfirmed fix's candidates.",
     ],
     [
       "markMoved with a candidate that isn't Open",
@@ -171,6 +213,29 @@ describe("a named decision on a Status its call doesn't allow", () => {
         const { old, moved } = await unconfirmedFix(t, { status: "false_positive" });
         return { id: old.id, candidate: moved.id };
       },
+      "The chosen Finding is a False positive, not Open, so it can't be merged into this one.",
+    ],
+    [
+      "markMoved with a candidate merged into another",
+      "markMoved",
+      async (t) => {
+        const into = await given(t);
+        const { old, moved } = await unconfirmedFix(t, { status: "fixed", moved_to: into.id });
+        return { id: old.id, candidate: moved.id };
+      },
+      "The chosen Finding was merged into another Finding, so it can't be merged into this one.",
+    ],
+    [
+      "markMoved with a candidate the Team no longer has",
+      "markMoved",
+      async (t) => {
+        const old = await given(t, {
+          status: "fixed",
+          unconfirmed_fix: { candidates: ["f-gone"] },
+        });
+        return { id: old.id, candidate: "f-gone" };
+      },
+      "The chosen Finding no longer exists, so it can't be merged into this one.",
     ],
     [
       "markMoved with a candidate under another Rule",
@@ -184,6 +249,23 @@ describe("a named decision on a Status its call doesn't allow", () => {
         });
         return { id: old.id, candidate: moved.id };
       },
+      "The chosen Finding has another Rule, so it can't be merged into this one.",
+    ],
+    [
+      "markMoved with a candidate from another module",
+      "markMoved",
+      async (t) => {
+        const rule = "patch/known-vulnerability";
+        const location = { kind: "file", path: "package.json" } as const;
+        const { old, moved } = await unconfirmedFix(t, {
+          module: "patch",
+          rule_id: rule,
+          location,
+          fingerprint: fingerprint(rule, location),
+        });
+        return { id: old.id, candidate: moved.id };
+      },
+      "The chosen Finding has another module and Rule, so it can't be merged into this one.",
     ],
     [
       "markMoved with a candidate on another Asset",
@@ -192,36 +274,52 @@ describe("a named decision on a Status its call doesn't allow", () => {
         const { old, moved } = await unconfirmedFix(t, { asset: api });
         return { id: old.id, candidate: moved.id };
       },
+      "The chosen Finding has another Asset, so it can't be merged into this one.",
     ],
-    ["reopen on an Open Finding", "reopen", (t) => given(t)],
-    ["reopen on a Fixed Finding", "reopen", (t) => given(t, { status: "fixed" })],
+    ["reopen on an Open Finding", "reopen", (t) => given(t), "This Finding is Open already."],
+    [
+      "reopen on a Fixed Finding",
+      "reopen",
+      (t) => given(t, { status: "fixed" }),
+      "This Finding is now Fixed, so it can't be reopened.",
+    ],
   ];
 
-  it.each(cases)("%s throws DecisionRefused, and writes nothing", async (_name, call, make) => {
-    const team = await newTeam();
-    const { id, candidate } = await make(team);
-    const before = await stored(team);
+  it.each(cases)(
+    "%s throws DecisionRefused in plain words, and writes nothing",
+    async (_name, call, make, words) => {
+      const team = await newTeam();
+      const { id, candidate } = await make(team);
+      const before = await stored(team);
 
-    const refused = await calls[call](team, id, lead, candidate).catch((error: unknown) => error);
+      expect(await refusal(calls[call](team, id, lead, candidate))).toEqual({
+        name: "DecisionRefused",
+        message: words,
+      });
+      expect(await stored(team)).toEqual(before);
+    },
+  );
 
-    expect(refused).toBeInstanceOf(DecisionRefused);
-    const status = before.findings.find((row) => row.id === id)!.status;
-    expect((refused as Error).message).toContain(call);
-    expect((refused as Error).message).toContain(status);
-    expect(await stored(team)).toEqual(before);
-  });
-
-  it("every call refuses a Finding merged into another", async () => {
+  it.each<[Call, string]>([
+    ["accept", "This Finding was merged into another Finding, so it can't be accepted."],
+    [
+      "markFalsePositive",
+      "This Finding was merged into another Finding, so it can't be marked a False positive.",
+    ],
+    ["confirmFix", "This Finding was merged into another Finding, so its fix can't be confirmed."],
+    ["markMoved", "This Finding was merged into another Finding, so it can't be marked moved."],
+    ["reopen", "This Finding was merged into another Finding, so it can't be reopened."],
+  ])("%s refuses a Finding merged into another, in plain words", async (call, words) => {
     const team = await newTeam();
     const into = await given(team);
+    // A merged Finding is refused before its Status is looked at.
     const merged = await given(team, { status: "fixed", moved_to: into.id });
     const before = await stored(team);
 
-    for (const call of Object.keys(calls) as Call[]) {
-      await expect(calls[call](team, merged.id, lead, into.id), call).rejects.toBeInstanceOf(
-        DecisionRefused,
-      );
-    }
+    expect(await refusal(calls[call](team, merged.id, lead, into.id))).toEqual({
+      name: "DecisionRefused",
+      message: words,
+    });
     expect(await stored(team)).toEqual(before);
   });
 });

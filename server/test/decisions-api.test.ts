@@ -236,9 +236,11 @@ describe("story 4: a Lead's decisions", () => {
 
     const refused = await post(`/api/findings/${finding.id}/reopen`, team, { reason: "Again" });
 
+    // The one exact text at the API: the refusal's words pass through as the 409's error. Each refusal's words are
+    // decisions.test.ts's.
     expect(refused).toEqual({
       status: 409,
-      body: { error: expect.stringMatching(/reopen refused: the Finding is open/) },
+      body: { error: "This Finding is Open already." },
     });
     expect(await stored(team)).toEqual(before);
   });

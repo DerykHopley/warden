@@ -6,7 +6,6 @@ import type {
   Module,
   ProposalDecision,
   Severity,
-  Status,
 } from "@warden/contracts";
 
 export const SEVERITY_WORDS: Record<Severity, string> = {
@@ -16,12 +15,8 @@ export const SEVERITY_WORDS: Record<Severity, string> = {
   low: "Low",
 };
 
-export const STATUS_WORDS: Record<Status, string> = {
-  open: "Open",
-  fixed: "Fixed",
-  accepted: "Accepted",
-  false_positive: "False positive",
-};
+/** The contracts' words: the server's refusals say a Status the same way. */
+export { STATUS_WORDS } from "@warden/contracts";
 
 /** A Team's Level on the journey, as the Overview and the Findings page's Level line say it. */
 export const LEVEL_WORDS: Record<Level, string> = {
