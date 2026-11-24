@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Sets up Warden's Google Cloud project, once: the APIs, the Docker repositories, the database's backups and network,
 # log retention and Secret Manager's audit logs, one password secret per database role, the database roles
-# themselves, two sets of service accounts (live, and owner previews), GitHub's deploy identities, the two public
-# services and the preview migration job. Safe to run again: it creates only what's missing, and sets each setting to
-# the value below whatever it was. README.md's "Setting up Google Cloud" says what it makes, and why.
+# themselves, two sets of service accounts (live, with the daily Job's, and owner previews), GitHub's deploy
+# identities, the two public services and the preview migration job. Safe to run again: it creates only what's
+# missing, and sets each setting to the value below whatever it was. README.md's "Setting up Google Cloud" says what it
+# makes, and why.
 #
 # Usage: [DRY_RUN=1] scripts/gcp-setup.sh <project-id> <instance>
 #        DRY_RUN=1 prints each command instead of running it, needs no credentials, and assumes nothing exists yet.
@@ -32,10 +33,10 @@ readonly SECRET_READS_SERVICE=secretmanager.googleapis.com
 # Cloud SQL's docs: "the transaction log retention setting must be less than the backup retention setting".
 readonly BACKUPS=7
 readonly LOG_DAYS=6
-# The database passwords the script generates: each set's app and migration roles. (Assigned, then made readonly:
-# the form bash 3.2 accepts.)
+# The database passwords the script generates: each set's app and migration roles, and the live admin role's, which
+# only the daily Job reads. (Assigned, then made readonly: the form bash 3.2 accepts.)
 GENERATED_SECRETS=(warden-db-app-password warden-db-migrate-password warden-db-preview-app-password
-  warden-db-preview-migrate-password)
+  warden-db-preview-migrate-password warden-db-admin-password)
 readonly GENERATED_SECRETS
 # The repository this script is in: the roles step runs its server/src/roles.ts.
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -293,27 +294,31 @@ ensure_service() {
   fi
 }
 
-# The roles run for a set as the dry run prints it: <set> <database> <app secret> <migrate secret>.
+# The roles run for a set as the dry run prints it: <set> <database> <app secret> <migrate secret> [admin secret].
 print_roles() {
   printf '%s\n' "WARDEN_DATABASE_ROLES=$1 PGHOST=127.0.0.1 PGPORT=LOCAL_PORT PGUSER=postgres PGDATABASE=$2" \
     "PGPASSWORD=<from warden-db-password> WARDEN_APP_PASSWORD=<from $3> WARDEN_MIGRATE_PASSWORD=<from $4>" \
-    "node server/src/roles.ts" | paste -sd ' ' -
+    ${5:+"WARDEN_ADMIN_PASSWORD=<from $5>"} "node server/src/roles.ts" | paste -sd ' ' -
 }
 
-# run_roles <project> <set> <database> <app secret> <migrate secret>: the roles script for one set, on its own
-# database, as postgres, through the proxy. Each password goes from Secret Manager into this one process's
-# environment only (a prefix assignment, not an argument). A failure stops the script with the roles script's exit
+# run_roles <project> <set> <database> <app secret> <migrate secret> [admin secret]: the roles script for one set, on
+# its own database, as postgres, through the proxy. Each password goes from Secret Manager into this one process's
+# environment only (a prefix assignment, not an argument). Without an admin secret, the admin role gets no password
+# (the preview set: no preview Job runs, so it can't log in). A failure stops the script with the roles script's exit
 # code; its own error, which holds no password, is above.
 run_roles() {
-  local project=$1 set=$2 database=$3 app_secret=$4 migrate_secret=$5
-  local postgres_password app_password migrate_password status=0
+  local project=$1 set=$2 database=$3 app_secret=$4 migrate_secret=$5 admin_secret=${6-}
+  local postgres_password app_password migrate_password admin_password="" status=0
   postgres_password=$(gcloud secrets versions access latest --secret=warden-db-password --project="$project")
   app_password=$(gcloud secrets versions access latest --secret="$app_secret" --project="$project")
   migrate_password=$(gcloud secrets versions access latest --secret="$migrate_secret" --project="$project")
+  if [[ -n $admin_secret ]]; then
+    admin_password=$(gcloud secrets versions access latest --secret="$admin_secret" --project="$project")
+  fi
   note "the $set roles, on $database"
   WARDEN_DATABASE_ROLES=$set PGHOST=127.0.0.1 PGPORT=$PROXY_PORT PGUSER=postgres PGDATABASE=$database \
     PGPASSWORD=$postgres_password WARDEN_APP_PASSWORD=$app_password WARDEN_MIGRATE_PASSWORD=$migrate_password \
-    node "$ROOT/server/src/roles.ts" || status=$?
+    WARDEN_ADMIN_PASSWORD=$admin_password node "$ROOT/server/src/roles.ts" || status=$?
   if [[ $status != 0 ]]; then
     echo "gcp-setup: the roles step failed for the $set set on $database (exit $status);" \
       "the roles script's error is above" >&2
@@ -340,6 +345,7 @@ main() {
   local run_sa="warden-run@$project.iam.gserviceaccount.com"
   local migrate_sa="warden-migrate@$project.iam.gserviceaccount.com"
   local deploy_sa="warden-deploy@$project.iam.gserviceaccount.com"
+  local daily_sa="warden-daily@$project.iam.gserviceaccount.com"
   local preview_run_sa="warden-preview-run@$project.iam.gserviceaccount.com"
   local preview_migrate_sa="warden-preview-migrate@$project.iam.gserviceaccount.com"
   local preview_deploy_sa="warden-preview-deploy@$project.iam.gserviceaccount.com"
@@ -417,39 +423,42 @@ main() {
   local connection="$project:$REGION:$instance"
   if dry_run; then
     printf '%s &\n' "$(print_command cloud-sql-proxy --quiet --address=127.0.0.1 --port=LOCAL_PORT "$connection")"
-    print_roles live warden warden-db-app-password warden-db-migrate-password
+    print_roles live warden warden-db-app-password warden-db-migrate-password warden-db-admin-password
     print_roles preview warden_preview warden-db-preview-app-password warden-db-preview-migrate-password
     note "then the proxy is stopped"
   else
     start_proxy "$connection"
-    run_roles "$project" live warden warden-db-app-password warden-db-migrate-password
+    run_roles "$project" live warden warden-db-app-password warden-db-migrate-password warden-db-admin-password
     run_roles "$project" preview warden_preview warden-db-preview-app-password warden-db-preview-migrate-password
     cleanup
   fi
 
   step "7. Service accounts (none gets a key)"
   local account
-  for account in warden-run warden-migrate warden-deploy warden-preview-run warden-preview-migrate \
+  for account in warden-run warden-migrate warden-deploy warden-daily warden-preview-run warden-preview-migrate \
     warden-preview-deploy; do
     if ! exists gcloud iam service-accounts describe "$account@$project.iam.gserviceaccount.com" \
       --project="$project"; then
       run gcloud iam service-accounts create "$account" --display-name="Warden: $account" --project="$project"
     fi
   done
-  for account in "$run_sa" "$migrate_sa" "$preview_run_sa" "$preview_migrate_sa"; do
+  for account in "$run_sa" "$migrate_sa" "$daily_sa" "$preview_run_sa" "$preview_migrate_sa"; do
     run_retrying gcloud projects add-iam-policy-binding "$project" --member="serviceAccount:$account" \
       --role=roles/cloudsql.client --condition=None
   done
   grant_secrets "$project" "$run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-app-password
   grant_secrets "$project" "$migrate_sa" warden-db-app-password warden-db-migrate-password
+  # warden-daily (the daily Job, ADR 0009): the only account that reads the admin password, so the server can't.
+  grant_secrets "$project" "$daily_sa" warden-db-app-password warden-db-admin-password
   grant_secrets "$project" "$preview_run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-preview-app-password
   grant_secrets "$project" "$preview_migrate_sa" warden-db-preview-migrate-password
-  # warden-deploy (main): Cloud Run on the project, the warden repository, the live accounts.
+  # warden-deploy (main): Cloud Run on the project, the warden repository, the live accounts (a release updates the
+  # daily Job, which runs as warden-daily).
   run_retrying gcloud projects add-iam-policy-binding "$project" --member="serviceAccount:$deploy_sa" \
     --role=roles/run.developer --condition=None
   run_retrying gcloud artifacts repositories add-iam-policy-binding "$REPOSITORY" --location="$REGION" \
     --member="serviceAccount:$deploy_sa" --role=roles/artifactregistry.writer --project="$project"
-  for account in "$run_sa" "$migrate_sa"; do
+  for account in "$run_sa" "$migrate_sa" "$daily_sa"; do
     run_retrying gcloud iam service-accounts add-iam-policy-binding "$account" \
       --member="serviceAccount:$deploy_sa" --role=roles/iam.serviceAccountUser --project="$project"
   done

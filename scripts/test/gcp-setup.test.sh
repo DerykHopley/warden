@@ -79,12 +79,24 @@ secrets warden-db-app-password roles/secretmanager.secretAccessor
 secrets warden-db-migrate-password roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-migrate)"
 
-assert_equal "warden-deploy gets run.developer, the warden repository's writer, and acts as run and migrate only" \
+assert_equal "warden-deploy gets run.developer, the warden repository's writer, and acts as run, migrate and daily only" \
   "artifacts warden roles/artifactregistry.writer
+iam warden-daily@$project.iam.gserviceaccount.com roles/iam.serviceAccountUser
 iam warden-migrate@$project.iam.gserviceaccount.com roles/iam.serviceAccountUser
 iam warden-run@$project.iam.gserviceaccount.com roles/iam.serviceAccountUser
 projects $project roles/run.developer" \
   "$(bindings_to warden-deploy)"
+
+assert_equal "warden-daily gets Cloud SQL client and the app and admin passwords, nothing else" \
+  "projects $project roles/cloudsql.client
+secrets warden-db-admin-password roles/secretmanager.secretAccessor
+secrets warden-db-app-password roles/secretmanager.secretAccessor" \
+  "$(bindings_to warden-daily)"
+assert_line "it makes the warden-daily service account" \
+  "gcloud iam service-accounts create warden-daily '--display-name=Warden: warden-daily' --project=$project"
+assert_equal "only warden-daily reads the admin password" \
+  "--member=serviceAccount:warden-daily@$project.iam.gserviceaccount.com" \
+  "$(grep -F 'add-iam-policy-binding warden-db-admin-password' <<<"$output" | grep -o -- '--member=[^ ]*')"
 
 assert_equal "warden-preview-run gets Cloud SQL client, the preview app password and the two Clerk secrets, nothing else" \
   "projects $project roles/cloudsql.client
@@ -166,7 +178,7 @@ assert_equal "the only Data Access logs turned on are Secret Manager's reads" \
   "$(grep -F 'DATA_READ' <<<"$output")"
 assert_line "the edited policy is written back" "gcloud projects set-iam-policy $project"
 
-generated="warden-db-app-password warden-db-migrate-password warden-db-preview-app-password warden-db-preview-migrate-password"
+generated="warden-db-app-password warden-db-migrate-password warden-db-preview-app-password warden-db-preview-migrate-password warden-db-admin-password"
 for secret in $generated; do
   assert_line "$secret is made from a random value piped in, in europe-west1 only" \
     "<random value> | gcloud secrets create $secret --replication-policy=user-managed --locations=europe-west1 --data-file=- --project=$project"
@@ -179,9 +191,9 @@ done
 # The roles step: from this machine, as postgres, through the proxy, once per set on its own database.
 assert_line "the roles step starts the Cloud SQL Auth Proxy on a free local port" \
   "cloud-sql-proxy --quiet --address=127.0.0.1 --port=LOCAL_PORT $project:europe-west1:$instance &"
-assert_line "the live roles run on warden as postgres, with placeholders for the passwords" \
-  "WARDEN_DATABASE_ROLES=live PGHOST=127.0.0.1 PGPORT=LOCAL_PORT PGUSER=postgres PGDATABASE=warden PGPASSWORD=<from warden-db-password> WARDEN_APP_PASSWORD=<from warden-db-app-password> WARDEN_MIGRATE_PASSWORD=<from warden-db-migrate-password> node server/src/roles.ts"
-assert_line "the preview roles run on warden_preview as postgres, with the preview passwords' placeholders" \
+assert_line "the live roles run on warden as postgres, with placeholders for the passwords, the admin one included" \
+  "WARDEN_DATABASE_ROLES=live PGHOST=127.0.0.1 PGPORT=LOCAL_PORT PGUSER=postgres PGDATABASE=warden PGPASSWORD=<from warden-db-password> WARDEN_APP_PASSWORD=<from warden-db-app-password> WARDEN_MIGRATE_PASSWORD=<from warden-db-migrate-password> WARDEN_ADMIN_PASSWORD=<from warden-db-admin-password> node server/src/roles.ts"
+assert_line "the preview roles run on warden_preview as postgres, with the preview passwords' placeholders and no admin password" \
   "WARDEN_DATABASE_ROLES=preview PGHOST=127.0.0.1 PGPORT=LOCAL_PORT PGUSER=postgres PGDATABASE=warden_preview PGPASSWORD=<from warden-db-password> WARDEN_APP_PASSWORD=<from warden-db-preview-app-password> WARDEN_MIGRATE_PASSWORD=<from warden-db-preview-migrate-password> node server/src/roles.ts"
 
 assert_line "it makes the warden-preview repository in europe-west1" \
@@ -351,7 +363,7 @@ fi
 if [[ \${1-} == */server/src/roles.ts ]]; then
   dir=\$(dirname "\$0")
   printf '%s %s %s %s:%s\n' "\$WARDEN_DATABASE_ROLES" "\$PGDATABASE" "\$PGUSER" "\$PGHOST" "\$PGPORT" >>"\$dir/roles-runs"
-  printf '%s\n' "\$PGPASSWORD" "\$WARDEN_APP_PASSWORD" "\$WARDEN_MIGRATE_PASSWORD" >>"\$dir/roles-passwords"
+  printf '%s\n' "\$PGPASSWORD" "\$WARDEN_APP_PASSWORD" "\$WARDEN_MIGRATE_PASSWORD" "admin:\${WARDEN_ADMIN_PASSWORD-}" >>"\$dir/roles-passwords"
   [[ \${FAKE_ROLES_EXIT:-0} == 0 ]] || echo '{"severity":"ERROR","message":"creating the roles failed"}'
   exit "\${FAKE_ROLES_EXIT:-0}"
 fi
@@ -424,18 +436,20 @@ for secret in $generated; do
   assert_no_line "$secret: its value isn't on a command line" "$value" "$calls"
 done
 [[ $(sort "$scratch"/fresh/secret-* | uniq -d) == "" ]] || fail "two of the passwords are the same"
-pass "the four passwords differ"
+pass "the five passwords differ"
 assert_equal "the roles script runs twice, as postgres through the proxy: live on warden, then preview on warden_preview" \
   "live warden postgres 127.0.0.1:$(cut -d= -f2 <<<"$(grep -o -- '--port=[0-9]*' "$scratch/fresh/proxy-calls")")
 preview warden_preview postgres 127.0.0.1:$(cut -d= -f2 <<<"$(grep -o -- '--port=[0-9]*' "$scratch/fresh/proxy-calls")")" \
   "$(cat "$scratch/fresh/roles-runs")"
-assert_equal "each run gets the postgres password and its own set's two passwords" \
+assert_equal "each run gets the postgres password and its own set's passwords: the admin one for live only" \
   "fake-warden-db-password
 $(cat "$scratch/fresh/secret-warden-db-app-password")
 $(cat "$scratch/fresh/secret-warden-db-migrate-password")
+admin:$(cat "$scratch/fresh/secret-warden-db-admin-password")
 fake-warden-db-password
 $(cat "$scratch/fresh/secret-warden-db-preview-app-password")
-$(cat "$scratch/fresh/secret-warden-db-preview-migrate-password")" \
+$(cat "$scratch/fresh/secret-warden-db-preview-migrate-password")
+admin:" \
   "$(cat "$scratch/fresh/roles-passwords")"
 assert_no_line "the postgres password isn't in the output" "fake-warden-db-password" "$out"
 assert_line "the proxy connects to the instance" "$project:europe-west1:$instance" "$(cat "$scratch/fresh/proxy-calls")"
