@@ -12,6 +12,42 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
+    // The dashboard bundles contracts' main entry point, so only the Node-only subpath loader may use Node.
+    files: ["contracts/src/**/*.ts"],
+    ignores: ["contracts/src/reconcile-cases.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: [
+                "node:*",
+                "fs",
+                "fs/*",
+                "path",
+                "url",
+                "os",
+                "crypto",
+                "child_process",
+                "module",
+              ],
+              message:
+                "contracts' main entry point runs in the browser too: keep Node code in src/reconcile-cases.ts",
+            },
+          ],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        ...["process", "Buffer", "require", "__dirname", "__filename"].map((name) => ({
+          name,
+          message: "contracts' main entry point runs in the browser too",
+        })),
+      ],
+    },
+  },
+  {
     files: ["dashboard/**/*.{ts,tsx}"],
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
     plugins: { "react-hooks": reactHooks },

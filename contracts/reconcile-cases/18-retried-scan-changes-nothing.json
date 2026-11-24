@@ -1,0 +1,77 @@
+{
+  "name": "A retried Scan changes nothing after its first time",
+  "rule": "`reconcile(scan) → outcome`: one Scan in, one result out, and a retried Scan changes nothing.",
+  "given": {
+    "now": "2026-11-24T08:00:00Z",
+    "findings": [
+      {
+        "id": "f-mcp",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+        "module": "guard",
+        "rule_id": "guard/mcp-server-unpinned",
+        "fingerprint": "guard/mcp-server-unpinned|file:.mcp.json",
+        "location": { "kind": "file", "path": ".mcp.json", "line": 5 },
+        "severity": "medium",
+        "title": "An MCP server runs an unpinned package",
+        "evidence": { "summary": ".mcp.json runs npx some-server@latest" },
+        "status": "open",
+        "unconfirmed_fix": null,
+        "accepted_reason": null,
+        "accepted_until": null,
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-1",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [{ "kind": "repo", "ref": "https://github.com/example/app" }],
+        "rules": ["guard/agent-can-read-env", "guard/mcp-server-unpinned"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      },
+      "labels": { "env": 0 }
+    },
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-1",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [{ "kind": "repo", "ref": "https://github.com/example/app" }],
+        "rules": ["guard/agent-can-read-env", "guard/mcp-server-unpinned"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      }
+    }
+  ],
+  "expect": [
+    { "id": "f-mcp", "status": "fixed", "unconfirmed_fix": null, "last_seen_scan": "scan-0" },
+    { "new": "env", "status": "open", "first_seen_scan": "scan-1", "last_seen_scan": "scan-1" }
+  ]
+}

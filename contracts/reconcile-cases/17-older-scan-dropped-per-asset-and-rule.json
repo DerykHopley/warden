@@ -1,0 +1,89 @@
+{
+  "name": "Scan order per Asset and Rule: an older Scan's result is dropped where a newer one covered the same pair, and still counts elsewhere",
+  "rule": "Scans are reconciled in the order they started: where a newer Scan has already covered the same Asset and Rule, the older Scan's result for that Asset and Rule is dropped. The rest of it still counts.",
+  "given": {
+    "now": "2026-11-24T08:00:00Z",
+    "findings": [
+      {
+        "id": "f-app",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+        "module": "guard",
+        "rule_id": "guard/agent-can-read-env",
+        "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+        "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+        "severity": "high",
+        "title": "The agent can read .env files",
+        "evidence": { "summary": "permissions.allow lets the agent read .env" },
+        "status": "open",
+        "unconfirmed_fix": null,
+        "accepted_reason": null,
+        "accepted_until": null,
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      },
+      {
+        "id": "f-api",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/api" },
+        "module": "guard",
+        "rule_id": "guard/agent-can-read-env",
+        "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+        "location": { "kind": "file", "path": ".claude/settings.json", "line": 8 },
+        "severity": "high",
+        "title": "The agent can read .env files",
+        "evidence": { "summary": "permissions.allow lets the agent read .env" },
+        "status": "open",
+        "unconfirmed_fix": null,
+        "accepted_reason": null,
+        "accepted_until": null,
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-newer",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T10:00:00Z",
+        "assets": [{ "kind": "repo", "ref": "https://github.com/example/app" }],
+        "rules": ["guard/agent-can-read-env"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      }
+    },
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-older",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [
+          { "kind": "repo", "ref": "https://github.com/example/app" },
+          { "kind": "repo", "ref": "https://github.com/example/api" }
+        ],
+        "rules": ["guard/agent-can-read-env"],
+        "observations": []
+      }
+    }
+  ],
+  "expect": [
+    { "id": "f-app", "status": "open", "last_seen_scan": "scan-newer" },
+    { "id": "f-api", "status": "fixed", "last_seen_scan": "scan-0" }
+  ]
+}

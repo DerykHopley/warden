@@ -1,0 +1,69 @@
+{
+  "name": "Confirm fix: the Unconfirmed fix is cleared, the Finding stays Fixed, and the new Finding stays Open on its own",
+  "rule": "A person confirms the fix, or marks it moved: the new Finding merges into the old one, which reopens with its id, age and history and takes the new location.",
+  "given": {
+    "now": "2026-11-24T08:00:00Z",
+    "findings": [
+      {
+        "id": "f-env",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+        "module": "guard",
+        "rule_id": "guard/agent-can-read-env",
+        "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+        "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+        "severity": "high",
+        "title": "The agent can read .env files",
+        "evidence": { "summary": "permissions.allow lets the agent read .env" },
+        "status": "open",
+        "unconfirmed_fix": null,
+        "accepted_reason": null,
+        "accepted_until": null,
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-1",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [{ "kind": "repo", "ref": "https://github.com/example/app" }],
+        "rules": ["guard/agent-can-read-env"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": "packages/web/.claude/settings.json", "line": 4 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      },
+      "labels": { "other": 0 }
+    },
+    {
+      "step": "decision",
+      "decision": "confirm_fix",
+      "finding": { "id": "f-env" },
+      "actor": { "kind": "person", "id": "lead-1" },
+      "reason": "The root settings were fixed; the package's settings are a separate problem"
+    }
+  ],
+  "expect": [
+    { "id": "f-env", "status": "fixed", "unconfirmed_fix": null, "first_seen_scan": "scan-0" },
+    {
+      "new": "other",
+      "status": "open",
+      "unconfirmed_fix": null,
+      "moved_to": null,
+      "first_seen_scan": "scan-1"
+    }
+  ]
+}

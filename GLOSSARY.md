@@ -128,20 +128,23 @@ _Avoid_: resolved, closed
 **Accepted**:
 A person has accepted the risk, with a reason and an expiry date. "Not affected" (the vulnerable part isn't used)
 is one such reason. An agent may only propose it. A daily job reopens every Accepted Finding whose expiry has
-passed, whether or not a Scan sees it. An Accepted Finding a Scan no longer sees is Fixed.
+passed, whether or not a Scan sees it. An Accepted Finding a Scan sees again stays Accepted until its expiry. An
+Accepted Finding a Scan no longer sees is Fixed.
 _Avoid_: ignored, waived, suppressed
 
 **Unconfirmed fix**:
 A Fixed Finding whose Scan also opened a new Finding that may be the same problem moved. Each module says what
 "may have moved" means: for Guard, the same Rule on the same Asset; for Patch, the same CVE under a different
-package or version. A person confirms the fix, or marks it moved: the new Finding merges into the old one,
-which reopens with its id, age and history and takes the new location. Not a Status. Unconfirmed fixes don't
-count in the Fix rate.
+package. A person confirms the fix, or marks it moved: the new Finding merges into the old one, which reopens
+with its id, age and history and takes the new location. The Finding merged into the old one is closed as Fixed
+and points to it with moved_to; it never counts in the Fix rate. Not a Status. Unconfirmed fixes don't count in
+the Fix rate.
 _Avoid_: suspect fix, moved (as a Status)
 
 **False positive**:
 A person has marked the Finding as wrong. An agent may only propose it. It feeds the eval. A person can reopen
-it, with a reason.
+it, with a reason. A False positive that a Scan no longer sees stays a False positive: only a person's reopen
+changes it.
 
 **Rule**:
 One check with an ID that starts with its module, such as `guard/agent-can-read-env` or

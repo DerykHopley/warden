@@ -1,0 +1,54 @@
+{
+  "name": "The same problem on two Assets is two Findings with the same Fingerprint",
+  "rule": "The same problem on three Assets is three Findings.",
+  "given": { "now": "2026-11-24T08:00:00Z", "findings": [] },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-1",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [
+          { "kind": "repo", "ref": "https://github.com/example/app" },
+          { "kind": "repo", "ref": "https://github.com/example/api" }
+        ],
+        "rules": ["guard/agent-can-read-env"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          },
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/api" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.json", "line": 8 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      },
+      "labels": { "on-app": 0, "on-api": 1 }
+    }
+  ],
+  "expect": [
+    {
+      "new": "on-app",
+      "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+      "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+      "status": "open"
+    },
+    {
+      "new": "on-api",
+      "asset": { "kind": "repo", "ref": "https://github.com/example/api" },
+      "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+      "status": "open"
+    }
+  ]
+}
