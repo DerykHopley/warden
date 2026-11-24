@@ -62,8 +62,11 @@ Dark mode redefines the same tokens; it never adds new ones.
 | Width | What changes |
 |---|---|
 | under 640px | One column. The top 5 stack. The table shows severity, title and status only. The panel opens full screen; "pinned" means full screen |
-| 640–1100px | Cards wrap to two or three per row. The panel floats over the page; pinning is offered from 1100px |
-| over 1100px | Five cards in a row. The panel can be pinned beside the page (320–680px wide, default 400px). Content grows to about 1480px, centred |
+| 640–1100px | Cards wrap to two or three per row. The panel opens floating over the page; pinning is offered from 1100px |
+| 1100–1600px | Five cards in a row. The panel starts closed and can be pinned beside the page (320–680px wide, default 400px) |
+| over 1600px (widescreen) | The panel starts **pinned**, so the spare width holds the detail card and chat instead of empty margin. Content never grows past about 1480px: longer table rows and lines read badly |
+
+Warden runs both in a small desktop-app window and on a wide browser screen, so the panel's starting state follows the window width. A person's own choice (pinned, unpinned, closed) is remembered and wins over the default.
 
 **Checklist:** each changed screen checked at 390px, 1024px and 1600px; nothing scrolls sideways.
 
