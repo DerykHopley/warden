@@ -286,7 +286,7 @@ behind it: an older waiting preview is cancelled (the run shows it) and must be 
 of the deploy step's log and on the run's summary page. Sign-in uses Clerk's development instance.
 
 **Secrets are pinned.** The revision and the job read their passwords and Clerk keys from Secret Manager by version
-number, never `latest`. The numbers live in `secret_version` in `scripts/cloud-run-deploy.sh`. To move one: add the
+number, never `latest`. The numbers live in `secret_version` in `scripts/lib/cloud-run.sh`. To move one: add the
 new version (`gcloud secrets versions add <secret> --data-file=-`), change its number there in a PR, merge it, then
 push a preview. Disable the old version only after no running revision reads it.
 
@@ -304,8 +304,8 @@ up yet.
 
 Every merge to `main` releases Warden to the live `warden` service. It needs Google Cloud set up first (above), with
 the repository variables `GCP_PROJECT_ID`, `GCP_DEPLOY_SA`, `GCP_WIF_PROVIDER`, `CLOUD_SQL_CONNECTION` and
-`VITE_CLERK_PUBLISHABLE_KEY`. Without `GCP_PROJECT_ID` or `GCP_DEPLOY_SA`, a release deploys nothing and the run
-stays green, with a notice naming the missing variable.
+`VITE_CLERK_PUBLISHABLE_KEY`. Without any of the five, a release deploys nothing and the run stays green, with a
+notice naming each missing variable (a rollback needs the first four).
 
 **What a release does** (`.github/workflows/release.yml`, then `scripts/cloud-run-deploy.sh <image> release`):
 
@@ -317,45 +317,61 @@ stays green, with a notice naming the missing variable.
 3. **Migrate:** deploy the `warden-migrate` job with the image, as `warden-migrate`, run
    `node server/src/migrate.ts` on `warden` as `warden_migrate`, and wait for it. A failed migration stops the
    release before any revision exists.
-4. **Deploy:** a `warden` revision named `warden-rel-<sha7>-<run>`, as `warden-run`, tagged `candidate`, with **no
+4. **Deploy:** a `warden` revision named `warden-rel-<sha7>-<run>-<attempt>`, as `warden-run`, tagged `candidate`, with **no
    traffic**. Every release sets the revision's env vars and secrets afresh; its `CLERK_AUTHORIZED_PARTIES` is each
    URL Cloud Run gives the service.
 5. **Health gate:** call `/api/health` on the tag's URL (`https://candidate---warden-<project-number>.europe-west1.run.app`)
    for up to about 90 seconds until it answers 200. If it never does, the release fails and the revision gets no
    traffic.
-6. **Traffic:** 100% of the service's traffic to that revision, by its name.
+6. **Traffic:** 100% of the service's traffic to that revision, by its name. The same call tags the release it took
+   the traffic from `previous` (a tag moves no traffic), which is where a rollback goes by default. So only a
+   revision that served is ever tagged `previous`: one whose health gate failed never is.
 7. **The daily Job:** `warden-daily-expiry` gets the same image and its settings afresh (`node
    server/src/daily-expiry.ts`, as `warden-daily`, one retry, its two passwords pinned), so the Job and the service
    run the same code. The Cloud Scheduler job that starts it isn't changed. If this step fails, the run fails after
    the traffic has moved, naming the Job: dispatch the release again, or set the image by hand (below).
 
-Releases and rollbacks run one at a time, and a running one is never cancelled. While one runs, GitHub keeps only the newest
-waiting behind it: a merge waiting behind a newer one shows as cancelled, and the newer one releases its code too.
-To release again without a merge (to retry a failed one), run "Release" by hand from `main`:
-`gh workflow run release.yml --ref main`.
+**One at a time.** Only the deploy job (steps 2 to 7) holds the release lock, which a rollback shares; full lanes
+run side by side. A running deploy is never cancelled. While one runs, GitHub keeps only the newest waiting behind
+it: an older waiting one shows as cancelled. And a deploy releases only while its commit is still `main`'s newest:
+when `main` has moved on, it skips with a notice, and the newer commit's own run releases it.
+
+To release again without a merge (to retry a failed one), run "Release" by hand from `main`
+(`gh workflow run release.yml --ref main`), or re-run the failed run: the revision name ends in the run's attempt,
+so a re-run makes a new revision.
 
 Secrets are pinned as for previews: see "Secrets are pinned" in "Owner previews" above. The live service reads
 `warden-db-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key`; the migration job
 `warden-db-migrate-password`; the daily Job `warden-db-app-password` and `warden-db-admin-password`. A new version
 reaches them with the next release after the PR that moves its number.
 
-**Roll back** with the "Rollback" workflow, by hand from `main`
-(`gh workflow run rollback.yml --ref main`, or `-f revision=<revision>`), which runs
-`scripts/cloud-run-rollback.sh [revision]`:
+**Roll back** with the "Rollback" workflow, by hand from `main`, which runs `scripts/cloud-run-rollback.sh
+[revision]`. **During an incident, name both revisions**: the one to go back to, and the one you saw serving. Then
+nothing changes if a release lands while the rollback waits for the lock:
 
-- it moves 100% of `warden`'s traffic to the revision given; with none, to the newest `warden-rel-` revision made
-  before the one serving now;
-- it points `warden-daily-expiry` at that revision's image;
-- it checks that the service's `/api/health` answers 200, and fails the run otherwise.
+```sh
+gh workflow run rollback.yml --ref main -f revision=<revision to go back to> -f from=<revision serving now>
+```
 
-With no earlier release, or a revision that isn't one of `warden`'s, it fails and traffic stays where it is. To roll
-back by hand instead:
+With no `revision`, it goes back to the release tagged `previous` (step 6 above). In order, it:
+
+1. tags the revision `rollback` and waits for `https://rollback---warden-<project-number>.europe-west1.run.app/api/health`
+   to answer 200. If it never does, it stops there and traffic stays where it is;
+2. moves 100% of `warden`'s traffic to it, by name;
+3. gives `warden-daily-expiry` that revision's image by its digest (the one Cloud Run resolved when it deployed the
+   revision, not the movable `:<commit>` tag), with the Job's whole configuration set afresh by the same function a
+   release uses (`update_daily_job` in `scripts/lib/cloud-run.sh`), so with today's pinned secret versions;
+4. checks that the service's own `/api/health` answers 200, and fails the run otherwise.
+
+It fails before changing anything when no release is tagged `previous` (or that one is already serving, as after a
+rollback), when traffic is split and no revision is named, when the revision isn't one of `warden`'s, or when the
+serving revision isn't the `from` one. To roll back by hand instead:
 
 ```sh
 gcloud run revisions list --service warden --region europe-west1
 gcloud run services update-traffic warden --to-revisions=<revision>=100 --region europe-west1
-gcloud run revisions describe <revision> --region europe-west1 --format='value(spec.containers[0].image)'
-gcloud run jobs update warden-daily-expiry --image=<that image> --region europe-west1
+gcloud run revisions describe <revision> --region europe-west1 --format='value(status.imageDigest)'
+gcloud run jobs update warden-daily-expiry --image=<that digest> --region europe-west1
 ```
 
 **The schema stays.** Migrations only run forwards, so a rollback keeps the newer schema, and the earlier code runs

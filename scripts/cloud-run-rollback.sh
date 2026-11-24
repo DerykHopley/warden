@@ -1,95 +1,79 @@
 #!/usr/bin/env bash
-# Rolls the live service back to an earlier revision: 100% of warden's traffic to it by name, then the daily Job
-# warden-daily-expiry onto that revision's image (so the Job and the service run the same code), then a check that
-# the service's /api/health answers 200. README.md's "Releasing" says when to use it.
+# Rolls the live service back to an earlier revision. It never moves traffic to a revision that hasn't answered:
+#   1. tag the revision rollback, and wait for https://rollback---<host>/api/health to answer 200 (no traffic moves);
+#   2. move 100% of warden's traffic to it by name;
+#   3. give the daily Job warden-daily-expiry that revision's image, by digest, with the Job's whole configuration set
+#      afresh as a release sets it (scripts/lib/cloud-run.sh), so the Job and the service run the same code;
+#   4. check that the service's own /api/health answers 200.
+# README.md's "Releasing" says when to use it.
 #
 # Usage: scripts/cloud-run-rollback.sh [revision]
 #        With a revision: that one, which must be one of warden's revisions.
-#        With none: the newest release revision (warden-rel-…) made before the one that has all the traffic now.
-# Env:   GCP_PROJECT_ID, required. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health check.
+#        With none: the release revision tagged previous, which a release tags when it takes the traffic from it, so
+#        only a revision that served is chosen. A newer revision whose health gate failed never gets that tag.
+# Env:   GCP_PROJECT_ID and CLOUD_SQL_CONNECTION (<project>:<region>:<instance>), required. ROLLBACK_FROM, optional:
+#        the revision the caller saw serving; when another serves now, it stops before changing anything.
+#        HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound each health check.
 # Needs: gcloud signed in as an account that may change warden's traffic and update the daily Job; curl; jq.
 #
 # Migrations only run forwards: the database keeps the newer schema, which the earlier code must still work with.
 set -euo pipefail
 
-readonly REGION=europe-west1
+readonly PROGRAM=cloud-run-rollback
+readonly USAGE="usage: [ROLLBACK_FROM=<revision>] scripts/cloud-run-rollback.sh [revision]"
 readonly SERVICE=warden
-readonly DAILY_JOB=warden-daily-expiry
-readonly RELEASE_PREFIX=warden-rel-
-readonly USAGE="usage: scripts/cloud-run-rollback.sh [revision]"
-
-usage_error() {
-  echo "cloud-run-rollback: $1" >&2
-  echo "$USAGE" >&2
-  exit 1
-}
-
-fail() {
-  echo "cloud-run-rollback: $1" >&2
-  exit 1
-}
-
-# <revisions json> <serving revision>: the newest release revision created before the serving one, or nothing.
-# Cloud Run writes creationTimestamp with or without fractional seconds, so they're dropped before comparing.
-previous_release() {
-  jq -r --arg serving "$2" --arg prefix "$RELEASE_PREFIX" '
-    def created: .metadata.creationTimestamp | sub("\\.[0-9]+"; "") | fromdateiso8601;
-    (map(select(.metadata.name == $serving)) | first) as $now
-    | if $now == null then empty else
-        map(select((.metadata.name | startswith($prefix)) and created < ($now | created)))
-        | sort_by(created) | last | .metadata.name // empty
-      end' <<<"$1"
-}
-
-# <url>: waits for <url>/api/health to answer 200, through a cold start; exits 1 when it never does.
-health_check() {
-  local url=$1/api/health attempt status
-  for ((attempt = 1; attempt <= ${HEALTH_ATTEMPTS:-18}; attempt++)); do
-    status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$url" || true)
-    [[ $status == 200 ]] && return 0
-    echo "cloud-run-rollback: $url answered ${status:-nothing} (try $attempt)" >&2
-    sleep "${HEALTH_INTERVAL:-5}"
-  done
-  fail "$url never answered 200 after the rollback; traffic and the daily Job have moved, so check the revision's logs"
-}
+readonly REVISION_NAME='^[a-z]([a-z0-9-]*[a-z0-9])?$'
+# shellcheck source-path=SCRIPTDIR source=lib/cloud-run.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-run.sh"
 
 main() {
   [[ $# -le 1 ]] || usage_error "give at most one revision"
-  local target=${1-}
-  if [[ -n $target ]]; then
-    [[ $target =~ ^[a-z]([a-z0-9-]*[a-z0-9])?$ ]] || usage_error "'$target' isn't a revision name"
-  fi
-  [[ -n ${GCP_PROJECT_ID:-} ]] || usage_error "set GCP_PROJECT_ID"
+  local target=${1-} from=${ROLLBACK_FROM:-}
+  [[ -z $target || $target =~ $REVISION_NAME ]] || usage_error "'$target' isn't a revision name"
+  [[ -z $from || $from =~ $REVISION_NAME ]] || usage_error "ROLLBACK_FROM '$from' isn't a revision name"
+  local var
+  for var in GCP_PROJECT_ID CLOUD_SQL_CONNECTION; do
+    [[ -n ${!var:-} ]] || usage_error "set $var"
+  done
 
-  local described revisions url serving
-  described=$(gcloud run services describe "$SERVICE" --region="$REGION" --project="$GCP_PROJECT_ID" \
-    --format=json) || fail "couldn't read $SERVICE"
+  local described url serving
+  described=$(describe_service "$SERVICE") || fail "couldn't read $SERVICE"
   url=$(jq -r '.status.url // empty' <<<"$described")
   [[ -n $url ]] || fail "$SERVICE reports no URL"
-  serving=$(jq -r '[.status.traffic[]? | select(.percent == 100) | .revisionName] | first // empty' <<<"$described")
-  revisions=$(gcloud run revisions list --service="$SERVICE" --region="$REGION" --project="$GCP_PROJECT_ID" \
-    --format=json) || fail "couldn't list $SERVICE's revisions"
+  serving=$(serving_revision "$described")
+  if [[ -n $from && $from != "$serving" ]]; then
+    fail "$SERVICE's serving revision changed since the rollback was asked for (${serving:-a split}, not $from); nothing changed"
+  fi
 
   if [[ -z $target ]]; then
     [[ -n $serving ]] || fail "no one revision has all of $SERVICE's traffic; name the revision to roll back to"
-    target=$(previous_release "$revisions" "$serving")
-    [[ -n $target ]] || fail "no release revision older than $serving; traffic is unchanged"
+    target=$(jq -r '[.status.traffic[]? | select(.tag == "previous") | .revisionName] | first // empty' \
+      <<<"$described")
+    [[ $target == "$RELEASE_PREFIX"* ]] ||
+      fail "no release is tagged previous; traffic is unchanged. Name the revision to roll back to"
+    [[ $target != "$serving" ]] ||
+      fail "$target, the release tagged previous, is already serving; traffic is unchanged. Name the revision to roll back to"
   fi
-  local image
-  image=$(jq -r --arg name "$target" 'map(select(.metadata.name == $name)) | first | .spec.containers[0].image // empty' \
-    <<<"$revisions")
-  [[ -n $image ]] || fail "$target isn't one of $SERVICE's revisions; traffic is unchanged"
 
-  echo "Rolling $SERVICE back from ${serving:-a split} to $target ($image)"
+  local revisions digest
+  revisions=$(gcloud run revisions list --service="$SERVICE" --region="$REGION" --project="$GCP_PROJECT_ID" \
+    --format=json) || fail "couldn't list $SERVICE's revisions"
+  digest=$(jq -r --arg name "$target" 'map(select(.metadata.name == $name)) | first | .status.imageDigest // empty' \
+    <<<"$revisions")
+  [[ -n $digest ]] || fail "$target isn't one of $SERVICE's revisions, or has no image digest; traffic is unchanged"
+
+  echo "Rolling $SERVICE back from ${serving:-a split} to $target ($digest)"
+  gcloud run services update-traffic "$SERVICE" --update-tags="rollback=$target" --region="$REGION" \
+    --project="$GCP_PROJECT_ID"
+  wait_for_health "$(tag_url rollback "$url")" || fail "$target didn't answer on its rollback tag; traffic is unchanged"
   gcloud run services update-traffic "$SERVICE" --to-revisions="$target=100" --region="$REGION" \
     --project="$GCP_PROJECT_ID"
-  gcloud run jobs update "$DAILY_JOB" --image="$image" --region="$REGION" --project="$GCP_PROJECT_ID" ||
+  update_daily_job "$digest" ||
     fail "traffic moved to $target, but updating the daily Job $DAILY_JOB failed; it still runs the newer image"
-  health_check "$url"
+  wait_for_health "$url" ||
+    fail "after the rollback, $url never answered 200; traffic and the daily Job have moved, so check $target's logs"
 
-  local done="Rolled back: $target has 100% of $SERVICE's traffic at $url, and $DAILY_JOB runs its image."
-  echo "$done"
-  if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then echo "$done" >>"$GITHUB_STEP_SUMMARY"; fi
+  say "Rolled back: $target has 100% of $SERVICE's traffic at $url, and $DAILY_JOB runs its image."
 }
 
 main "$@"

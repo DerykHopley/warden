@@ -85,11 +85,11 @@ jobs:
           gunzip -c "$RUNNER_TEMP/image.tar.gz" | docker load
           docker tag warden:preview "$IMAGE"
       - name: Sign in to Google Cloud (Workload Identity Federation, no key)
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_PREVIEW_DEPLOY_SA }}
-      - uses: google-github-actions/setup-gcloud@v3
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Push the image to warden-preview
         run: |
           gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet

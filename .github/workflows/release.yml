@@ -9,24 +9,21 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# One release or rollback at a time, and none cancelled halfway through a migration or a traffic move. GitHub keeps
-# one waiting run per group: a newer push replaces an older one still waiting, which is fine, as it holds that code.
-concurrency:
-  group: release
-  cancel-in-progress: false
-
 permissions:
   contents: read
 
 jobs:
+  # Outside the release lock: full lanes for several merges run side by side.
   full-lane:
     name: Full lane
     uses: ./.github/workflows/full-lane.yml
 
-  # Without the two variables the deploy can't sign in, so it's skipped and the run stays green.
+  # Without any of the five variables the deploy can't run, so it's skipped and the run stays green.
   not-configured:
     name: Release not configured
-    if: vars.GCP_PROJECT_ID == '' || vars.GCP_DEPLOY_SA == ''
+    if: >-
+      vars.GCP_PROJECT_ID == '' || vars.GCP_DEPLOY_SA == '' || vars.GCP_WIF_PROVIDER == '' ||
+      vars.CLOUD_SQL_CONNECTION == '' || vars.VITE_CLERK_PUBLISHABLE_KEY == ''
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -34,18 +31,30 @@ jobs:
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
         run: |
           missing=()
-          [ -n "$GCP_PROJECT_ID" ] || missing+=(GCP_PROJECT_ID)
-          [ -n "$GCP_DEPLOY_SA" ] || missing+=(GCP_DEPLOY_SA)
+          for name in GCP_PROJECT_ID GCP_DEPLOY_SA GCP_WIF_PROVIDER CLOUD_SQL_CONNECTION VITE_CLERK_PUBLISHABLE_KEY; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
           echo "::notice title=Release skipped::Set the repository variables ${missing[*]} to release (README.md, Setting up Google Cloud)."
 
   deploy:
     name: Deploy the release
     needs: full-lane
-    if: vars.GCP_PROJECT_ID != '' && vars.GCP_DEPLOY_SA != ''
+    if: >-
+      vars.GCP_PROJECT_ID != '' && vars.GCP_DEPLOY_SA != '' && vars.GCP_WIF_PROVIDER != '' &&
+      vars.CLOUD_SQL_CONNECTION != '' && vars.VITE_CLERK_PUBLISHABLE_KEY != ''
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # One release or rollback at a time, and none cancelled halfway through a migration or a traffic move. Only this
+    # job holds the lock, so a full lane never waits on it. GitHub keeps one waiting job per group: a newer one
+    # replaces an older one still waiting, which then shows as cancelled.
+    concurrency:
+      group: release
+      cancel-in-progress: false
     # The only job that may ask GitHub for an OIDC token, which Workload Identity Federation trades for
     # warden-deploy's credentials.
     permissions:
@@ -62,22 +71,39 @@ jobs:
             exit 1
           fi
       - uses: actions/checkout@v7
+      # Full lanes finish in any order, so an older run can reach the lock after a newer one released. It releases
+      # only while its commit is still main's newest; otherwise the newer run (or a later one) releases that code.
+      - name: Release only main's newest commit
+        id: tip
+        run: |
+          tip=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [ "$tip" = "$GITHUB_SHA" ]; then
+            echo "current=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "::notice title=Release skipped::main has moved on to $tip; its own release run releases it, not $GITHUB_SHA."
+            echo "current=false" >>"$GITHUB_OUTPUT"
+          fi
       # Built before signing in, so auth's credentials file never reaches the build context.
       - name: Build the image
+        if: steps.tip.outputs.current == 'true'
         env:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
         run: docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY --tag "$IMAGE" .
       - name: Sign in to Google Cloud (Workload Identity Federation, no key)
-        uses: google-github-actions/auth@v3
+        if: steps.tip.outputs.current == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
           service_account: ${{ vars.GCP_DEPLOY_SA }}
-      - uses: google-github-actions/setup-gcloud@v3
+      - if: steps.tip.outputs.current == 'true'
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
       - name: Push the image to warden
+        if: steps.tip.outputs.current == 'true'
         run: |
           gcloud auth configure-docker europe-west1-docker.pkg.dev --quiet
           docker push "$IMAGE"
       - name: Migrate, deploy a tagged revision, health gate, traffic, the daily Job's image
+        if: steps.tip.outputs.current == 'true'
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}

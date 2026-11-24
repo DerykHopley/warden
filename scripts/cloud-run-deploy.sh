@@ -10,43 +10,25 @@
 #        warden_preview database, as the preview accounts only. <name> is a Cloud Run tag: 1 to 20 lowercase letters,
 #        digits and hyphens, starting with a letter and not ending in a hyphen (20 keeps the revision name short).
 #        release: the warden service, a revision tagged candidate on the warden database, as the live accounts only;
-#        after its health gate, 100% of traffic by revision name, then the daily Job warden-daily-expiry's image.
+#        after its health gate, 100% of traffic by revision name (the release it replaces tagged previous, for a
+#        rollback), then the daily Job warden-daily-expiry's image.
 # Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>) and VITE_CLERK_PUBLISHABLE_KEY (public),
 #        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT (default 1), which GitHub
 #        Actions sets, name the revision. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health gate.
 # Needs: gcloud signed in as an account that may deploy the mode's job and service and act as its accounts; curl; jq.
-#
-# Every secret is a reference to a pinned version (secret_version below), never `latest` (ADR 0009): a new version
-# reaches a revision only through a PR that moves its number here.
+# The secret versions it pins, and what it shares with the rollback, are in scripts/lib/cloud-run.sh.
 set -euo pipefail
 
-readonly REGION=europe-west1
+readonly PROGRAM=cloud-run-deploy
 readonly USAGE="usage: scripts/cloud-run-deploy.sh <image> preview <name> | <image> release"
 readonly NAME_RULE="1 to 20 lowercase letters, digits and hyphens, starting with a letter and not ending in a hyphen"
-readonly DAILY_JOB=warden-daily-expiry
-readonly DAILY_ACCOUNT=warden-daily
-readonly ADMIN_PASSWORD_SECRET=warden-db-admin-password
-
-# Secret Manager versions the deploys read, one per secret: the only place a version number lives. gcp-setup.sh makes
-# each generated password as version 1; check a hand-made secret's with `gcloud secrets versions list <secret>`.
-secret_version() {
-  case $1 in
-    warden-db-app-password) echo 1 ;;
-    warden-db-migrate-password) echo 1 ;;
-    warden-db-admin-password) echo 1 ;;
-    warden-db-preview-app-password) echo 1 ;;
-    warden-db-preview-migrate-password) echo 1 ;;
-    warden-clerk-secret) echo 1 ;;
-    warden-clerk-jwt-key) echo 1 ;;
-    *)
-      echo "cloud-run-deploy: no pinned version for the secret $1" >&2
-      exit 1
-      ;;
-  esac
-}
+# shellcheck source-path=SCRIPTDIR source=lib/cloud-run.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-run.sh"
 
 # One table of names per mode: the service and its account, the migration job and its account, the database, its
-# role set and roles, and the two password secrets.
+# role set and roles, the two password secrets, the revision suffix's start, and which of the service's URLs a Clerk
+# session token may be made for (PARTIES_FROM: the tag's, for a preview reached only there; the service's own, for a
+# release that takes the traffic).
 names_for() {
   case $1 in
     preview)
@@ -60,6 +42,8 @@ names_for() {
       MIGRATE_USER=warden_preview_migrate
       APP_PASSWORD_SECRET=warden-db-preview-app-password
       MIGRATE_PASSWORD_SECRET=warden-db-preview-migrate-password
+      SUFFIX_START=pre-$TAG
+      PARTIES_FROM=tagged
       ;;
     release)
       SERVICE=warden
@@ -72,43 +56,13 @@ names_for() {
       MIGRATE_USER=warden_migrate
       APP_PASSWORD_SECRET=warden-db-app-password
       MIGRATE_PASSWORD_SECRET=warden-db-migrate-password
+      SUFFIX_START=rel
+      PARTIES_FROM=service
       ;;
   esac
 }
 readonly CLERK_SECRET=warden-clerk-secret
 readonly CLERK_JWT_SECRET=warden-clerk-jwt-key
-
-usage_error() {
-  echo "cloud-run-deploy: $1" >&2
-  echo "$USAGE" >&2
-  exit 1
-}
-
-# <secret>: its pinned reference, <secret>:<version>; fails, naming it, for a secret with no pinned version. Called
-# in a command substitution, so each caller adds `|| exit 1`: an exit in there ends only the subshell.
-pinned() {
-  local version
-  version=$(secret_version "$1") || return 1
-  echo "$1:$version"
-}
-
-# <items...>: a gcloud dict flag's value with @ as its delimiter (`gcloud topic escaping`), so a value may hold
-# commas. No value here holds an @.
-dict() {
-  local IFS=@
-  echo "^@^$*"
-}
-
-# The service's URLs, one per line: status.url first, then any other the run.googleapis.com/urls annotation lists.
-# A URL that is missing (jq's null) or empty is left out, so a service with none prints nothing.
-service_urls() {
-  gcloud run services describe "$SERVICE" --region="$REGION" --project="$GCP_PROJECT_ID" --format=json |
-    jq -r '[.status.url] + (.metadata.annotations["run.googleapis.com/urls"] // "[]" | fromjson) | .[] | strings' |
-    awk 'NF && $0 != "null" && !seen[$0]++'
-}
-
-# <url>: the URL with the tag before its host, as Cloud Run gives a tagged revision: https://<tag>---<host>.
-tag_url() { echo "https://$TAG---${1#https://}"; }
 
 migrate() {
   local password
@@ -125,10 +79,8 @@ migrate() {
       "PGUSER=$MIGRATE_USER" "PGDATABASE=$DATABASE")" \
     --set-secrets="$(dict "PGPASSWORD=$password")" \
     --project="$GCP_PROJECT_ID"
-  if ! gcloud run jobs execute "$JOB" --region="$REGION" --wait --project="$GCP_PROJECT_ID"; then
-    echo "cloud-run-deploy: the migration job $JOB failed; no revision was deployed" >&2
-    exit 1
-  fi
+  gcloud run jobs execute "$JOB" --region="$REGION" --wait --project="$GCP_PROJECT_ID" ||
+    fail "the migration job $JOB failed; no revision was deployed"
 }
 
 deploy_revision() {
@@ -150,55 +102,17 @@ deploy_revision() {
     --project="$GCP_PROJECT_ID"
 }
 
-# <url>: waits for <url>/api/health to answer 200, through a cold start; exits 1 when it never does.
-health_gate() {
-  local url=$1/api/health attempt status
-  for ((attempt = 1; attempt <= ${HEALTH_ATTEMPTS:-18}; attempt++)); do
-    status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 "$url" || true)
-    [[ $status == 200 ]] && return 0
-    echo "cloud-run-deploy: $url answered ${status:-nothing} (try $attempt)" >&2
-    sleep "${HEALTH_INTERVAL:-5}"
-  done
-  echo "cloud-run-deploy: $url never answered 200; the revision gets no traffic either way" >&2
-  exit 1
-}
-
 # Release only: 100% of the service's traffic to the new revision, by its name (never --to-latest, which would follow
-# whatever revision is newest).
+# whatever revision is newest). <serving>, the revision that had the traffic, is tagged previous in the same call when
+# it's a release, so only a revision that served is ever a rollback's default target. Tags move no traffic.
 move_traffic() {
+  local tags=()
+  [[ $1 == "$RELEASE_PREFIX"* ]] && tags=(--update-tags="previous=$1")
   gcloud run services update-traffic "$SERVICE" \
     --to-revisions="$SERVICE-$SUFFIX=100" \
+    ${tags[@]+"${tags[@]}"} \
     --region="$REGION" \
     --project="$GCP_PROJECT_ID"
-}
-
-# Release only: the daily Job (ADR 0009) runs the release's image, so the Job and the service run the same code. Its
-# whole configuration is set afresh, as the revision's is. The Cloud Scheduler job that starts it is left alone.
-update_daily_job() {
-  local app_password admin_password
-  app_password=$(pinned "$APP_PASSWORD_SECRET") || exit 1
-  admin_password=$(pinned "$ADMIN_PASSWORD_SECRET") || exit 1
-  if ! gcloud run jobs update "$DAILY_JOB" \
-    --image="$IMAGE" \
-    --region="$REGION" \
-    --service-account="$DAILY_ACCOUNT@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
-    --set-cloudsql-instances="$CLOUD_SQL_CONNECTION" \
-    --command=node \
-    --args=server/src/daily-expiry.ts \
-    --max-retries=1 \
-    --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "PGUSER=$APP_USER" "PGDATABASE=$DATABASE")" \
-    --set-secrets="$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")" \
-    --project="$GCP_PROJECT_ID"; then
-    echo "cloud-run-deploy: traffic moved to $SERVICE-$SUFFIX, but updating the daily Job $DAILY_JOB failed;" \
-      "it still runs the previous image. Dispatch the release again, or set it by hand (README.md, Releasing)" >&2
-    exit 1
-  fi
-}
-
-# <line>: printed, and added to the run's summary page when there is one.
-say() {
-  echo "$1"
-  if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then echo "$1" >>"$GITHUB_STEP_SUMMARY"; fi
 }
 
 main() {
@@ -223,52 +137,37 @@ main() {
     [[ -n ${!var:-} ]] || usage_error "set $var"
   done
   names_for "$mode"
-  if [[ $mode == preview ]]; then
-    SUFFIX="pre-$TAG-${GITHUB_SHA:0:7}-$GITHUB_RUN_NUMBER-${GITHUB_RUN_ATTEMPT:-1}"
-  else
-    SUFFIX="rel-${GITHUB_SHA:0:7}-$GITHUB_RUN_NUMBER"
-  fi
+  SUFFIX="$SUFFIX_START-${GITHUB_SHA:0:7}-$GITHUB_RUN_NUMBER-${GITHUB_RUN_ATTEMPT:-1}"
 
-  # The service's URLs, read before the deploy: the revision's CLERK_AUTHORIZED_PARTIES must name the ones it's
-  # reached at. A preview is reached at its tag's URLs only; a release, once it has the traffic, at the service's own.
+  # The service's URLs and serving revision, read before the deploy: the revision's CLERK_AUTHORIZED_PARTIES must
+  # name the URLs it's reached at.
   local described service=() tagged=() url
-  described=$(service_urls) || {
-    echo "cloud-run-deploy: couldn't read $SERVICE's URLs" >&2
-    exit 1
-  }
+  described=$(describe_service "$SERVICE") || fail "couldn't read $SERVICE's URLs"
   while IFS= read -r url; do
     if [[ -n $url ]]; then
       service+=("$url")
-      tagged+=("$(tag_url "$url")")
+      tagged+=("$(tag_url "$TAG" "$url")")
     fi
-  done <<<"$described"
-  [[ ${#service[@]} -gt 0 ]] || {
-    echo "cloud-run-deploy: $SERVICE reports no URL" >&2
-    exit 1
-  }
+  done < <(service_urls "$described")
+  [[ ${#service[@]} -gt 0 ]] || fail "$SERVICE reports no URL"
   local parties
-  if [[ $mode == preview ]]; then
-    parties=$(
-      IFS=,
-      echo "${tagged[*]}"
-    )
-  else
-    parties=$(
-      IFS=,
-      echo "${service[*]}"
-    )
-  fi
+  parties=$(
+    IFS=,
+    list="${PARTIES_FROM}[*]"
+    echo "${!list}"
+  )
 
   migrate
   deploy_revision "$parties"
-  health_gate "${tagged[0]}"
+  wait_for_health "${tagged[0]}" || fail "the revision gets no traffic"
 
   if [[ $mode == preview ]]; then
     say "Preview \`$TAG\` is up, with no traffic: ${tagged[0]}"
     return 0
   fi
-  move_traffic
-  update_daily_job
+  move_traffic "$(serving_revision "$described")"
+  update_daily_job "$IMAGE" ||
+    fail "traffic moved to $SERVICE-$SUFFIX, but updating the daily Job $DAILY_JOB failed; it still runs the previous image. Dispatch the release again, or set it by hand (README.md, Releasing)"
   say "Released \`$SERVICE-$SUFFIX\`: it has 100% of traffic at ${service[0]}, and $DAILY_JOB runs its image."
 }
 

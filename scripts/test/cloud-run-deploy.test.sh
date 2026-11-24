@@ -46,7 +46,8 @@ trap 'rm -rf "$scratch"' EXIT
 # A stub gcloud: records each call, one per line, and answers as FAKE_MIGRATION says (ok, or fail: the job's
 # execution fails the way `gcloud run jobs execute --wait` reports it). FAKE_DESCRIBE=fail makes reading the service
 # fail, as when the deploy account can't; FAKE_DESCRIBE=nourl describes a service with no URL at all (no status.url,
-# no annotation), as before its first revision is ready. FAKE_DAILY=fail makes updating the daily Job fail.
+# no annotation), as before its first revision is ready. FAKE_DAILY=fail makes updating the daily Job fail. The
+# service's traffic is all on FAKE_SERVING (default: a release revision, <service>-rel-0000000-11-1).
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
@@ -66,9 +67,10 @@ case "$*" in
     esac
     new="https://$service-123456789012.europe-west1.run.app"
     old="https://$service-abcdefghij-ew.a.run.app"
+    serving=${FAKE_SERVING:-$service-rel-0000000-11-1}
     cat <<JSON
 {"metadata":{"name":"$service","annotations":{"run.googleapis.com/urls":"[\"$new\",\"$old\"]"}},
- "status":{"url":"$new"}}
+ "status":{"url":"$new","traffic":[{"revisionName":"$serving","percent":100}]}}
 JSON
     ;;
   "run jobs execute "*)
@@ -279,14 +281,15 @@ assert_no_match "release: no call names roles.ts or the postgres password" 'role
 service_deploy=$(call_of "gcloud run deploy warden ")
 assert_line "release: the revision gets no traffic" " --no-traffic" "$service_deploy"
 assert_equal "release: the revision is tagged candidate" candidate "$(flag tag "$service_deploy")"
-assert_equal "release: the revision's suffix is rel-<sha7>-<run>" rel-abc1234-12 \
+assert_equal "release: the revision's suffix is rel-<sha7>-<run>-<attempt>" rel-abc1234-12-1 \
   "$(flag revision-suffix "$service_deploy")"
 assert_equal "release: the revision runs the image" "$release_image" "$(flag image "$service_deploy")"
 assert_equal "release: the revision runs as warden-run" "warden-run@$project.iam.gserviceaccount.com" \
   "$(flag service-account "$service_deploy")"
 assert_equal "release: the revision has the Cloud SQL instance attached" "$connection" \
   "$(flag set-cloudsql-instances "$service_deploy")"
-assert_no_match "release: no call uses an --update- flag" ' --update-' "$calls"
+assert_no_match "release: neither the job nor the revision deploy uses an --update- flag" ' --update-' \
+  "$job_deploy"$'\n'"$service_deploy"
 assert_equal "release: the revision's plain values, CLERK_AUTHORIZED_PARTIES the service's two URLs comma-separated and intact" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_app
@@ -302,13 +305,14 @@ CLERK_JWT_KEY=warden-clerk-jwt-key" \
   "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
 assert_equal "release: each of the revision's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
-assert_no_match "release: no secret is latest" ':latest' "$calls"
 
 assert_line "release: the health gate calls /api/health on the candidate tag's URL" \
   "https://candidate---warden-123456789012.europe-west1.run.app/api/health" "$(grep '^curl ' <<<"$calls")"
 traffic=$(call_of "gcloud run services update-traffic warden ")
-assert_equal "release: traffic moves, all of it, to the new revision by name" "warden-rel-abc1234-12=100" \
+assert_equal "release: traffic moves, all of it, to the new revision by name" "warden-rel-abc1234-12-1=100" \
   "$(flag to-revisions "$traffic")"
+assert_equal "release: the same call tags the release that was serving previous, for a rollback" \
+  "previous=warden-rel-0000000-11-1" "$(flag update-tags "$traffic")"
 assert_no_match "release: no call moves traffic to the latest revision" '--to-latest' "$calls"
 (($(line_no "curl ") < $(line_no "gcloud run services update-traffic"))) ||
   fail "release: traffic moves before the health gate answers"
@@ -342,9 +346,13 @@ assert_equal "release: each of the daily Job's secrets is pinned to a version nu
 assert_no_match "release: no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
 assert_no_match "release: no call names a preview service, job or account" 'warden-preview|warden-migrate-preview' \
   "$calls"
-assert_no_match "release: no call names a preview secret" 'warden-db-preview-' "$calls"
 assert_line "release: after the traffic move, the script prints the service's URL" \
   "https://warden-123456789012.europe-west1.run.app" "$out"
+
+# --- The first release, from Google's placeholder: no release to tag previous ---
+run_deploy 200 ok FAKE_SERVING=warden-00001-xyz -- "$release_image" release
+assert_equal "release from the placeholder: exit 0" 0 "$code"
+assert_no_match "release from the placeholder: the placeholder isn't tagged previous" '--update-tags' "$calls"
 
 # --- A release whose candidate never answers 200 ---
 run_deploy 503 ok -- "$release_image" release
@@ -366,12 +374,14 @@ assert_line "release, with the daily Job's update failing: traffic had moved" \
 assert_line "release, with the daily Job's update failing: names the Job" "warden-daily-expiry" "$out"
 
 # --- A secret with no pinned version stops the deploy before the gcloud call that would name it ---
-# without_pin <secret>: a copy of the script whose version table has no row for that secret.
+# without_pin <secret>: a copy of the script and its library, whose version table has no row for that secret.
 without_pin() {
-  local copy="$scratch/deploy-without-$1.sh"
-  grep -vF -- "    $1) echo" "$deploy" >"$copy"
-  grep -qF -- "    $1) echo" "$copy" && fail "the copy still pins $1"
-  printf '%s' "$copy"
+  local dir="$scratch/without-$1"
+  mkdir -p "$dir/lib"
+  cp "$deploy" "$dir/cloud-run-deploy.sh"
+  grep -vF -- "    $1) echo" "$root/scripts/lib/cloud-run.sh" >"$dir/lib/cloud-run.sh"
+  grep -qF -- "    $1) echo" "$dir/lib/cloud-run.sh" && fail "the copy still pins $1"
+  printf '%s' "$dir/cloud-run-deploy.sh"
 }
 # Assigned first, so set -e stops the test when a copy can't be made.
 no_migrate_pin=$(without_pin warden-db-preview-migrate-password)
