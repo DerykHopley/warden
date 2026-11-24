@@ -38,3 +38,22 @@ export const MeBody = z.object({
   role: Role.nullable(),
 });
 export type MeBody = z.infer<typeof MeBody>;
+
+/**
+ * One person in a Team, whatever their Role, as Warden stores them: their Clerk user id, their Role, and when they
+ * first opened Warden. (Not "Member", which is the lowest Role.)
+ */
+export const TeamMember = z.object({
+  userId: z.string().min(1),
+  role: Role,
+  joinedAt: z.iso.datetime(),
+});
+export type TeamMember = z.infer<typeof TeamMember>;
+
+/** `GET /api/team/members`: every person in the signed-in person's Team. Names and emails come from Clerk. */
+export const MembersBody = z.object({ members: z.array(TeamMember) });
+export type MembersBody = z.infer<typeof MembersBody>;
+
+/** `PUT /api/team/members/:userId/role`'s body: the Role to give. The answer is the person's `TeamMember`. */
+export const RoleChangeBody = z.object({ role: Role });
+export type RoleChangeBody = z.infer<typeof RoleChangeBody>;

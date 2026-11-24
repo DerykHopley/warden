@@ -1,9 +1,11 @@
 // Starts Warden's server: configuration checked first, then the pool, the app and the listener on PORT.
 import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createClerkClient } from "@clerk/backend";
 import { serve } from "@hono/node-server";
 import { createApp } from "./app.ts";
 import { createClerkVerifier } from "./auth.ts";
+import { clerkOrganizations } from "./clerk-organizations.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } from "./database.ts";
 import { createLogger } from "./log.ts";
@@ -63,10 +65,16 @@ pool.query("select 1").catch((error: unknown) => {
       logger.error("database connection failed at start", { error });
   }
 });
+// Clerk's Backend API, with the secret key: a Warden Admin is Clerk's org:admin too (ADR 0008).
+const clerk = createClerkClient({ secretKey: config.clerk.secretKey });
 const app = createApp({
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
-  members: createMembers({ withTeam: createWithTeam(pool) }),
+  members: createMembers({
+    withTeam: createWithTeam(pool),
+    clerkOrganizations: clerkOrganizations(clerk.organizations),
+    logger,
+  }),
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,
