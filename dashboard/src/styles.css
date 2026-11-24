@@ -515,6 +515,12 @@ button[aria-busy="true"],
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--line);
+  overflow-wrap: break-word;
+}
+
+/* Long strings with no spaces (a Rule id, a URL) may break anywhere; titles break between words only. */
+.findings-table .rule-id,
+.findings-table .asset-ref {
   overflow-wrap: anywhere;
 }
 
@@ -579,5 +585,12 @@ button[aria-busy="true"],
   .findings-table th,
   .findings-table td {
     padding: 12px 10px;
+  }
+
+  /* The flag goes under the Status word, so the Status column stays narrow. */
+  .findings-table .flag {
+    display: block;
+    width: fit-content;
+    margin: 4px 0 0;
   }
 }
