@@ -1,0 +1,13 @@
+#!/bin/sh
+# The fast lane's quickest checks, before a push leaves the machine. `pnpm install` points git here (the root
+# package.json's `prepare` script). The full fast lane runs in CI.
+set -e
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "pre-push: pnpm isn't on PATH; install it (see README.md) or push with --no-verify." >&2
+  exit 1
+fi
+
+pnpm lint
+pnpm typecheck
+pnpm design-lint

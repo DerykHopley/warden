@@ -120,12 +120,12 @@ Whoever files an issue sorts it into one lane straight away, with a label or mil
 
 ### CI
 
-- **Fast lane, on every PR, under 10 minutes:** `vitest`, `tsc --noEmit` and `eslint` for the server, the dashboard and the shared schemas (the walking skeleton sets the exact commands), plus the browser tests for the pages the PR touches, in one browser.
+- **Fast lane, on every PR, under 10 minutes:** `vitest`, `tsc --noEmit` and `eslint` for the server, the dashboard and the shared schemas (`.github/workflows/fast-lane.yml`: `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm typecheck`, `pnpm --filter @warden/contracts test`, `pnpm --filter @warden/server test` against Postgres 17 with pgvector, `pnpm --filter @warden/dashboard test`, `pnpm design-lint`, and `docker build`, not pushed), plus the browser tests for the pages the PR touches, in one browser.
 - **Full lane, on main, nightly and before a deploy:** every test in every browser.
 - Split a browser suite across parallel runners once it passes 10 minutes.
 - Rerun a CI job only for a fault in the infrastructure (a runner that died), and say so; a red test gets a diagnosis, not a rerun.
 - **A full-lane red on main (on trial):** file it as a Fix straight away, with the failing test id and the run link, and build it after the current ticket rather than stopping it. When the red breaks what users can do on the deployed app, revert first (the revert rule), then the Fix. A test that passed on rerun is still unexplained: the Fix says so.
-- The pre-push hook runs the fast lane's quickest checks: `eslint`, `tsc --noEmit` (set by the walking skeleton).
+- The pre-push hook runs the fast lane's quickest checks: `eslint`, `tsc --noEmit` (`.githooks/pre-push`: `pnpm lint`, `pnpm typecheck`, `pnpm design-lint`).
 
 ### Review mode: Throughput
 

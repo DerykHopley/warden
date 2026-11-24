@@ -33,6 +33,8 @@ Keep this file short enough to read before each UI ticket: a component gets a ro
 
 Each token is defined in light and dark. Starting values are in the prototype's `[data-variant="E"]` blocks; the walking skeleton copies them into the stylesheet.
 
+**The stylesheet:** `dashboard/src/styles.css` (light under `:root`, dark under `@media (prefers-color-scheme: dark)`).
+
 | Token | Value lives in | Use for | Not for |
 |---|---|---|---|
 | `--bg` | `:root` | page background (paper) | |

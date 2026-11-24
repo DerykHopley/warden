@@ -1,0 +1,145 @@
+/* Warden's design tokens: docs/design.md names and explains them; the values live here only.
+   Direction E, copied from the [data-variant="E"] blocks of prototypes/dashboard/index.html
+   (branch prototype/dashboard-directions). No web fonts load: each stack falls back to system fonts. */
+:root {
+  color-scheme: light dark;
+  --bg: #f7f5f0;
+  --surface: #fffefb;
+  --fg: #26241f;
+  --muted: #69655c;
+  --line: #e6e1d6;
+  --chip: #f0ebe1;
+  --accent: #36569a;
+  --accent-fg: #fff;
+  --sev-crit: #9b3434;
+  --sev-high: #8f5416;
+  --sev-med: #5f6b78;
+  --sev-low: #6b665d;
+  --tint-crit: #f6e4e1;
+  --tint-high: #f7ead9;
+  --tint-med: #e8ecf0;
+  --tint-low: #efede8;
+  --focus-bg: #eef2f8;
+  --focus-line: #cdd8ea;
+  --ok: #3d7a52;
+  --font-head: "Iowan Old Style", "Charter", "Georgia", serif;
+  --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(60, 50, 30, 0.06), 0 4px 14px rgba(60, 50, 30, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1d1c1a;
+    --surface: #262421;
+    --fg: #ece7dc;
+    --muted: #a6a093;
+    --line: #3a3732;
+    --chip: #302d29;
+    --accent: #a3b9e6;
+    --accent-fg: #1d1c1a;
+    --sev-crit: #e7978f;
+    --sev-high: #e6b57d;
+    --sev-med: #a9b6c4;
+    --sev-low: #9d978b;
+    --tint-crit: #3a2624;
+    --tint-high: #3a2e20;
+    --tint-med: #2a2f35;
+    --tint-low: #2c2a27;
+    --focus-bg: #252b36;
+    --focus-line: #38465c;
+    --ok: #8fc19c;
+    --font-head: "Iowan Old Style", "Charter", "Georgia", serif;
+    --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    --radius: 10px;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 4px 14px rgba(0, 0, 0, 0.18);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  line-height: 1.5;
+}
+
+.page {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+.card {
+  max-width: 560px;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 2rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.notice {
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  background: var(--chip);
+  border-radius: var(--radius);
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+button {
+  min-height: 44px;
+  padding: 0 18px;
+  font: inherit;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: 1px solid var(--accent);
+}
+
+button.secondary {
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--line);
+}
+
+button:hover {
+  filter: brightness(1.08);
+}
+
+button:focus-visible {
+  outline: 3px solid var(--focus-line);
+  outline-offset: 2px;
+}
