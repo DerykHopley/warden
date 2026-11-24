@@ -1,5 +1,12 @@
-// The API bodies the server sends and the dashboard reads: one zod schema gives both the type and the check.
+// The shared contracts: the API bodies the server sends and the dashboard reads, and Finding v1 with what a module
+// hands over. One zod schema gives both the type and the check. The dashboard bundles this entry point, so nothing
+// here may touch the file system; the reconcile cases load from `@warden/contracts/reconcile-cases`.
 import { z } from "zod";
+
+export * from "./finding.ts";
+export { fingerprint } from "./fingerprint.ts";
+export { agentEventsHash } from "./agent-events-hash.ts";
+export * from "./reconcile-case.ts";
 
 /** `GET /api/health`: 200 when every part is ok, 503 naming the part that failed. */
 export const HealthBody = z.object({

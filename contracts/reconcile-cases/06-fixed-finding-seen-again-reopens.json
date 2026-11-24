@@ -1,0 +1,54 @@
+{
+  "name": "A Fixed Finding that a Scan sees again reopens with its old id",
+  "rule": "Within one Asset, the same Fingerprint in a later Scan is the same Finding.",
+  "given": {
+    "now": "2026-11-24T08:00:00Z",
+    "findings": [
+      {
+        "id": "f-env",
+        "team": "team-a",
+        "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+        "module": "guard",
+        "rule_id": "guard/agent-can-read-env",
+        "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+        "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+        "severity": "high",
+        "title": "The agent can read .env files",
+        "evidence": { "summary": "permissions.allow lets the agent read .env" },
+        "status": "fixed",
+        "unconfirmed_fix": null,
+        "accepted_reason": null,
+        "accepted_until": null,
+        "first_seen_scan": "scan-0",
+        "last_seen_scan": "scan-0",
+        "moved_to": null
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-2",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [{ "kind": "repo", "ref": "https://github.com/example/app" }],
+        "rules": ["guard/agent-can-read-env"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      }
+    }
+  ],
+  "expect": [
+    { "id": "f-env", "status": "open", "first_seen_scan": "scan-0", "last_seen_scan": "scan-2" }
+  ]
+}

@@ -141,7 +141,8 @@ _Avoid_: suspect fix, moved (as a Status)
 
 **False positive**:
 A person has marked the Finding as wrong. An agent may only propose it. It feeds the eval. A person can reopen
-it, with a reason.
+it, with a reason. A False positive that a Scan no longer sees stays a False positive: only a person's reopen
+changes it.
 
 **Rule**:
 One check with an ID that starts with its module, such as `guard/agent-can-read-env` or

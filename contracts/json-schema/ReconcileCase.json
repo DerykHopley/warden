@@ -1,0 +1,513 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$ref": "#/$defs/ReconcileCase",
+  "$defs": {
+    "ReconcileCase": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "rule": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "given": {
+          "type": "object",
+          "properties": {
+            "now": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "findings": { "type": "array", "items": { "$ref": "#/$defs/Finding" } }
+          },
+          "required": ["now", "findings"],
+          "additionalProperties": false
+        },
+        "steps": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "step": { "type": "string", "const": "scan" },
+                  "scan": { "$ref": "#/$defs/Scan" },
+                  "labels": {
+                    "type": "object",
+                    "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                },
+                "required": ["step", "scan"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "step": { "type": "string", "const": "spot_run" },
+                  "spot_run": { "$ref": "#/$defs/SpotRun" },
+                  "labels": {
+                    "type": "object",
+                    "propertyNames": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  }
+                },
+                "required": ["step", "spot_run"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "step": { "type": "string", "const": "decision" },
+                  "decision": {
+                    "type": "string",
+                    "enum": ["accept", "mark_false_positive", "confirm_fix", "mark_moved", "reopen"]
+                  },
+                  "finding": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": { "id": { "type": "string", "minLength": 1 } },
+                        "required": ["id"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "new": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" }
+                        },
+                        "required": ["new"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "actor": {
+                    "type": "object",
+                    "properties": {
+                      "kind": { "type": "string", "enum": ["person", "agent"] },
+                      "id": { "type": "string", "minLength": 1, "maxLength": 200 }
+                    },
+                    "required": ["kind", "id"],
+                    "additionalProperties": false
+                  },
+                  "reason": { "type": "string", "minLength": 1, "maxLength": 2000 },
+                  "until": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  "candidate": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": { "id": { "type": "string", "minLength": 1 } },
+                        "required": ["id"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "new": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" }
+                        },
+                        "required": ["new"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": ["step", "decision", "finding", "actor", "reason"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "step": { "type": "string", "const": "expire" },
+                  "now": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  }
+                },
+                "required": ["step", "now"],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "expect": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "new": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+              "team": { "type": "string", "minLength": 1 },
+              "asset": { "$ref": "#/$defs/Asset" },
+              "module": { "type": "string", "enum": ["guard", "patch", "vouch"] },
+              "rule_id": {
+                "type": "string",
+                "maxLength": 200,
+                "pattern": "^(guard|patch|vouch)\\/[^\\s|]+$"
+              },
+              "fingerprint": { "type": "string", "minLength": 1 },
+              "location": { "$ref": "#/$defs/Location" },
+              "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+              "title": { "type": "string", "minLength": 1 },
+              "evidence": { "$ref": "#/$defs/Evidence" },
+              "control": {
+                "type": "object",
+                "properties": {
+                  "catalogue": { "type": "string", "minLength": 1, "maxLength": 200 },
+                  "ref": { "type": "string", "minLength": 1, "maxLength": 200 }
+                },
+                "required": ["catalogue", "ref"],
+                "additionalProperties": false
+              },
+              "status": {
+                "type": "string",
+                "enum": ["open", "fixed", "accepted", "false_positive"]
+              },
+              "unconfirmed_fix": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "candidates": {
+                        "minItems": 1,
+                        "type": "array",
+                        "items": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": { "id": { "type": "string", "minLength": 1 } },
+                              "required": ["id"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "new": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" }
+                              },
+                              "required": ["new"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      }
+                    },
+                    "required": ["candidates"],
+                    "additionalProperties": false
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "accepted_reason": {
+                "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }]
+              },
+              "accepted_until": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+                  },
+                  { "type": "null" }
+                ]
+              },
+              "first_seen_scan": { "type": "string", "minLength": 1 },
+              "last_seen_scan": { "type": "string", "minLength": 1 },
+              "moved_to": {
+                "anyOf": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": { "id": { "type": "string", "minLength": 1 } },
+                        "required": ["id"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "new": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" }
+                        },
+                        "required": ["new"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  { "type": "null" }
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["name", "rule", "given", "steps", "expect"],
+      "additionalProperties": false,
+      "description": "One reconcile case: given Findings, steps applied in order, the Findings expected after."
+    },
+    "Finding": {
+      "readOnly": true,
+      "description": "Finding v1: one observed problem with one Asset, raised by one module.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "team": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "asset": { "$ref": "#/$defs/Asset" },
+        "module": { "type": "string", "enum": ["guard", "patch", "vouch"] },
+        "rule_id": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^(guard|patch|vouch)\\/[^\\s|]+$"
+        },
+        "fingerprint": { "type": "string", "minLength": 1, "maxLength": 4000 },
+        "location": { "$ref": "#/$defs/Location" },
+        "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "evidence": { "$ref": "#/$defs/Evidence" },
+        "control": {
+          "type": "object",
+          "properties": {
+            "catalogue": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "ref": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          "required": ["catalogue", "ref"],
+          "additionalProperties": false
+        },
+        "status": { "type": "string", "enum": ["open", "fixed", "accepted", "false_positive"] },
+        "unconfirmed_fix": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "candidates": {
+                  "minItems": 1,
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+                }
+              },
+              "required": ["candidates"],
+              "additionalProperties": false
+            },
+            { "type": "null" }
+          ]
+        },
+        "accepted_reason": {
+          "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 2000 }, { "type": "null" }]
+        },
+        "accepted_until": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            { "type": "null" }
+          ]
+        },
+        "first_seen_scan": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "last_seen_scan": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "moved_to": {
+          "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "type": "null" }]
+        }
+      },
+      "required": [
+        "id",
+        "team",
+        "asset",
+        "module",
+        "rule_id",
+        "fingerprint",
+        "location",
+        "severity",
+        "title",
+        "evidence",
+        "status",
+        "unconfirmed_fix",
+        "accepted_reason",
+        "accepted_until",
+        "first_seen_scan",
+        "last_seen_scan",
+        "moved_to"
+      ],
+      "additionalProperties": false
+    },
+    "Asset": {
+      "type": "object",
+      "properties": {
+        "kind": { "type": "string", "enum": ["repo", "product", "device", "agent_session"] },
+        "ref": { "type": "string", "minLength": 1, "maxLength": 2000 }
+      },
+      "required": ["kind", "ref"],
+      "additionalProperties": false,
+      "description": "The thing a Finding is about."
+    },
+    "Location": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "file" },
+            "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "line": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+          },
+          "required": ["kind", "path"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "dependency" },
+            "package": { "type": "string", "minLength": 1, "maxLength": 214 },
+            "version": { "type": "string", "minLength": 1, "maxLength": 100 },
+            "vulnerability": { "type": "string", "minLength": 1, "maxLength": 100 }
+          },
+          "required": ["kind", "package", "version"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": { "type": "string", "const": "setting" },
+            "name": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          "required": ["kind", "name"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": { "kind": { "type": "string", "const": "session" } },
+          "required": ["kind"],
+          "additionalProperties": false
+        }
+      ],
+      "description": "Where on its Asset the problem sits."
+    },
+    "Evidence": {
+      "type": "object",
+      "properties": {
+        "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+        "secret": { "$ref": "#/$defs/SecretEvidence" },
+        "session": { "$ref": "#/$defs/SessionEvidence" }
+      },
+      "required": ["summary"],
+      "additionalProperties": false,
+      "description": "Why the module raised it. Never a secret's value or an event's raw content."
+    },
+    "SecretEvidence": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "line": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "mask": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "required": ["type", "path", "line", "mask"],
+      "additionalProperties": false,
+      "description": "A secret's type, path, line and mask; never its value."
+    },
+    "SessionEvidence": {
+      "type": "object",
+      "properties": {
+        "events": {
+          "minItems": 1,
+          "maxItems": 50,
+          "type": "array",
+          "items": { "$ref": "#/$defs/MaskedAgentEvent" }
+        },
+        "events_read": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "events_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "required": ["events", "events_read", "events_hash"],
+      "additionalProperties": false,
+      "description": "The masked events a Judge relied on, and a hash of all it read."
+    },
+    "MaskedAgentEvent": {
+      "type": "object",
+      "properties": {
+        "seq": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "tool": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "text": { "type": "string", "maxLength": 4000 }
+      },
+      "required": ["seq", "at", "name", "text"],
+      "additionalProperties": false,
+      "description": "One redacted Agent event the Judge relied on."
+    },
+    "Scan": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "team": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "module": { "type": "string", "enum": ["guard", "patch", "vouch"] },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "assets": { "minItems": 1, "type": "array", "items": { "$ref": "#/$defs/Asset" } },
+        "rules": {
+          "minItems": 1,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "^(guard|patch|vouch)\\/[^\\s|]+$"
+          }
+        },
+        "observations": { "type": "array", "items": { "$ref": "#/$defs/Observation" } }
+      },
+      "required": ["id", "team", "module", "started_at", "assets", "rules", "observations"],
+      "additionalProperties": false,
+      "description": "One run of a Baseline over some of a Team's Assets: what it covered and what it saw."
+    },
+    "Observation": {
+      "type": "object",
+      "properties": {
+        "asset": { "$ref": "#/$defs/Asset" },
+        "rule_id": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^(guard|patch|vouch)\\/[^\\s|]+$"
+        },
+        "location": { "$ref": "#/$defs/Location" },
+        "severity": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+        "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "evidence": { "$ref": "#/$defs/Evidence" }
+      },
+      "required": ["asset", "rule_id", "location", "severity", "title", "evidence"],
+      "additionalProperties": false,
+      "description": "One thing a Scan or Spot run saw."
+    },
+    "SpotRun": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "team": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "module": { "type": "string", "enum": ["guard", "patch", "vouch"] },
+        "started_at": {
+          "type": "string",
+          "format": "date-time",
+          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+        },
+        "observations": { "type": "array", "items": { "$ref": "#/$defs/Observation" } }
+      },
+      "required": ["id", "team", "module", "started_at", "observations"],
+      "additionalProperties": false,
+      "description": "A run outside the Baseline: it can open Findings but never marks one Fixed."
+    }
+  }
+}
