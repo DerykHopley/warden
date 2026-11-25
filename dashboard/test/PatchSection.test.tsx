@@ -104,6 +104,7 @@ function show(
       userId="user_me"
       getToken={getToken}
       candidates={[]}
+      assetName={null}
       onClear={() => {}}
       onRetryProposals={() => {}}
       onFindingChanged={onFindingChanged}

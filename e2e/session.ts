@@ -99,6 +99,10 @@ export const LANGCHAIN_SERVICE: ProductInput = {
   ],
 };
 
+/** A pattern for `text` as a whole: a Product's name, never a longer one that holds it. */
+export const exactly = (text: string) =>
+  new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
 /** A v2 session token for `person` in `team`, as Clerk writes one: `o.rol` without the `org:` prefix. */
 export async function sessionToken(
   key: CryptoKey | Uint8Array,

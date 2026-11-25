@@ -37,6 +37,15 @@ export async function fetchProducts(getToken: GetToken): Promise<ProductsResult>
   return body === undefined ? { kind: "not-answering" } : { kind: "products", ...body };
 }
 
+/** The Team's Products, as `fetchProducts` answers; an answer about a Team other than `team` is asked again. */
+export const askProducts = (getToken: GetToken, team: string | null, signal: AbortSignal) =>
+  askAboutTeam(
+    () => fetchProducts(getToken),
+    (result) => (result.kind === "products" ? result.team : undefined),
+    team,
+    signal,
+  );
+
 export type FrameworksResult = { kind: "frameworks"; frameworks: Framework[] } | Refused;
 
 export async function fetchFrameworks(getToken: GetToken): Promise<FrameworksResult> {

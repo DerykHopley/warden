@@ -209,6 +209,7 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
     onFindingChanged: nothingToDo,
     onFindingGone: nothingToDo,
     candidates: [],
+    assetName: null,
   };
 
   return (

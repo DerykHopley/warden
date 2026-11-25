@@ -19,12 +19,12 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { askAboutTeam, NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
+import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import {
+  askProducts,
   deleteProductInTeam,
   fetchFrameworks,
-  fetchProducts,
   saveProductInTeam,
   USAGE_WORDS,
   type DeleteResult,
@@ -185,12 +185,7 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   const ask = useCallback(
     async (signal: AbortSignal): Promise<ProductsView> => {
       const names = frameworkNames(getToken);
-      const products = await askAboutTeam(
-        () => fetchProducts(getToken),
-        (result) => (result.kind === "products" ? result.team : undefined),
-        team,
-        signal,
-      );
+      const products = await askProducts(getToken, team, signal);
       if (products.kind !== "products") return products;
       const frameworks = await names;
       if (frameworks !== null && "kind" in frameworks) return frameworks;
