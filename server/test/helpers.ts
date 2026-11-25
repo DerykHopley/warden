@@ -10,6 +10,7 @@ import { createClerkVerifier } from "../src/auth.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createLogger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
+import type { HookTables } from "../src/modules/guard/hook-settings.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import type { RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
@@ -117,6 +118,12 @@ export async function newTeam(
   await seedTeam(withTeam, team, people);
   return team;
 }
+
+/** The Team's hook_tokens rows, oldest first, read as that Team. */
+export const hookTokenRows = (withTeam: WithTeam, team: string) =>
+  withTeam(team, (tx) =>
+    tx.$extendTables<HookTables>().selectFrom("hook_tokens").selectAll().orderBy("id").execute(),
+  );
 
 /** The time `minutes` minutes before now. */
 export const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);

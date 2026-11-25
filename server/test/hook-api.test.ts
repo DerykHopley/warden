@@ -7,10 +7,18 @@ import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { hookRoutes } from "../src/modules/guard/hook-routes.ts";
-import { createHookSettings, type HookTables } from "../src/modules/guard/hook-settings.ts";
+import { createHookSettings } from "../src/modules/guard/hook-settings.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { activeOrganization, ADMIN, newTeam, sessionToken, testApp, testKey } from "./helpers.ts";
+import {
+  activeOrganization,
+  ADMIN,
+  hookTokenRows,
+  newTeam,
+  sessionToken,
+  testApp,
+  testKey,
+} from "./helpers.ts";
 
 let key: CryptoKey;
 let publicPem: string;
@@ -56,11 +64,7 @@ async function settings(app: App, team: string, as = ADMIN) {
 
 const sha256 = (token: string) => createHash("sha256").update(token).digest("hex");
 
-/** The Team's hook_tokens rows, oldest first, read as that Team. */
-const rows = (team: string) =>
-  withTeam(team, (tx) =>
-    tx.$extendTables<HookTables>().selectFrom("hook_tokens").selectAll().orderBy("id").execute(),
-  );
+const rows = (team: string) => hookTokenRows(withTeam, team);
 
 describe("POST /api/hook/token: an Admin issues or rotates the Team's hook token (story 7)", () => {
   it("answers 201 with a token and no previous token for the Team's first", async () => {

@@ -1,31 +1,26 @@
-// A Team's hook token (Guard spec, story 7): issued once, rotated with the old token valid 24 h after, kept only as
-// append-only SHA-256 hashes, and read back for the hook endpoint by `teamFor` from the token alone. Through the Guard
-// module's store on withTeam, with a clock the test sets. It runs on a database of its own: the owner's truncate locks
-// hook_tokens against every other file issuing tokens on the suite's shared database.
-import { randomBytes } from "node:crypto";
+// A Team's hook token (Guard spec, story 7): rotated with the old token valid 24 h after, kept only as append-only
+// SHA-256 hashes, and read back for the hook endpoint by `teamFor` from the token alone. Through the Guard module's
+// store on withTeam; a case that moves time has a store with a clock of its own. The API tests prove what a POST and a
+// GET answer. It runs on a database of its own: the owner's truncate locks hook_tokens against every other file
+// issuing tokens on the suite's shared database.
+import { createHash, randomBytes } from "node:crypto";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  createHookSettings,
-  type HookSettings,
-  type HookTables,
-} from "../src/modules/guard/hook-settings.ts";
+import { createHookSettings, type HookSettings } from "../src/modules/guard/hook-settings.ts";
 import type { WithTeam } from "../src/with-team.ts";
 import { ownDatabase } from "./databases.ts";
-import { ADMIN, newTeam } from "./helpers.ts";
+import { ADMIN, hookTokenRows, newTeam } from "./helpers.ts";
 
 let withTeamAs: Record<"warden_app" | "warden_migrate", WithTeam>;
 let end: (() => Promise<void>) | undefined;
 let withTeam: WithTeam;
+/** The store on the real clock, for cases that don't move time. */
 let hookSettings: HookSettings;
-
-/** The store's clock: now, unless a case sets it back to write a row in the past. */
-let clock: Date | undefined;
 
 beforeAll(async () => {
   ({ withTeamAs, end } = await ownDatabase(["warden_app", "warden_migrate"]));
   withTeam = withTeamAs.warden_app;
-  hookSettings = createHookSettings({ withTeam, now: () => clock ?? new Date() });
+  hookSettings = createHookSettings({ withTeam });
 }, 30_000);
 
 afterAll(() => end?.(), 30_000);
@@ -33,83 +28,95 @@ afterAll(() => end?.(), 30_000);
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 
-/** Issues the Team's next token as if `msAgo` milliseconds ago, and answers it. */
-async function issueAgo(team: string, msAgo: number) {
-  clock = new Date(Date.now() - msAgo);
-  try {
-    return (await hookSettings.issueToken(team, { issuedBy: ADMIN })).token;
-  } finally {
-    clock = undefined;
-  }
+const rows = (team: string) => hookTokenRows(withTeam, team);
+
+/** A clock that moves only when a case advances it. */
+function fakeClock(start = Date.now()) {
+  let now = start;
+  return { now: () => now, advance: (ms: number) => (now += ms) };
 }
 
-/** The Team's hook_tokens rows, oldest first, read as that Team. */
-const rows = (team: string) =>
-  withTeam(team, (tx) =>
-    tx.$extendTables<HookTables>().selectFrom("hook_tokens").selectAll().orderBy("id").execute(),
-  );
+/** A store on a clock of its own, and a way to issue the Team's next token on it. */
+function clockedStore() {
+  const clock = fakeClock();
+  const store = createHookSettings({ withTeam, now: clock.now });
+  const issue = async (team: string) => (await store.issueToken(team, { issuedBy: ADMIN })).token;
+  return { clock, store, issue };
+}
 
-describe("issueToken", () => {
-  it("answers a new token for a Team's first, with its time and no previous token", async () => {
-    const team = await newTeam(withTeam);
-
-    const issued = await hookSettings.issueToken(team, { issuedBy: ADMIN });
-
-    expect(issued).toEqual({
-      token: expect.any(String),
-      issuedAt: expect.any(Date),
-      previousValidUntil: null,
+/** `withTeam`, but each call's work waits until `count` calls have their transactions open, so they run at once. */
+function together(count: number): WithTeam {
+  let open = 0;
+  let allOpen = () => {};
+  const opened = new Promise<void>((resolve) => (allOpen = resolve));
+  return (team, work) =>
+    withTeam(team, async (tx) => {
+      if (++open === count) allOpen();
+      await opened;
+      return work(tx);
     });
-    expect(await rows(team)).toMatchObject([{ team_id: team, issued_by: ADMIN }]);
-  });
+}
 
-  it("answers a different token on a rotation, the old one valid until 24 h after it", async () => {
+describe("issueToken: rotations at once", () => {
+  it("answers two rotations at once as their stored rows say: the second's previous token is the first's", async () => {
     const team = await newTeam(withTeam);
-    const first = await hookSettings.issueToken(team, { issuedBy: ADMIN });
+    const atOnce = createHookSettings({ withTeam: together(2) });
 
-    const second = await hookSettings.issueToken(team, { issuedBy: ADMIN });
+    const answers = await Promise.all([
+      atOnce.issueToken(team, { issuedBy: ADMIN }),
+      atOnce.issueToken(team, { issuedBy: ADMIN }),
+    ]);
 
-    expect(second.token).not.toBe(first.token);
-    expect(second.previousValidUntil).toEqual(new Date(second.issuedAt.getTime() + 24 * HOUR));
-    expect(await rows(team)).toHaveLength(2);
+    const stored = await rows(team);
+    const answerFor = (hash: string) =>
+      answers.find(({ token }) => createHash("sha256").update(token).digest("hex") === hash);
+    expect(stored.map((row) => answerFor(row.token_hash)?.previousValidUntil)).toEqual(
+      stored.map((row, at) => (at === 0 ? null : new Date(row.issued_at.getTime() + 24 * HOUR))),
+    );
   });
 });
 
 describe("teamFor: the Team a token belongs to", () => {
   it("gives the Team for both the new token and the old one while the rotation is 23 h 59 min old", async () => {
+    const { clock, store, issue } = clockedStore();
     const team = await newTeam(withTeam);
-    const old = await issueAgo(team, 30 * HOUR);
-    const current = await issueAgo(team, 23 * HOUR + 59 * MINUTE);
+    const old = await issue(team);
+    clock.advance(6 * HOUR);
+    const current = await issue(team);
 
-    expect(await hookSettings.teamFor(current)).toBe(team);
-    expect(await hookSettings.teamFor(old)).toBe(team);
+    clock.advance(23 * HOUR + 59 * MINUTE);
+
+    expect(await store.teamFor(current)).toBe(team);
+    expect(await store.teamFor(old)).toBe(team);
   });
 
   it("gives undefined for the old token once the rotation is 24 h 1 min old, and the Team for the new one", async () => {
+    const { clock, store, issue } = clockedStore();
     const team = await newTeam(withTeam);
-    const old = await issueAgo(team, 30 * HOUR);
-    const current = await issueAgo(team, 24 * HOUR + MINUTE);
+    const old = await issue(team);
+    clock.advance(6 * HOUR);
+    const current = await issue(team);
 
-    expect(await hookSettings.teamFor(old)).toBeUndefined();
-    expect(await hookSettings.teamFor(current)).toBe(team);
+    clock.advance(24 * HOUR + MINUTE);
+
+    expect(await store.teamFor(old)).toBeUndefined();
+    expect(await store.teamFor(current)).toBe(team);
   });
 
   it("gives undefined for the first token after two rotations within the hour, and the Team for the second and third", async () => {
+    const { clock, store, issue } = clockedStore();
     const team = await newTeam(withTeam);
-    const first = await issueAgo(team, 50 * MINUTE);
-    const second = await issueAgo(team, 40 * MINUTE);
-    const third = await issueAgo(team, 30 * MINUTE);
+    const first = await issue(team);
+    clock.advance(10 * MINUTE);
+    const second = await issue(team);
+    clock.advance(10 * MINUTE);
+    const third = await issue(team);
 
-    expect(await hookSettings.teamFor(first)).toBeUndefined();
-    expect(await hookSettings.teamFor(second)).toBe(team);
-    expect(await hookSettings.teamFor(third)).toBe(team);
-  });
+    clock.advance(30 * MINUTE);
 
-  it("gives the Team for its only token", async () => {
-    const team = await newTeam(withTeam);
-    const { token } = await hookSettings.issueToken(team, { issuedBy: ADMIN });
-
-    expect(await hookSettings.teamFor(token)).toBe(team);
+    expect(await store.teamFor(first)).toBeUndefined();
+    expect(await store.teamFor(second)).toBe(team);
+    expect(await store.teamFor(third)).toBe(team);
   });
 
   /** The token with its last `.`-separated part swapped: the Team part, then the random part. */
@@ -123,6 +130,7 @@ describe("teamFor: the Team a token belongs to", () => {
     ["a string not in the token's form", async () => "not a hook token"],
     ["a token with its random part cut short", async () => `org_x.${"a".repeat(42)}`],
     ["a token with spaces around its Team part", async () => ` org_x .${"a".repeat(43)}`],
+    ["a token with a NUL in its Team part", async () => `org_x\u0000.${"a".repeat(43)}`],
     [
       "Team A's token with its Team part changed to Team B's id",
       async () => {
@@ -153,28 +161,16 @@ describe("teamFor: the Team a token belongs to", () => {
 });
 
 describe("read: the Team's token settings, never a token", () => {
-  it("answers no token for a Team with none", async () => {
-    const team = await newTeam(withTeam);
-
-    expect(await hookSettings.read(team)).toEqual({ issuedAt: null, previousValidUntil: null });
-  });
-
-  it("answers the current token's time, and when the token before it stops working", async () => {
-    const team = await newTeam(withTeam);
-    await issueAgo(team, 2 * HOUR);
-    const { issuedAt, previousValidUntil } = await hookSettings.issueToken(team, {
-      issuedBy: ADMIN,
-    });
-
-    expect(await hookSettings.read(team)).toEqual({ issuedAt, previousValidUntil });
-  });
-
   it("answers no previous token once it has stopped working", async () => {
+    const { clock, store, issue } = clockedStore();
     const team = await newTeam(withTeam);
-    await issueAgo(team, 30 * HOUR);
-    await issueAgo(team, 25 * HOUR);
+    await issue(team);
+    clock.advance(5 * HOUR);
+    await issue(team);
 
-    expect(await hookSettings.read(team)).toEqual({
+    clock.advance(25 * HOUR);
+
+    expect(await store.read(team)).toEqual({
       issuedAt: expect.any(Date),
       previousValidUntil: null,
     });

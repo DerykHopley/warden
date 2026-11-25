@@ -5,8 +5,6 @@ import type { HookSettingsBody, HookTokenBody } from "@warden/contracts";
 import type { MountRoutes } from "../../app.ts";
 import type { HookSettings } from "./hook-settings.ts";
 
-const iso = (at: Date | null) => at?.toISOString() ?? null;
-
 export function hookRoutes({ hookSettings }: { hookSettings: HookSettings }): MountRoutes {
   return (app, requireRole) => {
     // When the Team's token was issued, and when the one before it stops working: never a token.
@@ -14,7 +12,7 @@ export function hookRoutes({ hookSettings }: { hookSettings: HookSettings }): Mo
       const { issuedAt, previousValidUntil } = await hookSettings.read(c.get("team"));
       return c.json({
         token: issuedAt ? { issued_at: issuedAt.toISOString() } : null,
-        previous_valid_until: iso(previousValidUntil),
+        previous_valid_until: previousValidUntil?.toISOString() ?? null,
       } satisfies HookSettingsBody);
     });
 
@@ -27,7 +25,7 @@ export function hookRoutes({ hookSettings }: { hookSettings: HookSettings }): Mo
         {
           token: issued.token,
           issued_at: issued.issuedAt.toISOString(),
-          previous_valid_until: iso(issued.previousValidUntil),
+          previous_valid_until: issued.previousValidUntil?.toISOString() ?? null,
         } satisfies HookTokenBody,
         201,
       );

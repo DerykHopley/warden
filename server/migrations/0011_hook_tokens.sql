@@ -12,7 +12,7 @@ create table hook_tokens (
   -- The token's SHA-256, as 64 hex digits.
   token_hash text not null check (token_hash ~ '^[0-9a-f]{64}$'),
   -- Who issued it: an Admin's Clerk user id.
-  issued_by text not null check (issued_by ~ '\S'),
+  issued_by text not null check (issued_by !~ '^\s*$'),
   issued_at timestamptz not null default now(),
   primary key (team_id, id)
 );

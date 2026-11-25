@@ -3,7 +3,7 @@
 // Team's newest row is its current token, and the one before it stays valid 24 h after a rotation. The token names its
 // Team, so `teamFor` reads only that Team's rows: every call runs inside `withTeam`, never across Teams (ADR 0006).
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import type { Generated, Selectable, Transaction } from "kysely";
+import { sql, type Generated, type Selectable, type Transaction } from "kysely";
 import type { Database } from "../../schema.ts";
 import type { WithTeam } from "../../with-team.ts";
 
@@ -26,10 +26,11 @@ export type HookTables = {
 const OVERLAP_MS = 24 * 3_600_000;
 
 /**
- * A token: the Team's id, a dot, and 32 random bytes in base64url (43 characters, no dot). The Team part is split off
- * at the last dot, so it needs no database to read, and holds no space, which `withTeam` would refuse.
+ * A token: the Team's id, a dot, and 32 random bytes in base64url (43 characters, no dot). The Team part needs no
+ * database to read, and is held to a Team id's alphabet: a Clerk Organization id is `org_` and letters and digits (the
+ * tests' add a UUID's hyphens). So nothing `withTeam` or Postgres would refuse (a space, a NUL) reaches them.
  */
-const TOKEN = /^(\S+)\.([A-Za-z0-9_-]{43})$/;
+const TOKEN = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]{43})$/;
 
 /** A token's SHA-256, as 64 hex digits: what the table holds. */
 const hashOf = (token: string) => createHash("sha256").update(token).digest("hex");
@@ -57,19 +58,24 @@ export interface HookSettings {
 
 type Row = Selectable<HookTables["hook_tokens"]>;
 
-/** The Team's two newest rows, newest first. */
-const newestTwo = (tx: Transaction<Database>): Promise<Row[]> =>
+/** The Team's `count` newest rows, newest first. */
+const newest = (tx: Transaction<Database>, count: 1 | 2): Promise<Row[]> =>
   tx
     .$extendTables<HookTables>()
     .selectFrom("hook_tokens")
     .selectAll()
     .orderBy("id", "desc")
-    .limit(2)
+    .limit(count)
     .execute();
 
-/** When the token before `newest` stops working: 24 h after `newest`, or null when there is none before it. */
-const previousEnd = (newest: Row | undefined, previous: Row | undefined) =>
-  newest && previous ? new Date(newest.issued_at.getTime() + OVERLAP_MS) : null;
+const newestTwo = (tx: Transaction<Database>) => newest(tx, 2);
+
+/** When the token before a rotation stops working: 24 h after the rotation. */
+const validUntil = (rotation: Date) => new Date(rotation.getTime() + OVERLAP_MS);
+
+/** When the token before `current` stops working, or null when there is none before it. */
+const previousEnd = (current: Row | undefined, previous: Row | undefined) =>
+  current && previous ? validUntil(current.issued_at) : null;
 
 /** Whether two hex hashes are equal, compared in constant time. */
 const sameHash = (a: string, b: string) => {
@@ -77,20 +83,25 @@ const sameHash = (a: string, b: string) => {
   return x.length === y.length && timingSafeEqual(x, y);
 };
 
-/** `now` is the store's clock: a test sets it to write a row in the past. */
+/** `now` is the store's clock, in milliseconds: a test sets it to write a row in the past. */
 export function createHookSettings({
   withTeam,
-  now = () => new Date(),
+  now = Date.now,
 }: {
   withTeam: WithTeam;
-  now?: () => Date;
+  now?: () => number;
 }): HookSettings {
   return {
     issueToken(team, { issuedBy }) {
       const token = `${team}.${randomBytes(32).toString("base64url")}`;
-      const issuedAt = now();
       return withTeam(team, async (tx) => {
-        const [previous] = await newestTwo(tx);
+        // One rotation at a time per Team: the next reads the rows this one wrote, so its answer is the stored truth,
+        // and the issue times follow the rows' order.
+        await sql`select pg_advisory_xact_lock(hashtextextended(${`hook_tokens:${team}`}, 0))`.execute(
+          tx,
+        );
+        const [current] = await newest(tx, 1);
+        const issuedAt = new Date(now());
         await tx
           .$extendTables<HookTables>()
           .insertInto("hook_tokens")
@@ -101,29 +112,30 @@ export function createHookSettings({
             issued_at: issuedAt,
           })
           .execute();
-        const previousValidUntil = previous ? new Date(issuedAt.getTime() + OVERLAP_MS) : null;
-        return { token, issuedAt, previousValidUntil };
+        return { token, issuedAt, previousValidUntil: current ? validUntil(issuedAt) : null };
       });
     },
 
     async teamFor(token) {
       const team = TOKEN.exec(token)?.[1];
       if (team === undefined) return undefined;
-      const [newest, previous] = await withTeam(team, newestTwo);
-      if (newest === undefined) return undefined;
+      const [current, previous] = await withTeam(team, newestTwo);
+      if (current === undefined) return undefined;
       const hash = hashOf(token);
-      if (sameHash(hash, newest.token_hash)) return team;
-      const until = previousEnd(newest, previous);
-      if (previous && until && now() < until && sameHash(hash, previous.token_hash)) return team;
+      if (sameHash(hash, current.token_hash)) return team;
+      const until = previousEnd(current, previous);
+      if (previous && until && now() < until.getTime() && sameHash(hash, previous.token_hash)) {
+        return team;
+      }
       return undefined;
     },
 
     async read(team) {
-      const [newest, previous] = await withTeam(team, newestTwo);
-      const until = previousEnd(newest, previous);
+      const [current, previous] = await withTeam(team, newestTwo);
+      const until = previousEnd(current, previous);
       return {
-        issuedAt: newest?.issued_at ?? null,
-        previousValidUntil: until && now() < until ? until : null,
+        issuedAt: current?.issued_at ?? null,
+        previousValidUntil: until && now() < until.getTime() ? until : null,
       };
     },
   };
