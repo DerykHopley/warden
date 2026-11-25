@@ -173,6 +173,7 @@ describe("read: the Team's token settings, never a token", () => {
     expect(await store.read(team)).toEqual({
       issuedAt: expect.any(Date),
       previousValidUntil: null,
+      privacyTier: "details",
     });
   });
 });

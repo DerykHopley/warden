@@ -2,14 +2,16 @@
 // Kept as one append-only row per token issued (0011_hook_tokens), holding its SHA-256 hash, never the token; the
 // Team's newest row is its current token, and the one before it stays valid 24 h after a rotation. The token names its
 // Team, so `teamFor` reads only that Team's rows: every call runs inside `withTeam`, never across Teams (ADR 0006).
+// Beside it, the Team's Privacy tier: one row per Team in `guard_settings` (0012), replaced on each change.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import type { PrivacyTier } from "@warden/contracts";
 import { sql, type Generated, type Selectable, type Transaction } from "kysely";
 import type { Database } from "../../schema.ts";
 import type { WithTeam } from "../../with-team.ts";
 
 /**
- * Guard's hook token table, added to `withTeam`'s transaction with `$extendTables`, so `schema.ts` stays as it is. A
- * type, not an interface: `$extendTables` needs the index signature a type alias has.
+ * Guard's hook tables, added to `withTeam`'s transaction with `$extendTables`, so `schema.ts` stays as it is. A type,
+ * not an interface: `$extendTables` needs the index signature a type alias has.
  */
 export type HookTables = {
   /** Append-only: one row per token issued. A trigger refuses update, delete, truncate. */
@@ -20,7 +22,17 @@ export type HookTables = {
     issued_by: string;
     issued_at: Date;
   };
+  /** One row per Team that set its Privacy tier; a change replaces it (0012_guard_settings). */
+  guard_settings: {
+    team_id: string;
+    privacy_tier: PrivacyTier;
+    set_by: string;
+    set_at: Generated<Date>;
+  };
 };
+
+/** A Team's Privacy tier until an Admin sets one (GLOSSARY "Privacy tier"). */
+const DEFAULT_TIER: PrivacyTier = "details";
 
 /** How long the token before the newest keeps working after a rotation. */
 const OVERLAP_MS = 24 * 3_600_000;
@@ -41,6 +53,9 @@ export type IssuedToken = { token: string; issuedAt: Date; previousValidUntil: D
 /** The Team's token settings: its current token's issue time and when the one before stops working. Never a token. */
 export type HookTokenSettings = { issuedAt: Date | null; previousValidUntil: Date | null };
 
+/** The Team's hook settings: its token settings and its Privacy tier. */
+export type TeamHookSettings = HookTokenSettings & { privacyTier: PrivacyTier };
+
 export interface HookSettings {
   /**
    * Makes the Team's first token or its next one, stores its hash as a new row, and answers the token once, with its
@@ -52,8 +67,13 @@ export interface HookSettings {
    * after the newest was issued. Never throws for a malformed token.
    */
   teamFor(token: string): Promise<string | undefined>;
-  /** The Team's current token's issue time (null with none), and when the one before stops working (null when none). */
-  read(team: string): Promise<HookTokenSettings>;
+  /**
+   * The Team's current token's issue time (null with none), when the one before stops working (null when none), and
+   * its Privacy tier (`details` until an Admin sets one).
+   */
+  read(team: string): Promise<TeamHookSettings>;
+  /** Stores the Team's Privacy tier, with who set it, replacing the last: tier changes keep no history. */
+  setPrivacyTier(team: string, change: { tier: PrivacyTier; setBy: string }): Promise<void>;
 }
 
 type Row = Selectable<HookTables["hook_tokens"]>;
@@ -131,12 +151,36 @@ export function createHookSettings({
     },
 
     async read(team) {
-      const [current, previous] = await withTeam(team, newestTwo);
+      const { tokens, tier } = await withTeam(team, async (tx) => ({
+        tokens: await newestTwo(tx),
+        tier: await tx
+          .$extendTables<HookTables>()
+          .selectFrom("guard_settings")
+          .select("privacy_tier")
+          .executeTakeFirst(),
+      }));
+      const [current, previous] = tokens;
       const until = previousEnd(current, previous);
       return {
         issuedAt: current?.issued_at ?? null,
         previousValidUntil: until && now() < until.getTime() ? until : null,
+        privacyTier: tier?.privacy_tier ?? DEFAULT_TIER,
       };
+    },
+
+    async setPrivacyTier(team, { tier, setBy }) {
+      await withTeam(team, (tx) =>
+        tx
+          .$extendTables<HookTables>()
+          .insertInto("guard_settings")
+          .values({ team_id: team, privacy_tier: tier, set_by: setBy })
+          .onConflict((conflict) =>
+            conflict
+              .column("team_id")
+              .doUpdateSet({ privacy_tier: tier, set_by: setBy, set_at: sql<Date>`now()` }),
+          )
+          .execute(),
+      );
     },
   };
 }
