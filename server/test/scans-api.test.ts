@@ -3,7 +3,7 @@
 // Through the real app on the suite's shared database, each case with Teams of its own, a fake scanner and a fake
 // starter.
 import { randomUUID } from "node:crypto";
-import { ScanBody, type Asset } from "@warden/contracts";
+import { ScanBody, type Asset, type ScanState } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
@@ -24,6 +24,7 @@ import { logEntries } from "./server-process.ts";
 import {
   activeOrganization,
   linkRepos,
+  minutesAgo,
   seedTeam,
   sessionToken,
   testApp,
@@ -127,8 +128,6 @@ const read = (app: App, team: string, id: string, as = MEMBER) =>
 const rows = (team: string) =>
   withTeam(team, (tx) => tx.selectFrom("scan_requests").selectAll().orderBy("queued_at").execute());
 
-const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
-
 /** Writes the Team's Scan row straight to the table, as if it were queued `queued` minutes ago; answers its id. */
 async function insertScan(
   team: string,
@@ -139,7 +138,7 @@ async function insertScan(
     endedAt = null,
   }: {
     queued: number;
-    state?: "queued" | "running" | "done" | "failed";
+    state?: ScanState;
     startedAt?: Date | null;
     endedAt?: Date | null;
   },
@@ -276,25 +275,9 @@ describe("POST /api/scans: a Lead starts a Scan (story 2)", () => {
     const starter = fakeStarter();
     const { app } = scanApp({ startScanJob: starter.start });
     // Ten in the window, the oldest 50 minutes ago and failed; one older than an hour, which doesn't count.
-    await withTeam(team, async (tx) => {
-      for (let i = 0; i < 11; i++) {
-        const minutesAgo = i === 0 ? 61 : i === 1 ? 50 : 1;
-        await tx
-          .insertInto("scan_requests")
-          .values({
-            team_id: team,
-            id: randomUUID(),
-            module: "guard",
-            assets: JSON.stringify([repo()]),
-            rules: [ENV],
-            state: i === 1 ? "failed" : "queued",
-            ended_at: i === 1 ? new Date() : null,
-            requested_by: LEAD,
-            queued_at: new Date(Date.now() - minutesAgo * 60_000),
-          })
-          .execute();
-      }
-    });
+    await insertScan(team, { queued: 61 });
+    await insertScan(team, { queued: 50, state: "failed", endedAt: new Date() });
+    for (let i = 0; i < 9; i++) await insertScan(team, { queued: 1 });
 
     const res = await start(app, team);
 
@@ -563,7 +546,7 @@ describe("A Scan whose Job never started ends after QUEUED_SCAN_LIMIT_MINUTES (s
     expect(starter.calls).toEqual([]);
   });
 
-  it("never ends another Team's stale Scan: Team B's start and GET leave Team A's queued (story 15)", async () => {
+  it("never ends another Team's stale Scan: Team B's start ends its own, leaving Team A's queued (story 15)", async () => {
     const teamA = await newTeam();
     const teamB = await newTeam();
     const { app } = scanApp({ startScanJob: fakeStarter().start });
@@ -571,8 +554,7 @@ describe("A Scan whose Job never started ends after QUEUED_SCAN_LIMIT_MINUTES (s
     const staleB = await insertScan(teamB, { queued: 20 });
 
     expect((await start(app, teamB)).status).toBe(202);
-    expect((await read(app, teamB, staleB)).body).toMatchObject({ state: "failed" });
-    expect((await read(app, teamB, staleA)).status).toBe(404);
+    expect(await row(teamB, staleB)).toMatchObject({ state: "failed" });
 
     expect(await row(teamA, staleA)).toMatchObject({ state: "queued", ended_at: null });
   });

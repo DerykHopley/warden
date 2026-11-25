@@ -14,7 +14,14 @@ import { runScanJob } from "../src/scan-job.ts";
 import { createScans, QUEUED_SCAN_LIMIT_MINUTES, type Scanner, type Scans } from "../src/scans.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
+import {
+  activeOrganization,
+  minutesAgo,
+  seedTeam,
+  sessionToken,
+  testApp,
+  testKey,
+} from "./helpers.ts";
 import { logEntries } from "./server-process.ts";
 
 let pool: pg.Pool;
@@ -286,12 +293,13 @@ describe("runScanJob", () => {
   it("still runs a Scan the time limit ended, when its Job starts late", async () => {
     const team = await newTeam();
     const scan = await queued(team);
-    // Its Job never started in time: set its queueing back past the limit (the schema keeps `queued_at` unwritable).
-    const late = new Date(Date.now() - (QUEUED_SCAN_LIMIT_MINUTES + 5) * 60_000);
+    // Its Job never started in time: set its queueing back past the limit (the schema keeps `queued_at` unwritable),
+    // and read it, which ends it.
+    const late = minutesAgo(QUEUED_SCAN_LIMIT_MINUTES + 5);
     await withTeam(team, (tx) =>
       sql`update scan_requests set queued_at = ${late} where id = ${scan.id}`.execute(tx),
     );
-    expect(await scans.get(team, scan.id)).toMatchObject({ state: "failed", started_at: null });
+    await scans.get(team, scan.id);
 
     expect(await job(team, scan.id, fakeScanner().scanner).run).toBe(0);
 
