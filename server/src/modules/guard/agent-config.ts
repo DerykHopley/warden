@@ -379,7 +379,7 @@ const ESCAPE_OR_QUOTED = /\\[\s\S]|"(?:[^"\\]|\\[\s\S])*"?|'[^']*'?/g;
  * same: text inside quotes is never a command word. `bash -c "claude …"` is missed, as a guard hook that greps for the
  * flag is the commoner case.
  */
-const unquoted = (command: string) =>
+const withQuotesMasked = (command: string) =>
   command.replace(ESCAPE_OR_QUOTED, (match) =>
     match.startsWith("\\") ? match : "_".repeat(match.length),
   );
@@ -388,7 +388,7 @@ const unquoted = (command: string) =>
 const hookPlaces = ({ hooks }: ClaudeSettings): Place[] =>
   hooks.flatMap(({ command, line }) => {
     // The flag or mode value after the command word may be quoted, so it is searched for in the command as written.
-    const run = RUNS_CLAUDE.exec(unquoted(command));
+    const run = RUNS_CLAUDE.exec(withQuotesMasked(command));
     if (run === null) return [];
     const after = command.slice(run.index + run[0].length);
     return SKIP_FLAGS.flatMap(({ kind, pattern }) =>
@@ -425,7 +425,7 @@ const where = (count: number, line: number) =>
 // after an optional `./`, `/`, `**/`, `./**/`, `/**/` or `//**/`. In project settings `/` is the project root, and
 // `**` matches across folders, none included, so each reaches the root `.env`. `Read(./.env.*)` stops only
 // `.env.local` and the like.
-const DENIES_ENV = /^Read(?:\((?:\.?\/|(?:\.\/|\/\/?)?\*\*\/)?\.env\*?\))?$/;
+const DENIES_ENV = /^Read(?:\((?:\.\/|\/|\*\*\/|\.\/\*\*\/|\/\*\*\/|\/\/\*\*\/)?\.env\*?\))?$/;
 
 function agentCanReadEnv(asset: Asset, deny: readonly PermissionEntry[]): Observation | undefined {
   if (deny.some(({ rule }) => DENIES_ENV.test(rule))) return undefined;
