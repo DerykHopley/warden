@@ -25,6 +25,7 @@ import {
   askProducts,
   deleteProductInTeam,
   fetchFrameworks,
+  mayHaveStored,
   saveProductInTeam,
   USAGE_WORDS,
   type DeleteResult,
@@ -226,7 +227,10 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     setDeleting(false);
     setGone(false);
   }
+  // The Team the page shows now, for a forgotten save whose answer arrives once its Team shows again.
+  const teamNow = useRef(team);
   useEffect(() => {
+    teamNow.current = team;
     saveCall.current = null;
     deleteCall.current = null;
   }, [team, changes]);
@@ -383,8 +387,12 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     saveCall.current = call;
     setSaving(true);
     const result = await saveProductInTeam(getToken, savedIn, id, inputOf(draft));
-    // A Team or Role change since forgot this save: its answer is about a form no longer shown.
-    if (saveCall.current !== call) return;
+    // A Team or Role change since forgot this save: its answer is about a form no longer shown. Back on the save's
+    // Team, an answer that may have stored a Product still reads the list again, so the list shows what's stored.
+    if (saveCall.current !== call) {
+      if (mayHaveStored(result) && teamNow.current === savedIn) list.refresh();
+      return;
+    }
     saveCall.current = null;
     setSaving(false);
     switch (result.kind) {
