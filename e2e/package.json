@@ -1,0 +1,16 @@
+{
+  "name": "@warden/e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "e2e": "playwright test --project chromium",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.0",
+    "@types/node": "^24",
+    "@warden/contracts": "workspace:*",
+    "jose": "^6.2.18",
+    "typescript": "~6.0.3"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "name": "Modules don't collide: a Patch Scan over a Product leaves Guard's Findings on it untouched",
+  "rule": "A Scan marks a Finding Fixed only if it covered that Asset with that Rule and didn't see the problem.",
+  "given": {
+    "now": "2026-11-24T08:00:00Z",
+    "findings": [
+      {
+        "id": "f-guard",
+        "team": "team-a",
+        "asset": { "kind": "product", "ref": "shop" },
+        "module": "guard",
+        "rule_id": "guard/agent-added-dependency",
+        "fingerprint": "guard/agent-added-dependency|dependency:lodash|",
+        "location": { "kind": "dependency", "package": "lodash", "version": "4.17.20" },
+        "severity": "medium",
+        "title": "An agent added a dependency no one reviewed",
+        "evidence": { "summary": "An agent session added lodash to package.json" },
+        "status": "open",
+        "unconfirmed_fix": null,
+        "accepted_reason": null,
+        "accepted_until": null,
+        "first_seen_scan": "guard-scan-0",
+        "last_seen_scan": "guard-scan-0",
+        "moved_to": null
+      },
+      {
+        "id": "f-patch",
+        "team": "team-a",
+        "asset": { "kind": "product", "ref": "shop" },
+        "module": "patch",
+        "rule_id": "patch/known-vulnerability",
+        "fingerprint": "patch/known-vulnerability|dependency:lodash|CVE-2021-23337",
+        "location": {
+          "kind": "dependency",
+          "package": "lodash",
+          "version": "4.17.20",
+          "vulnerability": "CVE-2021-23337"
+        },
+        "severity": "high",
+        "title": "lodash is open to command injection",
+        "evidence": { "summary": "lodash 4.17.20 is affected by CVE-2021-23337" },
+        "status": "open",
+        "unconfirmed_fix": null,
+        "accepted_reason": null,
+        "accepted_until": null,
+        "first_seen_scan": "refresh-0",
+        "last_seen_scan": "refresh-0",
+        "moved_to": null
+      }
+    ]
+  },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "refresh-1",
+        "team": "team-a",
+        "module": "patch",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [{ "kind": "product", "ref": "shop" }],
+        "rules": ["patch/known-vulnerability"],
+        "observations": []
+      }
+    }
+  ],
+  "expect": [
+    { "id": "f-guard", "status": "open", "last_seen_scan": "guard-scan-0" },
+    { "id": "f-patch", "status": "fixed", "unconfirmed_fix": null, "last_seen_scan": "refresh-0" }
+  ]
+}

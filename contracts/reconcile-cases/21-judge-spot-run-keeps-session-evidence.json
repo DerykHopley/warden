@@ -1,0 +1,81 @@
+{
+  "name": "A Judge's Spot run on an Agent session opens an Open Finding that keeps its session evidence as reported",
+  "rule": "It's the Asset when the Judge flags agent behaviour; the masked Agent events the Judge relied on are the evidence.",
+  "given": { "now": "2026-11-24T08:00:00Z", "findings": [] },
+  "steps": [
+    {
+      "step": "spot_run",
+      "spot_run": {
+        "id": "judge-1",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:30:00Z",
+        "observations": [
+          {
+            "asset": { "kind": "agent_session", "ref": "session-7f3a" },
+            "rule_id": "guard/agent-read-secret-file",
+            "location": { "kind": "session" },
+            "severity": "high",
+            "title": "The agent printed a secrets file",
+            "evidence": {
+              "summary": "The agent ran cat .env and its output reached the session",
+              "session": {
+                "events": [
+                  {
+                    "seq": 4,
+                    "at": "2026-11-24T09:15:09Z",
+                    "name": "PreToolUse",
+                    "tool": "Bash",
+                    "text": "cat .env"
+                  },
+                  {
+                    "seq": 5,
+                    "at": "2026-11-24T09:15:10Z",
+                    "name": "PostToolUse",
+                    "tool": "Bash",
+                    "text": "AWS_SECRET_ACCESS_KEY=[REDACTED:aws_secret_key]"
+                  }
+                ],
+                "events_read": 12,
+                "events_hash": "sha256:996fa0d726ba6c54119f4f93320a4d468440302f5048d4acc5f2680f840a1efb"
+              }
+            }
+          }
+        ]
+      },
+      "labels": { "flagged": 0 }
+    }
+  ],
+  "expect": [
+    {
+      "new": "flagged",
+      "status": "open",
+      "asset": { "kind": "agent_session", "ref": "session-7f3a" },
+      "fingerprint": "guard/agent-read-secret-file|session",
+      "first_seen_scan": "judge-1",
+      "evidence": {
+        "summary": "The agent ran cat .env and its output reached the session",
+        "session": {
+          "events": [
+            {
+              "seq": 4,
+              "at": "2026-11-24T09:15:09Z",
+              "name": "PreToolUse",
+              "tool": "Bash",
+              "text": "cat .env"
+            },
+            {
+              "seq": 5,
+              "at": "2026-11-24T09:15:10Z",
+              "name": "PostToolUse",
+              "tool": "Bash",
+              "text": "AWS_SECRET_ACCESS_KEY=[REDACTED:aws_secret_key]"
+            }
+          ],
+          "events_read": 12,
+          "events_hash": "sha256:996fa0d726ba6c54119f4f93320a4d468440302f5048d4acc5f2680f840a1efb"
+        }
+      }
+    }
+  ]
+}

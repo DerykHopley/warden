@@ -26,7 +26,7 @@ Level: **Build**, review mode: **Throughput**, will become: **product**, phase: 
 - **A project that deploys (an app, a service): the first ticket (the foundation spec's first slice) is a walking skeleton on the real host,** through every outside service the app depends on (sign-in, database, storage), checked live by the owner. Problems with the host and those services show up in an hour, not after the features are built. A project with nothing to deploy (a CLI, a library) skips this.
 - **Secure defaults (on trial):** `docs/secure-defaults.md` lists the defaults the owner accepted for this project's traits (a public URL, paid model calls, more than one user, …). A ticket that brings a trait in carries that trait's accepted defaults as criteria; a trait the file doesn't have yet is offered to the owner first, the way `~/development/rig/skills/project-kickoff/secure-defaults.md` says.
 - Run `/security-review` before the first deploy, and before each deploy that changes sign-in, secrets or what users can reach.
-- **Owner preview:** the branch deploys to Cloud Run as a revision with `--no-traffic --tag <name>`, on a throwaway database, and the owner tests its tagged URL. The live revision and its data are never touched.
+- **Owner preview:** a `preview/<name>` branch deploys to the separate `warden-preview` Cloud Run service as a revision with `--no-traffic --tag <name>`, on the `warden_preview` database, under the preview identities, and the owner tests its tagged URL. The live `warden` service and its data are never touched.
 - **The desk:** every report to the owner (a coordinator's, a spec's or a Feature's) ends with what's waiting on them (Blocking, Hands-on steps, Ready to merge, Decided for you), so the latest message is all the owner needs to read.
 - Name `/mattpocock-skills:improve-codebase-architecture` to the owner when the same files keep changing together across tickets.
 - **A product others will run (on trial).** It's built to be installed, upgraded and trusted by someone other than the owner, so these are part of done, not a final polish:
@@ -120,12 +120,12 @@ Whoever files an issue sorts it into one lane straight away, with a label or mil
 
 ### CI
 
-- **Fast lane, on every PR, under 10 minutes:** `vitest`, `tsc --noEmit` and `eslint` for the server, the dashboard and the shared schemas (the walking skeleton sets the exact commands), plus the browser tests for the pages the PR touches, in one browser.
-- **Full lane, on main, nightly and before a deploy:** every test in every browser.
+- **Fast lane, on every PR, under 10 minutes:** `vitest`, `tsc --noEmit` and `eslint` for the server, the dashboard and the shared schemas (`.github/workflows/fast-lane.yml`: `pnpm install --frozen-lockfile`, `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm --filter @warden/contracts test`, `pnpm --filter @warden/server test` against Postgres 17 with pgvector, `pnpm --filter @warden/dashboard test`, `pnpm design-lint`, and `docker build`, not pushed), plus every browser test, in Chromium (`pnpm e2e`, locally too, runs Chromium only).
+- **Full lane, before each deploy:** every test in every browser (`.github/workflows/full-lane.yml`: the fast lane's checks, called through its `workflow_call`, with the `e2e/` tests in Chromium, Firefox and WebKit alongside, one parallel job each, picked with `--project`; the server's vitest suite runs against Postgres 17 with pgvector). Its triggers: the release workflow (`release.yml`) calls it through `workflow_call` before each deploy, so each merge to `main` runs it once, inside the release; by hand (`workflow_dispatch`); and a PR into `main` or `spec/**` that changes `full-lane.yml` or `e2e/playwright.config.ts`. No nightly run: it stays paused to save GitHub Actions minutes (the owner's budget decision on #1).
 - Split a browser suite across parallel runners once it passes 10 minutes.
 - Rerun a CI job only for a fault in the infrastructure (a runner that died), and say so; a red test gets a diagnosis, not a rerun.
 - **A full-lane red on main (on trial):** file it as a Fix straight away, with the failing test id and the run link, and build it after the current ticket rather than stopping it. When the red breaks what users can do on the deployed app, revert first (the revert rule), then the Fix. A test that passed on rerun is still unexplained: the Fix says so.
-- The pre-push hook runs the fast lane's quickest checks: `eslint`, `tsc --noEmit` (set by the walking skeleton).
+- The pre-push hook runs the fast lane's quickest checks: `eslint`, `tsc --noEmit` (`.githooks/pre-push`: `pnpm lint`, `pnpm format:check`, `pnpm typecheck`, `pnpm design-lint`).
 
 ### Review mode: Throughput
 

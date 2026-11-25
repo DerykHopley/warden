@@ -12,7 +12,10 @@ that can't bypass them. A query that forgets the Team still can't reach another 
 - **Policies on every Team-owned table, read and write,** with row-level security forced so the table owner is bound
   too. A CI check fails when any table lacks it.
 - **Separate roles:** the app role (bound by the policies), a migration role, and an admin role for the few
-  deliberate cross-Team tasks (the dev page's totals), used from one marked place in the code.
+  deliberate cross-Team tasks, used from one marked place in the code. The admin role has no `BYPASSRLS` anywhere:
+  its one grant is select on `teams (id)`, with one policy that shows it every Team's id, so the daily Job can list
+  the Teams (ADR 0009). Every other table refuses it, even with a Team set: the Team policies apply to every role,
+  so it holds no grant they could open (#36).
 - **Foreign keys include the Team:** `(team_id, id)`, because Postgres checks foreign keys without the policies,
   and a plain key would let Team A point at Team B's rows and learn they exist.
 - **Fields people filter on are real columns**, not JSON: a JSON filter lost its index under the policies.
@@ -34,8 +37,26 @@ Spike code and cases: the capstone archive, `architecture/spikes/team-scoping/`.
 
 ## Consequences
 
-- **Check on real Cloud SQL in the walking skeleton** that the app role is bound by the policies (unverified:
-  how the `cloudsqlsuperuser` setup affects table owners).
+- **On Cloud SQL, what's known before the first deploy:**
+  - `warden_admin` is made without `BYPASSRLS` everywhere, so Cloud SQL, the local database and CI work alike; a
+    superuser running `roles` takes it away from one that has it, and a runner that can't refuses to set its
+    password (#36). It reads only `teams (id)`, through its own grant and policy, and logs in with its own password
+    (`warden-db-admin-password`), which only the daily Job's account reads.
+  - `checkDatabaseRole` refuses `warden_admin` and `warden_migrate`, and any role that can become them, by name, at
+    start and on each new connection (#16, #17); also their preview twins, and an app role that is a member of any
+    role (#32).
+  - Owner previews have their own three roles (`warden_preview_migrate`, `warden_preview_app`,
+    `warden_preview_admin`) on the `warden_preview` database. Roles belong to the whole instance, so each database
+    lets only its own set connect: `createRoles` takes CONNECT away from PUBLIC (#32).
+  - No service account reads `postgres`'s password: the setup script runs `roles` for both sets from the owner's
+    machine, through the Cloud SQL Auth Proxy, and the migration jobs run only migrations (#32). Whether `postgres`
+    may revoke PUBLIC's CONNECT on a database `gcloud` made (it belongs to `cloudsqlsuperuser`) is checked by
+    `createRoles` itself, which stops if PUBLIC can still connect.
+  - What the first deploy showed live (the first owner preview, #65): the preview revision connected to Cloud SQL as
+    `warden_preview_app` and started, so the server's role check found it no superuser, without BYPASSRLS and a
+    member of no role. The rest needs `postgres`, which no agent reads: the owner's queries on #65, through the
+    Cloud SQL Auth Proxy, for `warden_app`'s and `warden_preview_app`'s attributes, PUBLIC's CONNECT on `warden` and
+    `warden_preview`, and `warden_admin` selecting `teams (id)` and nothing else. Their output lands here.
 - An empty result can mean "no Team set" as well as "nothing there": tests assert the Team is set, and `withTeam`
   refuses an empty Team.
 - The local-first desktop app holds one Team, so it doesn't need the policies; it keeps the same `withTeam` shape.

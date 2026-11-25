@@ -1,0 +1,12 @@
+**/node_modules
+**/dist
+.git
+.github
+.githooks
+.claude
+.env
+.env.*
+.envrc
+gha-creds-*.json
+**/*.test.ts
+**/*.test.tsx

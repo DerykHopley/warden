@@ -1,0 +1,1160 @@
+/* Warden's design tokens: docs/design.md names and explains them; the values live here only.
+   Direction E, copied from the [data-variant="E"] blocks of prototypes/dashboard/index.html
+   (branch prototype/dashboard-directions). No web fonts load: each stack falls back to system fonts. */
+:root {
+  color-scheme: light dark;
+  --bg: #f7f5f0;
+  --surface: #fffefb;
+  --fg: #26241f;
+  --muted: #69655c;
+  --line: #e6e1d6;
+  --chip: #f0ebe1;
+  --accent: #36569a;
+  --accent-fg: #fff;
+  --sev-crit: #9b3434;
+  --sev-high: #8f5416;
+  --sev-med: #5f6b78;
+  --sev-low: #6b665d;
+  --tint-crit: #f6e4e1;
+  --tint-high: #f7ead9;
+  --tint-med: #e8ecf0;
+  --tint-low: #efede8;
+  --focus-bg: #eef2f8;
+  --focus-line: #cdd8ea;
+  --ok: #3d7a52;
+  --font-head: "Iowan Old Style", "Charter", "Georgia", serif;
+  --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --radius: 10px;
+  --shadow: 0 1px 2px rgba(60, 50, 30, 0.06), 0 4px 14px rgba(60, 50, 30, 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1d1c1a;
+    --surface: #262421;
+    --fg: #ece7dc;
+    --muted: #a6a093;
+    --line: #3a3732;
+    --chip: #302d29;
+    --accent: #a3b9e6;
+    --accent-fg: #1d1c1a;
+    --sev-crit: #e7978f;
+    --sev-high: #e6b57d;
+    --sev-med: #a9b6c4;
+    --sev-low: #9d978b;
+    --tint-crit: #3a2624;
+    --tint-high: #3a2e20;
+    --tint-med: #2a2f35;
+    --tint-low: #2c2a27;
+    --focus-bg: #252b36;
+    --focus-line: #38465c;
+    --ok: #8fc19c;
+    --font-head: "Iowan Old Style", "Charter", "Georgia", serif;
+    --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    --radius: 10px;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 4px 14px rgba(0, 0, 0, 0.18);
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-body);
+  line-height: 1.5;
+}
+
+.page {
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 32px 16px;
+}
+
+/* The app's frame: the header and the page in one column, and the Ask Warden panel beside them when pinned. The
+   column takes the width the panel leaves, and the pages' layouts follow the column's width (container queries on
+   `app-column`), not the window's: the breakpoints in docs/design.md, Layout, are the column's. */
+.app-frame {
+  display: flex;
+  min-height: 100vh;
+}
+
+.app-column {
+  flex: 1 1 0;
+  min-width: 0;
+  container: app-column / inline-size;
+}
+
+/* Room under the page's last line for the closed panel's button, which floats over the page's bottom right. */
+.app-column .page {
+  padding-bottom: 96px;
+}
+
+.card {
+  max-width: 560px;
+  padding: 24px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.card > :first-child {
+  margin-top: 0;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 2rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.notice {
+  padding: 12px 16px;
+  margin: 0 0 16px;
+  background: var(--chip);
+  border-radius: var(--radius);
+}
+
+code {
+  font-family: var(--font-mono);
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 24px;
+}
+
+button {
+  min-height: 44px;
+  padding: 0 18px;
+  font: inherit;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+button.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border: 1px solid var(--accent);
+}
+
+button.secondary {
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--line);
+}
+
+/* Hover moves a button 15% toward the page background: lighter in light, darker in dark, visible in both. */
+button.primary:hover:enabled {
+  background: color-mix(in srgb, var(--accent) 85%, var(--bg));
+  border-color: color-mix(in srgb, var(--accent) 85%, var(--bg));
+}
+
+/* The Button's states also dress the Role picker and the page links, so each control behaves the same way. */
+button.secondary:hover:enabled,
+.role-picker:hover:enabled {
+  background: var(--chip);
+}
+
+button:focus-visible,
+.role-picker:focus-visible,
+.page-links a:focus-visible,
+.level-line a:focus-visible,
+.panel-divider:focus-visible,
+.chat-input:focus-visible,
+.field textarea:focus-visible,
+.field input:focus-visible,
+.candidate input:focus-visible,
+.card-line:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A date input's ring, on the input itself. In WebKit (Safari) the keyboard focuses the date's inner month, day and
+   year fields, in the input's own shadow tree: the input is the document's active element, but it never matches
+   :focus-visible, so the rule above draws nothing there. :focus-within does match it while an inner field has focus,
+   in every browser. Its own rule, so a browser that refused the selector would drop only this one. */
+.field input[type="date"]:focus-within {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:disabled,
+.role-picker:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Busy: the action is running; the control stays readable and says so with aria-busy. */
+button[aria-busy="true"],
+.role-picker[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+/* The app header: Warden, the Team and Role, the page links, the Organization switcher and Sign out. Its content
+   lines up with the page's 1480px column and wraps onto a second line on a phone. */
+.app-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--line);
+}
+
+.app-header-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 8px 16px;
+}
+
+.brand {
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+.team {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-name {
+  font-weight: 600;
+}
+
+/* The Role is a word in a quiet pill, never a colour alone. */
+.role {
+  padding: 2px 10px;
+  background: var(--chip);
+  border-radius: 999px;
+  font-size: 0.875rem;
+}
+
+/* The page links, the switcher and Sign out sit together at the header's end, with or without a Team. */
+.header-end {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 16px;
+  margin-left: auto;
+}
+
+.page-links {
+  display: flex;
+  gap: 4px;
+}
+
+.page-links a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--fg);
+  text-decoration: none;
+  border-radius: var(--radius);
+}
+
+.page-links a:hover {
+  background: var(--chip);
+}
+
+/* The current page: accent, bold and underlined, so it isn't told by colour alone. */
+.page-links a[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
+}
+
+.switcher {
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+/* People: one row per person. Under 640px a row shows the name and Role only. */
+.people {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.people th,
+.people td {
+  padding: 12px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+.people tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.people th {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+/* With pickers, the name and date line up with the middle of the 44px select on the row's first line. */
+.people.with-picker td:not(.role-cell) {
+  padding-top: 22px;
+}
+
+/* A long email or user id wraps rather than pushing the page sideways. */
+.people td:first-child {
+  overflow-wrap: anywhere;
+}
+
+@container app-column (max-width: 639px) {
+  .people .joined {
+    display: none;
+  }
+}
+
+/* The Role picker: a select dressed as a secondary Button; its states are the Button's, above. */
+.role-picker {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+/* A row's message after a change it couldn't make: words in a quiet box, under the Role. */
+.row-message {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: var(--chip);
+  border-radius: var(--radius);
+}
+
+/* The Findings page: the summary line, "Start here" (the top 5 as cards), then "All Findings" with its filter tabs.
+   Nothing here moves: a filter or a selection changes the page at once (docs/design.md, Motion). */
+.summary-line {
+  font-size: 1.75rem;
+}
+
+.start-here h2,
+.all-findings h2,
+.audit h2 {
+  margin: 32px 0 12px;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+/* Under 640px the cards stack; from 640px they wrap two or three to a row; from 1100px five sit in a row. */
+.top-five {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@container app-column (min-width: 640px) {
+  .top-five {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  }
+}
+
+@container app-column (min-width: 1100px) {
+  .top-five {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+.top-five > li {
+  min-width: 0;
+}
+
+/* A card is a button: Enter and Space select it. Selected (aria-current): the accent border, drawn a second pixel
+   thick with a ring so the card doesn't shift. */
+.finding-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-height: 44px;
+  padding: 16px;
+  color: var(--fg);
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-wrap: anywhere;
+}
+
+.finding-card:hover {
+  background: var(--chip);
+}
+
+.finding-card[aria-current="true"] {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    var(--shadow);
+}
+
+.card-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-rank {
+  min-width: 1.5em;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.125rem;
+}
+
+.card-title {
+  font-weight: 600;
+}
+
+.card-summary,
+.card-asset {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.card-asset {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+
+/* A Severity pill: its word in the Severity's colour on its tint, never the colour alone. */
+.sev-pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sev-critical {
+  color: var(--sev-crit);
+  background: var(--tint-crit);
+}
+
+.sev-high {
+  color: var(--sev-high);
+  background: var(--tint-high);
+}
+
+.sev-medium {
+  color: var(--sev-med);
+  background: var(--tint-med);
+}
+
+.sev-low {
+  color: var(--sev-low);
+  background: var(--tint-low);
+}
+
+/* The filter tabs in three groups, and the view path at their right (below them when they wrap). */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 24px;
+  margin-bottom: 16px;
+}
+
+.filter-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* A tab has the Button's height and focus ring; chosen, it reads as the current page link does: accent, bold and
+   underlined, so it isn't told by colour alone. */
+.filter-tab {
+  min-width: 44px;
+  padding: 0 12px;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.filter-tab:hover {
+  background: var(--chip);
+}
+
+.filter-tab[aria-pressed="true"] {
+  color: var(--accent);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 6px;
+}
+
+.view-path {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+/* The table: every Finding in the view. A click on a row, or the button in its title cell (Enter or Space), selects
+   it. Under 640px it shows Severity, Finding and Status only. */
+.findings-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.findings-table th,
+.findings-table td {
+  padding: 12px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Severity and Status take only the width their words need, so the Finding column gets the rest. */
+.findings-table .narrow {
+  width: 1%;
+  white-space: nowrap;
+}
+
+/* Titles, Rule ids and Asset refs may break anywhere: a long word with no space (a package name, a URL) wraps
+   rather than pushing the page sideways. */
+.findings-table .finding-title,
+.findings-table .rule-id,
+.findings-table .asset-ref {
+  overflow-wrap: anywhere;
+}
+
+.findings-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.findings-table th {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.findings-table tbody tr:has(.finding-link) {
+  cursor: pointer;
+}
+
+.findings-table tbody tr:has(.finding-link):hover {
+  background: var(--chip);
+}
+
+/* Selected: the quiet fill and an accent bar at its start; the title's button says so (aria-current). */
+.findings-table tbody tr.selected {
+  background: var(--chip);
+  box-shadow: inset 4px 0 0 var(--accent);
+}
+
+/* The title cell's button: the title and the Rule id, as text; it takes focus and selects the row. */
+.finding-link {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 0;
+  color: var(--fg);
+  text-align: left;
+  background: none;
+  border: 0;
+}
+
+.finding-title {
+  display: block;
+  font-weight: 600;
+}
+
+.rule-id,
+.asset-kind {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+/* The Unconfirmed fix flag: words in a quiet outlined pill beside the Status. */
+.flag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 8px;
+  font-size: 0.8125rem;
+  background: var(--chip);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+@container app-column (max-width: 639px) {
+  .findings-table .asset-col {
+    display: none;
+  }
+
+  .findings-table th,
+  .findings-table td {
+    padding: 12px 10px;
+  }
+
+  /* The flag goes under the Status word, so the Status column stays narrow. */
+  .findings-table .flag {
+    display: block;
+    width: fit-content;
+    margin: 4px 0 0;
+  }
+}
+
+/* The Level line above the Findings summary: one quiet line, its link a 44px-high target. */
+.level-line {
+  margin: 0;
+  color: var(--muted);
+}
+
+.level-line a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent);
+  border-radius: var(--radius);
+}
+
+/* The Overview (story 10): the journey as three cards, the trend line, and "Are we ready for the audit?". Nothing here
+   moves. Under 640px the cards stack; from 640px three sit in a row. */
+.journey {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@container app-column (min-width: 640px) {
+  .journey {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* A journey card says its state in words; current adds the accent border, drawn a second pixel thick with a ring as a
+   selected Finding card's is. */
+.journey-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-wrap: anywhere;
+}
+
+.journey-card[data-state="current"] {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    var(--shadow);
+}
+
+.journey-level {
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.125rem;
+}
+
+.journey-adds,
+.journey-note {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+/* The bar: a quiet track, filled with the accent as far as the Level has come. Its value is also in aria-valuenow. */
+.journey-bar {
+  display: block;
+  height: 6px;
+  margin-top: 4px;
+  overflow: hidden;
+  background: var(--chip);
+  border-radius: 999px;
+}
+
+.journey-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.journey-state {
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.trend-line {
+  margin: 24px 0 0;
+  font-family: var(--font-head);
+  font-size: 1.375rem;
+}
+
+/* The Ask Warden panel (docs/design.md: Side panel, Layout, Motion). Closed, it is a button over the page's bottom
+   right; floating, it sits over the page at the right; pinned, beside the page, the window's full height; under 640px
+   an open panel fills the screen. */
+.ask-warden-button {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  box-shadow: var(--shadow);
+}
+
+.ask-warden {
+  display: flex;
+  flex-direction: column;
+  color: var(--fg);
+  background: var(--surface);
+}
+
+/* Floating, it starts below the header (the shell measures it), so the header's controls stay reachable. */
+.ask-warden.floating {
+  position: fixed;
+  top: calc(var(--header-height, 61px) + 16px);
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  width: min(var(--panel-width), calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  animation: panel-slide-in 150ms ease-out;
+}
+
+.ask-warden.pinned {
+  position: sticky;
+  top: 0;
+  flex: 0 0 auto;
+  width: var(--panel-width);
+  height: 100vh;
+  border-left: 1px solid var(--line);
+}
+
+.ask-warden.full-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+@keyframes panel-slide-in {
+  from {
+    transform: translateX(calc(100% + 16px));
+  }
+  to {
+    transform: none;
+  }
+}
+
+/* The divider: a 16px handle over the pinned panel's left edge, with a grip in its middle. Hover fills the handle;
+   dragging runs an accent bar down the edge; focus shows the ring. */
+.panel-divider {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -8px;
+  z-index: 1;
+  width: 16px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.panel-divider::before {
+  content: "";
+  position: absolute;
+  top: calc(50% - 20px);
+  left: 6px;
+  width: 4px;
+  height: 40px;
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.panel-divider:hover {
+  background: var(--chip);
+}
+
+.panel-divider[data-dragging="true"]::before {
+  top: 0;
+  left: 7px;
+  width: 2px;
+  height: 100%;
+  background: var(--accent);
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.panel-header h2 {
+  margin: 0 auto 0 0;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+/* A ✕: the Button's height, and as wide, with no frame until hovered. */
+.icon-button {
+  min-width: 44px;
+  padding: 0;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid transparent;
+}
+
+.icon-button:hover {
+  background: var(--chip);
+}
+
+/* The detail card and the chat scroll; the context line and the input stay at the panel's foot. */
+.panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.panel-foot {
+  padding: 8px 16px 16px;
+  border-top: 1px solid var(--line);
+}
+
+.context-line {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.chat-form {
+  display: flex;
+  gap: 8px;
+}
+
+.chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* A Chat message: the person's on the quiet fill at the right, Warden's on the page background at the left. */
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.chat-message {
+  max-width: 85%;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+.chat-message.from-person {
+  align-self: flex-end;
+  background: var(--chip);
+}
+
+.chat-message.from-warden {
+  align-self: flex-start;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+/* The detail card: the item the chat is talking about, in its own tint, fading in. */
+.detail-card {
+  padding: 8px 8px 16px 16px;
+  background: var(--focus-bg);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+  animation: detail-card-in 120ms ease-out;
+}
+
+@keyframes detail-card-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.detail-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.detail-ids {
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+
+.detail-title {
+  margin: 0 8px 8px 0;
+  font-size: 1.0625rem;
+  font-weight: 600;
+}
+
+.detail-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 8px 12px 0;
+}
+
+.detail-status .flag {
+  margin-left: 0;
+}
+
+.detail-fields {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 8px 0 0;
+  font-size: 0.875rem;
+}
+
+.detail-fields dt {
+  color: var(--muted);
+}
+
+.detail-fields dd {
+  margin: 0;
+}
+
+.detail-proposals {
+  margin-right: 8px;
+}
+
+.detail-proposals h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.proposal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal {
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
+}
+
+.proposal p {
+  margin: 0;
+}
+
+.proposal-decision {
+  font-weight: 600;
+}
+
+.proposal-asked {
+  color: var(--muted);
+}
+
+/* "Couldn't load Proposals", with Retry beside it. */
+.proposals-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 16px 8px 0 0;
+}
+
+/* A stale Proposal says so in words, set apart by weight, not colour. */
+.proposal .proposal-stale {
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+/* The card's decisions (story 4): a Lead's row of decision buttons, or a Member's Propose buttons, under the fields;
+   a Proposal's Approve and Reject; each wraps on a narrow panel. */
+.card-actions,
+.proposal-actions,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.card-actions {
+  margin: 12px 8px 0 0;
+}
+
+.proposal-actions {
+  margin-top: 8px;
+}
+
+/* A decision's form, in the card in place of the row (a Reject's, in place of its Proposal's buttons). */
+.decision-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 12px 8px 0 0;
+}
+
+.proposal .decision-form {
+  margin: 8px 0 0;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  font-size: 0.875rem;
+  border: 0;
+}
+
+.field-label {
+  padding: 0;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.field textarea,
+.field input[type="date"] {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.field textarea {
+  resize: vertical;
+}
+
+/* A Mark moved candidate: the whole 44px-high row is its radio's target. */
+.candidate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.candidate:hover {
+  background: var(--chip);
+}
+
+.candidate input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.form-note {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* The card's one line: what was done (it takes focus), or why a call was refused, in words. A refusal is set apart by
+   weight, not colour. */
+.card-line {
+  margin: 12px 8px 0 0;
+  padding: 8px 12px;
+  font-size: 0.875rem;
+  background: var(--surface);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
+}
+
+.card-line.refused {
+  font-weight: 600;
+}
+
+.decision-form .card-line {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ask-warden.floating,
+  .detail-card {
+    animation: none;
+  }
+}

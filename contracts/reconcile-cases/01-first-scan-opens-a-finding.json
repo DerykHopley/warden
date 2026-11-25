@@ -1,0 +1,45 @@
+{
+  "name": "A first Scan that sees a problem opens one Open Finding",
+  "rule": "One observed problem with one Asset, raised by one module.",
+  "given": { "now": "2026-11-24T08:00:00Z", "findings": [] },
+  "steps": [
+    {
+      "step": "scan",
+      "scan": {
+        "id": "scan-1",
+        "team": "team-a",
+        "module": "guard",
+        "started_at": "2026-11-24T09:00:00Z",
+        "assets": [{ "kind": "repo", "ref": "https://github.com/example/app" }],
+        "rules": ["guard/agent-can-read-env"],
+        "observations": [
+          {
+            "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+            "rule_id": "guard/agent-can-read-env",
+            "location": { "kind": "file", "path": ".claude/settings.json", "line": 3 },
+            "severity": "high",
+            "title": "The agent can read .env files",
+            "evidence": { "summary": "permissions.allow lets the agent read .env" }
+          }
+        ]
+      },
+      "labels": { "env": 0 }
+    }
+  ],
+  "expect": [
+    {
+      "new": "env",
+      "team": "team-a",
+      "asset": { "kind": "repo", "ref": "https://github.com/example/app" },
+      "module": "guard",
+      "rule_id": "guard/agent-can-read-env",
+      "fingerprint": "guard/agent-can-read-env|file:.claude/settings.json",
+      "severity": "high",
+      "status": "open",
+      "unconfirmed_fix": null,
+      "first_seen_scan": "scan-1",
+      "last_seen_scan": "scan-1",
+      "moved_to": null
+    }
+  ]
+}

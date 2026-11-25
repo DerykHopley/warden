@@ -1,0 +1,266 @@
+// The migration runner: file-name order, nothing new on a second run, a failing file, the wrong user, no database, an
+// unknown role set, and another role set's roles.
+// Each case gets a fresh database; the grants cases share a migrated one of their own. Cases that assert the exit code
+// or the output run it as its own process; the rest call `migrate` directly.
+import { mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createPool, type DatabaseRoleNames } from "../src/database.ts";
+import { createLogger } from "../src/log.ts";
+import { MIGRATIONS_FOLDER, migrate } from "../src/migrate.ts";
+import {
+  createMigratedTestDatabase,
+  createTestDatabase,
+  poolAs,
+  runInServer,
+  testName,
+} from "./databases.ts";
+import { closedPort } from "./ports.ts";
+
+const silent = createLogger(() => {});
+const cleanups: (() => Promise<unknown>)[] = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+}, 30_000);
+
+async function freshDatabase() {
+  const database = await createTestDatabase();
+  cleanups.push(database.drop);
+  const pool = poolAs("warden_migrate", database.name);
+  cleanups.push(() => pool.end());
+  return { name: database.name, pool };
+}
+
+/** A migrations folder holding `files`, written in the order given. */
+function migrationsFolder(files: Record<string, string>): string {
+  const folder = mkdtempSync(join(tmpdir(), "warden-migrations-"));
+  cleanups.push(() => rm(folder, { recursive: true }));
+  for (const [name, sql] of Object.entries(files)) writeFileSync(join(folder, name), sql);
+  return folder;
+}
+
+const asMigrate = (database: string) => ({ PGUSER: "warden_migrate", PGDATABASE: database });
+
+async function appliedMigrations(pool: { query: (text: string) => Promise<{ rows: unknown[] }> }) {
+  const { rows } = await pool.query("select name from kysely_migration order by timestamp, name");
+  return rows.map((row) => (row as { name: string }).name);
+}
+
+/** The migrations Warden ships, by name, in byte order of their file names. */
+const shipped = readdirSync(MIGRATIONS_FOLDER)
+  .filter((file) => file.endsWith(".sql"))
+  .sort()
+  .map((file) => file.slice(0, -".sql".length));
+
+describe("pnpm migrate", () => {
+  it("applies the migrations folder, then nothing on a second run", async () => {
+    const database = await freshDatabase();
+
+    const first = await runInServer(["pnpm", "--silent", "migrate"], asMigrate(database.name));
+    expect(first.code, first.output).toBe(0);
+    expect(await appliedMigrations(database.pool)).toEqual(shipped);
+
+    const second = await runInServer(["pnpm", "--silent", "migrate"], asMigrate(database.name));
+    expect(second.code, second.output).toBe(0);
+    expect(second.output).not.toContain('"message":"applied"');
+    expect(await appliedMigrations(database.pool)).toEqual(shipped);
+  }, 30_000);
+
+  it("exits 1 for a WARDEN_DATABASE_ROLES it doesn't know, before connecting", async () => {
+    const result = await runInServer(["pnpm", "--silent", "migrate"], {
+      WARDEN_DATABASE_ROLES: "staging",
+      PGHOST: "127.0.0.1",
+      PGPORT: String(await closedPort()),
+    });
+
+    expect(result.code).toBe(1);
+    expect(result.output).toContain("WARDEN_DATABASE_ROLES");
+    expect(result.output).not.toMatch(/ECONNREFUSED/);
+  });
+
+  it("refuses to run as any user but warden_migrate, applying nothing", async () => {
+    const database = await freshDatabase();
+
+    // The PG* superuser: tables it made would miss warden_migrate's default grants.
+    const result = await runInServer(["pnpm", "--silent", "migrate"], {
+      PGDATABASE: database.name,
+    });
+
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("warden_migrate");
+    const { rows } = await database.pool.query(
+      "select to_regclass('kysely_migration') is not null as tracked",
+    );
+    expect(rows[0]).toEqual({ tracked: false });
+  }, 30_000);
+});
+
+describe("the migration runner", () => {
+  const migrateProcess = (folder: string, env: Record<string, string>) =>
+    runInServer([process.execPath, "src/migrate.ts", folder], env);
+
+  it("applies files in the byte order of their names, not the order they were written", async () => {
+    const database = await freshDatabase();
+    // "0002_Beta" sorts before "0002_alpha" by bytes, after it in most locales.
+    const folder = migrationsFolder({
+      "0010_third.sql": "insert into ran (name) values ('0010_third');",
+      "0002_alpha.sql": "insert into ran (name) values ('0002_alpha');",
+      "0002_Beta.sql": "insert into ran (name) values ('0002_Beta');",
+      "0001_first.sql":
+        "create table ran (id int generated always as identity, name text); insert into ran (name) values ('0001_first');",
+    });
+    const order = ["0001_first", "0002_Beta", "0002_alpha", "0010_third"];
+
+    const result = await migrate(database.pool, folder);
+
+    expect(result).toEqual({ applied: order });
+    const { rows } = await database.pool.query("select name from ran order by id");
+    expect(rows.map((row) => row.name)).toEqual(order);
+    expect(await appliedMigrations(database.pool)).toEqual(order);
+  }, 30_000);
+
+  it("reads back applied migrations with equal times in the same byte order", async () => {
+    const database = await freshDatabase();
+    const first = { "0001_Beta.sql": "select 1;", "0001_alpha.sql": "select 1;" };
+    expect(await migrate(database.pool, migrationsFolder(first))).toEqual({
+      applied: ["0001_Beta", "0001_alpha"],
+    });
+    // Two migrations recorded in the same millisecond: Kysely orders them by name, and must agree with the files.
+    await database.pool.query("update kysely_migration set timestamp = '2026-11-24T00:00:00.000Z'");
+
+    const result = await migrate(
+      database.pool,
+      migrationsFolder({ ...first, "0002_next.sql": "select 1;" }),
+    );
+
+    expect(result).toEqual({ applied: ["0002_next"] });
+  }, 30_000);
+
+  it("rolls back a failing file, names it, exits non-zero and applies no later file", async () => {
+    const database = await freshDatabase();
+    const folder = migrationsFolder({
+      "0001_good.sql": "create table good (id int);",
+      "0002_bad.sql": "create table half_made (id int); select * from no_such_table;",
+      "0003_later.sql": "create table later (id int);",
+    });
+
+    const result = await migrateProcess(folder, asMigrate(database.name));
+
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("0002_bad");
+    const { rows } = await database.pool.query(
+      `select to_regclass('good') is not null as good, to_regclass('half_made') is not null as half_made,
+              to_regclass('later') is not null as later`,
+    );
+    expect(rows[0]).toEqual({ good: true, half_made: false, later: false });
+    expect(await appliedMigrations(database.pool)).toEqual(["0001_good"]);
+  }, 30_000);
+
+  it("exits non-zero with the driver's error when the database can't be reached", async () => {
+    const result = await migrateProcess(migrationsFolder({ "0001_any.sql": "select 1;" }), {
+      PGHOST: "127.0.0.1",
+      PGPORT: String(await closedPort()),
+    });
+
+    expect(result.code).not.toBe(0);
+    expect(result.output).toContain("ECONNREFUSED");
+  });
+});
+
+describe("the migration runner for another role set", () => {
+  /** A fresh database made for a role set under test names (roles belong to the whole Postgres server, so a
+   * developer's own warden_preview_* roles are never touched), with a pool as that set's migration role. */
+  async function freshDatabaseFor() {
+    const base = testName();
+    const names: DatabaseRoleNames = {
+      migrate: `${base}_migrate`,
+      app: `${base}_app`,
+      admin: `${base}_admin`,
+    };
+    cleanups.push(async () => {
+      const superuser = createPool(silent, { max: 1 });
+      try {
+        for (const role of [names.app, names.admin, names.migrate]) {
+          await superuser.query(`drop role if exists ${role}`);
+        }
+      } finally {
+        await superuser.end();
+      }
+    });
+    const database = await createTestDatabase({}, names);
+    cleanups.push(database.drop);
+    const pool = createPool(silent, { user: names.migrate, database: database.name, max: 1 });
+    cleanups.push(() => pool.end());
+    return { names, pool };
+  }
+
+  it("applies every shipped migration, granting that set's app role the tables and the live app role nothing", async () => {
+    const { names, pool } = await freshDatabaseFor();
+
+    expect(await migrate(pool, MIGRATIONS_FOLDER, names)).toEqual({ applied: shipped });
+
+    for (const table of ["teams", "findings"]) {
+      for (const privilege of ["select", "insert", "update", "delete"]) {
+        const { rows } = await pool.query(
+          "select has_table_privilege($1, $2, $3) as own, has_table_privilege('warden_app', $2, $3) as live",
+          [names.app, `public.${table}`, privilege],
+        );
+        expect(rows[0], `${privilege} on ${table}`).toEqual({ own: true, live: false });
+      }
+    }
+  }, 30_000);
+});
+
+describe("the first migration's grants", () => {
+  /** A migrated database of the describe's own: the table made and dropped here stays off the suite's shared one. */
+  let database: string;
+  let drop: () => Promise<unknown>;
+  beforeAll(async () => {
+    ({ name: database, drop } = await createMigratedTestDatabase());
+  }, 30_000);
+  afterAll(() => drop(), 30_000);
+
+  async function laterTable() {
+    const owner = poolAs("warden_migrate", database);
+    const app = poolAs("warden_app", database);
+    const admin = poolAs("warden_admin", database);
+    cleanups.push(
+      () => owner.end(),
+      () => app.end(),
+      () => admin.end(),
+    );
+    const table = `grants_check_${process.pid}`;
+    // A serial key: inserting needs its sequence too.
+    await owner.query(`create table ${table} (id bigserial primary key, note text)`);
+    cleanups.push(() => owner.query(`drop table ${table}`));
+    return { table, app, admin };
+  }
+
+  it("lets warden_app read and write a table warden_migrate makes later, but not Kysely's tables", async () => {
+    const { table, app } = await laterTable();
+
+    await app.query(`insert into ${table} (note) values ('written')`);
+    await app.query(`update ${table} set note = 'changed'`);
+    const { rows } = await app.query(`select note from ${table}`);
+    expect(rows).toEqual([{ note: "changed" }]);
+    await app.query(`delete from ${table}`);
+
+    await expect(app.query("select * from kysely_migration")).rejects.toThrow(/permission denied/);
+    await expect(app.query("select * from kysely_migration_lock")).rejects.toThrow(
+      /permission denied/,
+    );
+  });
+
+  // 0006_proposals takes back 0001's default select for warden_admin: it reads only `teams (id)`.
+  it("gives warden_admin no read or write on a table warden_migrate makes later", async () => {
+    const { table, app, admin } = await laterTable();
+    await app.query(`insert into ${table} (note) values ('from the app')`);
+
+    await expect(admin.query(`select note from ${table}`)).rejects.toThrow(/permission denied/);
+    await expect(admin.query(`insert into ${table} (note) values ('x')`)).rejects.toThrow(
+      /permission denied/,
+    );
+  });
+});

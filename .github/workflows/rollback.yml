@@ -1,0 +1,85 @@
+name: Rollback
+
+# A rollback (README.md, "Releasing"), by hand from main only: scripts/cloud-run-rollback.sh checks the revision on a
+# rollback tag first, then moves all of warden's traffic to it, gives the daily Job its image and configuration, and
+# checks /api/health. The database keeps its newer schema.
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: The revision to roll back to (warden-rel-…); empty for the release tagged previous
+        required: false
+        type: string
+      from:
+        description: The revision you saw serving; if another serves when the rollback runs, it changes nothing
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  # The four variables the rollback reads (it builds nothing, so it needs no publishable key).
+  not-configured:
+    name: Rollback not configured
+    if: >-
+      vars.GCP_PROJECT_ID == '' || vars.GCP_DEPLOY_SA == '' || vars.GCP_WIF_PROVIDER == '' ||
+      vars.CLOUD_SQL_CONNECTION == ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Name the missing repository variables
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+          GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+          CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
+        run: |
+          missing=()
+          for name in GCP_PROJECT_ID GCP_DEPLOY_SA GCP_WIF_PROVIDER CLOUD_SQL_CONNECTION; do
+            [ -n "${!name}" ] || missing+=("$name")
+          done
+          echo "::notice title=Rollback skipped::Set the repository variables ${missing[*]} to roll back (README.md, Setting up Google Cloud)."
+
+  rollback:
+    name: Roll back
+    if: >-
+      vars.GCP_PROJECT_ID != '' && vars.GCP_DEPLOY_SA != '' && vars.GCP_WIF_PROVIDER != '' &&
+      vars.CLOUD_SQL_CONNECTION != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Its own lock, so a waiting rollback and a waiting release never cancel each other (GitHub keeps one waiting job
+    # per group). It runs beside a release instead: the script re-reads the serving revision just before it moves the
+    # traffic, and stops if a release moved it (README.md, "Releasing").
+    concurrency:
+      group: rollback
+      cancel-in-progress: false
+    # The only job that may ask GitHub for an OIDC token, which Workload Identity Federation trades for
+    # warden-deploy's credentials.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Workload Identity Federation gives main's tokens only; this says so plainly for a dispatch from elsewhere.
+      - name: Roll back from main only
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Roll back from main only, not $GITHUB_REF"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - name: Sign in to Google Cloud (Workload Identity Federation, no key)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+      - name: Check the revision on a tag, move the traffic and the daily Job back, check /api/health
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
+          REVISION: ${{ inputs.revision }}
+          ROLLBACK_FROM: ${{ inputs.from }}
+        # The inputs go in as environment variables, never into the script's text, and the script checks each is a
+        # revision name before any gcloud call.
+        run: scripts/cloud-run-rollback.sh ${REVISION:+"$REVISION"}
