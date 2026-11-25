@@ -5,20 +5,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
 import type pg from "pg";
-import type { HealthBody, ProductInput, Role } from "@warden/contracts";
+import {
+  fingerprint,
+  type Finding,
+  type HealthBody,
+  type ProductInput,
+  type Role,
+} from "@warden/contracts";
 import type { Hono } from "hono";
 import { createApp, type AppEnv, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
-import { createFindings, type Findings } from "../src/findings/index.ts";
+import {
+  createFindings,
+  DAILY_JOB_LIMITS,
+  type Findings,
+  type TransactionLimits,
+} from "../src/findings/index.ts";
+import { toRow } from "../src/findings/rows.ts";
 import { createLogger, type Logger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { createPatchAssessment } from "../src/modules/patch/assessment.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
+import { createPatchRefresh, type PatchRefresh } from "../src/modules/patch/refresh.ts";
 import { patchRoutes } from "../src/modules/patch/routes.ts";
 import { createSaveLimit, type SaveLimit } from "../src/modules/patch/save-limit.ts";
-import { createPatchScan, type PatchScan } from "../src/modules/patch/scan.ts";
+import { createPatchScan, PATCH_RULE, type PatchScan } from "../src/modules/patch/scan.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 /** Each module's move rule, as the start-up file wires them. */
@@ -29,10 +42,37 @@ const silent = () => createLogger(() => {});
 
 /**
  * The Patch Scan as the start-up file wires it: reporting to a Findings module with the start-up file's move rules,
- * on `withTeam`. `logger` takes its log lines (none are kept unless given).
+ * on `withTeam`. `logger` takes its log lines (none are kept unless given). `limits` are its transaction's, as the
+ * daily Job gives them (a save's Scan has none).
  */
-export function patchScan(withTeam: WithTeam, logger: Logger = silent()): PatchScan {
-  return createPatchScan({ findings: createFindings({ withTeam, moveRules: MOVE_RULES }), logger });
+export function patchScan(
+  withTeam: WithTeam,
+  logger: Logger = silent(),
+  limits?: TransactionLimits,
+): PatchScan {
+  return createPatchScan({
+    findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
+    logger,
+    limits,
+  });
+}
+
+/**
+ * Patch's daily step as the daily Job wires it: the Products store and the Patch Scan, on `withTeam`. `logger` takes
+ * the step's and the Scans' log lines; `limits` stand in for the Job's (DAILY_JOB_LIMITS by default).
+ */
+export function patchRefresh(
+  withTeam: WithTeam,
+  logger: Logger = silent(),
+  limits: TransactionLimits = DAILY_JOB_LIMITS,
+): PatchRefresh {
+  const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
+  return createPatchRefresh({
+    products: createProducts({ withTeam }),
+    findings,
+    scan: createPatchScan({ findings, logger, limits }),
+    logger,
+  });
 }
 
 /**
@@ -207,6 +247,56 @@ export async function seedProduct(
   return id;
 }
 
+/** What a test Patch Finding is built from: its CVE, package and version, and any field it sets otherwise. */
+export type PatchFindingFields = { cve: string; pkg?: string; version?: string } & Partial<Finding>;
+
+/**
+ * An Open `patch/known-vulnerability` Finding for `cve` on Product `productId` of `team`, as a Scan before this one
+ * would have left it, with any other field `overrides` set. Built only: nothing is written.
+ */
+export function patchFinding(
+  team: string,
+  productId: string,
+  { cve, pkg = "pkg:pypi/langchain", version = "0.0.200", ...overrides }: PatchFindingFields,
+): Finding {
+  const location = { kind: "dependency", package: pkg, version, vulnerability: cve } as const;
+  return {
+    id: randomUUID(),
+    team,
+    asset: { kind: "product", ref: productId },
+    module: "patch",
+    rule_id: PATCH_RULE,
+    fingerprint: fingerprint(PATCH_RULE, location),
+    location,
+    severity: "high",
+    title: `${cve}: a known vulnerability`,
+    evidence: { summary: `Version ${version} is affected.` },
+    status: "open",
+    unconfirmed_fix: null,
+    accepted_reason: null,
+    accepted_until: null,
+    first_seen_scan: "scan-0",
+    last_seen_scan: "scan-0",
+    moved_to: null,
+    ...overrides,
+  };
+}
+
+/**
+ * `patchFinding`'s Finding, written straight into `findings` through `withTeam`: no Scan runs, so the Product needn't
+ * exist. Returns it.
+ */
+export async function seedPatchFinding(
+  withTeam: WithTeam,
+  team: string,
+  productId: string,
+  fields: PatchFindingFields,
+): Promise<Finding> {
+  const finding = patchFinding(team, productId, fields);
+  await withTeam(team, (tx) => tx.insertInto("findings").values(toRow(finding)).execute());
+  return finding;
+}
+
 /** Members and Findings for a test that never reaches the database: any call fails it. */
 const noDatabase = () => Promise.reject(new Error("this test app has no database: pass withTeam"));
 const noMembers: Members = { open: noDatabase, list: noDatabase, changeRole: noDatabase };
@@ -216,6 +306,7 @@ const noFindings: Findings = {
   scan: noDatabase,
   scanLocked: noDatabase,
   list: noDatabase,
+  assetRefs: noDatabase,
   history: noDatabase,
   overview: noDatabase,
   accept: noDatabase,
