@@ -22,6 +22,7 @@ import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
 import { patchRoutes } from "../src/modules/patch/routes.ts";
+import { createSaveLimit, type SaveLimit } from "../src/modules/patch/save-limit.ts";
 import { createPatchScan, PATCH_RULE, type PatchScan } from "../src/modules/patch/scan.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
@@ -41,16 +42,22 @@ export function patchScan(withTeam: WithTeam, logger: Logger = silent()): PatchS
 
 /**
  * Patch's routes as the start-up file mounts them: the Products store and the Patch Scan, on `withTeam`. `scan`
- * stands in for the Patch Scan; `logger` takes the routes' log lines (none are kept unless given).
+ * stands in for the Patch Scan; `logger` takes the routes' log lines (none are kept unless given); `saveLimit` stands
+ * in for the start-up file's (a fresh one by default).
  */
 export function patchMount(
   withTeam: WithTeam,
-  { scan, logger = silent() }: { scan?: PatchScan; logger?: Logger } = {},
+  {
+    scan,
+    logger = silent(),
+    saveLimit = createSaveLimit(),
+  }: { scan?: PatchScan; logger?: Logger; saveLimit?: SaveLimit } = {},
 ): MountRoutes {
   return patchRoutes({
     products: createProducts({ withTeam }),
     scan: scan ?? patchScan(withTeam, logger),
     logger,
+    saveLimit,
   });
 }
 
