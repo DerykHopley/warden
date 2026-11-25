@@ -12,6 +12,8 @@ connection="$project:europe-west1:test-db"
 image="europe-west1-docker.pkg.dev/$project/warden-preview/warden:abc1234def5678"
 release_image="europe-west1-docker.pkg.dev/$project/warden/warden:abc1234def5678"
 publishable=pk_test_Y2ktcGxhY2Vob2xkZXIuY2xlcmsuYWNjb3VudHMuZGV2JA
+# The GitHub app's client id (public), as the repository variable WARDEN_GITHUB_APP_CLIENT_ID holds it.
+github_client_id=Iv23liExampleClientId0
 # The stub reports two URLs for each service <s>: the deterministic one, https://<s>-123456789012.europe-west1.run.app
 # (status.url), and the older hash one, https://<s>-abcdefghij-ew.a.run.app (in the run.googleapis.com/urls
 # annotation).
@@ -146,7 +148,7 @@ run_deploy() {
   local health=$1 migration=$2
   shift 2
   local vars=(GCP_PROJECT_ID="$project" CLOUD_SQL_CONNECTION="$connection" VITE_CLERK_PUBLISHABLE_KEY="$publishable"
-    GITHUB_SHA="$c3" GITHUB_RUN_NUMBER=12 GITHUB_RUN_ATTEMPT=1)
+    WARDEN_GITHUB_APP_CLIENT_ID="$github_client_id" GITHUB_SHA="$c3" GITHUB_RUN_NUMBER=12 GITHUB_RUN_ATTEMPT=1)
   while [[ $1 != -- ]]; do
     vars+=("$1")
     shift
@@ -254,6 +256,16 @@ assert_no_match "no call names a live account" '(^|[^-])warden-(run|migrate|depl
 assert_no_match "no call names the daily Job" 'warden-daily-expiry' "$calls"
 assert_no_match "no call names the Scan Job" 'warden-scan' "$calls"
 assert_no_match "no call names a live database secret" 'warden-db-(app|migrate|admin)-password' "$calls"
+# A preview gets no GitHub app settings (slice 17 wires them), so its link route answers 503, even with the client id
+# set (the preview workflow doesn't pass it).
+assert_no_match "no call names a GitHub app secret" 'warden-github-app' "$calls"
+assert_no_match "no call sets a GitHub app variable" 'GITHUB_APP_' "$calls"
+
+# --- A preview without the GitHub app's client id deploys: only a release needs it ---
+run_deploy 200 ok WARDEN_GITHUB_APP_CLIENT_ID= -- "$image" preview demo
+assert_equal "preview without WARDEN_GITHUB_APP_CLIENT_ID: exit 0" 0 "$code"
+assert_line "preview without WARDEN_GITHUB_APP_CLIENT_ID: the revision is deployed" "gcloud run deploy warden-preview " \
+  "$calls"
 
 # --- The longest name a tag may have (20 characters) is taken ---
 run_deploy 200 ok -- "$image" preview a234567890123456789z
@@ -333,20 +345,27 @@ assert_equal "release: the revision has the Cloud SQL instance attached" "$conne
   "$(flag set-cloudsql-instances "$service_deploy")"
 assert_no_match "release: neither the job nor the revision deploy uses an --update- flag" ' --update-' \
   "$job_deploy"$'\n'"$service_deploy"
-assert_equal "release: the revision's plain values, CLERK_AUTHORIZED_PARTIES the service's two URLs comma-separated and intact, and the Scan Job's name" \
+assert_equal "release: the revision's plain values, CLERK_AUTHORIZED_PARTIES the service's two URLs comma-separated and intact, the Scan Job's name and the GitHub app's client id" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_app
 PGDATABASE=warden
 VITE_CLERK_PUBLISHABLE_KEY=$publishable
 CLERK_AUTHORIZED_PARTIES=https://warden-123456789012.europe-west1.run.app,https://warden-abcdefghij-ew.a.run.app
-WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan" \
+WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan
+GITHUB_APP_CLIENT_ID=$github_client_id" \
   "$(gcloud_dict "$(flag set-env-vars "$service_deploy")")"
 service_secrets=$(gcloud_dict "$(flag set-secrets "$service_deploy")")
-assert_equal "release: the revision's secrets: the app password and the two Clerk keys" \
+assert_equal "release: the revision's secrets: the app password, the two Clerk keys and the GitHub app's two" \
   "PGPASSWORD=warden-db-app-password
 CLERK_SECRET_KEY=warden-clerk-secret
-CLERK_JWT_KEY=warden-clerk-jwt-key" \
+CLERK_JWT_KEY=warden-clerk-jwt-key
+GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
   "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
+assert_equal "release: the GitHub app's secrets are pinned at version 1, as #132 makes them" \
+  "GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret:1
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key:1" \
+  "$(grep '^GITHUB_APP_' <<<"$service_secrets")"
 assert_equal "release: each of the revision's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
 
@@ -559,5 +578,7 @@ bad_input "an unset GCP_PROJECT_ID" "GCP_PROJECT_ID" GCP_PROJECT_ID= -- "$image"
 bad_input "an unset VITE_CLERK_PUBLISHABLE_KEY" "VITE_CLERK_PUBLISHABLE_KEY" VITE_CLERK_PUBLISHABLE_KEY= -- \
   "$image" preview demo
 bad_input "an unset GITHUB_SHA" "GITHUB_SHA" GITHUB_SHA= -- "$image" preview demo
+bad_input "a release with an unset WARDEN_GITHUB_APP_CLIENT_ID" "set WARDEN_GITHUB_APP_CLIENT_ID" \
+  WARDEN_GITHUB_APP_CLIENT_ID= -- "$release_image" release
 
 echo "cloud-run-deploy: all passed"

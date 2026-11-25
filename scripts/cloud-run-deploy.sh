@@ -16,8 +16,9 @@
 #        a rollback), then the daily Job warden-daily-expiry's image. Run in a checkout with main's whole history: it
 #        releases only a commit on main that is newer than the serving release's (release_order).
 # Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>) and VITE_CLERK_PUBLISHABLE_KEY (public),
-#        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT (default 1), which GitHub
-#        Actions sets, name the revision. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health gate.
+#        all required; WARDEN_GITHUB_APP_CLIENT_ID (the read-only GitHub app's client id, public), required for a
+#        release and not read by a preview; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT
+#        (default 1), which GitHub Actions sets, name the revision. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health gate.
 # Needs: gcloud signed in as an account that may deploy the mode's job and service and act as its accounts; curl; jq;
 #        git, for a release.
 # The secret versions it pins, and what it shares with the rollback, are in scripts/lib/cloud-run.sh.
@@ -67,6 +68,9 @@ names_for() {
 }
 readonly CLERK_SECRET=warden-clerk-secret
 readonly CLERK_JWT_SECRET=warden-clerk-jwt-key
+# The read-only GitHub app's (#132): a release's revision only, until previews get theirs.
+readonly GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
+readonly GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key
 
 migrate() {
   local password
@@ -88,14 +92,21 @@ migrate() {
 }
 
 deploy_revision() {
-  local parties=$1 password clerk_secret clerk_jwt env
+  local parties=$1 password clerk_secret clerk_jwt github_secret github_key env secrets
   password=$(pinned "$APP_PASSWORD_SECRET") || exit 1
   clerk_secret=$(pinned "$CLERK_SECRET") || exit 1
   clerk_jwt=$(pinned "$CLERK_JWT_SECRET") || exit 1
   env=("PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "PGUSER=$APP_USER" "PGDATABASE=$DATABASE"
     "VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY" "CLERK_AUTHORIZED_PARTIES=$parties")
-  # A release's revision starts Scans on the Scan Job; a preview's has none, so its "Scan now" answers 503.
-  if [[ $SERVICE == warden ]]; then env+=("WARDEN_SCAN_JOB=$(scan_job_name)"); fi
+  secrets=("PGPASSWORD=$password" "CLERK_SECRET_KEY=$clerk_secret" "CLERK_JWT_KEY=$clerk_jwt")
+  # A release's revision starts Scans on the Scan Job, and links GitHub installations with the read-only app; a
+  # preview's has neither, so its "Scan now" and its link route answer 503.
+  if [[ $SERVICE == warden ]]; then
+    github_secret=$(pinned "$GITHUB_APP_CLIENT_SECRET") || exit 1
+    github_key=$(pinned "$GITHUB_APP_PRIVATE_KEY") || exit 1
+    env+=("WARDEN_SCAN_JOB=$(scan_job_name)" "GITHUB_APP_CLIENT_ID=$WARDEN_GITHUB_APP_CLIENT_ID")
+    secrets+=("GITHUB_APP_CLIENT_SECRET=$github_secret" "GITHUB_APP_PRIVATE_KEY=$github_key")
+  fi
   gcloud run deploy "$SERVICE" \
     --image="$IMAGE" \
     --region="$REGION" \
@@ -105,7 +116,7 @@ deploy_revision() {
     --service-account="$RUN_ACCOUNT@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
     --set-cloudsql-instances="$CLOUD_SQL_CONNECTION" \
     --set-env-vars="$(dict "${env[@]}")" \
-    --set-secrets="$(dict "PGPASSWORD=$password" "CLERK_SECRET_KEY=$clerk_secret" "CLERK_JWT_KEY=$clerk_jwt")" \
+    --set-secrets="$(dict "${secrets[@]}")" \
     --project="$GCP_PROJECT_ID"
 }
 
@@ -170,8 +181,10 @@ main() {
       ;;
     *) usage_error "the mode must be preview or release, not '$mode'" ;;
   esac
-  local var
-  for var in GCP_PROJECT_ID CLOUD_SQL_CONNECTION VITE_CLERK_PUBLISHABLE_KEY GITHUB_SHA GITHUB_RUN_NUMBER; do
+  local var required=(GCP_PROJECT_ID CLOUD_SQL_CONNECTION VITE_CLERK_PUBLISHABLE_KEY GITHUB_SHA GITHUB_RUN_NUMBER)
+  # Only a release's revision gets the GitHub app; a preview doesn't read its client id.
+  if [[ $mode == release ]]; then required+=(WARDEN_GITHUB_APP_CLIENT_ID); fi
+  for var in "${required[@]}"; do
     [[ -n ${!var:-} ]] || usage_error "set $var"
   done
   names_for "$mode"

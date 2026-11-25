@@ -342,7 +342,9 @@ preflight() {
   # What the owner makes by hand, checked before any change.
   exists gcloud sql instances describe "$instance" --project="$project" ||
     missing+=("Cloud SQL instance $instance")
-  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key; do
+  # The GitHub app's two (#132's steps) are made by hand too: the live service reads them.
+  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
+    warden-github-app-client-secret warden-github-app-private-key; do
     exists gcloud secrets describe "$secret" --project="$project" || missing+=("secret $secret")
   done
   if [[ -n ${missing[*]+set} ]]; then
@@ -570,7 +572,7 @@ main() {
   done
   note "Each secret's replication: each should be user-managed, in $REGION only"
   for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-    ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
+    warden-github-app-client-secret warden-github-app-private-key ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
     run gcloud secrets describe "$secret" --format='yaml(name,replication)' --project="$project"
   done
 
@@ -609,6 +611,9 @@ main() {
       --role=roles/cloudsql.client --condition=None
   done
   grant_secrets "$project" "$run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-app-password
+  # The GitHub app's client secret and private key: the live service alone, for now (#151). The Scan Job and the
+  # preview accounts get them when their own slices need them.
+  grant_secrets "$project" "$run_sa" warden-github-app-client-secret warden-github-app-private-key
   grant_secrets "$project" "$migrate_sa" warden-db-app-password warden-db-migrate-password
   # warden-daily (the daily Job, ADR 0009): the only account that reads the admin password, so the server can't.
   grant_secrets "$project" "$daily_sa" warden-db-app-password warden-db-admin-password
@@ -719,6 +724,10 @@ main() {
   # Public by design; read from the keyring when the line is pasted.
   # shellcheck disable=SC2016 # printed for the owner to run, not expanded here
   printf '%s\n' 'gh variable set VITE_CLERK_PUBLISHABLE_KEY --body "$(secret-tool lookup service warden-clerk-publishable)" --repo '"$GITHUB_REPO"
+  # The GitHub app's client id: public too, and from the keyring the same way. GitHub refuses a variable name that
+  # starts with GITHUB_, so a release reads it as WARDEN_GITHUB_APP_CLIENT_ID.
+  # shellcheck disable=SC2016 # printed for the owner to run, not expanded here
+  printf '%s\n' 'gh variable set WARDEN_GITHUB_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-app-client-id)" --repo '"$GITHUB_REPO"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

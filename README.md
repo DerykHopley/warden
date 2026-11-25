@@ -134,7 +134,9 @@ And these, made by hand:
 
 - a Cloud SQL for PostgreSQL 17 instance in `europe-west1`;
 - the secrets `warden-db-password` (the instance's `postgres` user's password), `warden-clerk-secret`,
-  `warden-clerk-publishable` and `warden-clerk-jwt-key`.
+  `warden-clerk-publishable` and `warden-clerk-jwt-key`;
+- the GitHub app's secrets `warden-github-app-client-secret` and `warden-github-app-private-key`, as #132's steps
+  make them.
 
 The `postgres` user's password must be the latest version of `warden-db-password`: the roles step logs in with it.
 When they differ, the script says so and prints the `gcloud sql users set-password` command that sets it from the
@@ -152,7 +154,7 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 | Artifact Registry | the Docker repositories `warden` (releases) and `warden-preview` (owner previews), in `europe-west1` |
 | Cloud SQL | the databases `warden` and `warden_preview`; daily backups, 7 kept; point-in-time recovery with 6 days of logs (Cloud SQL's docs ask for fewer log days than backups); no authorized networks, connectors required, and encrypted connections only (`--ssl-mode=ENCRYPTED_ONLY`) |
 | Logging | the `_Default` log bucket keeps 30 days; Data Access audit logs (`DATA_READ`) for Secret Manager only, so each read of a secret is recorded |
-| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-admin-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all nine secrets' replication |
+| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-admin-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all eleven secrets' replication |
 | Database roles | run from your machine, as `postgres`, through the Cloud SQL Auth Proxy on a free local port: `server/src/roles.ts` makes the live roles (`warden_migrate`, `warden_app`, `warden_admin`) on `warden`, with their three passwords, then the preview roles (`warden_preview_migrate`, `warden_preview_app`, `warden_preview_admin`) on `warden_preview`, with the app and migrate passwords only: no preview Job runs, so `warden_preview_admin` can't log in. Each database lets only its own set connect. The passwords go from Secret Manager into that one process's environment only; the proxy is stopped when the script ends, also on failure. No service account reads the `postgres` password, so **rerun the script after a change to `createRoles`** |
 | Service accounts | none has a key. See the table below |
 | Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches. The provider maps each token to its repository id and branch kind (`attribute.deploy`, such as `<repo-id>:main`): only this repository's `main` tokens may act as `warden-deploy`, and only its `preview/*` tokens as `warden-preview-deploy`, so a token from another repository can never match, even through another provider in the pool |
@@ -164,7 +166,7 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 
 | Account | Used by | May |
 |---|---|---|
-| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key`; start `warden-scan` with an override (`roles/run.jobsExecutorWithOverrides` on that Job only) |
+| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (the only account that reads the GitHub app's two); start `warden-scan` with an override (`roles/run.jobsExecutorWithOverrides` on that Job only) |
 | `warden-migrate` | the live migration job | Cloud SQL client; read `warden-db-app-password` and `warden-db-migrate-password`. Not the `postgres` password |
 | `warden-daily` | the daily expiry Job `warden-daily-expiry` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-db-admin-password`. The only account that reads the admin password, so the server can't list Teams |
 | `warden-scan` | the Scan Job `warden-scan` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` only. Never the admin password: it works inside one Team and lists none |
@@ -208,7 +210,7 @@ GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-
    ```
 
    Before changing anything it checks `cloud-sql-proxy`, the server's dependencies, the application-default
-   credentials, the instance and the four secrets above, and stops naming any that's missing. A `gcloud` error
+   credentials, the instance and the six secrets above, and stops naming any that's missing. A `gcloud` error
    other than "not found" also stops it, printing the error, and so does a failed roles run, with the roles
    script's own error (which holds no password). Turning on point-in-time recovery restarts the instance once
    (Cloud SQL's docs say so), closing open connections; the script warns first, and skips that flag when it's
@@ -216,11 +218,14 @@ GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-
 
 4. Paste the `gh variable set` lines it prints last. They hold names and ids only, never a secret:
    `GCP_PROJECT_ID`, `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`, `GCP_PREVIEW_DEPLOY_SA` (the preview workflow's
-   account), `CLOUD_SQL_CONNECTION` and `VITE_CLERK_PUBLISHABLE_KEY`. The publishable key is public by design; its
-   line reads it from your keyring when you paste it:
+   account), `CLOUD_SQL_CONNECTION`, `VITE_CLERK_PUBLISHABLE_KEY` and `WARDEN_GITHUB_APP_CLIENT_ID` (the GitHub
+   app's client id; GitHub refuses a variable name that starts with `GITHUB_`, and the release hands it to the live
+   service as `GITHUB_APP_CLIENT_ID`). The publishable key and the client id are public by design; their lines read
+   them from your keyring when you paste them:
 
    ```sh
    gh variable set VITE_CLERK_PUBLISHABLE_KEY --body "$(secret-tool lookup service warden-clerk-publishable)" --repo <owner>/<repo>
+   gh variable set WARDEN_GITHUB_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-app-client-id)" --repo <owner>/<repo>
    ```
 
 **Why the database keeps a public IP.** A private IP needs a VPC network, private services access and Direct VPC
@@ -309,7 +314,8 @@ up yet.
 Every merge to `main` releases Warden to the live `warden` service. It needs Google Cloud set up first (above), with
 the repository variables `GCP_PROJECT_ID`, `GCP_DEPLOY_SA`, `GCP_WIF_PROVIDER`, `CLOUD_SQL_CONNECTION` and
 `VITE_CLERK_PUBLISHABLE_KEY`. Without any of the five, a release deploys nothing and the run stays green, with a
-notice naming each missing variable (a rollback needs the first four).
+notice naming each missing variable (a rollback needs the first four). A release also needs
+`WARDEN_GITHUB_APP_CLIENT_ID`: without it, the deploy fails naming it, before anything changes.
 
 **What a release does** (`.github/workflows/release.yml`, then `scripts/cloud-run-deploy.sh <image> release`):
 
@@ -325,8 +331,10 @@ notice naming each missing variable (a rollback needs the first four).
 4. **Deploy:** a `warden` revision named `warden-rel-<sha7>-<run>-<attempt>`, as `warden-run`, tagged `candidate`, with **no
    traffic**. Every release sets the revision's env vars and secrets afresh; its `CLERK_AUTHORIZED_PARTIES` is each
    URL Cloud Run gives the service, and its `WARDEN_SCAN_JOB` names the Scan Job
-   (`projects/<project-id>/locations/europe-west1/jobs/warden-scan`), which "Scan now" starts. A preview's revision
-   has none, so its "Scan now" answers 503.
+   (`projects/<project-id>/locations/europe-west1/jobs/warden-scan`), which "Scan now" starts. It also gets the
+   GitHub app's settings: `GITHUB_APP_CLIENT_ID` from the repository variable, and the secrets
+   `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned. A preview's revision has none of these, so its
+   "Scan now" answers 503.
 5. **Health gate:** call `/api/health` on the tag's URL (`https://candidate---warden-<project-number>.europe-west1.run.app`)
    for up to about 90 seconds until it answers 200. If it never does, the release fails and the revision gets no
    traffic.
@@ -371,7 +379,8 @@ traffic meanwhile, it stops with traffic unchanged, and you dispatch it again if
 starts after a rollback moved the traffic releases forward from it, as any merge to `main` does.
 
 Secrets are pinned as for previews: see "Secrets are pinned" in "Owner previews" above. The live service reads
-`warden-db-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key`; the migration job
+`warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and
+`warden-github-app-private-key`; the migration job
 `warden-db-migrate-password`; the daily Job `warden-db-app-password` and `warden-db-admin-password`; the Scan Job
 `warden-db-app-password` alone. A new version
 reaches them with the next release after the PR that moves its number.
