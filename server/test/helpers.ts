@@ -1,5 +1,5 @@
 // Test seams: a key pair standing in for a Clerk instance, and an app wired as production wires it.
-import { randomInt, randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomInt, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,6 +34,21 @@ export const testPublishableKey = `pk_test_${Buffer.from(`${FRONTEND_API_HOST}$`
 export async function testKey() {
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   return { privateKey, publicPem: await exportSPKI(publicKey) };
+}
+
+let appKey: string | undefined;
+
+/**
+ * A GitHub App's private key as GitHub downloads it: a 2048-bit RSA PKCS#1 PEM, `BEGIN RSA PRIVATE KEY`. Made once per
+ * test file, on first use, since an RSA key takes a moment to generate.
+ */
+export function gitHubAppKey(): string {
+  appKey ??= generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs1", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).privateKey;
+  return appKey;
 }
 
 /** A v2 session token's active Organization claim, as Clerk writes it: `rol` without the `org:` prefix. */

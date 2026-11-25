@@ -1,6 +1,5 @@
 // The real server process: its configuration check at start-up, staying up when the database is gone, shutting down
 // cleanly, and wiring the GitHub client when its settings are given.
-import { generateKeyPairSync } from "node:crypto";
 import type { CryptoKey } from "jose";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type pg from "pg";
@@ -9,6 +8,7 @@ import { poolAs } from "./databases.ts";
 import {
   activeOrganization,
   ADMIN,
+  gitHubAppKey,
   newTeam,
   sessionToken,
   testKey,
@@ -17,20 +17,28 @@ import {
 import { closedPort } from "./ports.ts";
 import { startServer as start, waitForListening } from "./server-process.ts";
 
-/** A server whose database refuses connections, listening on a spare port. */
-async function startWithoutDatabase() {
+/** A server on a spare port with the test Clerk settings, the `database` settings and `extra`, once it's listening. */
+async function startWith(database: Record<string, string>, extra: Record<string, string> = {}) {
   const port = await closedPort();
   const server = start({
     CLERK_SECRET_KEY: "clerk-secret-value",
     VITE_CLERK_PUBLISHABLE_KEY: testPublishableKey,
+    ...database,
+    PORT: String(port),
+    ...extra,
+  });
+  await waitForListening(server.output);
+  return { ...server, port };
+}
+
+/** A server whose database refuses connections, listening on a spare port. */
+async function startWithoutDatabase() {
+  return startWith({
     PGHOST: "127.0.0.1",
     PGPORT: String(await closedPort()),
     PGUSER: "warden",
     PGDATABASE: "warden",
-    PORT: String(port),
   });
-  await waitForListening(server.output);
-  return { ...server, port };
 }
 
 describe("start-up", () => {
@@ -91,11 +99,7 @@ describe("start-up with or without the GitHub app's settings", () => {
   const GITHUB_APP = {
     GITHUB_APP_CLIENT_ID: "Iv23li-the-client-id",
     GITHUB_APP_CLIENT_SECRET: "the-client-secret-value",
-    GITHUB_APP_PRIVATE_KEY: generateKeyPairSync("rsa", {
-      modulusLength: 2048,
-      privateKeyEncoding: { type: "pkcs1", format: "pem" },
-      publicKeyEncoding: { type: "spki", format: "pem" },
-    }).privateKey,
+    GITHUB_APP_PRIVATE_KEY: gitHubAppKey(),
   };
 
   /**
@@ -103,23 +107,19 @@ describe("start-up with or without the GitHub app's settings", () => {
    * (400) when GitHub is set up, before any call to GitHub, and answers 503 when it isn't.
    */
   async function linkStatus(env: Record<string, string>) {
-    const port = await closedPort();
-    const server = start({
-      CLERK_SECRET_KEY: "clerk-secret-value",
-      CLERK_JWT_KEY: publicPem,
-      VITE_CLERK_PUBLISHABLE_KEY: testPublishableKey,
-      PGHOST: process.env.PGHOST ?? "",
-      PGPORT: process.env.PGPORT ?? "",
-      PGUSER: "warden_app",
-      PGDATABASE: inject("testDatabase"),
-      ...(process.env.PGPASSWORD ? { PGPASSWORD: process.env.PGPASSWORD } : {}),
-      PORT: String(port),
-      ...env,
-    });
-    await waitForListening(server.output);
+    const server = await startWith(
+      {
+        PGHOST: process.env.PGHOST ?? "",
+        PGPORT: process.env.PGPORT ?? "",
+        PGUSER: "warden_app",
+        PGDATABASE: inject("testDatabase"),
+        ...(process.env.PGPASSWORD ? { PGPASSWORD: process.env.PGPASSWORD } : {}),
+      },
+      { CLERK_JWT_KEY: publicPem, ...env },
+    );
     const team = await newTeam(createWithTeam(pool));
     const token = await sessionToken(key, ADMIN, 60, activeOrganization(team));
-    const res = await fetch(`http://127.0.0.1:${port}/api/github/installations`, {
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/github/installations`, {
       method: "POST",
       headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
       body: "{}",

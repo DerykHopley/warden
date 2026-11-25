@@ -2,6 +2,7 @@
 // back for the rest of that minute, before its token is checked. The count lives in this server instance's memory,
 // so each Cloud Run instance keeps its own: an accepted limit (docs/threat-model.md). Clerk's own sign-in protection
 // covers the password step itself.
+import { createAttemptLimit } from "./attempt-limit.ts";
 
 export type SignInLimit = {
   /**
@@ -26,50 +27,12 @@ export function createSignInLimit(
   } = {},
 ): SignInLimit {
   const { max = 20, windowMs = 60_000, now = Date.now, maxAddresses = 100_000 } = options;
-  /** Per address key: when its window began (its first attempt in it), and its attempts since. Kept in the order
-   * windows began, so the first entry is the oldest. */
-  const windows = new Map<string, { start: number; attempts: number }>();
-  let lastSweep = now();
-
-  const current = (key: string, at: number) => {
-    const window = windows.get(key);
-    if (window === undefined || at - window.start >= windowMs) return undefined;
-    return window;
-  };
-
-  /** Forgets every window that's over; at most once per window length, so it costs little however busy. */
-  const sweep = (at: number) => {
-    if (at - lastSweep < windowMs) return;
-    lastSweep = at;
-    for (const [key, window] of windows) {
-      if (at - window.start >= windowMs) windows.delete(key);
-    }
-  };
-
+  // Counted under each address's key, so an IPv6 /64 is one address.
+  const limit = createAttemptLimit({ max, windowMs, now, maxKeys: maxAddresses });
   return {
-    attempt(address) {
-      const at = now();
-      sweep(at);
-      const key = limitKey(address);
-      const window = current(key, at);
-      if (window !== undefined) {
-        if (window.attempts >= max) return Math.ceil((window.start + windowMs - at) / 1000);
-        window.attempts++;
-        return undefined;
-      }
-      windows.delete(key);
-      if (windows.size >= maxAddresses) {
-        const oldest = windows.keys().next().value;
-        if (oldest !== undefined) windows.delete(oldest);
-      }
-      windows.set(key, { start: at, attempts: 1 });
-      return undefined;
-    },
-    takeBack(address) {
-      const window = current(limitKey(address), now());
-      if (window !== undefined && window.attempts > 0) window.attempts--;
-    },
-    size: () => windows.size,
+    attempt: (address) => limit.attempt(limitKey(address)),
+    takeBack: (address) => limit.takeBack(limitKey(address)),
+    size: limit.size,
   };
 }
 

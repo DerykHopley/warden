@@ -1,21 +1,22 @@
 // The GitHub client over a fake fetch (spec decision 11: GitHub is faked at its HTTP boundary). A person's code becomes
 // a user token, which lists the installations they can reach and, in one of them, the repos they can read; the App's
-// JWT becomes an installation token, which lists the installation's repos. Every page is read. Each failure throws
-// GitHubRefusedCode or GitHubUnavailable, and none carries the code, the verifier, the client secret or a token.
-import { createPublicKey, generateKeyPairSync } from "node:crypto";
+// JWT becomes an installation token, whose answer gives the installation's permissions. Every page is read. Each
+// failure throws GitHubRefusedCode, GitHubInstallationUnreachable or GitHubUnavailable, and none carries the code, the
+// verifier, the client secret or a token.
+import { createPublicKey } from "node:crypto";
 import { jwtVerify } from "jose";
 import { describe, expect, it } from "vitest";
-import { rejection } from "../../../test/helpers.ts";
+import { gitHubAppKey, rejection } from "../../../test/helpers.ts";
 import type { Fetch } from "../../http-call.ts";
 import { createLogger } from "../../log.ts";
-import { createGitHub, GitHubRefusedCode, GitHubUnavailable } from "./github.ts";
+import {
+  createGitHub,
+  GitHubInstallationUnreachable,
+  GitHubRefusedCode,
+  GitHubUnavailable,
+} from "./github.ts";
 
-/** A GitHub App's key as GitHub downloads it: PKCS#1 PEM, `BEGIN RSA PRIVATE KEY`. */
-const PRIVATE_KEY = generateKeyPairSync("rsa", {
-  modulusLength: 2048,
-  privateKeyEncoding: { type: "pkcs1", format: "pem" },
-  publicKeyEncoding: { type: "spki", format: "pem" },
-}).privateKey;
+const PRIVATE_KEY = gitHubAppKey();
 
 const CLIENT_ID = "Iv23li-the-client-id";
 const CLIENT_SECRET = "the-client-secret-value";
@@ -28,7 +29,6 @@ const INSTALLATION_ID = 42;
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const INSTALLATIONS_URL = "https://api.github.com/user/installations";
 const ACCESS_TOKENS_URL = `https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`;
-const REPOS_URL = "https://api.github.com/installation/repositories";
 const USER_REPOS_URL = `https://api.github.com/user/installations/${INSTALLATION_ID}/repositories`;
 
 const STEPS = {
@@ -36,7 +36,6 @@ const STEPS = {
   installations: "GitHub's list of the user's installations",
   userRepos: `GitHub's list of the user's repositories in installation ${INSTALLATION_ID}`,
   accessToken: `GitHub's installation token for installation ${INSTALLATION_ID}`,
-  repos: `GitHub's list of installation ${INSTALLATION_ID}'s repositories`,
 };
 
 const json = (body: unknown, status = 200) =>
@@ -83,16 +82,11 @@ function fakeGitHub(
         },
         201,
       ),
-    repos = (call) => {
-      const all = items(2, repo);
-      return json({ total_count: all.length, repositories: page(call, all) });
-    },
   }: {
     token?: Answer;
     installations?: Answer;
     userRepos?: Answer;
     accessToken?: Answer;
-    repos?: Answer;
   } = {},
   timeoutMs?: number,
 ) {
@@ -102,7 +96,6 @@ function fakeGitHub(
     [`GET ${INSTALLATIONS_URL}`]: installations,
     [`GET ${USER_REPOS_URL}`]: userRepos,
     [`POST ${ACCESS_TOKENS_URL}`]: accessToken,
-    [`GET ${REPOS_URL}`]: repos,
   };
   const fetch: Fetch = async (url, init) => {
     const call = { url: new URL(url), init };
@@ -283,31 +276,15 @@ describe("createGitHub", () => {
     });
   });
 
-  it("keeps the code, the verifier and the secret out of the error and its log line when the token answer repeats the request", async () => {
-    const { github } = fakeGitHub({
-      token: ({ init }) => json({ message: init.body as string }, 400),
-    });
+  const installationPermissions = (github: ReturnType<typeof createGitHub>) =>
+    github.installationPermissions(INSTALLATION_ID);
 
-    const error = await rejection(userInstallationRepos(github));
-    const lines: string[] = [];
-    createLogger((line) => lines.push(line)).error("Linking failed", { error });
-
-    expect(error).toBeInstanceOf(GitHubUnavailable);
-    expect((error as GitHubUnavailable).step).toBe(STEPS.token);
-    expect((error as GitHubUnavailable).status).toBe(400);
-    for (const serialised of [error.message, error.stack ?? "", lines.join("")]) {
-      for (const secret of [CODE, VERIFIER, CLIENT_SECRET]) {
-        expect(serialised).not.toContain(secret);
-      }
-    }
-  });
-
-  describe("installationRepos", () => {
+  describe("installationPermissions", () => {
     it("sends an App JWT that verifies against the key's public half, issued by the client id", async () => {
       const { github, calls } = fakeGitHub();
       const before = Math.floor(Date.now() / 1000);
 
-      await github.installationRepos(INSTALLATION_ID);
+      await installationPermissions(github);
 
       const [tokenCall] = callsTo(calls, ACCESS_TOKENS_URL);
       expect(tokenCall!.init.method).toBe("POST");
@@ -323,44 +300,46 @@ describe("createGitHub", () => {
       expect(payload.exp! - after).toBeLessThanOrEqual(600);
     });
 
-    it("answers each repo's html_url as ref and id as githubId, with the installation token's permissions", async () => {
+    it("answers the installation token's permissions from the token answer alone, listing no repos", async () => {
       const { github, calls } = fakeGitHub();
 
-      expect(await github.installationRepos(INSTALLATION_ID)).toEqual({
-        repos: [
-          { ref: "https://github.com/acme/repo-1", githubId: 1001 },
-          { ref: "https://github.com/acme/repo-2", githubId: 1002 },
-        ],
-        permissions: PERMISSIONS,
-      });
+      expect(await installationPermissions(github)).toEqual(PERMISSIONS);
 
-      const [list] = callsTo(calls, REPOS_URL);
-      expect(header(list!, "Authorization")).toBe(`Bearer ${INSTALLATION_TOKEN}`);
+      expect(calls.map(({ url }) => `${url.origin}${url.pathname}`)).toEqual([ACCESS_TOKENS_URL]);
     });
 
-    it("reads every page when the installation lists more than 100 repos", async () => {
-      const all = items(230, repo);
-      const { github, calls } = fakeGitHub({
-        repos: (call) => json({ total_count: all.length, repositories: page(call, all) }),
+    it.each([
+      ["permissions are missing", {}],
+      ["permissions are empty", { permissions: {} }],
+    ])("answers no permissions when the token answer's %s", async (_name, answer) => {
+      const { github } = fakeGitHub({
+        accessToken: () => json({ token: INSTALLATION_TOKEN, ...answer }, 201),
       });
 
-      const { repos } = await github.installationRepos(INSTALLATION_ID);
-
-      expect(repos.map(({ githubId }) => githubId)).toEqual(all.map(({ id }) => id));
-      expect(callsTo(calls, REPOS_URL).map(({ url }) => url.searchParams.get("page"))).toEqual([
-        "1",
-        "2",
-        "3",
-      ]);
-      expect(callsTo(calls, ACCESS_TOKENS_URL)).toHaveLength(1);
+      expect(await installationPermissions(github)).toEqual({});
     });
+
+    it.each([
+      ["403, as for a suspended installation", 403, "This installation has been suspended"],
+      ["404, as for a removed installation", 404, "Not Found"],
+    ])(
+      "throws GitHubInstallationUnreachable when the token call answers %s",
+      async (_name, status, message) => {
+        const { github } = fakeGitHub({ accessToken: () => json({ message }, status) });
+
+        const error = await rejection(installationPermissions(github));
+
+        expect(error).toBeInstanceOf(GitHubInstallationUnreachable);
+        expect((error as GitHubInstallationUnreachable).status).toBe(status);
+      },
+    );
 
     it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
       "refuses installation id %s, which isn't a positive integer, before any call",
       async (installationId) => {
         const { github, calls } = fakeGitHub();
 
-        const error = await rejection(github.installationRepos(installationId));
+        const error = await rejection(github.installationPermissions(installationId));
 
         expect(error).toBeInstanceOf(RangeError);
         expect(calls).toEqual([]);
@@ -372,14 +351,13 @@ describe("createGitHub", () => {
     const { github, calls } = fakeGitHub();
 
     await github.userInstallationRepos(CODE, VERIFIER, INSTALLATION_ID);
-    await github.installationRepos(INSTALLATION_ID);
+    await installationPermissions(github);
 
     const apiCalls = calls.filter(({ url }) => url.origin === "https://api.github.com");
     expect(apiCalls.map(({ url }) => url.pathname)).toEqual([
       "/user/installations",
       `/user/installations/${INSTALLATION_ID}/repositories`,
       `/app/installations/${INSTALLATION_ID}/access_tokens`,
-      "/installation/repositories",
     ]);
     for (const call of apiCalls) {
       expect(header(call, "Accept")).toBe("application/vnd.github+json");
@@ -393,12 +371,7 @@ describe("createGitHub", () => {
       ["token", { token: answer }, userInstallationRepos],
       ["installations", { installations: answer }, userInstallationRepos],
       ["userRepos", { userRepos: answer }, userInstallationRepos],
-      [
-        "accessToken",
-        { accessToken: answer },
-        (github) => github.installationRepos(INSTALLATION_ID),
-      ],
-      ["repos", { repos: answer }, (github) => github.installationRepos(INSTALLATION_ID)],
+      ["accessToken", { accessToken: answer }, installationPermissions],
     ] as [
       keyof typeof STEPS,
       Parameters<typeof fakeGitHub>[0],
@@ -481,7 +454,6 @@ describe("createGitHub", () => {
   const LIST_URLS: Partial<Record<keyof typeof STEPS, string>> = {
     installations: INSTALLATIONS_URL,
     userRepos: USER_REPOS_URL,
-    repos: REPOS_URL,
   };
 
   /** A list page holding both lists' fields, so either list can read it. */
@@ -546,10 +518,12 @@ describe("createGitHub", () => {
       ["a body that isn't JSON", () => new Response("<html>oops</html>", { status: 200 })],
       ["a body that drops mid-stream", bodyDrops],
     ];
+    /** A case's name, its fake answers, the call it makes, and, where it matters, the step and status it fails at. */
     type Case = [
       string,
       Parameters<typeof fakeGitHub>[0],
       (github: ReturnType<typeof createGitHub>) => Promise<unknown>,
+      { step: string; status: number }?,
     ];
     const cases = answers.flatMap(([name, answer]) =>
       failures(answer).map(([step, fakes, run]): Case => [`${name} at ${step}`, fakes, run]),
@@ -565,22 +539,35 @@ describe("createGitHub", () => {
         { token: () => json({ error: "incorrect_client_credentials" }) },
         userInstallationRepos,
       ],
+      // Bug slice 3: GitHub's message, which repeats the request here, isn't carried into the error.
       [
         "a token answer repeating the request",
         { token: ({ init }) => json({ message: init.body as string }, 400) },
         userInstallationRepos,
+        { step: STEPS.token, status: 400 },
       ],
       [
         "a list short of its total_count",
-        { repos: () => json({ total_count: 3, repositories: [repo(1)] }) },
-        (github) => github.installationRepos(INSTALLATION_ID),
+        { userRepos: () => json({ total_count: 3, repositories: [repo(1)] }) },
+        userInstallationRepos,
+      ],
+      [
+        "an installation GitHub won't give a token for",
+        { accessToken: () => json({ message: "Not Found" }, 404) },
+        installationPermissions,
       ],
     );
 
-    it.each(cases)("with %s", async (_name, fakes, run) => {
+    it.each(cases)("with %s", async (_name, fakes, run, failsAt) => {
       const { github, calls } = fakeGitHub(fakes, 50);
       const error = await rejection(run(github));
-      expect([GitHubRefusedCode, GitHubUnavailable]).toContain(error.constructor);
+      expect([GitHubRefusedCode, GitHubUnavailable, GitHubInstallationUnreachable]).toContain(
+        error.constructor,
+      );
+      if (failsAt !== undefined) {
+        expect(error).toBeInstanceOf(GitHubUnavailable);
+        expect(error).toMatchObject(failsAt);
+      }
 
       const jwts = calls
         .map((call) => /^Bearer (eyJ.+)$/.exec(header(call, "Authorization") ?? "")?.[1])

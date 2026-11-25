@@ -2,9 +2,9 @@
 // `installation_id` anyone can forge, so a link asks GitHub, as the person, which installations they can reach: their
 // `code` (from GitHub's web application flow with PKCE) becomes a user access token, which lists them and, in the one
 // linked, the repos the person can read. GitHub lists an installation to anyone who can read one of its repos, so only
-// those repos are the person's to link. The App reads the installation's token permissions with its own installation
-// token. Each token serves one link and is dropped: never stored, logged or returned, and no error this client throws
-// carries one, the code, the verifier or the secret.
+// those repos are the person's to link. The App reads the installation's permissions from the answer that grants its
+// installation token. Each token serves one link and is dropped: never stored, logged or returned, and no error this
+// client throws carries one, the code, the verifier or the secret.
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
 import { z } from "zod";
 import { CallFailed, callJson, type Answer, type Fetch } from "../../http-call.ts";
@@ -29,6 +29,19 @@ export class GitHubRefusedCode extends Error {
   constructor(error: string) {
     super(`GitHub refused the code (${error})`);
     this.error = error;
+  }
+}
+
+/**
+ * GitHub won't give the App a token for the installation (403 or 404): it's suspended, or the App was uninstalled from
+ * it. Its `status` is GitHub's.
+ */
+export class GitHubInstallationUnreachable extends Error {
+  override name = "GitHubInstallationUnreachable";
+  readonly status: number;
+  constructor(installationId: number, status: number) {
+    super(`GitHub answered HTTP ${status} for installation ${installationId}'s token`);
+    this.status = status;
   }
 }
 
@@ -62,12 +75,11 @@ export interface GitHub {
     installationId: number,
   ): Promise<GitHubRepo[] | undefined>;
   /**
-   * The installation's repos, and its token's permissions as GitHub gives them (`{ contents: "read", … }`). An id that
-   * isn't a positive integer is refused with a RangeError before any call.
+   * The installation token's permissions as GitHub's answer granting it gives them (`{ contents: "read", … }`), or `{}`
+   * when it names none; no repo is listed. Throws GitHubInstallationUnreachable when GitHub won't grant one (403, 404).
+   * An id that isn't a positive integer is refused with a RangeError before any call.
    */
-  installationRepos(
-    installationId: number,
-  ): Promise<{ repos: GitHubRepo[]; permissions: Record<string, string> }>;
+  installationPermissions(installationId: number): Promise<Record<string, string>>;
 }
 
 /** GitHub's token answer refusing: it names an `error`, whatever the status (GitHub's troubleshooting page). */
@@ -267,27 +279,18 @@ export function createGitHub({
       return repositories.map(gitHubRepo);
     },
 
-    async installationRepos(installationId) {
+    async installationPermissions(installationId) {
       checkInstallationId(installationId);
-      const tokenStep = `GitHub's installation token for installation ${installationId}`;
-      const granted = read(
-        InstallationToken,
-        tokenStep,
-        await call(tokenStep, `${API}/app/installations/${installationId}/access_tokens`, {
-          method: "POST",
-          headers: apiHeaders(appJwt(clientId, key)),
-        }),
-      );
-      const repositories = await everyPage(
-        `GitHub's list of installation ${installationId}'s repositories`,
-        "/installation/repositories",
-        granted.token,
-        Repositories,
-      );
-      return {
-        repos: repositories.map(gitHubRepo),
-        permissions: granted.permissions ?? {},
-      };
+      const step = `GitHub's installation token for installation ${installationId}`;
+      const answer = await call(step, `${API}/app/installations/${installationId}/access_tokens`, {
+        method: "POST",
+        headers: apiHeaders(appJwt(clientId, key)),
+      });
+      if (answer.status === 403 || answer.status === 404) {
+        throw new GitHubInstallationUnreachable(installationId, answer.status);
+      }
+      // None named is `{}`, which the link refuses as not read-only (threat G1).
+      return read(InstallationToken, step, answer).permissions ?? {};
     },
   };
 }

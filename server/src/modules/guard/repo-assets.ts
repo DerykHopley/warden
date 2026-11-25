@@ -1,10 +1,11 @@
 // A Team's Repo Assets (Guard spec, stories 1 and 15): the GitHub installations an Admin linked and the repos each
 // lists, named by GitHub's `html_url`. A Guard Scan names only these. Every call runs inside `withTeam`, so row-level
 // security keeps each Team to its own rows (ADR 0006); only an installation's id is unique across Teams (threat G6).
-import { sql } from "kysely";
+import { sql, type Selectable } from "kysely";
 import { assetKey, type Asset } from "@warden/contracts";
 import { isPgError } from "../../database.ts";
 import type { AssetCheck } from "../../scans.ts";
+import type { Database } from "../../schema.ts";
 import type { WithTeam } from "../../with-team.ts";
 
 /** The constraint 0009_repo_assets puts on an installation's id across every Team. */
@@ -24,13 +25,13 @@ export type RepoAsset = { ref: string; githubId: number; installationId: number;
 export interface RepoAssets {
   /**
    * Records the installation under the Team (a relink by the same Team updates who and when) and replaces that
-   * installation's Repo Assets with `repos`, in one transaction. Throws InstallationLinkedElsewhere, writing nothing,
-   * for an installation another Team linked.
+   * installation's Repo Assets with `repos`, in one transaction, and answers the installation's Repo Assets as written.
+   * Throws InstallationLinkedElsewhere, writing nothing, for an installation another Team linked.
    */
   link(
     team: string,
     input: { installationId: number; linkedBy: string; repos: { ref: string; githubId: number }[] },
-  ): Promise<void>;
+  ): Promise<RepoAsset[]>;
   /**
    * The Team's Repo Assets, by ref: a repo several installations list once, under the one that listed it latest (ties:
    * the larger installation id).
@@ -42,6 +43,14 @@ export interface RepoAssets {
    */
   outside(team: string, assets: readonly Asset[]): Promise<Asset[]>;
 }
+
+/** A `repo_assets` row as the store answers it; pg reads its bigint ids back as strings. */
+const repoAsset = (row: Selectable<Database["repo_assets"]>): RepoAsset => ({
+  ref: row.ref,
+  githubId: Number(row.github_id),
+  installationId: Number(row.installation_id),
+  listedAt: row.listed_at,
+});
 
 export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAssets {
   return {
@@ -68,11 +77,11 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
           .deleteFrom("repo_assets")
           .where("installation_id", "=", String(installationId))
           .execute();
-        if (repos.length === 0) return;
+        if (repos.length === 0) return [];
         // GitHub's paged list can name a repo twice, and the key holds one row per installation and ref.
         const unique = new Map(repos.map((repo) => [repo.ref, repo])).values();
         // Another of the Team's installations listing the same repo keeps its own row (0010).
-        await tx
+        const rows = await tx
           .insertInto("repo_assets")
           .values(
             Array.from(unique, ({ ref, githubId }) => ({
@@ -82,7 +91,9 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
               installation_id: installationId,
             })),
           )
+          .returningAll()
           .execute();
+        return rows.map(repoAsset);
       });
     },
 
@@ -98,12 +109,7 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
           .orderBy("listed_at", "desc")
           .orderBy("installation_id", "desc")
           .execute();
-        return rows.map((row) => ({
-          ref: row.ref,
-          githubId: Number(row.github_id),
-          installationId: Number(row.installation_id),
-          listedAt: row.listed_at,
-        }));
+        return rows.map(repoAsset);
       });
     },
 

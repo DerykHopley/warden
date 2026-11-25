@@ -8,19 +8,28 @@ import {
 } from "@warden/contracts";
 import type { z } from "zod";
 import type { MountRoutes } from "../../app.ts";
+import { createAttemptLimit } from "../../attempt-limit.ts";
 import type { Logger } from "../../log.ts";
-import { createSignInLimit } from "../../sign-in-limit.ts";
-import { GitHubRefusedCode, GitHubUnavailable, type GitHub } from "./github.ts";
+import { SCANS_PER_HOUR } from "../../scans.ts";
+import {
+  GitHubInstallationUnreachable,
+  GitHubRefusedCode,
+  GitHubUnavailable,
+  type GitHub,
+} from "./github.ts";
 import { InstallationLinkedElsewhere, type RepoAsset, type RepoAssets } from "./repo-assets.ts";
 
-/** Link attempts a Team may make in an hour: the number of Scans it may start (`SCANS_PER_HOUR`). */
-const LINKS_PER_HOUR = 10;
+/** Link attempts a Team may make in an hour: the number of Scans it may start. */
+const LINKS_PER_HOUR = SCANS_PER_HOUR;
 
 /** The read-only app's permissions (threat G1): an installation token holding anything else isn't linked. */
 const READ_ONLY: Record<string, string> = { contents: "read", metadata: "read" };
 
-const isReadOnly = (permissions: Record<string, string>) =>
-  Object.entries(permissions).every(([name, level]) => READ_ONLY[name] === level);
+/** Fails closed: a token naming no permissions isn't read-only, since what it can do isn't known. */
+function isReadOnly(permissions: Record<string, string>) {
+  const named = Object.entries(permissions);
+  return named.length > 0 && named.every(([name, level]) => READ_ONLY[name] === level);
+}
 
 /** A body a schema refused, as one line, worded as the app's own routes word it: each issue's field and message. */
 function refusedBody(error: z.ZodError): string {
@@ -44,8 +53,8 @@ export function guardRoutes(
   ),
 ): MountRoutes {
   const { repoAssets } = deps;
-  // Kept in this instance's memory, keyed by Team: each Cloud Run instance counts on its own (threat A5).
-  const linkLimit = createSignInLimit({ max: LINKS_PER_HOUR, windowMs: 3_600_000 });
+  // Kept in this instance's memory, keyed by Team id as it is: each Cloud Run instance counts on its own (threat A5).
+  const linkLimit = createAttemptLimit({ max: LINKS_PER_HOUR, windowMs: 3_600_000 });
 
   return (app, requireRole) => {
     // Any person in the Team reads its Repo Assets, by ref (story 1).
@@ -71,17 +80,17 @@ export function guardRoutes(
       }
 
       const { installation_id: installationId, code, code_verifier: codeVerifier } = parsed.data;
+      let linked: RepoAsset[];
       try {
         const repos = await github.userInstallationRepos(code, codeVerifier, installationId);
         if (repos === undefined) {
           return c.json({ error: "You can't reach this installation on GitHub" }, 403);
         }
-        // Only for its permissions: the App's list is wider than what this person may bring in.
-        const { permissions } = await github.installationRepos(installationId);
-        if (!isReadOnly(permissions)) {
+        if (!isReadOnly(await github.installationPermissions(installationId))) {
           return c.json({ error: "This installation can do more than read" }, 409);
         }
-        await repoAssets.link(team, {
+        // What this link wrote: a later link of another installation can't change this answer.
+        linked = await repoAssets.link(team, {
           installationId,
           linkedBy: c.get("session").userId,
           repos,
@@ -89,6 +98,12 @@ export function guardRoutes(
       } catch (error) {
         if (error instanceof GitHubRefusedCode) {
           return c.json({ error: "GitHub refused the sign-in; connect again" }, 400);
+        }
+        if (error instanceof GitHubInstallationUnreachable) {
+          return c.json(
+            { error: "The app can't reach this installation on GitHub; nothing was linked" },
+            409,
+          );
         }
         if (error instanceof InstallationLinkedElsewhere) {
           return c.json({ error: "This installation is linked to another Team" }, 409);
@@ -105,10 +120,6 @@ export function guardRoutes(
         throw error;
       }
 
-      // Just linked, so this installation listed each of its repos latest.
-      const linked = (await repoAssets.list(team)).filter(
-        (repo) => repo.installationId === installationId,
-      );
       return c.json(
         {
           installation_id: installationId,

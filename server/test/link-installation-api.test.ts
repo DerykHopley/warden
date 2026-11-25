@@ -2,7 +2,7 @@
 // checked against their own GitHub sign-in, and only the repos they can read become Repo Assets. Through the real app
 // with Guard's routes and the real GitHub client, GitHub faked at `fetch` (spec decision 11), on the suite's shared
 // database, each case with Teams and installation ids of its own.
-import { generateKeyPairSync } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { LinkedInstallationBody, ReposBody } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
@@ -17,8 +17,10 @@ import { poolAs } from "./databases.ts";
 import {
   activeOrganization,
   ADMIN,
+  gitHubAppKey,
   newInstallation,
   newTeam,
+  seedTeam,
   sessionToken,
   testApp,
   testKey,
@@ -41,11 +43,6 @@ afterAll(async () => {
   await pool.end();
 });
 
-const PRIVATE_KEY = generateKeyPairSync("rsa", {
-  modulusLength: 2048,
-  privateKeyEncoding: { type: "pkcs1", format: "pem" },
-  publicKeyEncoding: { type: "spki", format: "pem" },
-}).privateKey;
 const CLIENT_SECRET = "the-client-secret-value";
 const CODE = "the-code-value";
 const VERIFIER = "the-code-verifier-value-that-is-long-enough-for-pkce";
@@ -63,10 +60,14 @@ const githubRepo = (name: string, id: number) => ({
   html_url: `https://github.com/acme/${name}`,
 });
 
+/** The App's own list of an installation's repos: wider than the person's, and never read by a link. */
+const APP_REPOS_URL = "https://api.github.com/installation/repositories";
+
 /**
  * A fake GitHub for one installation: the person reaches `reachable` installations and reads `userRepos` in it; the
- * App's installation token lists `appRepos` with `permissions`. `failAt` names one endpoint that answers 500; `refuse`
- * makes the token exchange refuse the code. Every call is recorded.
+ * App's installation token answer gives `permissions` ("omitted": none), or `tokenStatus` when it's an error, and the
+ * App's list holds `appRepos`. `failAt` names one endpoint that answers 500; `refuse` makes the token exchange refuse
+ * the code. Every call is recorded.
  */
 function fakeGitHub({
   installationId,
@@ -74,6 +75,7 @@ function fakeGitHub({
   userRepos = [githubRepo("web", 1)],
   appRepos = [githubRepo("web", 1), githubRepo("secret", 2)],
   permissions = { contents: "read", metadata: "read" },
+  tokenStatus,
   refuse = false,
   failAt,
 }: {
@@ -81,7 +83,8 @@ function fakeGitHub({
   reachable?: number[];
   userRepos?: ReturnType<typeof githubRepo>[];
   appRepos?: ReturnType<typeof githubRepo>[];
-  permissions?: Record<string, string>;
+  permissions?: Record<string, string> | "omitted";
+  tokenStatus?: 403 | 404;
   refuse?: boolean;
   failAt?: "installations";
 }) {
@@ -105,8 +108,14 @@ function fakeGitHub({
       case `GET ${api}/user/installations/${installationId}/repositories`:
         return json({ total_count: userRepos.length, repositories: userRepos });
       case `POST ${api}/app/installations/${installationId}/access_tokens`:
-        return json({ token: INSTALLATION_TOKEN, permissions }, 201);
-      case `GET ${api}/installation/repositories`:
+        if (tokenStatus !== undefined) return json({ message: "Not Found" }, tokenStatus);
+        return json(
+          permissions === "omitted"
+            ? { token: INSTALLATION_TOKEN }
+            : { token: INSTALLATION_TOKEN, permissions },
+          201,
+        );
+      case `GET ${APP_REPOS_URL}`:
         return json({ total_count: appRepos.length, repositories: appRepos });
       default:
         throw new Error(`unexpected call to ${route}`);
@@ -115,17 +124,22 @@ function fakeGitHub({
   const github = createGitHub({
     clientId: "Iv23li-the-client-id",
     clientSecret: CLIENT_SECRET,
-    privateKey: PRIVATE_KEY,
+    privateKey: gitHubAppKey(),
     fetch,
   });
   return { github, calls };
 }
 
-/** The app with Guard's routes, linking through `github` (none: GitHub isn't set up), and every log line it writes. */
-function linkApp(github?: ReturnType<typeof fakeGitHub>["github"]) {
+/**
+ * The app with Guard's routes, linking through `github` (none: GitHub isn't set up) into `assets` (the suite's Repo
+ * Assets by default), and every log line it writes.
+ */
+function linkApp(github?: ReturnType<typeof fakeGitHub>["github"], assets = repoAssets) {
   const guardLines: string[] = [];
   const logger = createLogger((line) => guardLines.push(line));
-  const routes = github ? guardRoutes({ repoAssets, github, logger }) : guardRoutes({ repoAssets });
+  const routes = github
+    ? guardRoutes({ repoAssets: assets, github, logger })
+    : guardRoutes({ repoAssets: assets });
   const { app, lines } = testApp({ publicPem, withTeam, moduleRoutes: [routes] });
   return { app, logLines: () => [...lines, ...guardLines] };
 }
@@ -167,7 +181,7 @@ describe("POST /api/github/installations: an Admin links an installation (storie
   it("answers 201 with only the repos the Admin's own token lists, not the App's wider list, and GET /api/repos lists exactly those", async () => {
     const team = await newTeam(withTeam);
     const installationId = newInstallation();
-    const { github } = fakeGitHub({ installationId });
+    const { github, calls } = fakeGitHub({ installationId });
     const { app } = linkApp(github);
 
     const res = await link(app, team, linkBody(installationId));
@@ -184,6 +198,35 @@ describe("POST /api/github/installations: an Admin links an installation (storie
       ],
     });
     expect(await reposOf(app, team)).toEqual([["https://github.com/acme/web", installationId]]);
+    // The permissions come from the installation token's answer alone: the App's list is never read.
+    expect(calls).not.toContain(`GET ${APP_REPOS_URL}`);
+  });
+
+  it("answers 201 with the repos this link wrote, even when another installation links one of them before the answer", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const other = newInstallation();
+    // Another Admin's link of a second installation listing the same repo lands just after this one's write.
+    const racing: RepoAssets = {
+      ...repoAssets,
+      async link(linkTeam, input) {
+        const written = await repoAssets.link(linkTeam, input);
+        await repoAssets.link(linkTeam, { ...input, installationId: other });
+        return written;
+      },
+    };
+    const { app } = linkApp(fakeGitHub({ installationId }).github, racing);
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res.status).toBe(201);
+    expect(LinkedInstallationBody.parse(res.body).repos).toEqual([
+      {
+        asset: { kind: "repo", ref: "https://github.com/acme/web" },
+        installation_id: installationId,
+        listed_at: expect.any(String),
+      },
+    ]);
   });
 
   it("links an installation the Admin reads no repo in with repos: []", async () => {
@@ -266,21 +309,47 @@ describe("POST /api/github/installations: an Admin links an installation (storie
     );
   });
 
-  it("answers 409 for an installation whose token can write contents, and links nothing", async () => {
-    const team = await newTeam(withTeam);
-    const installationId = newInstallation();
-    const { app } = linkApp(
-      fakeGitHub({ installationId, permissions: { contents: "write", metadata: "read" } }).github,
-    );
+  it.each([
+    ["can write contents", { contents: "write", metadata: "read" }],
+    // Fails closed: permissions GitHub doesn't name aren't taken as read-only.
+    ["names no permissions", "omitted" as const],
+    ["names an empty set of permissions", {}],
+  ])(
+    "answers 409 for an installation whose token %s, and links nothing",
+    async (_name, permissions) => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app } = linkApp(fakeGitHub({ installationId, permissions }).github);
 
-    const res = await link(app, team, linkBody(installationId));
+      const res = await link(app, team, linkBody(installationId));
 
-    expect(res).toMatchObject({
-      status: 409,
-      body: { error: "This installation can do more than read" },
-    });
-    expect(await reposOf(app, team)).toEqual([]);
-  });
+      expect(res).toMatchObject({
+        status: 409,
+        body: { error: "This installation can do more than read" },
+      });
+      expect(await reposOf(app, team)).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["403, as for a suspended installation", 403 as const],
+    ["404, as for a removed installation", 404 as const],
+  ])(
+    "answers 409 when GitHub answers the App's token call %s, and links nothing",
+    async (_name, tokenStatus) => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app } = linkApp(fakeGitHub({ installationId, tokenStatus }).github);
+
+      const res = await link(app, team, linkBody(installationId));
+
+      expect(res).toMatchObject({
+        status: 409,
+        body: { error: "The app can't reach this installation on GitHub; nothing was linked" },
+      });
+      expect(await reposOf(app, team)).toEqual([]);
+    },
+  );
 
   it("answers Team B's Admin 409 for Team A's installation, and Team A's repos are unchanged", async () => {
     const teamA = await newTeam(withTeam);
@@ -366,6 +435,20 @@ describe("POST /api/github/installations: an Admin links an installation (storie
     expect(calls).toHaveLength(callsBefore);
     expect((await link(app, other, linkBody(installationId))).status).toBe(400);
     expect(calls.length).toBeGreaterThan(callsBefore);
+  });
+
+  it("counts Teams whose ids differ only in case apart", async () => {
+    // Clerk's Organization ids are case-sensitive, so these are two Teams.
+    const id = randomUUID();
+    const upper = `org_A${id}`;
+    const lower = `org_a${id}`;
+    await seedTeam(withTeam, upper, [[ADMIN, "admin"]]);
+    await seedTeam(withTeam, lower, [[ADMIN, "admin"]]);
+    const installationId = newInstallation();
+    const { app } = linkApp(fakeGitHub({ installationId, refuse: true }).github);
+    for (let i = 0; i < 10; i++) await link(app, upper, linkBody(installationId));
+
+    expect((await link(app, lower, linkBody(installationId))).status).toBe(400);
   });
 
   it.each([
