@@ -1,6 +1,19 @@
+import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { FRONTEND_API_HOST, testPublishableKey as publishableKey } from "../test/helpers.ts";
 import { ConfigError, loadConfig } from "./config.ts";
+
+/** A GitHub App's key as GitHub downloads it: PKCS#1 PEM, `BEGIN RSA PRIVATE KEY`. */
+const { privateKey: appKey, publicKey } = generateKeyPairSync("rsa", {
+  modulusLength: 2048,
+  privateKeyEncoding: { type: "pkcs1", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+});
+const ecKey = generateKeyPairSync("ec", {
+  namedCurve: "P-256",
+  privateKeyEncoding: { type: "pkcs8", format: "pem" },
+  publicKeyEncoding: { type: "spki", format: "pem" },
+}).privateKey;
 
 const env = {
   CLERK_SECRET_KEY: "clerk-secret-value",
@@ -114,6 +127,85 @@ describe("loadConfig", () => {
       expect(error).toBeInstanceOf(ConfigError);
       expect((error as ConfigError).variables).toEqual(["WARDEN_SCAN_JOB"]);
     }
+  });
+
+  describe("the GitHub app's settings", () => {
+    const github = {
+      GITHUB_APP_CLIENT_ID: "Iv23li-client-id-value",
+      GITHUB_APP_CLIENT_SECRET: "client-secret-value",
+      GITHUB_APP_PRIVATE_KEY: appKey,
+    };
+
+    /** The ConfigError `run` throws. */
+    function configError(run: () => unknown): ConfigError {
+      try {
+        run();
+      } catch (error) {
+        expect(error).toBeInstanceOf(ConfigError);
+        return error as ConfigError;
+      }
+      throw new Error("loadConfig answered");
+    }
+
+    it("reads all three into github", () => {
+      expect(loadConfig({ ...env, ...github }).github).toEqual({
+        clientId: "Iv23li-client-id-value",
+        clientSecret: "client-secret-value",
+        privateKey: appKey,
+      });
+    });
+
+    it("leaves github undefined when none is set, or all are empty", () => {
+      expect(loadConfig(env).github).toBeUndefined();
+      const empty = {
+        GITHUB_APP_CLIENT_ID: "",
+        GITHUB_APP_CLIENT_SECRET: "",
+        GITHUB_APP_PRIVATE_KEY: "",
+      };
+      expect(loadConfig({ ...env, ...empty }).github).toBeUndefined();
+    });
+
+    it.each([
+      [
+        "only the client id",
+        { GITHUB_APP_CLIENT_ID: github.GITHUB_APP_CLIENT_ID },
+        ["GITHUB_APP_CLIENT_SECRET", "GITHUB_APP_PRIVATE_KEY"],
+      ],
+      [
+        "the id and secret, the key empty",
+        { ...github, GITHUB_APP_PRIVATE_KEY: "" },
+        ["GITHUB_APP_PRIVATE_KEY"],
+      ],
+      [
+        "only the secret and key",
+        {
+          GITHUB_APP_CLIENT_SECRET: github.GITHUB_APP_CLIENT_SECRET,
+          GITHUB_APP_PRIVATE_KEY: appKey,
+        },
+        ["GITHUB_APP_CLIENT_ID"],
+      ],
+    ])("with %s, names each missing one and no value", (_name, some, missing) => {
+      const error = configError(() => loadConfig({ ...env, ...some }));
+      expect(error.variables).toEqual(missing);
+      for (const value of Object.values(some).filter((value) => value !== "")) {
+        expect(error.message).not.toContain(value);
+      }
+      expect(error.message).not.toContain("BEGIN");
+    });
+
+    it.each([
+      ["a value that isn't a PEM", "not-a-key-value"],
+      ["a public key", publicKey],
+      ["a private key that isn't RSA", ecKey],
+    ])("refuses a private key that is %s, naming only it and no value", (_name, value) => {
+      const error = configError(() =>
+        loadConfig({ ...env, ...github, GITHUB_APP_PRIVATE_KEY: value }),
+      );
+      expect(error.variables).toEqual(["GITHUB_APP_PRIVATE_KEY"]);
+      expect(error.message).not.toContain(value);
+      expect(error.message).not.toContain("BEGIN");
+      expect(error.message).not.toContain(github.GITHUB_APP_CLIENT_SECRET);
+    });
   });
 
   it.each([

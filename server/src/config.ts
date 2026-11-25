@@ -1,5 +1,6 @@
 // Configuration, read once at start-up and checked. `pg` reads the PG* variables itself; they are checked here
 // so a missing one stops the server at start rather than at its first query.
+import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
 
 /** Clerk's Frontend API host, which a publishable key carries as base64 of `<host>$`. */
@@ -54,7 +55,32 @@ const Env = z.object({
   WARDEN_SCAN_JOB: optional.refine((value) => value === undefined || JOB_NAME.test(value), {
     message: "isn't projects/<project>/locations/<region>/jobs/<job>",
   }),
+  /** The read-only GitHub App's client id: the JWT's issuer, as GitHub recommends, and the user flow's client. */
+  GITHUB_APP_CLIENT_ID: optional,
+  GITHUB_APP_CLIENT_SECRET: optional,
+  /** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
+  GITHUB_APP_PRIVATE_KEY: optional.refine(
+    (value) => value === undefined || isRsaPrivateKey(value),
+    {
+      message: "isn't an RSA private key",
+    },
+  ),
 });
+
+/** Whether Node can read `pem` as an RSA private key, which RS256 signs with. */
+function isRsaPrivateKey(pem: string): boolean {
+  try {
+    return createPrivateKey(pem).asymmetricKeyType === "rsa";
+  } catch {
+    return false;
+  }
+}
+
+const GITHUB_VARIABLES = [
+  "GITHUB_APP_CLIENT_ID",
+  "GITHUB_APP_CLIENT_SECRET",
+  "GITHUB_APP_PRIVATE_KEY",
+] as const;
 
 /** `https://host[:port]` and nothing more: what a token's `azp` holds. */
 function isOrigin(value: string): boolean {
@@ -81,6 +107,8 @@ export type Config = {
     /** Only a token made for one of these origins signs anyone in; another app's on the same instance doesn't. */
     authorizedParties: string[];
   };
+  /** The read-only GitHub App, which a Team's repos are linked through; unset, none can be linked. */
+  github: { clientId: string; clientSecret: string; privateKey: string } | undefined;
 };
 
 /** A variable is missing or malformed. Its message names the variables, never their values. */
@@ -106,6 +134,12 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   if (behindCloudRun && data.CLERK_AUTHORIZED_PARTIES === undefined) {
     throw new ConfigError(["CLERK_AUTHORIZED_PARTIES"]);
   }
+  // The App's three settings come together: one without the others links nothing, and is a mistake to say at start.
+  const missingGitHub = GITHUB_VARIABLES.filter((name) => data[name] === undefined);
+  if (missingGitHub.length > 0 && missingGitHub.length < GITHUB_VARIABLES.length) {
+    throw new ConfigError(missingGitHub);
+  }
+  const { GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET, GITHUB_APP_PRIVATE_KEY } = data;
   return {
     port: data.PORT,
     behindCloudRun,
@@ -116,5 +150,15 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       frontendApiHost: data.VITE_CLERK_PUBLISHABLE_KEY,
       authorizedParties: data.CLERK_AUTHORIZED_PARTIES ?? [LOCAL_DASHBOARD_ORIGIN],
     },
+    github:
+      GITHUB_APP_CLIENT_ID !== undefined &&
+      GITHUB_APP_CLIENT_SECRET !== undefined &&
+      GITHUB_APP_PRIVATE_KEY !== undefined
+        ? {
+            clientId: GITHUB_APP_CLIENT_ID,
+            clientSecret: GITHUB_APP_CLIENT_SECRET,
+            privateKey: GITHUB_APP_PRIVATE_KEY,
+          }
+        : undefined,
   };
 }
