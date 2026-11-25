@@ -4,7 +4,7 @@ import { Observation, type ProductDependency } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import { CVE_SNAPSHOT_FOLDER } from "./cve-snapshot.ts";
 import { PATCH_FRAMEWORKS } from "./frameworks.ts";
-import { cveObservation, cvePackage, osvPurl, type CveFacts } from "./scan.ts";
+import { cveObservation, cvePackage, osvPurl, purlEcosystem, type CveFacts } from "./scan.ts";
 import { verdict, type OsvEntry } from "./verdict.ts";
 
 const framework = (id: string) => PATCH_FRAMEWORKS.find((f) => f.id === id)!;
@@ -15,6 +15,25 @@ const entry = (pkg: string, fixed: string | null, ecosystem = "PyPI"): OsvEntry 
   package: pkg,
   ranges: [{ introduced: "0", fixed, last_affected: null }],
   fixed: fixed === null ? [] : [fixed],
+});
+
+describe("purlEcosystem", () => {
+  it.each([
+    ["pkg:pypi/langchain-core", "PyPI"],
+    ["pkg:npm/flowise", "npm"],
+    ["pkg:golang/github.com/ollama/ollama", "Go"],
+    ["pkg:generic/dify", undefined],
+    ["pypi/langchain", undefined],
+  ])("reads %s as %s", (purl, ecosystem) => {
+    expect(purlEcosystem(purl)).toBe(ecosystem);
+  });
+
+  it("reads every framework's purls, the reverse of osvPurl", () => {
+    for (const { purls } of PATCH_FRAMEWORKS) {
+      for (const purl of purls) expect(purlEcosystem(purl)).toBeDefined();
+    }
+    expect(purlEcosystem(osvPurl("PyPI", "Langchain_Core"))).toBe("PyPI");
+  });
 });
 
 describe("osvPurl", () => {

@@ -15,6 +15,7 @@ import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { patchMoveRule } from "./modules/patch/move-rule.ts";
 import { createProducts } from "./modules/patch/products.ts";
 import { patchRoutes } from "./modules/patch/routes.ts";
+import { createSaveLimit } from "./modules/patch/save-limit.ts";
 import { createPatchScan } from "./modules/patch/scan.ts";
 import { createShutdown } from "./shutdown.ts";
 import { createWithTeam } from "./with-team.ts";
@@ -96,13 +97,15 @@ const appDeps: AppDeps = {
   frontendApiHost: config.clerk.frontendApiHost,
   dashboardDir: existsSync(`${dashboardDir}/index.html`) ? dashboardDir : undefined,
 };
-// Each module's routes, behind the app's middleware (ADR 0005). Saving a Product runs its Patch Scan into Findings.
+// Each module's routes, behind the app's middleware (ADR 0005). Saving a Product runs its Patch Scan into Findings,
+// so each Team may save 30 times a minute (createSaveLimit's defaults), counted in this instance's memory.
 const app = createApp(
   appDeps,
   patchRoutes({
     products: createProducts({ withTeam }),
     scan: createPatchScan({ findings, logger }),
     logger,
+    saveLimit: createSaveLimit(),
   }),
 );
 
