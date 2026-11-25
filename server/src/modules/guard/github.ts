@@ -5,9 +5,10 @@
 // those repos are the person's to link. The App reads the installation's permissions from the answer that grants its
 // installation token. Each token serves one link and is dropped: never stored, logged or returned, and no error this
 // client throws carries one, the code, the verifier or the secret.
-import { createPrivateKey, sign, type KeyObject } from "node:crypto";
+import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
 import { CallFailed, callJson, type Answer, type Fetch } from "../../http-call.ts";
+import { signAppJwt } from "./app-jwt.ts";
 
 const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const API = "https://api.github.com";
@@ -153,18 +154,6 @@ function read<T>(
   return parsed.data;
 }
 
-const base64url = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-
-/**
- * The App's JWT (GitHub's "Generating a JSON Web Token"): RS256, issued by the client id 60 s in the past against
- * clock drift, expiring 10 minutes after that, so within the 10 minutes GitHub allows.
- */
-function appJwt(clientId: string, key: KeyObject): string {
-  const now = Math.floor(Date.now() / 1000);
-  const input = `${base64url({ alg: "RS256", typ: "JWT" })}.${base64url({ iat: now - 60, exp: now + 540, iss: clientId })}`;
-  return `${input}.${sign("sha256", Buffer.from(input), key).toString("base64url")}`;
-}
-
 const apiHeaders = (token: string) => ({
   Accept: "application/vnd.github+json",
   "X-GitHub-Api-Version": API_VERSION,
@@ -293,7 +282,7 @@ export function createGitHub({
       const step = `GitHub's installation token for installation ${installationId}`;
       const answer = await call(step, `${API}/app/installations/${installationId}/access_tokens`, {
         method: "POST",
-        headers: apiHeaders(appJwt(clientId, key)),
+        headers: apiHeaders(signAppJwt(clientId, key)),
       });
       if (answer.status === 403 || answer.status === 404) {
         throw new GitHubInstallationUnreachable(installationId, answer.status);
@@ -304,7 +293,9 @@ export function createGitHub({
 
     async appSlug() {
       const step = "GitHub's authenticated app";
-      const answer = await call(step, `${API}/app`, { headers: apiHeaders(appJwt(clientId, key)) });
+      const answer = await call(step, `${API}/app`, {
+        headers: apiHeaders(signAppJwt(clientId, key)),
+      });
       return read(AuthenticatedApp, step, answer).slug;
     },
 
