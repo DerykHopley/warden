@@ -3,10 +3,13 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  type Coverage,
+  type Ecosystem,
   noFix,
   type OsvEntry,
+  type OsvRange,
   parseVersion,
-  type Usage,
+  readEcosystem,
   verdict,
   type Verdict,
   type VerdictKind,
@@ -15,13 +18,14 @@ import {
 type R = [string | null, string | null, string | null];
 
 /** One OSV entry: ranges as (introduced, fixed, last_affected). */
-function entry(ecosystem: string, pkg: string, ...ranges: R[]): OsvEntry {
+function entry(ecosystem: Ecosystem, pkg: string, ...ranges: R[]): OsvEntry {
   const rs = ranges.map(([i, f, la]) => ({ introduced: i, fixed: f, last_affected: la }));
+  // This key order shows in test_a16b_2_no_fix_table's names (its %j).
   return {
     ecosystem,
     package: pkg,
-    ranges: rs,
     fixed: rs.filter((r) => r.fixed).map((r) => r.fixed!),
+    ranges: rs,
   };
 }
 
@@ -44,7 +48,7 @@ const BAD_OSV_START = [entry("PyPI", "langflow", ["abc123", "1.3.0", null])];
 
 type Row = [
   case_: string,
-  coverage: string,
+  coverage: Coverage,
   entries: OsvEntry[],
   version: string | null,
   want: VerdictKind,
@@ -347,7 +351,7 @@ describe("test_a15_3_who_acts_from_usage", () => {
     ["transitive", "upstream"],
     ["hosted", "vendor"],
   ] as const)("%s -> %s", (usage, who) => {
-    const cases: [string, OsvEntry[], string | null][] = [
+    const cases: [Coverage, OsvEntry[], string | null][] = [
       ["package", LANGFLOW, "1.2.0"],
       ["none", [], null],
     ];
@@ -360,7 +364,7 @@ describe("test_a15_3_who_acts_from_usage", () => {
 it("test_a15_2_every_snapshot_version_parses_in_its_ecosystem", () => {
   // The Python test reads the snapshot through the `knowledge` fixture; here, a copy of Patch's fixtures/osv.json.
   const osv = JSON.parse(readFileSync(new URL("./fixtures/osv.json", import.meta.url), "utf8")) as {
-    cves: Record<string, OsvEntry[]>;
+    cves: Record<string, { ecosystem: string; ranges: OsvRange[] }[]>;
   };
   let n = 0;
   for (const entries of Object.values(osv.cves)) {
@@ -368,7 +372,7 @@ it("test_a15_2_every_snapshot_version_parses_in_its_ecosystem", () => {
       for (const r of e.ranges) {
         for (const v of [r.introduced, r.fixed, r.last_affected]) {
           if (v && v !== "0") {
-            parseVersion(e.ecosystem, v);
+            parseVersion(readEcosystem(e.ecosystem), v);
             n++;
           }
         }
@@ -380,14 +384,7 @@ it("test_a15_2_every_snapshot_version_parses_in_its_ecosystem", () => {
 
 // --- A16b.2: "no fix yet" ---------------------------------------------------------------------------------------
 
-function _e(...ranges: R[]): OsvEntry {
-  return {
-    ecosystem: "PyPI",
-    package: "p",
-    fixed: ranges.filter(([, f]) => f).map(([, f]) => f!),
-    ranges: ranges.map(([i, f, la]) => ({ introduced: i, fixed: f, last_affected: la })),
-  };
-}
+const _e = (...ranges: R[]): OsvEntry => entry("PyPI", "p", ...ranges);
 
 describe("test_a16b_2_no_fix_table", () => {
   it.each([
@@ -398,7 +395,7 @@ describe("test_a16b_2_no_fix_table", () => {
     ["package", [], false], // no OSV record for this CVE
     ["commits", [_e(["0", null, null])], false], // commit ranges only
     ["none", [], false],
-  ] as [string, OsvEntry[], boolean][])("%s %j -> %s", (coverage, entries, want) => {
+  ] as [Coverage, OsvEntry[], boolean][])("%s %j -> %s", (coverage, entries, want) => {
     expect(noFix(coverage, entries)).toBe(want);
   });
 });
@@ -516,7 +513,7 @@ const B67_TABLE: B67Row[] = [
 
 describe("test_b67_2_fixes_per_package_table", () => {
   it.each(B67_TABLE)("%s", (_case, entries, version, want, reason, fixed, wantFixes) => {
-    const v = verdict("package", entries, "library" as Usage, version);
+    const v = verdict("package", entries, "library", version);
     expect([v.verdict, v.reason, v.fixed_version, fixes(v)]).toEqual([
       want,
       reason,
