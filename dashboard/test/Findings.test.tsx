@@ -7,7 +7,7 @@ import type { Finding } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FindingsPage } from "../src/Findings.tsx";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
-import { demoFindings, ID, TEAM } from "./findings-fixture.ts";
+import { demoFindings, ID, PRODUCT_ID, SHOP_WEB, TEAM } from "./findings-fixture.ts";
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -317,15 +317,10 @@ describe("a link that names a Finding", () => {
 
 describe("a Product Asset's name", () => {
   // The lodash Finding on a saved Product (its ref the Product's id); minimist keeps the demo seed's made-up "shop".
-  const PRODUCT_ID = "5e1f0000-0000-4000-8000-0000000000aa";
   const onProduct = demoFindings.map((f) =>
     f.id === ID.lodash ? { ...f, asset: { kind: "product" as const, ref: PRODUCT_ID } } : f,
   );
-  const products = (team = TEAM) =>
-    json(200, {
-      team,
-      products: [{ id: PRODUCT_ID, name: "Shop web", repo_urls: [], dependencies: [] }],
-    });
+  const products = (team = TEAM) => json(200, { team, products: [SHOP_WEB] });
   const LODASH = "lodash 4.17.20 has a known vulnerability";
   const MINIMIST = "minimist 1.2.5 has a known vulnerability";
   /** The Asset cell of the row titled `title`. */

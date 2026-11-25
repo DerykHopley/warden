@@ -2,11 +2,7 @@
 // by the specs that check the card's Patch section (patch-card, layout, keyboard).
 import type { Page } from "@playwright/test";
 import { FindingsBody, PatchAssessment, type Finding } from "@warden/contracts";
-import { asAdmin, CEDAR, ensureProduct, expect, LANGCHAIN_SERVICE } from "./session.ts";
-
-/** A pattern for `text` as a whole: a Product's name, never a longer one that holds it. */
-export const exactly = (text: string) =>
-  new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+import { asAdmin, CEDAR, ensureProduct, exactly, expect, LANGCHAIN_SERVICE } from "./session.ts";
 
 /** GETs `path` as Hedy, Cedar's Admin, as the page does for her; its body. */
 async function asHedy(path: string): Promise<unknown> {

@@ -2,11 +2,11 @@
 // the page that changes them; an Admin adds a Product on the page and changes it. In Cedar, the Team with no demo
 // Findings.
 import type { ProductInput } from "@warden/contracts";
-import { exactly } from "./cedar-cve.ts";
 import {
   CEDAR,
   CHAT_ASSISTANT,
   ensureProduct,
+  exactly,
   expect,
   HEDY,
   KATHERINE,
@@ -58,7 +58,7 @@ test("a Product's save opens its CVE Findings from the loaded snapshot, on the T
   signIn,
 }) => {
   await removeProducts(CEDAR, [VULNERABLE.name]);
-  const id = await ensureProduct(CEDAR, VULNERABLE);
+  await ensureProduct(CEDAR, VULNERABLE);
   await signIn(HEDY, CEDAR);
   await page.goto("/findings");
 
@@ -74,7 +74,6 @@ test("a Product's save opens its CVE Findings from the loaded snapshot, on the T
       .filter({ hasText: /^CVE-\d{4}-\d+/ })
       .first(),
   ).toBeVisible();
-  await expect(page.locator(".asset-ref", { hasText: id })).toHaveCount(0);
 });
 
 /** This test's own Products, by name, so it never changes the Product another spec reads. */

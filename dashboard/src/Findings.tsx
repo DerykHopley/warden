@@ -33,7 +33,7 @@ import {
   type FindingsResult,
 } from "./findings.ts";
 import { findingsViewWords } from "./panel.ts";
-import { fetchProducts, type ProductsResult } from "./products.ts";
+import { askProducts, type ProductsResult } from "./products.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
@@ -78,13 +78,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
   // The Team's Products, once per page load, only to name a Product Asset: until they come, or when they're refused,
   // each Asset shows its ref and the page says nothing about it.
   const listProducts = useCallback(
-    (signal: AbortSignal) =>
-      askAboutTeam(
-        () => fetchProducts(getToken),
-        (result) => (result.kind === "products" ? result.team : undefined),
-        me.team,
-        signal,
-      ),
+    (signal: AbortSignal) => askProducts(getToken, me.team, signal),
     [getToken, me.team],
   );
   const productsCall = useWardenCall<ProductsResult>(listProducts, onSessionEnded);
