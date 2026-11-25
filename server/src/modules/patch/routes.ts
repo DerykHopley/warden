@@ -16,13 +16,8 @@ import { ProductNameTaken, ProductNotFound, VersionRefused } from "./errors.ts";
 import { PATCH_FRAMEWORKS } from "./frameworks.ts";
 import type { Products } from "./products.ts";
 import type { SaveLimit } from "./save-limit.ts";
-import { PURL_TYPES, type PatchScan } from "./scan.ts";
-import { checkVersion, type Ecosystem } from "./verdict.ts";
-
-/** Each purl type's OSV ecosystem: the reverse of the Scan's PURL_TYPES. */
-const PURL_ECOSYSTEMS = new Map(
-  Object.entries(PURL_TYPES).map(([ecosystem, type]) => [type, ecosystem as Ecosystem]),
-);
+import { purlEcosystem, type PatchScan } from "./scan.ts";
+import { checkVersion } from "./verdict.ts";
 
 /**
  * Each framework Patch knows, by id: its display name, and the ecosystems its purls are in, in the shape
@@ -36,7 +31,7 @@ const FRAMEWORKS = new Map(
       name,
       osv: {
         packages: purls.map((purl) => {
-          const ecosystem = PURL_ECOSYSTEMS.get(/^pkg:([^/]+)\//.exec(purl)?.[1] ?? "");
+          const ecosystem = purlEcosystem(purl);
           if (ecosystem === undefined) {
             throw new Error(`${id}'s purl ${purl} is in no ecosystem Patch has version rules for`);
           }

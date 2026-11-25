@@ -53,7 +53,17 @@ export interface PatchScan {
 }
 
 /** Each OSV ecosystem's purl type. */
-export const PURL_TYPES: Record<Ecosystem, string> = { PyPI: "pypi", npm: "npm", Go: "golang" };
+const PURL_TYPES: Record<Ecosystem, string> = { PyPI: "pypi", npm: "npm", Go: "golang" };
+/** Each purl type's OSV ecosystem: PURL_TYPES the other way round. */
+const PURL_ECOSYSTEMS = new Map(
+  Object.entries(PURL_TYPES).map(([ecosystem, type]) => [type, ecosystem as Ecosystem]),
+);
+
+/** The OSV ecosystem a purl's type is in (the reverse of osvPurl's); undefined for one Patch has no rule for. */
+export function purlEcosystem(purl: string): Ecosystem | undefined {
+  const type = /^pkg:([^/]+)\//.exec(purl)?.[1];
+  return type === undefined ? undefined : PURL_ECOSYSTEMS.get(type);
+}
 
 /**
  * A package as a purl without its version (the contracts README's Fingerprint rule): PyPI's name in lower case with
