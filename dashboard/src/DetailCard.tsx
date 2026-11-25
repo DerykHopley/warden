@@ -533,7 +533,11 @@ export function DetailCard(props: {
           {cardLine.text}
         </p>
       )}
-      {waiting && <p className="card-line">Waiting for a Lead or Admin to decide.</p>}
+      {/* Right after a Member's Proposal is sent, its Done line says the same thing: one box, not two. A refusal
+          line doesn't stand in for it. */}
+      {waiting && cardLine?.kind !== "done" && (
+        <p className="card-line">Waiting for a Lead or Admin to decide.</p>
+      )}
       {rowForm ??
         ((decisions.length > 0 || proposes.length > 0) && (
           <div className="card-actions" role="group" aria-label="Decisions">
