@@ -1,10 +1,12 @@
 // Clearing out test databases and test roles a killed run left behind, without touching one a run still uses or one a
-// person made.
+// person made; and waiting for a Postgres that takes no connection yet.
 import { randomBytes } from "node:crypto";
+import { setTimeout } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
-import { dropStaleTestDatabases, dropStaleTestRoles } from "./databases.ts";
+import { dropStaleTestDatabases, dropStaleTestRoles, waitForPostgres } from "./databases.ts";
+import { gatedProxy } from "./ports.ts";
 
 const superuser = createPool(
   createLogger(() => {}),
@@ -100,4 +102,48 @@ describe("dropStaleTestDatabases and dropStaleTestRoles", () => {
 
     for (const name of theirs) expect(await exists(name), name).toBe(true);
   }, 30_000);
+});
+
+// A container started seconds before the run resets connections until Postgres listens on TCP, and the global
+// setup's first query failing there ended the run before any test, with no summary (#99).
+describe("waitForPostgres", () => {
+  it("waits out a Postgres that hangs up on connections at first, then returns", async () => {
+    const late = await gatedProxy(Number(process.env.PGPORT));
+    try {
+      const waiting = waitForPostgres({ host: "127.0.0.1", port: late.port }, { intervalMs: 50 });
+      await setTimeout(300);
+      late.open();
+      await expect(waiting).resolves.toBeUndefined();
+    } finally {
+      await late.close();
+    }
+  });
+
+  it("gives up at its deadline, naming the address and the last error", async () => {
+    const never = await gatedProxy(Number(process.env.PGPORT));
+    try {
+      const waiting = waitForPostgres(
+        { host: "127.0.0.1", port: never.port },
+        { timeoutMs: 300, intervalMs: 50 },
+      );
+      await expect(waiting).rejects.toThrow(
+        `Postgres at 127.0.0.1:${never.port} took no connection within 0.3 s`,
+      );
+      // The proxy accepts and hangs up; a just-started container's port resets instead. Both read as unreachable.
+      await expect(waiting).rejects.toMatchObject({
+        cause: { message: "Connection terminated unexpectedly" },
+      });
+    } finally {
+      await never.close();
+    }
+  });
+
+  it("doesn't wait on a login Postgres refuses", async () => {
+    // Waiting out its 10 s deadline would run past the test's 5 s timeout.
+    const waiting = waitForPostgres(
+      { database: `warden_test_none_${suffix()}` },
+      { timeoutMs: 10_000 },
+    );
+    await expect(waiting).rejects.toMatchObject({ code: "3D000" });
+  });
 });
