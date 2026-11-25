@@ -55,17 +55,24 @@ const Env = z.object({
   WARDEN_SCAN_JOB: optional.refine((value) => value === undefined || JOB_NAME.test(value), {
     message: "isn't projects/<project>/locations/<region>/jobs/<job>",
   }),
-  /** The read-only GitHub App's client id: the JWT's issuer, as GitHub recommends, and the user flow's client. */
-  GITHUB_APP_CLIENT_ID: optional,
-  GITHUB_APP_CLIENT_SECRET: optional,
-  /** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
-  GITHUB_APP_PRIVATE_KEY: optional.refine(
-    (value) => value === undefined || isRsaPrivateKey(value),
-    {
-      message: "isn't an RSA private key",
-    },
-  ),
 });
+
+/** The read-only GitHub App's settings, read only when one of them is set: they come together or not at all. */
+const GitHubApp = z
+  .object({
+    /** The App's client id: the JWT's issuer, as GitHub recommends, and the user flow's client. */
+    GITHUB_APP_CLIENT_ID: required,
+    GITHUB_APP_CLIENT_SECRET: required,
+    /** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
+    GITHUB_APP_PRIVATE_KEY: required.refine(isRsaPrivateKey, {
+      message: "isn't an RSA private key",
+    }),
+  })
+  .transform((app) => ({
+    clientId: app.GITHUB_APP_CLIENT_ID,
+    clientSecret: app.GITHUB_APP_CLIENT_SECRET,
+    privateKey: app.GITHUB_APP_PRIVATE_KEY,
+  }));
 
 /** Whether Node can read `pem` as an RSA private key, which RS256 signs with. */
 function isRsaPrivateKey(pem: string): boolean {
@@ -125,8 +132,13 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   // An empty value counts as unset: `.envrc` exports "" when a keyring entry is missing.
   const present = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== ""));
   const parsed = Env.safeParse(present);
-  if (!parsed.success) {
-    throw new ConfigError([...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))]);
+  // One of the App's settings without the others links nothing, and is a mistake to say at start, with the rest.
+  const github = GITHUB_VARIABLES.some((name) => name in present)
+    ? GitHubApp.safeParse(present)
+    : undefined;
+  if (!parsed.success || github?.success === false) {
+    const issues = [...(parsed.error?.issues ?? []), ...(github?.error?.issues ?? [])];
+    throw new ConfigError([...new Set(issues.map((issue) => String(issue.path[0])))]);
   }
   const { data } = parsed;
   const behindCloudRun = data.K_SERVICE !== undefined;
@@ -134,12 +146,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   if (behindCloudRun && data.CLERK_AUTHORIZED_PARTIES === undefined) {
     throw new ConfigError(["CLERK_AUTHORIZED_PARTIES"]);
   }
-  // The App's three settings come together: one without the others links nothing, and is a mistake to say at start.
-  const missingGitHub = GITHUB_VARIABLES.filter((name) => data[name] === undefined);
-  if (missingGitHub.length > 0 && missingGitHub.length < GITHUB_VARIABLES.length) {
-    throw new ConfigError(missingGitHub);
-  }
-  const { GITHUB_APP_CLIENT_ID, GITHUB_APP_CLIENT_SECRET, GITHUB_APP_PRIVATE_KEY } = data;
   return {
     port: data.PORT,
     behindCloudRun,
@@ -150,15 +156,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       frontendApiHost: data.VITE_CLERK_PUBLISHABLE_KEY,
       authorizedParties: data.CLERK_AUTHORIZED_PARTIES ?? [LOCAL_DASHBOARD_ORIGIN],
     },
-    github:
-      GITHUB_APP_CLIENT_ID !== undefined &&
-      GITHUB_APP_CLIENT_SECRET !== undefined &&
-      GITHUB_APP_PRIVATE_KEY !== undefined
-        ? {
-            clientId: GITHUB_APP_CLIENT_ID,
-            clientSecret: GITHUB_APP_CLIENT_SECRET,
-            privateKey: GITHUB_APP_PRIVATE_KEY,
-          }
-        : undefined,
+    github: github?.data,
   };
 }

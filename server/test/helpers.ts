@@ -224,6 +224,16 @@ export function testApp(options: {
   return { app, lines };
 }
 
+/** The error `promise` rejects with; a promise that resolves fails the test. */
+export async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("the promise resolved");
+}
+
 /** What `promise` was refused with: its class's name and its words (undefined when it resolved). */
 export async function refusal(promise: Promise<unknown>) {
   const error = await promise.then(

@@ -23,6 +23,17 @@ const env = {
   PGDATABASE: "warden",
 };
 
+/** The ConfigError `run` throws. */
+function configError(run: () => unknown): ConfigError {
+  try {
+    run();
+  } catch (error) {
+    expect(error).toBeInstanceOf(ConfigError);
+    return error as ConfigError;
+  }
+  throw new Error("loadConfig answered");
+}
+
 describe("loadConfig", () => {
   it("reads the variables and defaults PORT to 8080", () => {
     const config = loadConfig(env);
@@ -42,24 +53,15 @@ describe("loadConfig", () => {
   });
 
   it("names every missing required variable, empty counting as missing, and no value", () => {
-    const run = () =>
+    const error = configError(() =>
       loadConfig({
         VITE_CLERK_PUBLISHABLE_KEY: publishableKey,
         PGHOST: "",
         PGPASSWORD: "pw-value",
-      });
-    expect(run).toThrow(ConfigError);
-    try {
-      run();
-    } catch (error) {
-      expect((error as ConfigError).variables).toEqual([
-        "CLERK_SECRET_KEY",
-        "PGHOST",
-        "PGUSER",
-        "PGDATABASE",
-      ]);
-      expect((error as Error).message).not.toContain("pw-value");
-    }
+      }),
+    );
+    expect(error.variables).toEqual(["CLERK_SECRET_KEY", "PGHOST", "PGUSER", "PGDATABASE"]);
+    expect(error.message).not.toContain("pw-value");
   });
 
   it("refuses a publishable key that holds no Frontend API host, without printing it", () => {
@@ -120,13 +122,8 @@ describe("loadConfig", () => {
     ["a project of ..", "projects/../locations/r/jobs/j"],
     ["a project of .", "projects/./locations/r/jobs/j"],
   ])("refuses a Scan Job named by %s, naming only WARDEN_SCAN_JOB", (_name, value) => {
-    try {
-      loadConfig({ ...env, WARDEN_SCAN_JOB: value });
-      expect.unreachable();
-    } catch (error) {
-      expect(error).toBeInstanceOf(ConfigError);
-      expect((error as ConfigError).variables).toEqual(["WARDEN_SCAN_JOB"]);
-    }
+    const error = configError(() => loadConfig({ ...env, WARDEN_SCAN_JOB: value }));
+    expect(error.variables).toEqual(["WARDEN_SCAN_JOB"]);
   });
 
   describe("the GitHub app's settings", () => {
@@ -135,17 +132,6 @@ describe("loadConfig", () => {
       GITHUB_APP_CLIENT_SECRET: "client-secret-value",
       GITHUB_APP_PRIVATE_KEY: appKey,
     };
-
-    /** The ConfigError `run` throws. */
-    function configError(run: () => unknown): ConfigError {
-      try {
-        run();
-      } catch (error) {
-        expect(error).toBeInstanceOf(ConfigError);
-        return error as ConfigError;
-      }
-      throw new Error("loadConfig answered");
-    }
 
     it("reads all three into github", () => {
       expect(loadConfig({ ...env, ...github }).github).toEqual({
@@ -205,6 +191,33 @@ describe("loadConfig", () => {
       expect(error.message).not.toContain(value);
       expect(error.message).not.toContain("BEGIN");
       expect(error.message).not.toContain(github.GITHUB_APP_CLIENT_SECRET);
+    });
+
+    it("names the missing ones along with a key that isn't one", () => {
+      const error = configError(() =>
+        loadConfig({
+          ...env,
+          GITHUB_APP_CLIENT_ID: github.GITHUB_APP_CLIENT_ID,
+          GITHUB_APP_PRIVATE_KEY: "not-a-key-value",
+        }),
+      );
+      expect(error.variables).toEqual(["GITHUB_APP_CLIENT_SECRET", "GITHUB_APP_PRIVATE_KEY"]);
+      expect(error.message).not.toContain("not-a-key-value");
+    });
+
+    it("names a missing GitHub variable along with a missing required one", () => {
+      const error = configError(() =>
+        loadConfig({
+          ...env,
+          CLERK_SECRET_KEY: "",
+          GITHUB_APP_CLIENT_ID: github.GITHUB_APP_CLIENT_ID,
+        }),
+      );
+      expect(error.variables).toEqual([
+        "CLERK_SECRET_KEY",
+        "GITHUB_APP_CLIENT_SECRET",
+        "GITHUB_APP_PRIVATE_KEY",
+      ]);
     });
   });
 

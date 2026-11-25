@@ -2,7 +2,9 @@
 // the Scan's id and Team. Each failure rejects, naming the step and the status, and never the token. A jobs.run that
 // times out or never answers rejects as unknown: Google may have started the execution.
 import { describe, expect, it } from "vitest";
-import { cloudRunScanJobStarter, type Fetch } from "./cloud-run-scan-job-starter.ts";
+import { rejection } from "../test/helpers.ts";
+import { cloudRunScanJobStarter } from "./cloud-run-scan-job-starter.ts";
+import type { Fetch } from "./http-call.ts";
 import { createLogger } from "./log.ts";
 import { ScanJobStartUnknown } from "./scans.ts";
 
@@ -58,15 +60,6 @@ const bodyNever = (init: RequestInit) =>
     }),
     { status: 200 },
   );
-
-async function rejection(started: Promise<void>): Promise<Error> {
-  try {
-    await started;
-  } catch (error) {
-    return error as Error;
-  }
-  throw new Error("the start resolved");
-}
 
 const SCAN = { scanId: "scan-1", team: "org_a" };
 

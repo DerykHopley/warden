@@ -3,7 +3,7 @@
 // calls: fetch for the Cloud Run Job, spawn for the child process.
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
-import type { Fetch } from "./cloud-run-scan-job-starter.ts";
+import type { Fetch } from "./http-call.ts";
 import type { Spawn } from "./local-scan-job-starter.ts";
 import { createLogger } from "./log.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";

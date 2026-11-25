@@ -8,6 +8,7 @@ import { createPool, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { createRoles } from "../src/roles.ts";
 import { poolAs, runInServer, testName } from "./databases.ts";
+import { rejection } from "./helpers.ts";
 import { closedPort } from "./ports.ts";
 import { scramAuthenticates } from "./scram.ts";
 
@@ -127,14 +128,6 @@ async function membershipsOf(role: string) {
   return rows.map((row) => row.rolname);
 }
 
-/** The error a promise rejects with, or undefined. */
-function rejection(promise: Promise<unknown>): Promise<unknown> {
-  return promise.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-}
-
 /** Everything an error carries that a log line could show. */
 function everythingIn(error: unknown): string {
   const { message, stack, cause } = error as Error;
@@ -233,8 +226,8 @@ describe("the roles script run by a user that can't take BYPASSRLS away, once th
       }),
     );
 
-    expect((error as Error).message).toContain(`${fixture.names.admin} has BYPASSRLS`);
-    expect((error as Error).message).toContain(`${fixture.base}_owner can't take it away`);
+    expect(error.message).toContain(`${fixture.names.admin} has BYPASSRLS`);
+    expect(error.message).toContain(`${fixture.base}_owner can't take it away`);
     expect(await storedPasswords(fixture.names)).toEqual(before);
   });
 });
@@ -330,7 +323,7 @@ describe("the roles script failing to set a password", () => {
           }),
         );
 
-        expect((error as Error).message).toBe(
+        expect(error.message).toBe(
           `setting ${fixture.names.app}'s password failed (SQLSTATE 42501)`,
         );
         expect(everythingIn(error)).not.toContain(password);
@@ -354,9 +347,7 @@ describe("the roles script failing to set a password", () => {
         }),
       );
 
-      expect((error as Error).message).toBe(
-        `${fixture.names.migrate}'s password must be printable ASCII`,
-      );
+      expect(error.message).toBe(`${fixture.names.migrate}'s password must be printable ASCII`);
       expect(everythingIn(error)).not.toContain("päss-wörd");
     } finally {
       await fixture.drop();
@@ -534,9 +525,7 @@ describe("the roles script and stray memberships of the app role", () => {
         createRoles(fixture.asRunner, { names: fixture.names, logger: fixture.logger }),
       );
 
-      expect((error as Error).message).toMatch(
-        `${fixture.names.app} is still a member of pg_read_all_data`,
-      );
+      expect(error.message).toMatch(`${fixture.names.app} is still a member of pg_read_all_data`);
     } finally {
       await fixture.drop();
     }

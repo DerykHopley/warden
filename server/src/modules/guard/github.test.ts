@@ -5,7 +5,8 @@
 import { createPublicKey, generateKeyPairSync } from "node:crypto";
 import { jwtVerify } from "jose";
 import { describe, expect, it } from "vitest";
-import type { Fetch } from "../../cloud-run-scan-job-starter.ts";
+import { rejection } from "../../../test/helpers.ts";
+import type { Fetch } from "../../http-call.ts";
 import { createLogger } from "../../log.ts";
 import { createGitHub, GitHubRefusedCode, GitHubUnavailable } from "./github.ts";
 
@@ -129,14 +130,17 @@ const dropped: Answer = () => Promise.reject(new TypeError("fetch failed"));
 
 const serverError: Answer = () => json({ message: "Server Error" }, 500);
 
-async function rejection(promise: Promise<unknown>): Promise<Error> {
-  try {
-    await promise;
-  } catch (error) {
-    return error as Error;
-  }
-  throw new Error("the call resolved");
-}
+/** A 200 whose connection resets partway through its body, as undici's body read rejects. */
+const bodyDrops: Answer = () =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"total_count": 1, "'));
+        controller.error(new TypeError("terminated"));
+      },
+    }),
+    { status: 200 },
+  );
 
 describe("createGitHub", () => {
   describe("userInstallationIds", () => {
@@ -157,8 +161,6 @@ describe("createGitHub", () => {
       });
       expect(`${list!.url.origin}${list!.url.pathname}`).toBe(INSTALLATIONS_URL);
       expect(header(list!, "Authorization")).toBe(`Bearer ${USER_TOKEN}`);
-      expect(header(list!, "Accept")).toBe("application/vnd.github+json");
-      expect(header(list!, "X-GitHub-Api-Version")).toBe("2026-03-10");
       for (const { init } of calls) expect(init.signal).toBeInstanceOf(AbortSignal);
     });
 
@@ -180,32 +182,45 @@ describe("createGitHub", () => {
       ]);
     });
 
-    it("throws GitHubRefusedCode when GitHub's 200 names bad_verification_code, and lists nothing", async () => {
-      const { github, calls } = fakeGitHub({
-        token: () =>
-          json({
-            error: "bad_verification_code",
-            error_description: "The code passed is incorrect or expired.",
-            error_uri: "https://docs.github.com/apps/troubleshooting",
-          }),
-      });
+    it.each([
+      ["bad_verification_code", 200],
+      ["bad_verification_code", 400],
+      ["invalid_grant", 400],
+    ])(
+      "throws GitHubRefusedCode when GitHub's token answer names %s with status %i, and lists nothing",
+      async (name, status) => {
+        const { github, calls } = fakeGitHub({
+          token: () =>
+            json(
+              {
+                error: name,
+                error_description: "The code passed is incorrect or expired.",
+                error_uri: "https://docs.github.com/apps/troubleshooting",
+              },
+              status,
+            ),
+        });
 
-      const error = await rejection(github.userInstallationIds(CODE, VERIFIER));
+        const error = await rejection(github.userInstallationIds(CODE, VERIFIER));
 
-      expect(error).toBeInstanceOf(GitHubRefusedCode);
-      expect((error as GitHubRefusedCode).error).toBe("bad_verification_code");
-      expect(callsTo(calls, INSTALLATIONS_URL)).toEqual([]);
-    });
+        expect(error).toBeInstanceOf(GitHubRefusedCode);
+        expect((error as GitHubRefusedCode).error).toBe(name);
+        expect(callsTo(calls, INSTALLATIONS_URL)).toEqual([]);
+      },
+    );
 
-    it("throws GitHubUnavailable, not a refused code, when GitHub refuses Warden's own client credentials", async () => {
-      const { github } = fakeGitHub({
-        token: () => json({ error: "incorrect_client_credentials" }),
-      });
+    it.each([
+      ["Warden's own client credentials refused", "incorrect_client_credentials", 200],
+      ["Warden's callback URL refused", "redirect_uri_mismatch", 200],
+      ["a 5xx naming an error", "bad_verification_code", 502],
+    ])("throws GitHubUnavailable, not a refused code, for %s", async (_name, refusal, status) => {
+      const { github } = fakeGitHub({ token: () => json({ error: refusal }, status) });
 
       const error = await rejection(github.userInstallationIds(CODE, VERIFIER));
 
       expect(error).toBeInstanceOf(GitHubUnavailable);
-      expect(error.message).toContain("incorrect_client_credentials");
+      expect((error as GitHubUnavailable).status).toBe(status);
+      expect(error.message).toContain(refusal);
     });
   });
 
@@ -228,8 +243,6 @@ describe("createGitHub", () => {
       expect(payload.iat).toBeLessThan(before);
       expect(payload.exp).toBeGreaterThan(after);
       expect(payload.exp! - after).toBeLessThanOrEqual(600);
-      expect(header(tokenCall!, "X-GitHub-Api-Version")).toBe("2026-03-10");
-      expect(header(tokenCall!, "Accept")).toBe("application/vnd.github+json");
     });
 
     it("answers each repo's html_url as ref and id as githubId, with the installation token's permissions", async () => {
@@ -245,8 +258,6 @@ describe("createGitHub", () => {
 
       const [list] = callsTo(calls, REPOS_URL);
       expect(header(list!, "Authorization")).toBe(`Bearer ${INSTALLATION_TOKEN}`);
-      expect(header(list!, "X-GitHub-Api-Version")).toBe("2026-03-10");
-      expect(header(list!, "Accept")).toBe("application/vnd.github+json");
     });
 
     it("reads every page when the installation lists more than 100 repos", async () => {
@@ -265,6 +276,36 @@ describe("createGitHub", () => {
       ]);
       expect(callsTo(calls, ACCESS_TOKENS_URL)).toHaveLength(1);
     });
+
+    it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+      "refuses installation id %s, which isn't a positive integer, before any call",
+      async (installationId) => {
+        const { github, calls } = fakeGitHub();
+
+        const error = await rejection(github.installationRepos(installationId));
+
+        expect(error).toBeInstanceOf(RangeError);
+        expect(calls).toEqual([]);
+      },
+    );
+  });
+
+  it("sends GitHub's JSON media type and API version on every API call", async () => {
+    const { github, calls } = fakeGitHub();
+
+    await github.userInstallationIds(CODE, VERIFIER);
+    await github.installationRepos(INSTALLATION_ID);
+
+    const apiCalls = calls.filter(({ url }) => url.origin === "https://api.github.com");
+    expect(apiCalls.map(({ url }) => url.pathname)).toEqual([
+      "/user/installations",
+      `/app/installations/${INSTALLATION_ID}/access_tokens`,
+      "/installation/repositories",
+    ]);
+    for (const call of apiCalls) {
+      expect(header(call, "Accept")).toBe("application/vnd.github+json");
+      expect(header(call, "X-GitHub-Api-Version")).toBe("2026-03-10");
+    }
   });
 
   /** Each step, failed by `answer`, through the call that reaches it. */
@@ -342,6 +383,66 @@ describe("createGitHub", () => {
     },
   );
 
+  it.each(failures(bodyDrops))(
+    "throws GitHubUnavailable naming the step, not a shape it doesn't document, when the %s call's body drops",
+    async (step, answers, run) => {
+      const { github } = fakeGitHub(answers);
+
+      const error = await rejection(run(github));
+
+      expect(error).toBeInstanceOf(GitHubUnavailable);
+      expect((error as GitHubUnavailable).step).toBe(STEPS[step]);
+      expect((error as GitHubUnavailable).status).toBe(200);
+      expect(error.message).toMatch(/terminated/);
+      expect(error.message).not.toMatch(/shape/);
+      expect(error.cause).toBeInstanceOf(TypeError);
+    },
+  );
+
+  /** Each list, answered by `answer`, through the call that reads it. */
+  const lists = (answer: Answer) =>
+    failures(answer).filter(([step]) => step === "installations" || step === "repos");
+
+  /** A list page holding both lists' fields, so either list can read it. */
+  const listPage = (total: number, entries: ReturnType<typeof repo>[]) =>
+    json({ total_count: total, installations: entries, repositories: entries });
+
+  it.each(
+    lists((call) => {
+      const n = Number(call.url.searchParams.get("page"));
+      return listPage(
+        1_000_000,
+        items(100, (i) => repo((n - 1) * 100 + i)),
+      );
+    }),
+  )(
+    "throws GitHubUnavailable, after 100 pages, when the %s list doesn't end",
+    async (step, answers, run) => {
+      const { github, calls } = fakeGitHub(answers);
+
+      const error = await rejection(run(github));
+
+      expect(error).toBeInstanceOf(GitHubUnavailable);
+      expect((error as GitHubUnavailable).step).toBe(STEPS[step]);
+      expect(error.message).toMatch(/100 pages/);
+      const url = step === "repos" ? REPOS_URL : INSTALLATIONS_URL;
+      expect(callsTo(calls, url)).toHaveLength(100);
+    },
+  );
+
+  it.each(lists(() => listPage(3, [repo(1), repo(2)])))(
+    "throws GitHubUnavailable, not part of the list, when the %s list ends short of its total_count",
+    async (step, answers, run) => {
+      const { github } = fakeGitHub(answers);
+
+      const error = await rejection(run(github));
+
+      expect(error).toBeInstanceOf(GitHubUnavailable);
+      expect((error as GitHubUnavailable).step).toBe(STEPS[step]);
+      expect(error.message).toMatch(/2 of 3/);
+    },
+  );
+
   describe("no error holds a secret", () => {
     /** Everything an error carries: its name, message, stack, every own field, and its causes', unredacted. */
     function everythingIn(value: unknown, seen = new Set<unknown>()): string {
@@ -363,6 +464,7 @@ describe("createGitHub", () => {
       ["no answer", never],
       ["a dropped connection", dropped],
       ["a body that isn't JSON", () => new Response("<html>oops</html>", { status: 200 })],
+      ["a body that drops mid-stream", bodyDrops],
     ];
     type Case = [
       string,
@@ -382,6 +484,11 @@ describe("createGitHub", () => {
         "refused client credentials",
         { token: () => json({ error: "incorrect_client_credentials" }) },
         (github) => github.userInstallationIds(CODE, VERIFIER),
+      ],
+      [
+        "a list short of its total_count",
+        { repos: () => json({ total_count: 3, repositories: [repo(1)] }) },
+        (github) => github.installationRepos(INSTALLATION_ID),
       ],
     );
 
