@@ -2,8 +2,9 @@
 // lists, named by GitHub's `html_url`. A Guard Scan names only these. Every call runs inside `withTeam`, so row-level
 // security keeps each Team to its own rows (ADR 0006); only an installation's id is unique across Teams (threat G6).
 import { sql } from "kysely";
-import type { Asset } from "@warden/contracts";
+import { assetKey, type Asset } from "@warden/contracts";
 import { isPgError } from "../../database.ts";
+import type { AssetCheck } from "../../scans.ts";
 import type { WithTeam } from "../../with-team.ts";
 
 /** The constraint 0009_repo_assets puts on an installation's id across every Team. */
@@ -65,10 +66,12 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
           .where("installation_id", "=", String(installationId))
           .execute();
         if (repos.length === 0) return;
+        // GitHub's paged list can name a repo twice, and one insert can't upsert a row twice (Postgres 21000).
+        const unique = new Map(repos.map((repo) => [repo.ref, repo])).values();
         await tx
           .insertInto("repo_assets")
           .values(
-            repos.map(({ ref, githubId }) => ({
+            Array.from(unique, ({ ref, githubId }) => ({
               team_id: team,
               ref,
               github_id: githubId,
@@ -103,16 +106,29 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
       });
     },
 
-    outside(team, assets) {
-      return withTeam(team, async (tx) => {
-        const refs = assets.filter((asset) => asset.kind === "repo").map((asset) => asset.ref);
-        const held =
-          refs.length === 0
-            ? []
-            : await tx.selectFrom("repo_assets").select("ref").where("ref", "in", refs).execute();
-        const heldRefs = new Set(held.map((row) => row.ref));
-        return assets.filter((asset) => asset.kind !== "repo" || !heldRefs.has(asset.ref));
-      });
+    async outside(team, assets) {
+      const refs = assets.filter((asset) => asset.kind === "repo").map((asset) => asset.ref);
+      if (refs.length === 0) return [...assets];
+      const held = await withTeam(team, (tx) =>
+        tx.selectFrom("repo_assets").select("ref").where("ref", "in", refs).execute(),
+      );
+      const heldRefs = new Set(held.map((row) => row.ref));
+      return assets.filter((asset) => asset.kind !== "repo" || !heldRefs.has(asset.ref));
     },
+  };
+}
+
+/**
+ * Guard's AssetCheck: a Guard Scan names only the Team's Repo Assets. Its refusal names the first Asset outside by its
+ * place, and a repo by its ref, but any other kind by its kind alone, since its ref may well be a Repo Asset's.
+ */
+export function guardAssetCheck({ outside }: Pick<RepoAssets, "outside">): AssetCheck {
+  return async (team, assets) => {
+    const [first] = await outside(team, assets);
+    if (first === undefined) return undefined;
+    const i = assets.findIndex((asset) => assetKey(asset) === assetKey(first));
+    return first.kind === "repo"
+      ? `assets[${i}]: ${first.ref} isn't one of your Team's repos`
+      : `a Guard Scan names only Repo Assets: assets[${i}] is a ${first.kind}`;
   };
 }

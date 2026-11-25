@@ -11,7 +11,7 @@ import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } f
 import { createFindings } from "./findings/index.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
-import { createRepoAssets } from "./modules/guard/repo-assets.ts";
+import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";
 import { createScans } from "./scans.ts";
@@ -92,7 +92,7 @@ const app = createApp({
   // The Job's own list, so a start names the Rules the Job will run.
   scanners: SCANNERS,
   // A Guard Scan names only the Team's Repo Assets.
-  assetChecks: { guard: repoAssets.outside },
+  assetChecks: { guard: guardAssetCheck(repoAssets) },
   moduleRoutes: [guardRoutes({ repoAssets })],
   // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503).
   startScanJob: scanJobStarterFor(config, { logger }),

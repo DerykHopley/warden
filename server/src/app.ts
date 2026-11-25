@@ -4,7 +4,6 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import {
   AcceptBody,
-  assetKey,
   atLeast,
   MarkMovedBody,
   ProposeBody,
@@ -62,7 +61,7 @@ export type AppDeps = {
   scans: Scans;
   /** Each module's scanner, as the start-up file wires them: a start names its Rules, and a module without one is 400. */
   scanners: Scanners;
-  /** Each module's check of a start's Assets, as the start-up file wires them: a start naming one it answers is 400. */
+  /** Each module's check of a start's Assets, as the start-up file wires them: a start one refuses is 400. */
   assetChecks: AssetChecks;
   /** Starts the Scan Job for a queued Scan; without one (none wired here), a start answers 503. */
   startScanJob?: ScanJobStarter;
@@ -413,15 +412,12 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
         400,
       );
     }
-    const team = c.get("team");
-    // Only the Team's own Assets, such as Guard's Repo Assets (story 15): another Team's are refused like any other.
-    const check = deps.assetChecks[module];
-    const [first] = check === undefined ? [] : await check(team, assets);
-    if (first !== undefined) {
-      const i = assets.findIndex((asset) => assetKey(asset) === assetKey(first));
-      return c.json({ error: `assets[${i}]: ${first.ref} isn't one of your Team's repos` }, 400);
-    }
     if (deps.startScanJob === undefined) return c.json({ error: "Scans aren't set up here" }, 503);
+    const team = c.get("team");
+    // Only the Team's own Assets, such as Guard's Repo Assets (story 15): another Team's are refused like any other,
+    // in the module's own words.
+    const refused = await deps.assetChecks[module]?.(team, assets);
+    if (refused !== undefined) return c.json({ error: refused }, 400);
 
     const queued = await deps.scans.queue(team, {
       module,

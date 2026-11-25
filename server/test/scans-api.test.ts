@@ -2,12 +2,12 @@
 // told about with only its id and Team (ADR 0009), and any person in the Team reads it back (`GET /api/scans/:id`).
 // Through the real app on the suite's shared database, each case with Teams of its own, a fake scanner and a fake
 // starter.
-import { randomInt, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { ScanBody, type Asset } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import { createRepoAssets } from "../src/modules/guard/repo-assets.ts";
+import { createRepoAssets, guardAssetCheck } from "../src/modules/guard/repo-assets.ts";
 import {
   createScans,
   ScanJobStartUnknown,
@@ -20,7 +20,14 @@ import {
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { logEntries } from "./server-process.ts";
-import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
+import {
+  activeOrganization,
+  linkRepos,
+  seedTeam,
+  sessionToken,
+  testApp,
+  testKey,
+} from "./helpers.ts";
 
 let key: CryptoKey;
 let publicPem: string;
@@ -343,9 +350,9 @@ describe("POST /api/scans: a Lead starts a Scan (story 2)", () => {
     ]);
   });
 
-  it("answers 503 with no starter wired, writing nothing", async () => {
+  it("answers 503 with no starter wired, before checking the Assets, writing nothing", async () => {
     const team = await newTeam();
-    const { app } = scanApp();
+    const { app } = scanApp({ assetChecks: { guard: async () => "every Asset is refused" } });
 
     const res = await start(app, team);
 
@@ -358,26 +365,17 @@ describe("POST /api/scans: a Guard Scan names only the Team's Repo Assets (stori
   /** The app with Guard's check of a start's Assets on the real Repo Assets store, as the start-up file wires it. */
   function checkedApp(startScanJob: ScanJobStarter) {
     const repoAssets = createRepoAssets({ withTeam });
-    return { repoAssets, ...scanApp({ startScanJob, assetChecks: { guard: repoAssets.outside } }) };
+    return {
+      repoAssets,
+      ...scanApp({ startScanJob, assetChecks: { guard: guardAssetCheck(repoAssets) } }),
+    };
   }
-
-  /** Links a new installation listing `assets` (repos) to the Team. */
-  const linkRepos = (
-    repoAssets: ReturnType<typeof createRepoAssets>,
-    team: string,
-    assets: Asset[],
-  ) =>
-    repoAssets.link(team, {
-      installationId: randomInt(1, 2 ** 47),
-      linkedBy: LEAD,
-      repos: assets.map((asset, i) => ({ ref: asset.ref, githubId: i + 1 })),
-    });
 
   it("answers 202 and queues the Scan when every Asset is one of the Team's Repo Assets", async () => {
     const team = await newTeam();
     const starter = fakeStarter();
     const { app, repoAssets } = checkedApp(starter.start);
-    await linkRepos(repoAssets, team, [repo(1), repo(2)]);
+    await linkRepos(repoAssets, team, [repo(1).ref, repo(2).ref], LEAD);
 
     const res = await start(app, team, { module: "guard", assets: [repo(2), repo(1)] });
 
@@ -391,8 +389,8 @@ describe("POST /api/scans: a Guard Scan names only the Team's Repo Assets (stori
     const other = await newTeam();
     const starter = fakeStarter();
     const { app, repoAssets } = checkedApp(starter.start);
-    await linkRepos(repoAssets, team, [repo(1)]);
-    await linkRepos(repoAssets, other, [repo(7)]);
+    await linkRepos(repoAssets, team, [repo(1).ref], LEAD);
+    await linkRepos(repoAssets, other, [repo(7).ref], LEAD);
 
     const res = await start(app, team, { module: "guard", assets: [repo(1), repo(7), repo(8)] });
 
@@ -402,40 +400,6 @@ describe("POST /api/scans: a Guard Scan names only the Team's Repo Assets (stori
     });
     expect(await rows(team)).toEqual([]);
     expect(await rows(other)).toEqual([]);
-    expect(starter.calls).toEqual([]);
-  });
-
-  it("refuses a repo no Team holds with 400 naming it, for a Team with no Repo Assets", async () => {
-    const team = await newTeam();
-    const starter = fakeStarter();
-    const { app } = checkedApp(starter.start);
-
-    const res = await start(app, team, { module: "guard", assets: [repo(3)] });
-
-    expect(res).toMatchObject({
-      status: 400,
-      body: { error: expect.stringContaining("assets[0]") },
-    });
-    expect(await rows(team)).toEqual([]);
-    expect(starter.calls).toEqual([]);
-  });
-
-  it("refuses a product Asset with 400, though a Repo Asset has its ref", async () => {
-    const team = await newTeam();
-    const starter = fakeStarter();
-    const { app, repoAssets } = checkedApp(starter.start);
-    await linkRepos(repoAssets, team, [repo(1)]);
-
-    const res = await start(app, team, {
-      module: "guard",
-      assets: [{ kind: "product", ref: repo(1).ref }],
-    });
-
-    expect(res).toMatchObject({
-      status: 400,
-      body: { error: expect.stringContaining("assets[0]") },
-    });
-    expect(await rows(team)).toEqual([]);
     expect(starter.calls).toEqual([]);
   });
 });

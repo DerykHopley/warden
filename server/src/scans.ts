@@ -28,12 +28,16 @@ export interface Scanner {
 export type Scanners = Partial<Record<Module, Scanner>>;
 
 /**
- * Each module's check of a start's Assets, as the start-up file wires them: it answers the Assets the Team doesn't
- * hold, in the order given, and a start naming any is refused. A module without one takes any Assets the body allows.
+ * A module's check of a start's Assets: the refusal of the first one the Team can't scan with that module, worded for
+ * the Lead in the module's own terms and naming its place (`assets[i]`), or undefined when it can scan them all.
  */
-export type AssetChecks = Partial<
-  Record<Module, (team: string, assets: readonly Asset[]) => Promise<Asset[]>>
->;
+export type AssetCheck = (team: string, assets: readonly Asset[]) => Promise<string | undefined>;
+
+/**
+ * Each module's AssetCheck, as the start-up file wires them: a start it refuses is 400 with its words. A module
+ * without one takes any Assets the body allows.
+ */
+export type AssetChecks = Partial<Record<Module, AssetCheck>>;
 
 /**
  * Starts the Scan Job for one queued Scan, handing it only the Scan's id and Team (ADR 0009): the Job reads the rest

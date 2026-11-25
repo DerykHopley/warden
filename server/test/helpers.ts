@@ -1,4 +1,5 @@
 // Test seams: a key pair standing in for a Clerk instance, and an app wired as production wires it.
+import { randomInt, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createLogger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import type { RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import {
   createScans,
@@ -86,6 +88,41 @@ export async function seedTeam(
       await tx.insertInto("team_members").values({ team_id: team, user_id, role }).execute();
     }
   });
+}
+
+/** The Admin `newTeam` seeds by default, who links the installations `linkRepos` records. */
+export const ADMIN = "user_admin";
+
+/** A Team with an id no other case uses and these people in it (its Admin by default), written through `withTeam`. */
+export async function newTeam(
+  withTeam: WithTeam,
+  people: [userId: string, role: Role][] = [[ADMIN, "admin"]],
+) {
+  const team = `org_${randomUUID()}`;
+  await seedTeam(withTeam, team, people);
+  return team;
+}
+
+/** A GitHub repo's ref, as GitHub's `html_url` names it. */
+export const repoRef = (name: string) => `https://github.com/example/${name}`;
+
+/** An installation id no other case uses: GitHub's are positive integers. */
+export const newInstallation = () => randomInt(1, 2 ** 47);
+
+/** Links a new installation listing `refs` to the Team, and answers its id. */
+export async function linkRepos(
+  repoAssets: RepoAssets,
+  team: string,
+  refs: string[],
+  linkedBy = ADMIN,
+) {
+  const installationId = newInstallation();
+  await repoAssets.link(team, {
+    installationId,
+    linkedBy,
+    repos: refs.map((ref, i) => ({ ref, githubId: i + 1 })),
+  });
+  return installationId;
 }
 
 /** Members and Findings for a test that never reaches the database: any call fails it. */
