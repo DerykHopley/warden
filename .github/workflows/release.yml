@@ -98,4 +98,6 @@ jobs:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          # The GitHub app's client id (#151): the deploy fails naming it while it's unset.
+          WARDEN_GITHUB_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_APP_CLIENT_ID }}
         run: scripts/cloud-run-deploy.sh "$IMAGE" release
