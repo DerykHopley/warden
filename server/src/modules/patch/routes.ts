@@ -8,23 +8,52 @@ import {
   type Product,
   type ProductsBody,
 } from "@warden/contracts";
-import type { Context } from "hono";
+import type { Context, MiddlewareHandler } from "hono";
 import type { z } from "zod";
 import type { AppEnv, MountRoutes } from "../../app.ts";
 import type { Logger } from "../../log.ts";
-import { ProductNameTaken, ProductNotFound } from "./errors.ts";
+import { ProductNameTaken, ProductNotFound, VersionRefused } from "./errors.ts";
 import { PATCH_FRAMEWORKS } from "./frameworks.ts";
 import type { Products } from "./products.ts";
-import type { PatchScan } from "./scan.ts";
+import type { SaveLimit } from "./save-limit.ts";
+import { PURL_TYPES, type PatchScan } from "./scan.ts";
+import { checkVersion, type Ecosystem } from "./verdict.ts";
 
-const FRAMEWORK_IDS = new Set(PATCH_FRAMEWORKS.map(({ id }) => id));
+/** Each purl type's OSV ecosystem: the reverse of the Scan's PURL_TYPES. */
+const PURL_ECOSYSTEMS = new Map(
+  Object.entries(PURL_TYPES).map(([ecosystem, type]) => [type, ecosystem as Ecosystem]),
+);
+
+/**
+ * Each framework Patch knows, by id: its display name, and the ecosystems its purls are in, in the shape
+ * `checkVersion` reads. A purl in no ecosystem Patch has version rules for stops start-up, as the frameworks are
+ * fixed data.
+ */
+const FRAMEWORKS = new Map(
+  PATCH_FRAMEWORKS.map(({ id, name, purls }) => [
+    id,
+    {
+      name,
+      osv: {
+        packages: purls.map((purl) => {
+          const ecosystem = PURL_ECOSYSTEMS.get(/^pkg:([^/]+)\//.exec(purl)?.[1] ?? "");
+          if (ecosystem === undefined) {
+            throw new Error(`${id}'s purl ${purl} is in no ecosystem Patch has version rules for`);
+          }
+          return { ecosystem };
+        }),
+      },
+    },
+  ]),
+);
 
 /** Postgres can't store a NUL in text and would refuse the write as a 500, so a field holding one is a 400. */
 const NUL_MESSAGE = "holds a NUL character, which Warden can't store";
 
 /**
  * A Product as a Lead sends it, with what the contracts can't check: each framework one Patch knows, each Repo URL
- * once, each version one word, and no NUL in anything stored. Each version is trimmed here before it's checked, so
+ * once, each version one word its framework's ecosystems can read (`checkVersion`; a framework with no package data
+ * takes a plain version), and no NUL in anything stored. Each version is trimmed here before it's checked, so
  * `" 2.0\n"` is one word; the store trims it again, for callers that don't come through these routes (the daily step,
  * the seed). One of only whitespace is already refused by the contract's Text. Repo URLs come trimmed from the
  * contract's URL check, so `" https://…/a\n"` repeats `"https://…/a"`.
@@ -50,7 +79,8 @@ const ProductChange = ProductInput.transform(({ dependencies, ...product }): Pro
     }
   });
   dependencies.forEach(({ framework, version }, i) => {
-    if (!FRAMEWORK_IDS.has(framework)) {
+    const known = FRAMEWORKS.get(framework);
+    if (known === undefined) {
       refuse(
         ["dependencies", i, "framework"],
         `"${framework}" isn't a framework Patch knows: GET /api/patch/frameworks lists them`,
@@ -58,9 +88,16 @@ const ProductChange = ProductInput.transform(({ dependencies, ...product }): Pro
     }
     if (version === null) return;
     if (/\s/.test(version)) {
-      refuse(["dependencies", i, "version"], "a version has no spaces in it, such as 1.4.0");
+      return refuse(["dependencies", i, "version"], "a version has no spaces in it, such as 1.4.0");
     }
-    if (version.includes("\0")) refuse(["dependencies", i, "version"], NUL_MESSAGE);
+    if (version.includes("\0")) return refuse(["dependencies", i, "version"], NUL_MESSAGE);
+    if (known === undefined) return;
+    try {
+      checkVersion(known.osv, known.name, version);
+    } catch (error) {
+      if (!(error instanceof VersionRefused)) throw error;
+      refuse(["dependencies", i, "version"], error.message);
+    }
   });
 });
 
@@ -86,6 +123,16 @@ async function refusing(c: Context<AppEnv>, work: () => Promise<Response>): Prom
 }
 
 /**
+ * The path's Product id. One holding a NUL is no Product's id (Postgres can't store a NUL in text, and would refuse
+ * the read as a 500), so it's ProductNotFound before the store sees it: the same 404 as an id the Team doesn't have.
+ */
+function productId(c: Context<AppEnv>): string {
+  const id = c.req.param("id") ?? "";
+  if (id.includes("\0")) throw new ProductNotFound(id);
+  return id;
+}
+
+/**
  * `refusing`, with `work` given the request's Product. A body that isn't JSON (read as undefined) or that
  * ProductChange refuses is a 400, before any write.
  */
@@ -105,16 +152,31 @@ async function withProduct(
  * records it, and slice 5's daily refresh catches the Product up. After a DELETE there's no Product row left to
  * refresh: that refresh will also scan each Product Asset with Open Findings and no Product row (slice 5's work, not
  * this one's).
+ *
+ * `saveLimit` counts each Team's saves (POST, PUT and DELETE together) once requireRole has let the request through,
+ * so a Member's 403 never counts; a save past it is a 429 with Retry-After, before the body is read, so nothing is
+ * written and nothing scanned.
  */
 export function patchRoutes({
   products,
   scan,
   logger,
+  saveLimit,
 }: {
   products: Products;
   scan: PatchScan;
   logger: Logger;
+  saveLimit: SaveLimit;
 }): MountRoutes {
+  const limited: MiddlewareHandler<AppEnv> = async (c, next) => {
+    const retryAfter = saveLimit.attempt(c.get("team"));
+    if (retryAfter !== undefined) {
+      c.header("Retry-After", String(retryAfter));
+      return c.json({ error: "Too many Product saves: try again in a minute" }, 429);
+    }
+    await next();
+  };
+
   async function scanAfterChange(team: string, product: Pick<Product, "id">) {
     try {
       await scan.scanProduct(team, product);
@@ -136,7 +198,7 @@ export function patchRoutes({
 
     // A Lead or an Admin creates, changes and deletes them (stories 1 and 2); a Member gets requireRole's 403.
     // Each change's Scan runs only once the store has written it: a refused change (400, 404, 409) scans nothing.
-    app.post("/api/products", requireRole("lead"), (c) =>
+    app.post("/api/products", requireRole("lead"), limited, (c) =>
       withProduct(c, async (input) => {
         const product = await products.create(c.get("team"), input);
         await scanAfterChange(c.get("team"), product);
@@ -145,9 +207,9 @@ export function patchRoutes({
     );
 
     // PUT replaces the whole Product: Repo URLs and dependencies left out are gone.
-    app.put("/api/products/:id", requireRole("lead"), (c) =>
+    app.put("/api/products/:id", requireRole("lead"), limited, (c) =>
       withProduct(c, async (input) => {
-        const product = await products.update(c.get("team"), c.req.param("id"), input);
+        const product = await products.update(c.get("team"), productId(c), input);
         await scanAfterChange(c.get("team"), product);
         return c.json(product);
       }),
@@ -155,9 +217,9 @@ export function patchRoutes({
 
     // A deleted Product's Scan reads no dependencies, so every Finding on it turns Fixed. If that Scan fails, the
     // daily refresh's sweep of Product Assets with no Product row (slice 5) turns them Fixed.
-    app.delete("/api/products/:id", requireRole("lead"), (c) =>
+    app.delete("/api/products/:id", requireRole("lead"), limited, (c) =>
       refusing(c, async () => {
-        const id = c.req.param("id");
+        const id = productId(c);
         await products.remove(c.get("team"), id);
         await scanAfterChange(c.get("team"), { id });
         return c.body(null, 204);

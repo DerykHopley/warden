@@ -1,5 +1,6 @@
-// Stories 1, 2 and 8 at the API, changing Products: a Lead or an Admin creates, changes and deletes the Team's
-// Products, a Member is refused, and no Team changes another's. Through the real app with Patch's routes mounted as the
+// Stories 1, 2, 3 and 8 at the API, changing Products: a Lead or an Admin creates, changes and deletes the Team's
+// Products, a Member is refused, a version its framework can't read is refused, each Team's saves are limited on their
+// own, and no Team changes another's. Through the real app with Patch's routes mounted as the
 // start-up file mounts them, as the person each session names, on the suite's shared database with Teams of this
 // file's own.
 import { randomUUID } from "node:crypto";
@@ -10,6 +11,8 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { AppEnv } from "../src/app.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
+import { createSaveLimit, type SaveLimit } from "../src/modules/patch/save-limit.ts";
+import type { PatchScan } from "../src/modules/patch/scan.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
@@ -26,17 +29,45 @@ const LEAD = "user_lead";
 const ADMIN = "user_admin";
 
 let key: CryptoKey;
+let publicPem: string;
 let pool: pg.Pool;
 let withTeam: WithTeam;
 let app: Hono<AppEnv>;
 
 beforeAll(async () => {
-  const { privateKey, publicPem } = await testKey();
+  let privateKey: CryptoKey;
+  ({ privateKey, publicPem } = await testKey());
   key = privateKey;
   pool = poolAs("warden_app", inject("testDatabase"));
   withTeam = createWithTeam(pool);
   ({ app } = testApp({ publicPem, withTeam, mount: patchMount(withTeam) }));
 });
+
+/**
+ * The app with a stand-in for the Patch Scan that records the Product id of each Scan it's asked for, and
+ * `saveLimit` (by default, the start-up file's).
+ */
+function scanRecorded(saveLimit?: SaveLimit) {
+  const scanned: string[] = [];
+  const scan: PatchScan = {
+    scanProduct: (_team, { id }) => {
+      scanned.push(id);
+      return Promise.resolve({
+        opened: [],
+        seen: [],
+        fixed: [],
+        reopened: [],
+        alreadyApplied: false,
+      });
+    },
+  };
+  const { app: recorded } = testApp({
+    publicPem,
+    withTeam,
+    mount: patchMount(withTeam, { scan, ...(saveLimit === undefined ? {} : { saveLimit }) }),
+  });
+  return { app: recorded, scanned };
+}
 
 afterAll(() => pool.end());
 
@@ -50,28 +81,35 @@ async function team() {
   return id;
 }
 
-/** A request as `as` in `teamId`: `body` sent as JSON, or as it is when it's already a string. */
+/**
+ * A request as `as` in `teamId`, to `on` (the file's app by default): `body` sent as JSON, or as it is when it's
+ * already a string.
+ */
 async function call(
   method: string,
   path: string,
-  { as, teamId, body }: { as: string; teamId: string; body?: unknown },
+  { as, teamId, body, on = app }: { as: string; teamId: string; body?: unknown; on?: Hono<AppEnv> },
 ) {
   const token = await sessionToken(key, as, 60, activeOrganization(teamId));
-  const res = await app.request(path, {
+  const res = await on.request(path, {
     method,
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
   });
   const text = await res.text();
-  return { status: res.status, body: text === "" ? undefined : (JSON.parse(text) as unknown) };
+  return {
+    status: res.status,
+    retryAfter: res.headers.get("Retry-After"),
+    body: text === "" ? undefined : (JSON.parse(text) as unknown),
+  };
 }
 
-const create = (teamId: string, body: unknown, as = LEAD) =>
-  call("POST", "/api/products", { as, teamId, body });
-const replace = (teamId: string, id: string, body: unknown, as = LEAD) =>
-  call("PUT", `/api/products/${id}`, { as, teamId, body });
-const remove = (teamId: string, id: string, as = LEAD) =>
-  call("DELETE", `/api/products/${id}`, { as, teamId });
+const create = (teamId: string, body: unknown, as = LEAD, on?: Hono<AppEnv>) =>
+  call("POST", "/api/products", { as, teamId, body, on });
+const replace = (teamId: string, id: string, body: unknown, as = LEAD, on?: Hono<AppEnv>) =>
+  call("PUT", `/api/products/${id}`, { as, teamId, body, on });
+const remove = (teamId: string, id: string, as = LEAD, on?: Hono<AppEnv>) =>
+  call("DELETE", `/api/products/${id}`, { as, teamId, on });
 
 async function list(teamId: string) {
   const { status, body } = await call("GET", "/api/products", { as: MEMBER, teamId });
@@ -377,5 +415,122 @@ describe("a Product id the Team doesn't have", () => {
     expect(answers.map(({ status }) => status)).toEqual([404, 404]);
     expect(await list(a)).toEqual(before);
     expect(await list(b)).toEqual([]);
+  });
+
+  // Bug slice 3 (#113's verifier): the NUL reached Postgres in the id, a 500.
+  it("answers PUT and DELETE 404 for an id holding a NUL, and scans nothing", async () => {
+    const teamId = await team();
+    await created(teamId);
+    const before = await stored(teamId);
+    const { app: recorded, scanned } = scanRecorded();
+
+    const answers = [
+      await replace(teamId, "a%00b", supportBot, LEAD, recorded),
+      await remove(teamId, "a%00b", LEAD, recorded),
+    ];
+
+    expect(answers.map(({ status, body }) => ({ status, body }))).toEqual([
+      { status: 404, body: { error: "No such Product" } },
+      { status: 404, body: { error: "No such Product" } },
+    ]);
+    expect(scanned).toEqual([]);
+    expect(await stored(teamId)).toEqual(before);
+  });
+});
+
+// Story 3: a saved version is one its framework's ecosystems can read, so its CVE Findings get a real verdict.
+describe("a version its framework can't read", () => {
+  const product = (framework: string, version: string): ProductInput => ({
+    name: `${framework} app`,
+    repo_urls: [],
+    dependencies: [{ framework, version, usage: "self_hosted", internet_facing: true }],
+  });
+
+  it("answers LangChain 'banana' 400 on POST and PUT, writes nothing and scans nothing", async () => {
+    const teamId = await team();
+    const { app: recorded, scanned } = scanRecorded();
+    const kept = await created(teamId);
+    const before = await stored(teamId);
+
+    const answers = [
+      await create(teamId, product("langchain", "banana"), LEAD, recorded),
+      await replace(teamId, kept.id, product("langchain", "banana"), LEAD, recorded),
+    ];
+
+    const refusal =
+      "dependencies.0.version: 'banana' isn't a PyPI (PEP 440) version, which LangChain uses. Example: 0.3.27.";
+    expect(answers.map(({ status, body }) => ({ status, body }))).toEqual([
+      { status: 400, body: { error: refusal } },
+      { status: 400, body: { error: refusal } },
+    ]);
+    expect(scanned).toEqual([]);
+    expect(await stored(teamId)).toEqual(before);
+  });
+
+  it("takes a version each framework's ecosystem reads, and a plain one for a framework with no package data", async () => {
+    const teamId = await team();
+
+    const answers = [
+      await create(teamId, product("ollama", "v0.1.2")),
+      await create(teamId, product("langchain", "0.0.200")),
+      await create(teamId, product("dify", "1.0.0")),
+    ];
+
+    expect(answers.map(({ status }) => status)).toEqual([201, 201, 201]);
+  });
+
+  it("answers Dify '1.0$' 400: it doesn't look like a version", async () => {
+    const teamId = await team();
+
+    const answer = await create(teamId, product("dify", "1.0$"));
+
+    expect(answer.status).toBe(400);
+    expect(answer.body).toEqual({
+      error: expect.stringContaining("dependencies.0.version: '1.0$' doesn't look like a version"),
+    });
+    expect(await stored(teamId)).toEqual({ products: [], dependencies: [] });
+  });
+});
+
+// Story 8: each Team's saves are its own, with its own limit (the spec's secure default for a public URL).
+describe("the save limit", () => {
+  it("answers a Team's third save in a minute 429 with Retry-After, writing and scanning nothing; another Team still saves", async () => {
+    const [a, b] = [await team(), await team()];
+    const { app: limited, scanned } = scanRecorded(createSaveLimit({ max: 2 }));
+
+    const made = await create(a, supportBot, LEAD, limited);
+    expect(made.status).toBe(201);
+    const product = Product.parse(made.body);
+    const put = await replace(a, product.id, { ...supportBot, name: "Renamed" }, LEAD, limited);
+    expect(put.status).toBe(200);
+    const before = await stored(a);
+
+    const third = await remove(a, product.id, LEAD, limited);
+
+    expect(third.status).toBe(429);
+    expect(third.retryAfter).toMatch(/^[1-9]\d*$/);
+    expect(Number(third.retryAfter)).toBeLessThanOrEqual(60);
+    expect(third.body).toEqual({ error: expect.any(String) });
+    expect(await stored(a)).toEqual(before);
+    expect(scanned).toEqual([product.id, product.id]);
+    expect((await create(b, supportBot, LEAD, limited)).status).toBe(201);
+  });
+
+  it("doesn't count a Member's refused saves", async () => {
+    const teamId = await team();
+    const { app: limited } = scanRecorded(createSaveLimit({ max: 2 }));
+
+    const refused = [
+      await create(teamId, supportBot, MEMBER, limited),
+      await create(teamId, supportBot, MEMBER, limited),
+      await create(teamId, supportBot, MEMBER, limited),
+    ];
+    const saved = [
+      await create(teamId, supportBot, LEAD, limited),
+      await create(teamId, { ...supportBot, name: "Other app" }, LEAD, limited),
+    ];
+
+    expect(refused.map(({ status }) => status)).toEqual([403, 403, 403]);
+    expect(saved.map(({ status }) => status)).toEqual([201, 201]);
   });
 });

@@ -53,7 +53,7 @@ export interface PatchScan {
 }
 
 /** Each OSV ecosystem's purl type. */
-const PURL_TYPES: Record<Ecosystem, string> = { PyPI: "pypi", npm: "npm", Go: "golang" };
+export const PURL_TYPES: Record<Ecosystem, string> = { PyPI: "pypi", npm: "npm", Go: "golang" };
 
 /**
  * A package as a purl without its version (the contracts README's Fingerprint rule): PyPI's name in lower case with
