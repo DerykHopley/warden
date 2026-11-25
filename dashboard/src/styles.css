@@ -175,6 +175,7 @@ button:focus-visible,
 .page-links a:focus-visible,
 .level-line a:focus-visible,
 .repo-urls a:focus-visible,
+.patch-links a:focus-visible,
 .panel-divider:focus-visible,
 .chat-input:focus-visible,
 .field textarea:focus-visible,
@@ -1296,6 +1297,56 @@ button[aria-busy="true"],
 }
 
 /* "Couldn't load Proposals", with Retry beside it. */
+/* A Patch Finding's assessment, between the card's fields and its decisions: the same rows as the fields. */
+.patch-section {
+  margin-right: 8px;
+}
+
+.patch-section h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.patch-section > p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.patch-section .detail-fields {
+  margin-right: 0;
+}
+
+/* The verdict's reason, and the due line, each on a line of their own under the word they explain. */
+.patch-reason,
+.patch-due {
+  display: block;
+  margin: 0;
+}
+
+.patch-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+/* NVD and OSV links side by side, each a 44px target with the focus ring, wrapping on a narrow card. */
+.patch-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.patch-links a {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--accent);
+}
+
+.patch-failed,
 .proposals-failed {
   display: flex;
   flex-wrap: wrap;

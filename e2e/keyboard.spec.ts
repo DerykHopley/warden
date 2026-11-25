@@ -4,6 +4,7 @@
 // its Repo URL links, and for an Admin's Add, Edit and Product form.
 import type { Locator, Page } from "@playwright/test";
 import { expectRings, expectTargets } from "./a11y.ts";
+import { cedarCveFinding, openCveCard } from "./cedar-cve.ts";
 import {
   CEDAR,
   CHAT_ASSISTANT,
@@ -192,6 +193,24 @@ test(
       ...(await repoLinks.all()),
     ]);
     await expectRings(page, [repoLinks.first()]);
+  },
+);
+
+test(
+  "at 390px, a CVE Finding's NVD and OSV links are each at least 44 by 44px and show a ring",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    const finding = await cedarCveFinding((assessment) => assessment.links.osv.length > 0);
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/findings");
+    const links = (await openCveCard(page, finding)).locator(".patch-links").getByRole("link");
+    await expect(links.first()).toHaveText("NVD");
+    await expect(links.nth(1)).toHaveText(/^OSV/);
+
+    const all = await links.all();
+    await expectTargets(all);
+    await expectRings(page, all);
   },
 );
 

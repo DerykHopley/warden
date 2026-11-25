@@ -345,9 +345,10 @@ describe("the detail card's Proposals, from GET /api/proposals", () => {
     const answers = [json(503, { error: "Down" }), proposalsAnswer()];
     open("/findings", { proposals: () => answers.shift() ?? proposalsAnswer() });
     await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
-    await within(card()).findByText("Couldn't load Proposals");
+    const failed = await within(card()).findByText("Couldn't load Proposals");
 
-    await userEvent.click(within(card()).getByRole("button", { name: "Retry" }));
+    // The Proposals' own Retry: a Patch Finding's card has the Patch section's too.
+    await userEvent.click(within(failed.parentElement!).getByRole("button", { name: "Retry" }));
 
     expect(
       await within(card()).findByRole("list", { name: "Pending Proposals" }),

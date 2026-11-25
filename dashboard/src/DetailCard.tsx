@@ -44,6 +44,7 @@ import {
   UNCONFIRMED_FIX,
 } from "./finding-words.ts";
 import { shortId } from "./findings.ts";
+import { PatchSection } from "./PatchSection.tsx";
 import { personName, type ClerkUser } from "./person-name.ts";
 import type { ProposalsResult } from "./proposals.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
@@ -523,6 +524,15 @@ export function DetailCard(props: {
           </>
         )}
       </dl>
+      {finding.module === "patch" && (
+        // Keyed by what a decision changes, so the section asks again after one and drops the earlier ask's answer.
+        <PatchSection
+          key={`${finding.status} ${finding.accepted_until ?? ""}`}
+          finding={finding}
+          getToken={getToken}
+          onSessionEnded={props.onSessionEnded}
+        />
+      )}
       {cardLine?.kind === "done" && (
         <p className="card-line" role="status" tabIndex={-1}>
           {cardLine.text}

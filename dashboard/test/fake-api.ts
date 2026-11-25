@@ -21,6 +21,8 @@ export type Routes = {
   products?: () => Answer;
   /** GET /api/patch/frameworks. */
   frameworks?: () => Answer;
+  /** GET /api/patch/findings/:id/assessment, with the Finding id. */
+  assessment?: (id: string) => Answer;
   /** POST /api/products (id null) or PUT /api/products/:id, with the Product id and the parsed body. */
   saveProduct?: (id: string | null, body: unknown) => Answer;
   /** DELETE /api/products/:id, with the Product id. */
@@ -54,6 +56,10 @@ export function serve(routes: Routes) {
     if (url === "/api/products" && method === "GET" && routes.products) return routes.products();
     if (url === "/api/patch/frameworks" && method === "GET" && routes.frameworks) {
       return routes.frameworks();
+    }
+    const assessed = /^\/api\/patch\/findings\/([^/]+)\/assessment$/.exec(url);
+    if (assessed && method === "GET" && routes.assessment) {
+      return routes.assessment(decodeURIComponent(assessed[1] ?? ""));
     }
     if (url === "/api/products" && method === "POST" && routes.saveProduct) {
       return routes.saveProduct(null, sentBody(init));
