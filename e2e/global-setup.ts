@@ -11,7 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exportJWK, exportSPKI, generateKeyPair } from "jose";
-import { createMigratedTestDatabase, loadTestCveSnapshot } from "../server/test/databases.ts";
+import {
+  createMigratedTestDatabase,
+  loadTestCveSnapshot,
+  waitForPostgres,
+} from "../server/test/databases.ts";
 import {
   ACME,
   BLUEBIRD,
@@ -89,6 +93,7 @@ export default async function globalSetup() {
   };
   try {
     const connection = { ...postgres, port: Number(postgres.port) };
+    await waitForPostgres(connection); // a container started just before the run (#236)
     const database = await createMigratedTestDatabase(connection);
     cleanup.push(database.drop);
     // As warden_migrate, before the server starts: what the release does after migrating.
