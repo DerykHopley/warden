@@ -12,6 +12,8 @@ import { createFindings } from "./findings/index.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
 import { createGitHub } from "./modules/guard/github.ts";
+import { hookRoutes } from "./modules/guard/hook-routes.ts";
+import { createHookSettings } from "./modules/guard/hook-settings.ts";
 import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";
@@ -79,6 +81,7 @@ pool.query("select 1").catch((error: unknown) => {
 const clerk = createClerkClient({ secretKey: config.clerk.secretKey });
 const withTeam = createWithTeam(pool);
 const repoAssets = createRepoAssets({ withTeam });
+const hookSettings = createHookSettings({ withTeam });
 const app = createApp({
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
@@ -99,6 +102,7 @@ const app = createApp({
     guardRoutes(
       config.github ? { repoAssets, github: createGitHub(config.github), logger } : { repoAssets },
     ),
+    hookRoutes({ hookSettings }),
   ],
   // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503).
   startScanJob: scanJobStarterFor(config, { logger }),

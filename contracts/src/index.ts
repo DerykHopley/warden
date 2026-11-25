@@ -64,3 +64,4 @@ export * from "./decisions.ts";
 export * from "./findings-view.ts";
 export * from "./scans.ts";
 export * from "./repos.ts";
+export * from "./hook.ts";

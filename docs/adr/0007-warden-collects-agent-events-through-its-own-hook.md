@@ -37,4 +37,5 @@ Research on 2026-11-24 (capstone archive, `research/research-agent-session-trace
 - Warden now holds sensitive data in transit, so the endpoint, its tokens and retention are in the threat model
   (`docs/threat-model.md`, a foundation spec slice) and `docs/data.md`.
 - The eval's scripted sessions reach Warden through the same hook.
-- Hook tokens are secrets: kept in Secret Manager, rotatable per Team.
+- Hook tokens are secrets, rotatable per Team. Amended by #100's question 4: not kept in Secret Manager, but as a
+  SHA-256 hash per token in Cloud SQL, shown once when issued; on rotation the old token stays valid 24 hours.
