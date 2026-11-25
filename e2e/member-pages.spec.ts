@@ -9,7 +9,7 @@ test("a Member reaches Findings and People from the header, each with their Team
   await signIn(GRACE);
   await page.goto("/");
   const links = page.getByRole("navigation", { name: "Pages" }).getByRole("link");
-  await expect(links).toHaveText(["Findings", "Overview", "People"]);
+  await expect(links).toHaveText(["Findings", "Overview", "Products", "People"]);
   await expect(page.getByRole("banner")).toContainText("Acme");
   await expect(page.getByRole("banner")).toContainText("Member");
 

@@ -2,15 +2,103 @@
 // closed, floating and pinned (where pinning is offered). Nothing scrolls sideways;
 // under 640px one column and a table of Severity, Finding and Status; from 640 to 1100px the cards wrap two or three to
 // a row; from 1100px five sit in a row; content stays within about 1480px, centred.
-import type { Page } from "@playwright/test";
-import { expect, GRACE, test } from "./session.ts";
+//
+// Every page, opened directly at each width and scheme, scrolls nothing sideways: Products in Cedar (its Products
+// stay out of Acme's Findings counts), the rest as Grace in Acme.
+import type { Locator, Page } from "@playwright/test";
+import {
+  ACME,
+  CEDAR,
+  CHAT_ASSISTANT,
+  ensureProduct,
+  expect,
+  GRACE,
+  KATHERINE,
+  signInEachTest,
+  SIGNS_IN_ITSELF,
+  test,
+  type Person,
+  type Team,
+} from "./session.ts";
 
 const WIDTHS = [390, 1024, 1600] as const;
 const SCHEMES = ["light", "dark"] as const;
 
-test.beforeEach(async ({ signIn }) => {
-  await signIn(GRACE);
+signInEachTest(GRACE);
+
+test.beforeAll(async () => {
+  await ensureProduct(CEDAR, CHAT_ASSISTANT);
 });
+
+/**
+ * Who opens each page, and what it shows once it has loaded, so the check runs against its content, not its waiting
+ * line. /findings and /overview are opened directly at each width and scheme by their own tests below.
+ */
+const PAGES: { path: string; person: Person; team: Team; loaded: (page: Page) => Locator }[] = [
+  // A Member's landing page is Findings.
+  {
+    path: "/",
+    person: GRACE,
+    team: ACME,
+    loaded: (page) => page.locator(".findings-table tbody tr").first(),
+  },
+  {
+    path: "/products",
+    person: KATHERINE,
+    team: CEDAR,
+    loaded: (page) => page.locator(".product").first(),
+  },
+  {
+    path: "/people",
+    person: GRACE,
+    team: ACME,
+    loaded: (page) => page.locator(".people tbody tr").first(),
+  },
+];
+
+for (const { path, person, team, loaded } of PAGES) {
+  for (const scheme of SCHEMES) {
+    for (const width of WIDTHS) {
+      test(
+        `${path} opened directly at ${width}px in ${scheme}: nothing scrolls sideways`,
+        SIGNS_IN_ITSELF,
+        async ({ page, signIn }) => {
+          await signIn(person, team);
+          await page.setViewportSize({ width, height: 900 });
+          await page.emulateMedia({ colorScheme: scheme });
+          await page.goto(path);
+          await expect(loaded(page)).toBeVisible();
+          const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+            scrollWidth: document.documentElement.scrollWidth,
+            clientWidth: document.documentElement.clientWidth,
+          }));
+          expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        },
+      );
+    }
+  }
+}
+
+test(
+  "Products under 640px: each Product's parts and dependency rows stack in one column",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await signIn(KATHERINE, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const entry = page.locator(".product", { hasText: "Chat assistant" });
+    await expect(entry).toBeVisible();
+    const lefts = (selector: string) =>
+      entry
+        .locator(selector)
+        .evaluateAll((all) => all.map((el) => Math.round(el.getBoundingClientRect().left)));
+    expect(new Set(await lefts(".product-part")).size).toBe(1);
+    expect(new Set(await lefts(".dependency:first-child > *")).size).toBe(1);
+
+    await page.setViewportSize({ width: 1024, height: 900 });
+    expect(new Set(await lefts(".product-part")).size).toBe(2);
+  },
+);
 
 async function openAt(page: Page, width: number, colorScheme: "light" | "dark") {
   await page.setViewportSize({ width, height: 900 });
@@ -197,6 +285,28 @@ test("at 390px, a title holding a 60-character word with no break in it still do
     clientWidth: document.documentElement.clientWidth,
   }));
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+});
+
+// The header's width depends on the fonts the machine has: the four page links fitted with this machine's Noto Sans and
+// scrolled 9px sideways with the CI runner's DejaVu Sans (#141). Wider letters stand in for a wider font, so this test
+// fails on any machine while the header can't wrap.
+test("at 390px with the header's text a tenth of an em wider per letter, the header wraps instead of scrolling sideways, and each page link stays 44 by 44px", async ({
+  page,
+}) => {
+  await openAt(page, 390, "light");
+  await page.addStyleTag({ content: ".app-header { letter-spacing: 0.1em; }" });
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  const links = page.getByRole("navigation", { name: "Pages" }).getByRole("link");
+  await expect(links).toHaveCount(4);
+  for (const box of await links.evaluateAll((all) => all.map((a) => a.getBoundingClientRect()))) {
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.right).toBeLessThanOrEqual(clientWidth);
+  }
 });
 
 test("under 640px: the cards stack in one column, and the table shows Severity, Finding and Status", async ({

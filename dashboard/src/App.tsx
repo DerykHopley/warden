@@ -17,6 +17,7 @@ import { fetchMe, type MeResult } from "./me.ts";
 import { OverviewPage } from "./Overview.tsx";
 import type { PagePanel, PanelContext } from "./panel.ts";
 import { PeoplePage } from "./People.tsx";
+import { ProductsPage } from "./Products.tsx";
 import { ROLE_WORDS } from "./roles.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
@@ -128,6 +129,7 @@ const nothingToDo = () => {};
 const PAGES: { path: string; label: string; Page: ComponentType<PageProps> }[] = [
   { path: "/findings", label: "Findings", Page: FindingsPage },
   { path: "/overview", label: "Overview", Page: OverviewPage },
+  { path: "/products", label: "Products", Page: ProductsPage },
   { path: "/people", label: "People", Page: PeoplePage },
 ];
 
