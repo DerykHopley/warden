@@ -1,10 +1,9 @@
 // Patch's priority (A16): how urgent an open CVE is for a Team, with the reasons and a due date. A pure function,
 // ported from the spike `architecture/spikes/stack-ts/patch-p3` (src/priority.ts, status.ts, settings.ts), itself a
 // port of Patch's backend/app/priority.py. Same behaviour; the policy is fixed in code (no Team setting).
-import type { Status } from "@warden/contracts";
+import type { PriorityLevel, Status } from "@warden/contracts";
 import { isNvdSeverity, type NvdSeverity } from "./cvss-band.ts";
-
-export type PriorityLevel = "urgent" | "high" | "normal" | "low";
+import type { VerdictKind } from "./verdict.ts";
 
 export const ALERT_PRIORITY: Readonly<Record<PriorityLevel, number>> = {
   urgent: 5,
@@ -31,14 +30,11 @@ export const PATCH_POLICY: PriorityPolicy = Object.freeze({
   adopt_kev_deadline: true,
 });
 
-/** Whether a CVE touches the version in use (A15). The verdict file (#107) has its own; slice 6 joins them. */
-type AffectedVerdict = "affected" | "not_affected" | "unknown";
-
 export interface CveFacts {
   readonly severity: NvdSeverity | "NONE" | null; // NONE or null when NVD hasn't scored it
   readonly kev: boolean;
   readonly epss_percentile: number | null; // 0 to 1, EPSS by FIRST
-  readonly verdict: AffectedVerdict;
+  readonly verdict: VerdictKind; // whether the CVE touches the version in use (A15)
   readonly internet_facing: boolean;
   readonly status: Status;
   readonly published: string; // YYYY-MM-DD
@@ -132,14 +128,15 @@ function percent(p: number): number {
   return Math.trunc(Number((p * 100).toFixed(6)));
 }
 
+/** The UTC calendar day `date` falls on, as YYYY-MM-DD. */
+export function utcDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
 /** A real calendar day written YYYY-MM-DD, so that comparing two as text compares the days. */
 function isoDate(date: string): Date {
   const d = new Date(`${date}T00:00:00Z`);
-  if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-    Number.isNaN(d.getTime()) ||
-    d.toISOString().slice(0, 10) !== date
-  ) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(d.getTime()) || utcDay(d) !== date) {
     throw new RangeError(`Invalid isoformat string: '${date}'`);
   }
   return d;
@@ -148,7 +145,7 @@ function isoDate(date: string): Date {
 function addDays(date: string, days: number): string {
   const d = isoDate(date);
   d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
+  return utcDay(d);
 }
 
 /** An Accepted Finding whose review date has come. No review date counts as due. */
@@ -163,7 +160,8 @@ function isOpen(status: Status, reviewDate: string | null, asOf: string): boolea
 
 /**
  * The level, reasons, due date and overdue for one CVE. `epssPercentile`: row 2's threshold. Throws a RangeError for
- * a date that isn't YYYY-MM-DD or an EPSS percentile outside 0 to 1.
+ * a date that isn't YYYY-MM-DD, every date given checked up front, whichever one the due date is counted from, or an
+ * EPSS percentile outside 0 to 1.
  */
 export function priority(
   facts: CveFacts,
@@ -171,7 +169,10 @@ export function priority(
   asOf: string,
   epssPercentile = 90,
 ): Priority {
-  for (const date of [asOf, facts.kev_deadline, facts.review_date]) if (date) isoDate(date);
+  for (const date of [asOf, facts.published]) isoDate(date);
+  for (const date of [facts.kev_added, facts.kev_deadline, facts.review_date]) {
+    if (date) isoDate(date);
+  }
   const epss = facts.epss_percentile;
   if (epss !== null && !(epss >= 0 && epss <= 1)) {
     throw new RangeError(`EPSS percentile must be from 0 to 1, got ${epss}`);

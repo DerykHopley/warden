@@ -15,14 +15,7 @@ import { createSaveLimit, type SaveLimit } from "../src/modules/patch/save-limit
 import type { PatchScan } from "../src/modules/patch/scan.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import {
-  activeOrganization,
-  patchMount,
-  seedTeam,
-  sessionToken,
-  testApp,
-  testKey,
-} from "./helpers.ts";
+import { call, newTeam, patchMount, testApp, testKey } from "./helpers.ts";
 
 const MEMBER = "user_member";
 const LEAD = "user_lead";
@@ -71,48 +64,22 @@ function scanRecorded(saveLimit?: SaveLimit) {
 
 afterAll(() => pool.end());
 
-async function team() {
-  const id = `org_${randomUUID()}`;
-  await seedTeam(withTeam, id, [
+const team = () =>
+  newTeam(withTeam, [
     [MEMBER, "member"],
     [LEAD, "lead"],
     [ADMIN, "admin"],
   ]);
-  return id;
-}
 
-/**
- * A request as `as` in `teamId`, to `on` (the file's app by default): `body` sent as JSON, or as it is when it's
- * already a string.
- */
-async function call(
-  method: string,
-  path: string,
-  { as, teamId, body, on = app }: { as: string; teamId: string; body?: unknown; on?: Hono<AppEnv> },
-) {
-  const token = await sessionToken(key, as, 60, activeOrganization(teamId));
-  const res = await on.request(path, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
-  });
-  const text = await res.text();
-  return {
-    status: res.status,
-    retryAfter: res.headers.get("Retry-After"),
-    body: text === "" ? undefined : (JSON.parse(text) as unknown),
-  };
-}
-
-const create = (teamId: string, body: unknown, as = LEAD, on?: Hono<AppEnv>) =>
-  call("POST", "/api/products", { as, teamId, body, on });
-const replace = (teamId: string, id: string, body: unknown, as = LEAD, on?: Hono<AppEnv>) =>
-  call("PUT", `/api/products/${id}`, { as, teamId, body, on });
-const remove = (teamId: string, id: string, as = LEAD, on?: Hono<AppEnv>) =>
-  call("DELETE", `/api/products/${id}`, { as, teamId, on });
+const create = (teamId: string, body: unknown, as = LEAD, on = app) =>
+  call(on, key, "POST", "/api/products", { as, teamId, body });
+const replace = (teamId: string, id: string, body: unknown, as = LEAD, on = app) =>
+  call(on, key, "PUT", `/api/products/${id}`, { as, teamId, body });
+const remove = (teamId: string, id: string, as = LEAD, on = app) =>
+  call(on, key, "DELETE", `/api/products/${id}`, { as, teamId });
 
 async function list(teamId: string) {
-  const { status, body } = await call("GET", "/api/products", { as: MEMBER, teamId });
+  const { status, body } = await call(app, key, "GET", "/api/products", { as: MEMBER, teamId });
   expect(status).toBe(200);
   return ProductsBody.parse(body).products;
 }

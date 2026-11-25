@@ -20,6 +20,25 @@ export class ProductNotFound extends Error {
 }
 
 /**
+ * A Finding id that isn't one of the Team's Patch Findings: one the Team doesn't have (another Team's included),
+ * another module's, or one with no CVE to assess. Its message names nothing but the id asked for.
+ */
+export class PatchFindingNotFound extends Error {
+  constructor(id: string) {
+    super(`No Patch Finding ${id} in this Team`);
+    this.name = "PatchFindingNotFound";
+  }
+}
+
+/** A Patch Finding whose CVE the loaded CVE snapshot doesn't hold: never loaded, or dropped by a newer one. */
+export class CveNotInSnapshot extends Error {
+  constructor(cveId: string) {
+    super(`The CVE snapshot doesn't hold ${cveId}, so its Finding can't be assessed`);
+    this.name = "CveNotInSnapshot";
+  }
+}
+
+/**
  * A name another Product in the Team already has, whatever its case or the spaces around it: nothing was written
  * (Patch's 409). The unique index decides it, so two Leads saving at once get it too.
  */

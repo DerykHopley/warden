@@ -12,7 +12,8 @@ import {
   type ProductInput,
   type Role,
 } from "@warden/contracts";
-import { createApp, type MountRoutes } from "../src/app.ts";
+import type { Hono } from "hono";
+import { createApp, type AppEnv, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import {
   createFindings,
@@ -24,6 +25,7 @@ import { toRow } from "../src/findings/rows.ts";
 import { createLogger, type Logger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import { createPatchAssessment } from "../src/modules/patch/assessment.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
 import { createPatchRefresh, type PatchRefresh } from "../src/modules/patch/refresh.ts";
@@ -74,9 +76,10 @@ export function patchRefresh(
 }
 
 /**
- * Patch's routes as the start-up file mounts them: the Products store and the Patch Scan, on `withTeam`. `scan`
- * stands in for the Patch Scan; `logger` takes the routes' log lines (none are kept unless given); `saveLimit` stands
- * in for the start-up file's (a fresh one by default).
+ * Patch's routes as the start-up file mounts them: the Products store, the Patch Scan and the assessment, on
+ * `withTeam`. `scan` stands in for the Patch Scan; `logger` takes the routes' log lines (none are kept unless given);
+ * `saveLimit` stands in for the start-up file's (a fresh one by default); `now` is the assessment's clock (the real
+ * time by default).
  */
 export function patchMount(
   withTeam: WithTeam,
@@ -84,11 +87,17 @@ export function patchMount(
     scan,
     logger = silent(),
     saveLimit = createSaveLimit(),
-  }: { scan?: PatchScan; logger?: Logger; saveLimit?: SaveLimit } = {},
+    now,
+  }: { scan?: PatchScan; logger?: Logger; saveLimit?: SaveLimit; now?: () => Date } = {},
 ): MountRoutes {
   return patchRoutes({
     products: createProducts({ withTeam }),
     scan: scan ?? patchScan(withTeam, logger),
+    assessment: createPatchAssessment({
+      findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
+      withTeam,
+      now,
+    }),
     logger,
     saveLimit,
   });
@@ -178,6 +187,42 @@ export async function seedTeam(
       await tx.insertInto("team_members").values({ team_id: team, user_id, role }).execute();
     }
   });
+}
+
+/** A new Team of its own, with these people in it at these Roles: its id. */
+export async function newTeam(
+  withTeam: WithTeam,
+  people: [userId: string, role: Role][],
+): Promise<string> {
+  const id = `org_${randomUUID()}`;
+  await seedTeam(withTeam, id, people);
+  return id;
+}
+
+/**
+ * A request to `app` as `as`, signed in to Team `teamId` with a session token signed by `key`: `body` sent as JSON,
+ * or as it is when it's already a string. Its status, Retry-After, body read as JSON (undefined when empty) and text.
+ */
+export async function call(
+  app: Hono<AppEnv>,
+  key: CryptoKey,
+  method: string,
+  path: string,
+  { as, teamId, body }: { as: string; teamId: string; body?: unknown },
+) {
+  const token = await sessionToken(key, as, 60, activeOrganization(teamId));
+  const res = await app.request(path, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
+  });
+  const text = await res.text();
+  return {
+    status: res.status,
+    retryAfter: res.headers.get("Retry-After"),
+    body: text === "" ? undefined : (JSON.parse(text) as unknown),
+    text,
+  };
 }
 
 /**
