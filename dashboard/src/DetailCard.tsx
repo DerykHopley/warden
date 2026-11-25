@@ -783,7 +783,13 @@ function Proposals(props: {
     return (
       <p className="proposals-failed">
         <span className="muted">Couldn't load Proposals</span>
-        <button type="button" className="secondary" onClick={props.onRetry}>
+        {/* Named apart from a Patch Finding's assessment Retry, which can show in the same card. */}
+        <button
+          type="button"
+          className="secondary"
+          onClick={props.onRetry}
+          aria-label="Retry Proposals"
+        >
           Retry
         </button>
       </p>

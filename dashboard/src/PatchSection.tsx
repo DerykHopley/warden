@@ -11,7 +11,7 @@ import {
   ASSESSMENT_LOADING,
   assessmentLinks,
   dueDayWords,
-  fetchAssessment,
+  fetchAssessmentInTeam,
   LEVEL_WORDS,
   NO_ASSESSMENT,
   NO_FIX,
@@ -30,7 +30,10 @@ export function PatchSection(props: {
 }) {
   const { finding, getToken } = props;
   const headingId = useId();
-  const call = useCallback(() => fetchAssessment(getToken, finding.id), [getToken, finding.id]);
+  const call = useCallback(
+    () => fetchAssessmentInTeam(getToken, finding.team, finding.id),
+    [getToken, finding.team, finding.id],
+  );
   const { result, refresh } = useWardenCall(call, props.onSessionEnded);
   // Retry keeps the refusal on screen while it asks again, its button busy until a new answer replaces it.
   const [retriedOn, setRetriedOn] = useState<AssessmentResult | null>(null);
@@ -56,12 +59,14 @@ export function PatchSection(props: {
               ? tryAgainIn(result.retryAfter)
               : ASSESSMENT_FAILED}
           </span>
+          {/* Named apart from the Proposals' Retry, which can show in the same card. */}
           <button
             type="button"
             className="secondary"
             onClick={retry}
             disabled={retriedOn === result}
             aria-busy={retriedOn === result}
+            aria-label="Retry the CVE assessment"
           >
             Retry
           </button>
@@ -108,12 +113,7 @@ function Assessment({
           <dt>Priority</dt>
           <dd>
             <strong>{LEVEL_WORDS[priority.level]}</strong>
-            {priority.overdue && (
-              <>
-                {" "}
-                <span className="flag">Overdue</span>
-              </>
-            )}
+            {priority.overdue && <span className="flag">Overdue</span>}
             {priority.reasons.length > 0 && (
               <ul className="patch-list">
                 {priority.reasons.map((reason, i) => (

@@ -3,6 +3,7 @@
 import { PatchAssessment } from "@warden/contracts";
 import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
 import { dayWords } from "./date-words.ts";
+import { confirmTeam } from "./products.ts";
 
 export type AssessmentResult =
   | { kind: "assessment"; assessment: PatchAssessment }
@@ -29,6 +30,26 @@ export async function fetchAssessment(
   if (res.status === 404) return { kind: "not-found", error: await serverError(res) };
   const assessment = await parsed(res, PatchAssessment);
   return assessment === undefined ? { kind: "not-answering" } : { kind: "assessment", assessment };
+}
+
+/**
+ * Asks as `fetchAssessment` does, but only once /api/me says the session is in `team`, the Finding's Team, and with the
+ * token that answer was asked with (`confirmTeam`, through `askAboutTeam`). The assessment names no Team, and right
+ * after a Team switch Clerk can still hand out a token for the Team just left: asked with it, the server would answer
+ * a 404 that stays on the card. While /api/me names another Team, or gives no answer, nothing is asked and Retry shows;
+ * its 429 is too many sign-in attempts, and its 409 is not answering, as the assessment's own 409 is.
+ */
+export async function fetchAssessmentInTeam(
+  getToken: GetToken,
+  team: string,
+  findingId: string,
+): Promise<AssessmentResult> {
+  const inTeam = await confirmTeam(getToken, team);
+  if (inTeam.kind === "confirmed") return fetchAssessment(inTeam.getToken, findingId);
+  if (inTeam.kind === "too-many-sign-ins") {
+    return { kind: "too-many-attempts", retryAfter: inTeam.retryAfter };
+  }
+  return inTeam.kind === "team-not-opened" ? { kind: "not-answering" } : inTeam;
 }
 
 export const VERDICT_WORDS: Record<PatchAssessment["verdict"], string> = {

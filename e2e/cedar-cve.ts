@@ -2,22 +2,12 @@
 // by the specs that check the card's Patch section (patch-card, layout, keyboard).
 import type { Page } from "@playwright/test";
 import { FindingsBody, PatchAssessment, type Finding } from "@warden/contracts";
-import {
-  CEDAR,
-  ensureProduct,
-  expect,
-  HEDY,
-  LANGCHAIN_SERVICE,
-  sessionToken,
-  signingKey,
-} from "./session.ts";
+import { asAdmin, CEDAR, ensureProduct, expect, LANGCHAIN_SERVICE } from "./session.ts";
 
 /** GETs `path` as Hedy, Cedar's Admin, as the page does for her; its body. */
-export async function asHedy(path: string): Promise<unknown> {
-  const origin = process.env.E2E_BASE_URL;
-  if (!origin) throw new Error("E2E_BASE_URL is unset: run the browser tests with `pnpm e2e`");
-  const token = await sessionToken(await signingKey(), origin, HEDY, CEDAR, "admin");
-  const res = await fetch(`${origin}${path}`, { headers: { Authorization: `Bearer ${token}` } });
+async function asHedy(path: string): Promise<unknown> {
+  const { origin, headers } = await asAdmin(CEDAR);
+  const res = await fetch(`${origin}${path}`, { headers });
   if (!res.ok) throw new Error(`GET ${path}: ${res.status} ${await res.text()}`);
   return res.json();
 }
@@ -53,11 +43,11 @@ export async function cedarCveFinding(
 }
 
 /**
- * Opens `finding`'s detail card from the Findings page (already open, signed in to Cedar) and waits for its Patch
- * section's assessment. Another Cedar Product can have a Finding with the same CVE title: the row is the one on
- * `finding`'s Product.
+ * Opens `finding`'s detail card from the Findings page (already open, signed in to Cedar), and returns its Patch
+ * section without waiting for it. Another Cedar Product can have a Finding with the same CVE title: the row is the one
+ * on `finding`'s Product.
  */
-export async function openCveCard(page: Page, finding: Finding) {
+export async function selectCveRow(page: Page, finding: Finding) {
   await page
     .getByRole("table", { name: "All Findings" })
     .getByRole("row")
@@ -65,7 +55,12 @@ export async function openCveCard(page: Page, finding: Finding) {
     .filter({ has: page.locator(".finding-title", { hasText: finding.title }) })
     .locator(".finding-link")
     .click();
-  const patch = page.locator(".detail-card").getByRole("region", { name: "Patch" });
+  return page.locator(".detail-card").getByRole("region", { name: "Patch" });
+}
+
+/** Opens `finding`'s detail card as `selectCveRow` does, and waits for its Patch section's assessment. */
+export async function openCveCard(page: Page, finding: Finding) {
+  const patch = await selectCveRow(page, finding);
   await expect(patch.locator("dt", { hasText: "Who acts" })).toBeVisible();
   return patch;
 }

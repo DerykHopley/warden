@@ -277,6 +277,10 @@ for (const width of WIDTHS) {
         await page.setViewportSize({ width, height: 900 });
         await page.goto("/findings");
         await openCveCard(page, finding);
+        await expect(page.locator(".ask-warden")).toHaveAttribute(
+          "data-shown",
+          state === "floating" && width < 640 ? "full-screen" : state,
+        );
         await expectNoSidewaysScroll(page);
       },
     );

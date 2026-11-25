@@ -177,7 +177,7 @@ export async function removeProducts(team: Team, names: readonly string[]) {
 }
 
 /** The server's origin and the headers that call the API as `team`'s Admin. */
-async function asAdmin(team: Team) {
+export async function asAdmin(team: Team) {
   const origin = process.env.E2E_BASE_URL;
   if (!origin) throw new Error("E2E_BASE_URL is unset: run the browser tests with `pnpm e2e`");
   const token = await sessionToken(await signingKey(), origin, team.admin, team, "admin");

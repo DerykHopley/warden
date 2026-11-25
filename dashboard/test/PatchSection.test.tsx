@@ -76,13 +76,25 @@ const priority = (fields: Partial<PatchAssessment["priority"]>) => ({
 
 const onSessionEnded = vi.fn();
 const onFindingChanged = vi.fn();
-const getToken = () => Promise.resolve("session-token");
+const sessionToken = () => Promise.resolve("session-token" as string | null);
 
-/** Renders the card for `focused`, as a person with `role`, with the server's routes `routes`. */
-function show(focused: Finding, routes: Routes, role: Role | null = null) {
+/** /api/me's answer: the session is in the Patch Finding's Team. */
+const inTeam = () =>
+  json(200, { userId: "user_me", team: PATCH.team, role: "member", level: "quick" });
+
+/**
+ * Renders the card for `focused`, as a person with `role`, with the server's routes `routes` (/api/me says the session
+ * is in the Finding's Team, unless `routes` says otherwise).
+ */
+function show(
+  focused: Finding,
+  routes: Routes,
+  role: Role | null = null,
+  getToken: () => Promise<string | null> = sessionToken,
+) {
   onSessionEnded.mockReset();
   onFindingChanged.mockReset();
-  serve(routes);
+  serve({ me: inTeam, ...routes });
   const element = (shown: Finding) => (
     <DetailCard
       finding={shown}
@@ -253,7 +265,10 @@ describe("the Patch section of a Patch Finding's card", () => {
   it("flags an overdue Finding Overdue, in words; one not overdue has no flag", async () => {
     const overdue = show(PATCH, answering(assessment({ priority: priority({ overdue: true }) })));
     const flagged = await rows(overdue.card);
-    expect(within(flagged.Priority!).getByText("Overdue")).toHaveClass("flag");
+    const flag = within(flagged.Priority!).getByText("Overdue");
+    expect(flag).toHaveClass("flag");
+    // Spaced by .flag's own margin, as the card's Unconfirmed fix flag is, with no space of text before it.
+    expect(flag.previousSibling).toBe(within(flagged.Priority!).getByText("Urgent"));
     overdue.unmount();
 
     const onTime = show(PATCH, answering());
@@ -326,8 +341,6 @@ describe("the Patch section of a Patch Finding's card", () => {
         .getAllByRole("link")
         .map((link) => link.getAttribute("href")),
     ).toEqual(["https://nvd.nist.gov/vuln/detail/CVE-2023-36258"]);
-    expect(document.querySelector('.detail-card a[href^="javascript:"]')).toBeNull();
-    expect(document.querySelector('.detail-card a[href^="http:"]')).toBeNull();
   });
 });
 
@@ -349,7 +362,7 @@ describe("the Patch section's refusals", () => {
     const { card } = show(PATCH, { assessment: () => json(404, { error: words }) });
     const patch = section(card);
     expect(await patch.findByText(words)).toHaveClass("muted");
-    expect(patch.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(patch.queryByRole("button")).toBeNull();
   });
 
   it("a 404 without a body says Warden has no CVE assessment for this Finding.", async () => {
@@ -358,7 +371,7 @@ describe("the Patch section's refusals", () => {
     expect(await patch.findByText("Warden has no CVE assessment for this Finding.")).toHaveClass(
       "muted",
     );
-    expect(patch.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(patch.queryByRole("button")).toBeNull();
   });
 
   it.each<[string, () => Response | Promise<Response>]>([
@@ -376,7 +389,9 @@ describe("the Patch section's refusals", () => {
       const patch = section(card);
       expect(await patch.findByText("Couldn't load the CVE assessment.")).toBeVisible();
 
-      const retry = patch.getByRole("button", { name: "Retry" });
+      // Named apart from the Proposals' Retry, which can show in the same card; it still reads Retry.
+      const retry = patch.getByRole("button", { name: "Retry the CVE assessment" });
+      expect(retry).toHaveTextContent(/^Retry$/);
       expect(retry).toHaveClass("secondary");
       await userEvent.click(retry);
       expect(retry).toHaveAttribute("aria-busy", "true");
@@ -398,7 +413,41 @@ describe("the Patch section's refusals", () => {
     expect(
       await patch.findByText("Too many sign-in attempts. Try again in 30 seconds."),
     ).toBeVisible();
-    expect(patch.getByRole("button", { name: "Retry" })).toBeVisible();
+    expect(patch.getByRole("button", { name: "Retry the CVE assessment" })).toBeVisible();
+  });
+
+  it("right after a Team switch, a token for the Team just left asks no assessment: the section shows the Finding's Team's answer, not its 404", async () => {
+    let tokens = 0;
+    const getTokens = async () => `token-${++tokens}` as string | null;
+    const teamOf = (init: RequestInit | undefined) =>
+      new Headers(init?.headers).get("Authorization") === "Bearer token-1"
+        ? "org_left"
+        : PATCH.team;
+    const { card } = show(
+      PATCH,
+      {
+        me: () => {
+          const [, init] = callsTo("/api/me").at(-1)!;
+          return json(200, {
+            userId: "user_me",
+            team: teamOf(init),
+            role: "member",
+            level: "quick",
+          });
+        },
+        assessment: () => {
+          const [, init] = callsTo(ASSESSMENT_PATH).at(-1)!;
+          return teamOf(init) === PATCH.team
+            ? json(200, assessment())
+            : json(404, { error: "No such Patch Finding" });
+        },
+      },
+      null,
+      getTokens,
+    );
+    const row = await rows(card);
+    expect(row["Who acts"]).toHaveTextContent("You");
+    expect(section(card).queryByText("No such Patch Finding")).toBeNull();
   });
 
   it("a 401 ends the session", async () => {

@@ -1,7 +1,9 @@
 // Spec #101, stories 5 and 6: a Patch Finding's detail card says whether the Product's version is affected and why,
 // what fixes it, who acts, and how urgent it is and when it's due, as the assessment route answers it. In Cedar, on its
-// own LangChain Product; and in Acme, a demo Finding whose CVE the snapshot doesn't hold says so.
-import { assessmentOf, cedarCveFinding, openCveCard } from "./cedar-cve.ts";
+// own LangChain Product; and in Acme, a demo Finding whose CVE the snapshot doesn't hold says so. A failed
+// assessment's line sits as the failed Proposals' line does (a 503 from each, faked in the browser).
+import type { Locator, Route } from "@playwright/test";
+import { assessmentOf, cedarCveFinding, openCveCard, selectCveRow } from "./cedar-cve.ts";
 import { ACME, CEDAR, expect, GRACE, HEDY, test } from "./session.ts";
 
 test("Hedy opens a CVE Finding from Findings, and its Patch section says what the assessment route answers", async ({
@@ -65,5 +67,29 @@ test("Grace opens the @aws-sdk demo Finding in Acme, and its Patch section says 
   await expect(patch).toContainText(
     "The CVE snapshot doesn't hold GHSA-demo-0001, so its Finding can't be assessed",
   );
-  await expect(patch.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await expect(patch.getByRole("button")).toHaveCount(0);
+});
+
+test("when the assessment and the Proposals both fail, the Patch section's failed line sits as the Proposals' does", async ({
+  page,
+  signIn,
+}) => {
+  const finding = await cedarCveFinding();
+  await signIn(HEDY, CEDAR);
+  const down = (route: Route) => route.fulfill({ status: 503, json: { error: "Down" } });
+  await page.route("**/api/patch/findings/*/assessment", down);
+  await page.route("**/api/proposals", down);
+  await page.goto("/findings");
+  const patch = await selectCveRow(page, finding);
+
+  const patchFailed = patch.locator(".patch-failed");
+  const proposalsFailed = page.locator(".detail-card .proposals-failed");
+  await expect(patchFailed).toContainText("Couldn't load the CVE assessment.");
+  await expect(proposalsFailed).toContainText("Couldn't load Proposals");
+  const margins = (line: Locator) =>
+    line.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return [style.marginTop, style.marginRight, style.marginBottom, style.marginLeft];
+    });
+  expect(await margins(patchFailed)).toEqual(await margins(proposalsFailed));
 });

@@ -320,7 +320,10 @@ describe("the detail card's pending Proposals", () => {
 
   it("offers Retry after Couldn't load Proposals", async () => {
     const { card, onRetry } = show(finding(ID), { kind: "not-answering" });
-    await userEvent.click(card.getByRole("button", { name: "Retry" }));
+    // Named apart from a Patch Finding's assessment Retry, which can show in the same card; it still reads Retry.
+    const retry = card.getByRole("button", { name: "Retry Proposals" });
+    expect(retry).toHaveTextContent(/^Retry$/);
+    await userEvent.click(retry);
     expect(onRetry).toHaveBeenCalledOnce();
   });
 

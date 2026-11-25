@@ -1296,7 +1296,6 @@ button[aria-busy="true"],
   color: var(--muted);
 }
 
-/* "Couldn't load Proposals", with Retry beside it. */
 /* A Patch Finding's assessment, between the card's fields and its decisions: the same rows as the fields. */
 .patch-section {
   margin-right: 8px;
@@ -1308,8 +1307,12 @@ button[aria-busy="true"],
 }
 
 .patch-section > p {
-  margin: 0;
   font-size: 0.875rem;
+}
+
+/* Waiting and a 404's words sit right under the heading; the failed line keeps the Proposals' margins (below). */
+.patch-section > p:not(.patch-failed) {
+  margin: 0;
 }
 
 .patch-section .detail-fields {
@@ -1346,6 +1349,8 @@ button[aria-busy="true"],
   color: var(--accent);
 }
 
+/* "Couldn't load Proposals" (.proposals-failed) and "Couldn't load the CVE assessment." (.patch-failed), each with
+   Retry beside it. */
 .patch-failed,
 .proposals-failed {
   display: flex;
