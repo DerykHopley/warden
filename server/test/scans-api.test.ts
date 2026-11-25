@@ -412,6 +412,21 @@ describe("POST /api/scans: a Guard Scan names only the Team's Repo Assets (stori
     expect(starter.calls).toStrictEqual([{ scanId: res.body.id, team }]);
   });
 
+  it("answers 202 for a repo two installations list after one is relinked without it", async () => {
+    const team = await newTeam();
+    const starter = fakeStarter();
+    const { app, repoAssets } = checkedApp(starter.start);
+    await linkRepos(repoAssets, team, [repo(1).ref], LEAD);
+    const second = await linkRepos(repoAssets, team, [repo(1).ref], LEAD);
+    await repoAssets.link(team, { installationId: second, linkedBy: LEAD, repos: [] });
+
+    const res = await start(app, team, { module: "guard", assets: [repo(1)] });
+
+    expect(res.status).toBe(202);
+    expect(await rows(team)).toMatchObject([{ id: res.body.id, state: "queued" }]);
+    expect(starter.calls).toStrictEqual([{ scanId: res.body.id, team }]);
+  });
+
   it("refuses a repo another Team holds with 400 naming it, queuing nothing and starting nothing", async () => {
     const team = await newTeam();
     const other = await newTeam();
