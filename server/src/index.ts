@@ -11,6 +11,8 @@ import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } f
 import { createFindings } from "./findings/index.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
+import { createRepoAssets } from "./modules/guard/repo-assets.ts";
+import { guardRoutes } from "./modules/guard/routes.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";
 import { createScans } from "./scans.ts";
 import { createShutdown } from "./shutdown.ts";
@@ -75,6 +77,7 @@ pool.query("select 1").catch((error: unknown) => {
 // Clerk's Backend API, with the secret key: a Warden Admin is Clerk's org:admin too (ADR 0008).
 const clerk = createClerkClient({ secretKey: config.clerk.secretKey });
 const withTeam = createWithTeam(pool);
+const repoAssets = createRepoAssets({ withTeam });
 const app = createApp({
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
@@ -88,6 +91,9 @@ const app = createApp({
   scans: createScans({ withTeam }),
   // The Job's own list, so a start names the Rules the Job will run.
   scanners: SCANNERS,
+  // A Guard Scan names only the Team's Repo Assets.
+  assetChecks: { guard: repoAssets.outside },
+  moduleRoutes: [guardRoutes({ repoAssets })],
   // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503).
   startScanJob: scanJobStarterFor(config, { logger }),
   behindCloudRun: config.behindCloudRun,

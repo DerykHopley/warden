@@ -44,6 +44,15 @@ describe("start-up", () => {
     expect(server.child.exitCode).toBeNull();
   });
 
+  // The modules' routes are wired in index.ts: an unwired one would answer the API's 404.
+  it("mounts Guard's routes: GET /api/repos asks for a sign-in", async () => {
+    const server = await startWithoutDatabase();
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/repos`);
+
+    expect(res.status).toBe(401);
+  });
+
   it("exits 0 on SIGTERM", async () => {
     const server = await startWithoutDatabase();
 

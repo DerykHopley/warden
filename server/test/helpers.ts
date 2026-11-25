@@ -11,7 +11,13 @@ import { createLogger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
-import { createScans, type ScanJobStarter, type Scanners, type Scans } from "../src/scans.ts";
+import {
+  createScans,
+  type AssetChecks,
+  type ScanJobStarter,
+  type Scanners,
+  type Scans,
+} from "../src/scans.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
@@ -133,6 +139,10 @@ export function testApp(options: {
   startScanJob?: ScanJobStarter;
   /** The queued Scans, in place of the real ones on `withTeam`. */
   scans?: Scans;
+  /** Each module's routes, such as Guard's; none by default. */
+  moduleRoutes?: MountRoutes[];
+  /** Each module's check of a start's Assets; none by default, so any Assets the body's shape allows are queued. */
+  assetChecks?: AssetChecks;
 }) {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
@@ -162,6 +172,8 @@ export function testApp(options: {
         options.scans ?? (options.withTeam ? createScans({ withTeam: options.withTeam }) : noScans),
       scanners: options.scanners ?? {},
       startScanJob: options.startScanJob,
+      moduleRoutes: options.moduleRoutes ?? [],
+      assetChecks: options.assetChecks ?? {},
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),
       frontendApiHost: FRONTEND_API_HOST,

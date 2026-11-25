@@ -159,4 +159,24 @@ export interface Database {
     started_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
     ended_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
   };
+
+  /**
+   * A GitHub installation a Team linked (0009_repo_assets): one Team per installation id. Written only by the Guard
+   * module's Repo Assets store. Ids are bigint, which pg reads back as a string.
+   */
+  github_installations: {
+    team_id: string;
+    installation_id: ColumnType<string, number, never>;
+    linked_by: string;
+    linked_at: ColumnType<Date, Date | undefined, Date>;
+  };
+
+  /** A repo an installation lists, as one of the Team's Repo Assets (0009_repo_assets), one row per ref. */
+  repo_assets: {
+    team_id: string;
+    ref: string;
+    github_id: ColumnType<string, number, number>;
+    installation_id: ColumnType<string, number, number>;
+    listed_at: ColumnType<Date, Date | undefined, Date>;
+  };
 }
