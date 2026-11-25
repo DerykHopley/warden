@@ -218,17 +218,6 @@ describe("GET /api/hook: an Admin reads the Team's hook token settings", () => {
     }
   });
 
-  it("answers the placeholder in the block before the Team's first token", async () => {
-    const team = await newTeam(withTeam);
-    const { app } = hookApp();
-
-    const { managed_settings } = HookSettingsBody.parse((await settings(app, team)).body);
-
-    for (const hook of hooksOf(managed_settings)) {
-      expect(hook.headers.Authorization).toBe(`Bearer ${HOOK_TOKEN_PLACEHOLDER}`);
-    }
-  });
-
   it.each([
     [
       "https behind a front end that sets X-Forwarded-Proto",

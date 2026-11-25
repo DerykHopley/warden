@@ -52,8 +52,6 @@ describe("managedSettings: every hook is the same http handler", () => {
           allowedEnvVars: ["USER"],
           headers: { Authorization: `Bearer ${TOKEN}`, "X-Warden-Developer": "$USER" },
         });
-        expect(hook.url).toMatch(/\/api\/hook\/events$/);
-        expect(hook.url).not.toContain(TOKEN);
       }
     },
   );

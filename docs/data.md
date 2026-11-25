@@ -40,7 +40,7 @@ Where this document and an ADR disagree, the ADR wins.
 | OpenRouter and the model providers behind it | The redacted Agent events and repo text the Judge reads, for one call | Team | OpenRouter, and the provider that serves the call | Not kept: OpenRouter keeps no prompt or response unless an account opts in, and Warden doesn't; Warden routes only to Zero Data Retention endpoints. OpenRouter always keeps call metadata (tokens, latency), never content | Nothing to delete for content; metadata goes with the OpenRouter account | Designed: Guard spec |
 | Langfuse Cloud | Traces of Warden's own model calls. A Judge call's trace holds metadata only: model, tokens, cost, timing, outcome, and the Team id | Warden | Langfuse Cloud, EU region | Langfuse's free plan has no retention setting, so the metadata stays until Warden deletes the Langfuse project | Deleting the Langfuse project; nothing in it identifies a person or holds content | Designed: Guard spec (the first model call) |
 | GitHub, through the GitHub app | The Team's own repos, which the app reads. When an Admin links an installation: the code and PKCE verifier from their GitHub sign-in, with the app's client id and secret, sent to GitHub once to get a user token; that token lists the installations the Admin can reach and the repos they can read in the one linked; GitHub's answer granting the App an installation token gives that installation's permissions, and the token itself is never used. Both tokens are dropped after that one link: never stored, logged or returned. With the write grant, the branches and Fix PRs the app opens | Team | GitHub | Fix PRs stay in the Team's repo until the Team closes them; Warden keeps no copy of a repo after a Scan, and no GitHub token after a link | The Team closes a Fix PR and deletes its branch; uninstalling the app ends all access at once | Built: linking an installation (Guard spec slice 2b, #146). Designed: reading repos in a Scan, the write grant (Guard spec) |
-| The developer's laptop | Claude Code's managed hook settings: Warden's URL, the Team's hook token, which events the hook sends. Where a laptop runs safeagents, its `scrub` cleans events before they leave | Team (the settings); the developer (the events) | The developer's laptop | While the Admin keeps the managed settings in place | The Admin removes the managed settings; a rotated token stops working after 24 hours | Designed: Guard spec |
+| The developer's laptop | Claude Code's managed hook settings: Warden's URL, the Team's hook token, which events the hook sends, and the developer's `$USER` in the `X-Warden-Developer` header. Where a laptop runs safeagents, its `scrub` cleans events before they leave | Team (the settings); the developer (the events) | The developer's laptop | While the Admin keeps the managed settings in place | The Admin removes the managed settings; a rotated token stops working after 24 hours | Built: the managed settings, which an Admin reads from `GET /api/hook` and pastes in (Guard spec slice 9a-ii, #154). Designed: the events endpoint they post to (Guard spec slice 10), and safeagents' `scrub` |
 | The person's browser: `localStorage` | One key, `warden.askWardenPanel`: the Ask Warden panel's mode (closed, floating or pinned) and its pinned width, as the person last chose them. Nothing about a Team, a Finding or a chat | The person | The browser they open Warden in, for Warden's origin | Until the browser's site data is cleared | The person clears the site's data in their browser; Warden never sends it to the server or anywhere else | Built: slice 9b (#49) |
 | The local keyring (development only) | Development copies of keys, read by a committed `.envrc`: Clerk's keys, and the read-only GitHub App's client id, client secret and private key (services `warden-github-app-client-id`, `warden-github-app-client-secret` and `warden-github-app-private-key`); OpenRouter and others later | The person developing Warden | The developer's own system keyring | While the developer needs them | `secret-tool clear service <name>` | Built: slice 1a (#4: `.envrc` and `.env.example`); the GitHub App's three (Guard spec slice 2b-i, #131) |
 
@@ -134,16 +134,19 @@ An Agent session names a pseudonymous developer, not a person (designed, Guard s
   `agent_id` and `agent_type` for a subagent; none of them names the person. The hook can add request headers whose
   values come from environment variables on the laptop, but only variables listed in the hook's `allowedEnvVars`
   (and, in managed settings, `httpHookAllowedEnvVars`). So the identifier has to come from such a header, set in the
-  managed settings. Which variable, and how it's tied to a Clerk user when an Admin turns names on, is an **open
-  question for the Guard spec**. The value is whatever the laptop's environment says, so it identifies a developer
+  managed settings. It's `$USER`, sent in the `X-Warden-Developer` header, with `allowedEnvVars: ["USER"]` on each
+  hook (#100, question 3; built in #154). How it's tied to a Clerk user when an Admin turns names on is still
+  **open**: the Guard spec leaves names-on out (threat model Q1). The value is whatever the laptop's environment says, so it identifies a developer
   only as far as the laptop is trusted.
 
 ## The Privacy tier
 
-How much of an Agent session's content the hook sends to Warden, set per Team by an Admin. Warden redacts what
-arrives, whatever the tier. Built: the tier, stored per Team, and the managed settings an Admin reads from
-`GET /api/hook`, which send only the tier's events (Guard spec slice 9a-ii, #154). Designed: the filter on arrival
-(Guard spec slice 10).
+How much of an Agent session's content the hook sends to Warden, set per Team by an Admin. Built: the tier,
+stored per Team, and the managed settings an Admin reads from `GET /api/hook` (Guard spec slice 9a-ii, #154). The
+block leaves out only `UserPromptSubmit` below Content: its `PostToolUse` and `PostToolUseFailure` hooks run at
+every tier, and Claude Code posts each hook's whole JSON input, so every tier still sends the tool events' full
+input (`tool_input`) and output (`tool_response`) to Warden. Designed (Guard spec slice 10): the filter on arrival,
+which applies the tier, and Warden redacting what arrives, whatever the tier.
 
 - **Metadata:** tool names and outcomes.
 - **Details (the default):** also commands, file paths and URLs.
