@@ -324,8 +324,8 @@ export function DetailCard(props: {
   function submit(event: FormEvent) {
     event.preventDefault();
     if (form === null || form.kind === "approve" || !ready(form)) return;
-    // The form may have stayed open past midnight: the day it offered as the earliest is then today, which the server
-    // refuses in its own words. Checked against the day now, it's refused here, in the form's words, with no call.
+    // The too-early rule's one check, against the day now: a form open past midnight (its earliest day is then today),
+    // or a day typed in before tomorrow, is refused here in the form's words, with no call.
     if (asksUntil(form) && draft.until < earliestUntil()) {
       setLine({ kind: "refused", text: REFUSED.untilPassed, at: keyOf(form) });
       return;
@@ -406,8 +406,8 @@ export function DetailCard(props: {
 
   function ready(action: Action): boolean {
     if (draft.reason.trim() === "") return false;
-    // Against the day this render saw: a form open past midnight is checked again, at the day now, in submit.
-    if (asksUntil(action) && (draft.until === "" || draft.until < earliest)) return false;
+    // A day is needed; whether it's early enough is submit's check, so the button never turns off with no reason shown.
+    if (asksUntil(action) && draft.until === "") return false;
     if (asksCandidate(action)) {
       return mergeable.some((candidate) => candidate.id === draft.candidate);
     }
@@ -654,9 +654,12 @@ function ActionForm(props: {
     props.onCancel();
   }
   return (
+    // noValidate: a Reopens on day under `min` would otherwise stop the submit with the browser's own bubble; submit
+    // refuses it in the form's words instead. `min` stays, so the picker greys out the days before it.
     <form
       className="decision-form"
       aria-label={props.name}
+      noValidate
       onSubmit={props.onSubmit}
       onKeyDown={onKeyDown}
     >
