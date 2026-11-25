@@ -176,6 +176,16 @@ describe("0007_one_pending_proposal on a database 0006 wrote", () => {
     }
     expect(await refusal(ask())).toEqual({ name: "ProposalPending", message: WAITING });
     await findings.approveProposal(teamA, "p-c", { actor: lead });
+    // Deciding a marked one keeps its mark.
+    expect(
+      (await proposals(teamA))
+        .filter((row) => row.finding_id === "f-three")
+        .map(({ id, state, duplicate_of }) => ({ id, state, duplicate_of })),
+    ).toEqual([
+      { id: "p-a", state: "rejected", duplicate_of: null },
+      { id: "p-b", state: "rejected", duplicate_of: "p-a" },
+      { id: "p-c", state: "approved", duplicate_of: "p-a" },
+    ]);
 
     // p-c's approval made the Finding a False positive, which takes no Proposal: reopen it, as a Lead would.
     await findings.reopen(teamA, "f-three", { actor: lead, reason: "Not a fixture after all" });

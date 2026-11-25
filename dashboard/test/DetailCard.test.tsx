@@ -529,6 +529,19 @@ describe("a Member's Propose buttons while a Proposal waits", () => {
     expect(card.queryByText(WAITING)).not.toBeInTheDocument();
   });
 
+  it("leave an open Propose form, and its typed reason, as they are while the Proposals load again (a Retry)", async () => {
+    const shown = show(OPEN, { kind: "not-answering" }, { role: "member" });
+    const form = await openForm(shown.card, "Propose False positive");
+    await fill(form, "A test fixture");
+
+    shown.update(OPEN, "loading");
+    expect(shown.card.getByRole("form", { name: "Propose False positive" })).toBeInTheDocument();
+    expect(reasonField(form)).toHaveValue("A test fixture");
+
+    shown.update(OPEN, listed([]));
+    expect(reasonField(form)).toHaveValue("A test fixture");
+  });
+
   it("aren't replaced on a Finding whose Status takes no Proposal: there are none to replace", () => {
     const { card } = show(FALSE_POSITIVE, listed([proposal({ stale: true })]), { role: "member" });
 

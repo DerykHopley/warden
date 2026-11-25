@@ -11,7 +11,7 @@ import {
   type ProposeBody,
 } from "@warden/contracts";
 import type { Selectable, Transaction } from "kysely";
-import pg from "pg";
+import { isPgError } from "../database.ts";
 import type { Database } from "../schema.ts";
 import {
   applyLockedDecision,
@@ -133,11 +133,7 @@ export async function applyPropose(
       .executeTakeFirstOrThrow();
     return proposalFromRow(row);
   } catch (error) {
-    if (
-      error instanceof pg.DatabaseError &&
-      error.code === "23505" &&
-      error.constraint === ONE_PENDING
-    )
+    if (isPgError(error, "23505") && error.constraint === ONE_PENDING)
       throw new ProposalPending(findingId);
     throw error;
   }

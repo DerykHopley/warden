@@ -246,10 +246,9 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   /**
    * What a Findings call's refusal answers: 404 for a Finding or Proposal id the Team doesn't have (another Team's
    * included), 409 for a Status the decision doesn't take, a Proposal already decided or a Finding with a Proposal
-   * still pending, 403 for a person no longer a
-   * Lead under the Team's lock. Nothing was written in any of them. Anything else, a zod error included (stored or
-   * derived data that broke Finding v1), is thrown on to the logged 500, which shows no schema text: only the route's
-   * own body parse answers 400.
+   * still pending, 403 for a person no longer a Lead under the Team's lock. Nothing was written in any of them.
+   * Anything else, a zod error included (stored or derived data that broke Finding v1), is thrown on to the logged
+   * 500, which shows no schema text: only the route's own body parse answers 400.
    */
   function findingRefusal(c: Context<AppEnv>, error: unknown): Response {
     if (error instanceof FindingNotFound) return c.json({ error: "No such Finding" }, 404);

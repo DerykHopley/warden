@@ -130,11 +130,6 @@ const attempts: Record<string, { statement: RawBuilder<unknown>; app: RegExp; ow
     app: /a Proposal is decided once/,
     owner: /a Proposal is decided once/,
   },
-  "a change to a marked duplicate's reason": {
-    statement: sql`update proposals set reason = 'rewritten' where id = 'p-dup-third'`,
-    app: /a Proposal is decided once/,
-    owner: /a Proposal is decided once/,
-  },
   "an insert with duplicate_of set": {
     statement: sql`insert into proposals (team_id, id, finding_id, decision, reason, requested_by_kind,
                    requested_by_id, duplicate_of)
@@ -217,29 +212,5 @@ describe("a Proposal is decided once and then kept", () => {
     ).rejects.toThrow(/proposals_decided_check/);
 
     expect(await rows()).toEqual(before);
-  });
-});
-
-describe("a duplicate 0007 marked", () => {
-  it("is decided like any pending Proposal, approved or rejected, and keeps its mark", async () => {
-    await decide("p-dup-second");
-    await withTeamAs.warden_app(team, (tx) =>
-      tx
-        .updateTable("proposals")
-        .set({
-          state: "rejected",
-          decided_by: "user_lead",
-          decided_at: sql<Date>`now()`,
-          decided_reason: "Asked twice",
-        })
-        .where("id", "=", "p-dup-third")
-        .executeTakeFirstOrThrow(),
-    );
-
-    expect((await rows()).filter((row) => row.finding_id === "f-dup")).toMatchObject([
-      { id: "p-dup-first", state: "pending", duplicate_of: null },
-      { id: "p-dup-second", state: "approved", duplicate_of: "p-dup-first" },
-      { id: "p-dup-third", state: "rejected", duplicate_of: "p-dup-first" },
-    ]);
   });
 });

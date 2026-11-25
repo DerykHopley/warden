@@ -182,11 +182,13 @@ export function DetailCard(props: {
   const refocused = useRef(0);
 
   // A form whose action the card no longer offers closes: the Finding's Status changed (a 409, then the page's new
-  // answer), the person's Role was lowered, or the Proposal left the list. Its refusal line stays, in the card.
+  // answer), the person's Role was lowered, a Proposal now waits on the Finding, or the Proposal left the list. Its
+  // refusal line stays, in the card. A Propose form stays open while the Proposals load again (a Retry), with its
+  // reason.
   const offered =
     form === null ||
     (form.kind === "decide" && decisions.includes(form.decision)) ||
-    (form.kind === "propose" && proposes.includes(form.decision)) ||
+    (form.kind === "propose" && !waiting && memberProposes.includes(form.decision)) ||
     (form.kind === "reject" && lead && pending.some((p) => p.id === form.proposal));
   if (!offered) {
     setForm(null);

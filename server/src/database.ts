@@ -187,6 +187,11 @@ export function guardDatabaseRole(
   };
 }
 
+/** Whether `error` is Postgres's, with one of `codes` (SQLSTATE, such as "23505" for unique_violation). */
+export function isPgError(error: unknown, ...codes: string[]): error is pg.DatabaseError {
+  return error instanceof pg.DatabaseError && codes.includes(error.code ?? "");
+}
+
 /** Why the start-up connection failed: the database isn't there (yet), it refused the login, the role check
  * failed, or something else. */
 export type ConnectionFailure = "unreachable" | "login refused" | "role check failed" | "other";

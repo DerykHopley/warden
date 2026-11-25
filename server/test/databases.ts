@@ -76,10 +76,12 @@ async function migrateTestDatabase(name: string, folder: string, connection: pg.
 }
 
 /** A folder holding copies of the shipped migrations up to and including `last` (its name without `.sql`), and a way
- * to remove it. */
+ * to remove it. Throws when no shipped migration is `last`: a typo would otherwise copy a different set. */
 async function migrationsUpTo(last: string) {
+  const shipped = await readdir(MIGRATIONS_FOLDER);
+  if (!shipped.includes(`${last}.sql`)) throw new Error(`no shipped migration ${last}.sql`);
   const folder = await mkdtemp(join(tmpdir(), "warden-migrations-"));
-  const files = (await readdir(MIGRATIONS_FOLDER)).filter(
+  const files = shipped.filter(
     (file) => file.endsWith(".sql") && file.slice(0, -".sql".length) <= last,
   );
   for (const file of files) await copyFile(join(MIGRATIONS_FOLDER, file), join(folder, file));

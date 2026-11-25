@@ -463,9 +463,10 @@ describe("one pending Proposal per Finding", () => {
           requested_by_id: agent.id,
         })
         .execute();
-      const { rows } = await sql<{ xid: string }>`select pg_current_xact_id()::text as xid`.execute(
-        tx,
-      );
+      // pg_locks holds a 32-bit xid: the epoch-free form of pg_current_xact_id's xid8.
+      const { rows } = await sql<{
+        xid: string;
+      }>`select pg_current_xact_id()::xid::text as xid`.execute(tx);
       inserted(rows[0]!.xid);
       await committing;
     });
@@ -585,22 +586,22 @@ describe("the Team's pending Proposals", () => {
       reason: "Asked before the accept",
     });
     await findings.accept(team, finding.id, { actor: lead, reason: "Later", until: nextWeek() });
-    // On another Finding: this one already has a pending Proposal.
-    const fresh = await findings.propose(team, (await anotherFinding(finding)).id, {
+    const listed = async () =>
+      (await findings.pendingProposals(team)).map((p) => [p.reason, p.stale] as const);
+
+    expect(await listed()).toEqual([["Asked before the accept", true]]);
+    expect(await refusal(findings.approveProposal(team, old.id, { actor: lead }))).toMatchObject({
+      name: "DecisionRefused",
+    });
+
+    // The same Finding, asked again once the stale one is rejected: asked after the accept, so not stale.
+    await findings.rejectProposal(team, old.id, { actor: lead, reason: "Asked before the accept" });
+    const fresh = await findings.propose(team, finding.id, {
       requester: agent,
       decision: "mark_false_positive",
       reason: "Asked after the accept",
     });
-
-    expect(
-      (await findings.pendingProposals(team)).map((p) => [p.reason, p.stale] as const),
-    ).toEqual([
-      ["Asked before the accept", true],
-      ["Asked after the accept", false],
-    ]);
-    expect(await refusal(findings.approveProposal(team, old.id, { actor: lead }))).toMatchObject({
-      name: "DecisionRefused",
-    });
+    expect(await listed()).toEqual([["Asked after the accept", false]]);
     await expect(findings.approveProposal(team, fresh.id, { actor: lead })).resolves.toMatchObject({
       state: "approved",
     });
