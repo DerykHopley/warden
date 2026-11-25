@@ -457,6 +457,51 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     expect(guard.logLines().join("")).toContain('"observations":5');
   });
 
+  it("opens a Finding for an MCP server without a pinned version, with its fix, then marks it Fixed once pinned (stories 3, 4)", async () => {
+    const team = await newTeam();
+    const mcpJson = (pkg: string) => ({
+      path: ".mcp.json",
+      text: `${JSON.stringify(
+        {
+          mcpServers: {
+            docs: { type: "http", url: "https://example.com/mcp" },
+            github: { command: "npx", args: ["-y", pkg] },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    });
+    let current: RepoFile[] = [guarded, mcpJson("some-mcp-server@latest")];
+    const guard = guardApp(readerOf(() => files(current)()));
+    await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
+
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+
+    const mcp = packRule("guard/mcp-server-unpinned");
+    const opened = await listFindings(guard, team);
+    expect(opened).toEqual([
+      expect.objectContaining({
+        asset: repo,
+        rule_id: mcp.ruleId,
+        status: "open",
+        severity: "medium",
+        title: mcp.title,
+        location: { kind: "file", path: ".mcp.json", line: 7 },
+        evidence: {
+          summary: `1 MCP server without a pinned version (github) in .mcp.json, on line 7. To fix: ${mcp.fix}`,
+        },
+      }),
+    ]);
+
+    current = [guarded, mcpJson("some-mcp-server@1.2.3")];
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+
+    expect(await listFindings(guard, team)).toEqual([
+      expect.objectContaining({ id: opened[0]!.id, rule_id: mcp.ruleId, status: "fixed" }),
+    ]);
+  });
+
   it("keeps the whole-repo Findings Open when a root settings file is unread, rather than marking them Fixed on a guess", async () => {
     const team = await newTeam();
     const claudeMd: RepoFile = { path: "CLAUDE.md", text: "# Guarded\n" };

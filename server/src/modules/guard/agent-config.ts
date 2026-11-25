@@ -157,7 +157,7 @@ const asArray = (value: unknown): readonly unknown[] => (Array.isArray(value) ? 
  * line, as `JSON.parse` keeps the last value. Deeper values are stepped over without recursion, so a deeply nested
  * file can't overflow the stack.
  */
-function valueLines(text: string, depth: number): Map<string, number> {
+export function valueLines(text: string, depth: number): Map<string, number> {
   const lines = new Map<string, number>();
   let i = 0;
   let line = 1;

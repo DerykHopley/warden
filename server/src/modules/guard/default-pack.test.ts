@@ -7,7 +7,7 @@ import { DEFAULT_PACK, DEFAULT_PACK_RULE_IDS, packRule, SECRET_IN_REPO } from ".
 import { guardScanner } from "./scanner.ts";
 
 describe("the Default Pack", () => {
-  it("holds the two secret Rules, the two per-file agent-config Rules and the two whole-repo ones", () => {
+  it("holds the two secret Rules, the two per-file agent-config Rules, the two whole-repo ones and the MCP server Rule, in the spec's order", () => {
     expect(DEFAULT_PACK.map((rule) => rule.ruleId)).toEqual([
       "guard/secret-in-repo",
       "guard/secret-in-agent-settings",
@@ -15,7 +15,17 @@ describe("the Default Pack", () => {
       "guard/permission-skip",
       "guard/agent-can-read-env",
       "guard/no-runtime-guard",
+      "guard/mcp-server-unpinned",
     ]);
+  });
+
+  it("gives the MCP server Rule its Severity, title and fix", () => {
+    expect(packRule("guard/mcp-server-unpinned")).toEqual({
+      ruleId: "guard/mcp-server-unpinned",
+      severity: "medium",
+      title: "An MCP server runs without a pinned version",
+      fix: "Pin each MCP server to an exact version: a package's x.y.z, or an image's digest or version tag.",
+    });
   });
 
   it("gives the whole-repo agent-config Rules their Severity, title and fix", () => {
