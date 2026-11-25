@@ -341,6 +341,71 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     expect(after).toHaveLength(2);
   });
 
+  it("opens a Finding for a broad Bash allow and one per file that skips permission checks, each with its fix (story 3)", async () => {
+    const team = await newTeam();
+    const agentConfig: RepoFile[] = [
+      {
+        path: "README.md",
+        text: "# Guarded\n\nNever run `claude --dangerously-skip-permissions` here.\n",
+      },
+      {
+        path: ".claude/settings.json",
+        text: `{\n  "permissions": {\n    "allow": ["Bash(*)"],\n    "defaultMode": "bypassPermissions"\n  }\n}\n`,
+      },
+      {
+        path: "scripts/agent.sh",
+        text: '#!/bin/sh\nclaude --dangerously-skip-permissions -p "$1"\n',
+      },
+    ];
+    const guard = guardApp(readerOf(files(agentConfig)));
+    await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
+
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+
+    const opened = await listFindings(guard, team);
+    const blanket = packRule("guard/blanket-bash-allow");
+    const skip = packRule("guard/permission-skip");
+    expect(opened).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          asset: repo,
+          rule_id: blanket.ruleId,
+          status: "open",
+          severity: "high",
+          title: blanket.title,
+          location: { kind: "file", path: ".claude/settings.json", line: 3 },
+          evidence: {
+            summary: `1 broad Bash allow (Bash(*)) in .claude/settings.json, on line 3. To fix: ${blanket.fix}`,
+          },
+        }),
+        expect.objectContaining({
+          asset: repo,
+          rule_id: skip.ruleId,
+          status: "open",
+          severity: "high",
+          title: skip.title,
+          location: { kind: "file", path: ".claude/settings.json", line: 4 },
+          evidence: {
+            summary: `1 place skips the agent's permission checks (defaultMode bypassPermissions) in .claude/settings.json, on line 4. To fix: ${skip.fix}`,
+          },
+        }),
+        expect.objectContaining({
+          asset: repo,
+          rule_id: skip.ruleId,
+          status: "open",
+          severity: "high",
+          title: skip.title,
+          location: { kind: "file", path: "scripts/agent.sh", line: 2 },
+          evidence: {
+            summary: `1 place skips the agent's permission checks (--dangerously-skip-permissions) in scripts/agent.sh, on line 2. To fix: ${skip.fix}`,
+          },
+        }),
+      ]),
+    );
+    expect(opened).toHaveLength(3);
+    expect(guard.logLines().join("")).toContain('"observations":3');
+  });
+
   it("fails a Scan whose repo the reader can't read, reconciling nothing and logging why", async () => {
     const team = await newTeam();
     let unreadable = false;

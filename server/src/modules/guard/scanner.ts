@@ -7,6 +7,7 @@
 import { assetKey, Location } from "@warden/contracts";
 import type { Logger } from "../../log.ts";
 import type { Scanner } from "../../scans.ts";
+import { agentConfigCheck } from "./agent-config.ts";
 import { DEFAULT_PACK } from "./default-pack.ts";
 import type { RepoAssets } from "./repo-assets.ts";
 import type { RepoReader } from "./repo-reader.ts";
@@ -44,6 +45,7 @@ export function guardScanner({
         let skipped = 0;
         let unread = 0;
         let observations = 0;
+        const agentConfig = agentConfigCheck(asset);
         for await (const file of reader.readRepo(repo.installationId, {
           ref: repo.ref,
           githubId: repo.githubId,
@@ -59,7 +61,10 @@ export function guardScanner({
             unread += 1;
             continue;
           }
-          for (const observation of secretObservations(asset, file)) {
+          for (const observation of [
+            ...secretObservations(asset, file),
+            ...agentConfig.see(file),
+          ]) {
             if (!covered.has(observation.rule_id)) continue;
             recorder.saw(observation);
             observations += 1;
