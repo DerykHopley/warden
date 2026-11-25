@@ -379,11 +379,11 @@ type Position = {
   /** It is the first word after the reserved word `coproc`. */
   coproc: boolean;
   /**
-   * It follows the first word after `coproc`, which is the coprocess's name when this word starts a compound command,
-   * and otherwise was the command word: `ifCommand` is where this word then stands, and `start` where that word's run
-   * of the agent starts, if it ran it.
+   * It follows the first word after `coproc`, whose role is still open: that word is the coprocess's name when this
+   * word starts a compound command, and otherwise was the command word. `asCommand` is where this word stands in the
+   * second case, and `pendingStart` where that word's run of the agent starts, if it runs it.
    */
-  named: { ifCommand: Position; start: number | undefined } | undefined;
+  afterCoprocWord: { asCommand: Position; pendingStart: number | undefined } | undefined;
 };
 
 /** The first word of a command, as after `;`, `&&`, `|`, a newline, `(` or an opening backquote. */
@@ -395,7 +395,7 @@ const COMMAND_START: Position = {
   timeOptions: [],
   timeProgram: false,
   coproc: false,
-  named: undefined,
+  afterCoprocWord: undefined,
 };
 
 /** Any word after the command word, when that command isn't a wrapper. */
@@ -413,7 +413,10 @@ const STARTS_COMMAND = new Set(["\n", ";", "&", "|"]);
  */
 const TIME = "time";
 
-/** Words that keep the next word a command word, when they are themselves reserved words. */
+/**
+ * Words that keep the next word a command word, when they come first in their command: before any assignment or
+ * redirect in it (`! time` keeps `time` first).
+ */
 const RESERVED = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", TIME]);
 
 /** The options the reserved word `time` takes before its command word, as bash reads them: one `-p`, then one `--`. */
@@ -476,29 +479,35 @@ function readWord(
   end: number,
 ): [start: number | undefined, next: Position] {
   if (at.target) return [undefined, { ...at, target: false }];
-  if (at.named !== undefined) {
-    if (COMPOUND_STARTS.has(word)) return readWord(COMMAND_START, word, end);
-    const [start, next] = readWord(at.named.ifCommand, word, end);
-    return [at.named.start ?? start, next];
+  // A compound command after `coproc`, or after the word that follows it (then the coprocess's name), is read as it
+  // is anywhere.
+  if ((at.coproc || at.afterCoprocWord !== undefined) && COMPOUND_STARTS.has(word)) {
+    return readWord(COMMAND_START, word, end);
+  }
+  if (at.afterCoprocWord !== undefined) {
+    const { asCommand, pendingStart } = at.afterCoprocWord;
+    const [start, next] = readWord(asCommand, word, end);
+    return [pendingStart ?? start, next];
   }
   if (!at.command) return at.wrapped && isAgent(word) ? [end, AFTER_COMMAND] : [undefined, at];
-  if (at.coproc) {
-    if (COMPOUND_STARTS.has(word)) return readWord(COMMAND_START, word, end);
-    // Bash reads no reserved word here but a compound command's: `coproc ! claude` runs a command named `!`.
-    const [start, next] = readWord({ ...at, coproc: false, prefixed: true }, word, end);
-    if (ASSIGNMENT.test(word) || REDIRECT.test(word)) return [start, next];
-    return [undefined, { ...AFTER_COMMAND, named: { ifCommand: next, start } }];
-  }
   const option = at.timeOptions.indexOf(word);
   if (option >= 0) return [undefined, { ...at, timeOptions: at.timeOptions.slice(option + 1) }];
   if (at.timeProgram && word.startsWith("-")) {
     const value = TIME_PROGRAM_VALUE.test(word);
     return [undefined, { ...at, timeProgram: word !== "--", target: value }];
   }
-  if (ASSIGNMENT.test(word)) return [undefined, { ...at, prefixed: true, timeOptions: [] }];
+  // An assignment or a redirect after `coproc` makes the next word the coprocess's command word.
+  if (ASSIGNMENT.test(word)) {
+    return [undefined, { ...at, prefixed: true, coproc: false, timeOptions: [] }];
+  }
   if (REDIRECT.test(word)) {
     const alone = REDIRECT_ALONE.test(word);
-    return [undefined, { ...at, prefixed: true, timeOptions: [], target: alone }];
+    return [undefined, { ...at, prefixed: true, coproc: false, timeOptions: [], target: alone }];
+  }
+  if (at.coproc) {
+    // Bash reads no reserved word here but a compound command's: `coproc ! claude` runs a command named `!`.
+    const [pendingStart, asCommand] = readWord({ ...at, coproc: false, prefixed: true }, word, end);
+    return [undefined, { ...AFTER_COMMAND, afterCoprocWord: { asCommand, pendingStart } }];
   }
   if (!at.prefixed && RESERVED.has(word)) {
     return [undefined, { ...at, timeOptions: word === TIME ? TIME_OPTIONS : [] }];
