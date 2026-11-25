@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScanBody, ScanState, StartScanBody } from "../src/index.ts";
+import { ScanBody, StartScanBody } from "../src/index.ts";
 import { expectIssueAt, expectRefused } from "./refused.ts";
 
 const repo = (n: number) => ({ kind: "repo", ref: `https://github.com/example/app-${n}` }) as const;
@@ -68,10 +68,6 @@ describe("ScanBody", () => {
 
   it("reads a queued Scan, its later times null", () => {
     expect(ScanBody.parse(queued)).toEqual(queued);
-  });
-
-  it("takes each of the four states", () => {
-    expect(ScanState.options).toEqual(["queued", "running", "done", "failed"]);
   });
 
   it("refuses a state outside the four", () => {

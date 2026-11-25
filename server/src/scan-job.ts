@@ -4,8 +4,8 @@
 // harmless: a Scan already done changes nothing, and one run again reconciles under the same id and start, which
 // reconcile applies once.
 //
-// A start-up file like index.ts (ADR 0005): the one other file that may import the modules, to wire their scanners.
-// None is wired in this slice; Guard's comes with its scanner.
+// A start-up file like index.ts (ADR 0005): it wires the modules' scanners and move rules from `wiring.ts`, the list
+// the server shares, so the API's Rules and the Job's scanner can't drift apart.
 //
 // As its own process (the local starter spawns it; the Cloud Run Job runs it from slice 1b):
 // - WARDEN_SCAN_ID and WARDEN_TEAM name the Scan; either missing or blank exits 1 before connecting.
@@ -15,13 +15,9 @@
 import { createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings, type Findings } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
-import { guardMoveRule } from "./modules/guard/move-rule.ts";
-import { patchMoveRule } from "./modules/patch/move-rule.ts";
 import { createScans, type Scanners, type Scans } from "./scans.ts";
+import { MOVE_RULES, SCANNERS } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
-
-/** Each module's scanner, as the Job wires them: none yet. */
-export const SCANNERS: Scanners = {};
 
 export async function runScanJob({
   scanId,
@@ -119,10 +115,7 @@ async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
       team,
       scans: createScans({ withTeam }),
       // ADR 0005: the modules come in here, as in index.ts.
-      findings: createFindings({
-        withTeam,
-        moveRules: { guard: guardMoveRule, patch: patchMoveRule },
-      }),
+      findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
       scanners: SCANNERS,
       logger,
     });

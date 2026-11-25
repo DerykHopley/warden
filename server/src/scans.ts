@@ -1,6 +1,6 @@
 // Queued Scans (ADR 0009): a Lead's start writes a row under the session's Team, the Scan Job reads it back by its id
 // and Team and moves its state. Shared code like the Findings module: it never imports a module. Each module's scanner
-// comes in as `Scanners`, wired by the start-up files (index.ts and scan-job.ts), and the starter as a
+// comes in as `Scanners`, wired by the start-up files from `wiring.ts`, and the starter as a
 // `ScanJobStarter`.
 import { randomUUID } from "node:crypto";
 import { sql, type Selectable } from "kysely";

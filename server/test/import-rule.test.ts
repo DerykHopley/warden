@@ -71,14 +71,13 @@ describe("ADR 0005's import rule", () => {
     expect(await lint(code, "server/src/seed.ts")).toEqual([]);
   });
 
-  it("lets the Scan Job's start-up file import a module, as the server's does, and no other shared file", async () => {
+  it("lets the wiring the start-up files share import a module, and not the Scan Job or its shared code", async () => {
     const code =
       'import { guardMoveRule } from "./modules/guard/move-rule.ts";\nvoid guardMoveRule;\n';
-    expect(await lint(code, "server/src/scan-job.ts")).toEqual([]);
-    expect(await lint(code, "server/src/scans.ts")).toEqual([expect.stringMatching(ADR_0005)]);
-    expect(await lint(code, "server/src/local-scan-job-starter.ts")).toEqual([
-      expect.stringMatching(ADR_0005),
-    ]);
+    expect(await lint(code, "server/src/wiring.ts")).toEqual([]);
+    for (const shared of ["scan-job.ts", "scans.ts", "local-scan-job-starter.ts"]) {
+      expect(await lint(code, `server/src/${shared}`)).toEqual([expect.stringMatching(ADR_0005)]);
+    }
   });
 
   it("lets shared code import() anything else", async () => {

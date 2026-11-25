@@ -28,8 +28,7 @@ import type pg from "pg";
 import { createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
-import { guardMoveRule } from "./modules/guard/move-rule.ts";
-import { patchMoveRule } from "./modules/patch/move-rule.ts";
+import { MOVE_RULES } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
 export type SeedResult =
@@ -132,10 +131,7 @@ export async function seedDemoFindings({
 }): Promise<SeedResult> {
   const withTeam = createWithTeam(pool);
   // Every module's move rule, as the server wires them: the demo's Unconfirmed fix comes from Guard's.
-  const findings = createFindings({
-    withTeam,
-    moveRules: { guard: guardMoveRule, patch: patchMoveRule },
-  });
+  const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
 
   const lock = await pool.connect();
   const key = `demo_seed:${team}`;

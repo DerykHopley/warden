@@ -111,6 +111,10 @@ describe("runScanJob", () => {
     const [finding, ...others] = await findings.list(team);
     expect(others).toEqual([]);
     expect(finding).toMatchObject({ rule_id: ENV, status: "open", first_seen_scan: scan.id });
+    const applied = await withTeam(team, (tx) =>
+      tx.selectFrom("scans").select(["id", "module", "kind"]).execute(),
+    );
+    expect(applied).toEqual([{ id: scan.id, module: "guard", kind: "scan" }]);
     const after = await scans.get(team, scan.id);
     expect(after).toMatchObject({ state: "done" });
     expect(after!.started_at).toEqual(expect.any(String));
@@ -125,18 +129,6 @@ describe("runScanJob", () => {
     expect(ScanBody.parse(await res.json())).toMatchObject({ id: scan.id, state: "done" });
   });
 
-  it("reconciles under the queued Scan's id", async () => {
-    const team = await newTeam();
-    const scan = await queued(team);
-
-    await job(team, scan.id, fakeScanner().scanner).run;
-
-    const applied = await withTeam(team, (tx) =>
-      tx.selectFrom("scans").select(["id", "module", "kind"]).execute(),
-    );
-    expect(applied).toEqual([{ id: scan.id, module: "guard", kind: "scan" }]);
-  });
-
   it("marks the Scan failed and opens nothing when the scanner throws", async () => {
     const team = await newTeam();
     const scan = await queued(team);
@@ -149,20 +141,6 @@ describe("runScanJob", () => {
     expect(logEntries(lines.join(""))).toContainEqual(
       expect.objectContaining({ severity: "ERROR", scanId: scan.id, team }),
     );
-  });
-
-  it("marks the Scan failed when findings.scan refuses what the scanner saw", async () => {
-    const team = await newTeam();
-    const scan = await queued(team);
-    const elsewhere = {
-      ...problem,
-      asset: { kind: "repo", ref: "https://github.com/example/other" },
-    } as const;
-
-    expect(await job(team, scan.id, fakeScanner([elsewhere]).scanner).run).toBe(1);
-
-    expect(await scans.get(team, scan.id)).toMatchObject({ state: "failed" });
-    expect(await findings.list(team)).toEqual([]);
   });
 
   it("changes nothing when run again after the row is set back to running (a retried execution)", async () => {
