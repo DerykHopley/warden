@@ -131,6 +131,8 @@ export function testApp(options: {
   scanners?: Scanners;
   /** The Scan Job starter; none by default, so a start answers 503. */
   startScanJob?: ScanJobStarter;
+  /** The queued Scans, in place of the real ones on `withTeam`. */
+  scans?: Scans;
 }) {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
@@ -156,7 +158,8 @@ export function testApp(options: {
             moveRules: { guard: guardMoveRule, patch: patchMoveRule },
           })
         : noFindings,
-      scans: options.withTeam ? createScans({ withTeam: options.withTeam }) : noScans,
+      scans:
+        options.scans ?? (options.withTeam ? createScans({ withTeam: options.withTeam }) : noScans),
       scanners: options.scanners ?? {},
       startScanJob: options.startScanJob,
       behindCloudRun: true,

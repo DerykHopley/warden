@@ -86,12 +86,46 @@ async function queued(team: string): Promise<ScanBody> {
   return outcome.scan;
 }
 
-function job(team: string, scanId: string, scanner: Scanner | undefined) {
+type Move = () => Promise<ScanBody | undefined>;
+
+/** The real Scans, except that a move to `state` runs `instead`, which may make the real move or throw without it. */
+function scansWhere(
+  state: Parameters<Scans["move"]>[2],
+  instead: (move: Move) => ReturnType<Move>,
+) {
+  return {
+    ...scans,
+    move: (team, id, to) =>
+      to === state ? instead(() => scans.move(team, id, to)) : scans.move(team, id, to),
+  } satisfies Scans;
+}
+
+const dropped = async (): ReturnType<Move> => {
+  throw new Error("the connection dropped");
+};
+
+/** Puts the Scan's row back to running, as a Job killed after reconcile but before `done` leaves it. */
+async function setBackToRunning(team: string, id: string) {
+  await withTeam(team, (tx) =>
+    tx
+      .updateTable("scan_requests")
+      .set({ state: "running", ended_at: null })
+      .where("id", "=", id)
+      .execute(),
+  );
+}
+
+function job(
+  team: string,
+  scanId: string,
+  scanner: Scanner | undefined,
+  { through = scans }: { through?: Scans } = {},
+) {
   const lines: string[] = [];
   const run = runScanJob({
     scanId,
     team,
-    scans,
+    scans: through,
     findings,
     scanners: scanner ? { guard: scanner } : {},
     logger: createLogger((line) => lines.push(line)),
@@ -148,12 +182,37 @@ describe("runScanJob", () => {
     const scan = await queued(team);
     expect(await job(team, scan.id, fakeScanner().scanner).run).toBe(0);
     const first = await findings.list(team);
-    await scans.move(team, scan.id, "running");
+    await setBackToRunning(team, scan.id);
 
     expect(await job(team, scan.id, fakeScanner().scanner).run).toBe(0);
 
     expect(await findings.list(team)).toEqual(first);
     expect(first).toHaveLength(1);
+    expect(await scans.get(team, scan.id)).toMatchObject({ state: "done" });
+  });
+
+  it("leaves the Scan running for a retry, not failed, when the move to done fails after reconcile", async () => {
+    const team = await newTeam();
+    const scan = await queued(team);
+    const through = scansWhere("done", dropped);
+    const { run, lines } = job(team, scan.id, fakeScanner().scanner, { through });
+
+    expect(await run).toBe(1);
+
+    expect(await findings.list(team)).toHaveLength(1);
+    expect(await scans.get(team, scan.id)).toMatchObject({ state: "running" });
+    const errors = logEntries(lines.join("")).filter((entry) => entry.severity === "ERROR");
+    expect(errors).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("reconciled"),
+        scanId: scan.id,
+        error: expect.objectContaining({ message: "the connection dropped" }),
+      }),
+    ]);
+    expect(errors[0]!.message).not.toContain("nothing was reconciled");
+
+    expect(await job(team, scan.id, fakeScanner().scanner).run).toBe(0);
+    expect(await findings.list(team)).toHaveLength(1);
     expect(await scans.get(team, scan.id)).toMatchObject({ state: "done" });
   });
 
@@ -166,6 +225,61 @@ describe("runScanJob", () => {
 
     expect(await findings.list(team)).toHaveLength(1);
     expect(await scans.get(team, scan.id)).toMatchObject({ state: "done" });
+  });
+
+  it("starts a failed Scan's rerun afresh, so a Scan run in between doesn't supersede what it sees", async () => {
+    const team = await newTeam();
+    const failed = await queued(team);
+    expect(await job(team, failed.id, throwingScanner).run).toBe(1);
+    const between = await queued(team);
+    expect(await job(team, between.id, fakeScanner([]).scanner).run).toBe(0);
+
+    expect(await job(team, failed.id, fakeScanner().scanner).run).toBe(0);
+
+    expect(await findings.list(team)).toEqual([
+      expect.objectContaining({ rule_id: ENV, status: "open", first_seen_scan: failed.id }),
+    ]);
+    const [rerun, other] = [await scans.get(team, failed.id), await scans.get(team, between.id)];
+    expect(Date.parse(rerun!.started_at!)).toBeGreaterThan(Date.parse(other!.started_at!));
+  });
+
+  it("logs the scanner's error even when the move to failed fails too", async () => {
+    const team = await newTeam();
+    const scan = await queued(team);
+    const through = scansWhere("failed", dropped);
+    const { run, lines } = job(team, scan.id, throwingScanner, { through });
+
+    expect(await run).toBe(1);
+
+    expect(logEntries(lines.join(""))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "ERROR",
+          scanId: scan.id,
+          error: expect.objectContaining({ message: "the repo couldn't be cloned" }),
+        }),
+        expect.objectContaining({
+          severity: "ERROR",
+          scanId: scan.id,
+          error: expect.objectContaining({ message: "the connection dropped" }),
+        }),
+      ]),
+    );
+  });
+
+  it("ends the Scan failed when it has no start after moving to running", async () => {
+    const team = await newTeam();
+    const scan = await queued(team);
+    const through = scansWhere("running", async (move) => {
+      const moved = await move();
+      return moved && { ...moved, started_at: null };
+    });
+    const counting = fakeScanner();
+
+    expect(await job(team, scan.id, counting.scanner, { through }).run).toBe(1);
+
+    expect(counting.runs).toEqual([]);
+    expect(await scans.get(team, scan.id)).toMatchObject({ state: "failed" });
   });
 
   it("returns 0 for a Scan already done, without running the scanner", async () => {
@@ -197,6 +311,21 @@ describe("runScanJob", () => {
     );
   });
 
+  it("returns 0 and leaves the Scan done when another attempt finished it after this one read it", async () => {
+    const team = await newTeam();
+    const scan = await queued(team);
+    await job(team, scan.id, fakeScanner().scanner).run;
+    const done = await scans.get(team, scan.id);
+    // This attempt read the row while it was still queued.
+    const through = { ...scans, get: async () => ({ ...done!, state: "queued" as const }) };
+    const counting = fakeScanner();
+
+    expect(await job(team, scan.id, counting.scanner, { through }).run).toBe(0);
+
+    expect(counting.runs).toEqual([]);
+    expect(await scans.get(team, scan.id)).toEqual(done);
+  });
+
   it("returns 1 and changes nothing when the Scan's module has no scanner", async () => {
     const team = await newTeam();
     const scan = await queued(team);
@@ -208,5 +337,19 @@ describe("runScanJob", () => {
     expect(logEntries(lines.join(""))).toContainEqual(
       expect.objectContaining({ severity: "ERROR", scanId: scan.id, module: "guard" }),
     );
+  });
+});
+
+describe("Scans.move", () => {
+  it("never moves a Scan out of done: a late attempt answers undefined and changes nothing", async () => {
+    const team = await newTeam();
+    const scan = await queued(team);
+    await job(team, scan.id, fakeScanner().scanner).run;
+    const done = await scans.get(team, scan.id);
+
+    expect(await scans.move(team, scan.id, "failed")).toBeUndefined();
+    expect(await scans.move(team, scan.id, "running")).toBeUndefined();
+
+    expect(await scans.get(team, scan.id)).toEqual(done);
   });
 });

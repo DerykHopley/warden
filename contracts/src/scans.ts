@@ -51,7 +51,10 @@ export const ScanBody = z.strictObject({
   assets: z.array(Asset),
   rules: z.array(RuleId),
   queued_at: DateTime,
-  /** When the Job first started running it; a retried run keeps it, and reconciles under it. */
+  /**
+   * When the Job started the run it reconciles under: a retry after its Findings were applied keeps it; a rerun of an
+   * attempt that applied nothing starts afresh.
+   */
   started_at: DateTime.nullable(),
   /** When it was last done or failed. */
   ended_at: DateTime.nullable(),

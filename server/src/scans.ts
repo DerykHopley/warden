@@ -49,9 +49,11 @@ export interface Scans {
   /** The Team's Scan with this id; undefined for any other id, another Team's included. */
   get(team: string, id: string): Promise<ScanBody | undefined>;
   /**
-   * Moves the Team's Scan to `state`, answering it as moved (undefined for an id the Team doesn't have). Running keeps
-   * the first start, so a retried Job reconciles under the same id and start, and clears the end; done and failed set
-   * the end.
+   * Moves the Team's Scan to `state`, answering it as moved; undefined when nothing moved, for an id the Team doesn't
+   * have or a move MOVES_FROM doesn't allow (never out of done), so a late attempt can't undo a finished Scan.
+   * Running clears the end and sets the start: the start reconcile already applied this Scan's id under, so a retried
+   * Job reconciles under the same pair and changes nothing (ADR 0009); otherwise now, so a Scan started after an
+   * attempt that reconciled nothing doesn't count as newer than the rerun. Done and failed set the end.
    */
   move(
     team: string,
@@ -59,6 +61,16 @@ export interface Scans {
     state: Exclude<ScanState, "queued">,
   ): Promise<ScanBody | undefined>;
 }
+
+/**
+ * The states each move may start from. Running from failed is a rerun, and from running a retried execution; done
+ * from failed is an attempt that reconciled after a late one failed it. Nothing moves out of done.
+ */
+const MOVES_FROM = {
+  running: ["queued", "running", "failed"],
+  done: ["running", "failed"],
+  failed: ["queued", "running"],
+} as const satisfies Record<Exclude<ScanState, "queued">, readonly ScanState[]>;
 
 function toBody(row: Selectable<Database["scan_requests"]>): ScanBody {
   return ScanBody.parse({
@@ -127,10 +139,19 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
           .updateTable("scan_requests")
           .set(
             state === "running"
-              ? { state, started_at: sql<Date>`coalesce(started_at, now())`, ended_at: null }
+              ? {
+                  state,
+                  started_at: sql<Date>`coalesce(
+                    (select s.started_at from scans s
+                      where s.team_id = scan_requests.team_id and s.id = scan_requests.id),
+                    now()
+                  )`,
+                  ended_at: null,
+                }
               : { state, ended_at: sql<Date>`now()` },
           )
           .where("id", "=", id)
+          .where("state", "in", MOVES_FROM[state])
           .returningAll()
           .executeTakeFirst();
         return row && toBody(row);

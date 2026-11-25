@@ -1,5 +1,5 @@
 // The local starter, over a fake spawn: it runs scan-job.ts with node, handing it the Scan's id and Team and the
-// server's own PG* variables, and nothing else from the server's environment.
+// server's own PG* variables, HOME and Node's options, and nothing else from the server's environment.
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -12,6 +12,10 @@ const SERVER_ENV = {
   PGUSER: "warden_app",
   PGDATABASE: "warden",
   PGPASSWORD: "the-app-password",
+  HOME: "/home/warden",
+  NODE_OPTIONS: "--max-old-space-size=512",
+  NODE_EXTRA_CA_CERTS: "/etc/ssl/extra.pem",
+  PATH: "/usr/bin",
   CLERK_SECRET_KEY: "sk_test_never_handed_on",
   WARDEN_ADMIN_PASSWORD: "never-handed-on",
 };
@@ -40,7 +44,7 @@ const entries = (lines: string[]) =>
   lines.map((line) => JSON.parse(line) as Record<string, unknown>);
 
 describe("localScanJobStarter", () => {
-  it("runs scan-job.ts with node, the Scan's id and Team, and only the server's PG* variables", async () => {
+  it("runs scan-job.ts with node, the Scan's id and Team, and only the server's PG* and Node variables", async () => {
     const fake = fakeSpawn();
     const { start } = starter(fake.spawn);
 
@@ -58,6 +62,9 @@ describe("localScanJobStarter", () => {
           PGUSER: "warden_app",
           PGDATABASE: "warden",
           PGPASSWORD: "the-app-password",
+          HOME: "/home/warden",
+          NODE_OPTIONS: "--max-old-space-size=512",
+          NODE_EXTRA_CA_CERTS: "/etc/ssl/extra.pem",
           WARDEN_SCAN_ID: "scan-1",
           WARDEN_TEAM: "org_a",
         },

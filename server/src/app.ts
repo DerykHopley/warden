@@ -415,12 +415,21 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     try {
       await deps.startScanJob({ scanId, team });
     } catch (error) {
-      await deps.scans.move(team, scanId, "failed");
-      logger.error("The Scan Job couldn't be started; the Scan is marked failed", {
+      // Logged before the move, so a failed move can't hide why the start failed.
+      logger.error("The Scan Job couldn't be started; marking the Scan failed", {
         scanId,
         team,
         error,
       });
+      try {
+        await deps.scans.move(team, scanId, "failed");
+      } catch (moveError) {
+        logger.error("The Scan couldn't be marked failed; it stays queued", {
+          scanId,
+          team,
+          error: moveError,
+        });
+      }
       return c.json({ error: "The Scan couldn't be started" }, 502);
     }
     return c.json(queued.scan satisfies ScanBody, 202);

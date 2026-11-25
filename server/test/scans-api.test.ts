@@ -7,7 +7,13 @@ import { ScanBody, type Asset } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import type { ScanJobStarter, Scanner, Scanners } from "../src/scans.ts";
+import {
+  createScans,
+  type ScanJobStarter,
+  type Scanner,
+  type Scanners,
+  type Scans,
+} from "../src/scans.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { logEntries } from "./server-process.ts";
@@ -49,8 +55,9 @@ function fakeStarter() {
 function scanApp({
   scanners = { guard: fakeGuard },
   startScanJob,
-}: { scanners?: Scanners; startScanJob?: ScanJobStarter } = {}) {
-  return testApp({ publicPem, withTeam, scanners, startScanJob });
+  scans,
+}: { scanners?: Scanners; startScanJob?: ScanJobStarter; scans?: Scans } = {}) {
+  return testApp({ publicPem, withTeam, scanners, startScanJob, scans });
 }
 
 async function newTeam() {
@@ -263,6 +270,41 @@ describe("POST /api/scans: a Lead starts a Scan (story 2)", () => {
     expect(logEntries(lines.join(""))).toContainEqual(
       expect.objectContaining({ severity: "ERROR", scanId: row!.id, team }),
     );
+  });
+
+  it("logs the start's error first, then the failed move's own, when the Scan can't be marked failed", async () => {
+    const team = await newTeam();
+    const real = createScans({ withTeam });
+    const { app, lines } = scanApp({
+      startScanJob: async () => {
+        throw new Error("the Admin API said no");
+      },
+      scans: {
+        ...real,
+        move: async () => {
+          throw new Error("the connection dropped");
+        },
+      },
+    });
+
+    const res = await start(app, team);
+
+    expect(res).toMatchObject({ status: 502, body: { error: "The Scan couldn't be started" } });
+    const [row] = await rows(team);
+    expect(row).toMatchObject({ state: "queued" });
+    const errors = logEntries(lines.join("")).filter((entry) => entry.severity === "ERROR");
+    expect(errors).toEqual([
+      expect.objectContaining({
+        scanId: row!.id,
+        team,
+        error: expect.objectContaining({ message: "the Admin API said no" }),
+      }),
+      expect.objectContaining({
+        scanId: row!.id,
+        team,
+        error: expect.objectContaining({ message: "the connection dropped" }),
+      }),
+    ]);
   });
 
   it("answers 503 with no starter wired, writing nothing", async () => {

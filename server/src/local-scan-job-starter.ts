@@ -1,6 +1,7 @@
 // The Scan Job starter off Cloud Run (ADR 0009): runs scan-job.ts as a child process of the server, with the Scan's
-// id and Team and the server's own PG* variables, so it connects as the server does. Nothing else of the server's
-// environment is handed on: no Clerk key, no admin password. It isn't waited on; its exit is logged.
+// id and Team, the server's own PG* variables and HOME, and Node's options, so it connects as the server does. Nothing
+// else of the server's environment is handed on: no Clerk key, no admin password. It isn't waited on; its exit is
+// logged.
 import { spawn as nodeSpawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -16,9 +17,17 @@ export type Spawn = (
 
 const SCAN_JOB = fileURLToPath(new URL("./scan-job.ts", import.meta.url));
 
-/** The server's connection variables: every PG* one libpq and `pg` read. */
-function pgVariables(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return Object.fromEntries(Object.entries(env).filter(([name]) => name.startsWith("PG")));
+/**
+ * What the Job needs to connect and run as the server does: HOME, where `pg` finds ~/.pgpass and
+ * ~/.postgresql's certificates, and Node's own options and extra CA certificates.
+ */
+const HANDED_ON = new Set(["HOME", "NODE_OPTIONS", "NODE_EXTRA_CA_CERTS"]);
+
+/** The server's connection variables (every PG* one libpq and `pg` read) and HANDED_ON's. */
+function jobVariables(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => name.startsWith("PG") || HANDED_ON.has(name)),
+  );
 }
 
 export function localScanJobStarter({
@@ -33,7 +42,7 @@ export function localScanJobStarter({
   return ({ scanId, team }) =>
     new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [SCAN_JOB], {
-        env: { ...pgVariables(env), WARDEN_SCAN_ID: scanId, WARDEN_TEAM: team },
+        env: { ...jobVariables(env), WARDEN_SCAN_ID: scanId, WARDEN_TEAM: team },
         // Its log lines go where the server's go.
         stdio: "inherit",
       });

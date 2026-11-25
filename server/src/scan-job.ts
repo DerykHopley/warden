@@ -1,8 +1,8 @@
 // The Scan Job (ADR 0009): runs one queued Scan. `POST /api/scans` queues the row and starts the Job with only the
 // Scan's id and Team; the Job reads the rest from the row inside `withTeam`, runs the module's scanner through
 // `findings.scan` under the Scan's id, and moves its state: running, then done or failed. A retried execution is
-// harmless: a Scan already done changes nothing, and one run again reconciles under the same id and start, which
-// reconcile applies once.
+// harmless: a Scan already done changes nothing, and one whose Findings were applied reconciles again under the same id
+// and start, which reconcile applies once. A rerun of an attempt that applied nothing starts afresh.
 //
 // A start-up file like index.ts (ADR 0005): it wires the modules' scanners and move rules from `wiring.ts`, the list
 // the server shares, so the API's Rules and the Job's scanner can't drift apart.
@@ -54,28 +54,52 @@ export async function runScanJob({
     return 1;
   }
 
-  // `move` sets the start on the first run and keeps it on a retry, so a retry reconciles under the same pair.
-  const startedAt = (await scans.move(team, scanId, "running"))?.started_at;
-  if (!startedAt) throw new Error(`scan job: Scan ${scanId} has no start after moving to running`);
+  // `move` keeps the start reconcile already applied this Scan's id under, so a retry reconciles under the same pair;
+  // otherwise it starts afresh. Nothing moved means another attempt finished the Scan after this one read it.
+  const running = await scans.move(team, scanId, "running");
+  if (running === undefined) {
+    logger.info("scan job: the Scan was done by another attempt; nothing changed", {
+      scanId,
+      team,
+    });
+    return 0;
+  }
+
+  // From here every exit ends the Scan: done, failed, or left running for the retry to finish.
+  let outcome: Awaited<ReturnType<Findings["scan"]>>;
   try {
-    const outcome = await findings.scan(
+    const startedAt = running.started_at;
+    if (startedAt === null) throw new Error("the Scan has no start after moving to running");
+    outcome = await findings.scan(
       { id: scanId, started_at: startedAt, team, module, assets, rules },
       (recorder) => scanner.scan({ team, assets, rules }, recorder),
     );
-    await scans.move(team, scanId, "done");
-    logger.info("scan job done", {
+  } catch (error) {
+    // findings.scan reconciles nothing when the scanner throws or a report is refused. The message stays in the log,
+    // logged before the move so a failed move can't hide it.
+    logger.error("scan job: the Scan failed; nothing was reconciled", {
       scanId,
       team,
       module,
-      opened: outcome.opened.length,
-      fixed: outcome.fixed.length,
-      reopened: outcome.reopened.length,
+      error,
     });
-    return 0;
+    try {
+      await scans.move(team, scanId, "failed");
+    } catch (moveError) {
+      logger.error("scan job: the Scan couldn't be marked failed; it stays running", {
+        scanId,
+        team,
+        error: moveError,
+      });
+    }
+    return 1;
+  }
+
+  try {
+    await scans.move(team, scanId, "done");
   } catch (error) {
-    // findings.scan reconciles nothing when the scanner throws or a report is refused. The message stays in the log.
-    await scans.move(team, scanId, "failed");
-    logger.error("scan job: the Scan failed; nothing was reconciled", {
+    // The Findings are applied; a retry reconciles under the same id and start, changing nothing, then marks it done.
+    logger.error("scan job: the Scan reconciled but couldn't be marked done; it stays running", {
       scanId,
       team,
       module,
@@ -83,6 +107,15 @@ export async function runScanJob({
     });
     return 1;
   }
+  logger.info("scan job done", {
+    scanId,
+    team,
+    module,
+    opened: outcome.opened.length,
+    fixed: outcome.fixed.length,
+    reopened: outcome.reopened.length,
+  });
+  return 0;
 }
 
 /** The environment variable's value, or undefined when it's missing or blank. */
