@@ -52,7 +52,7 @@ flowchart LR
       DB[("Cloud SQL Postgres, row-level security")]
     end
     subgraph TB4["TB4: Secret Manager"]
-      SM["Clerk keys, database passwords, hook tokens, GitHub app key and webhook secret, OpenRouter key, Langfuse keys, pseudonym keys"]
+      SM["Clerk keys, database passwords, GitHub app key and webhook secret, OpenRouter key, Langfuse keys, pseudonym keys"]
     end
     LOG["Cloud Logging, through the redactor"]
   end
@@ -141,7 +141,7 @@ settled on ticket #5.
 | H1 | Events sent with no token or a wrong one | S | Outside attacker | Fake events in a Team; paid Judge calls | The endpoint refuses any event without a valid token, compared in constant time; a refused event is never stored or judged | Guard spec | Designed | ADR 0007 |
 | H2 | A token used to write into another Team | S, E | A developer in the Team; a leaked token's holder | Events land in the wrong Team | The token names the Team. The endpoint takes the Team from the token alone, never from the body, and writes through `withTeam`, so an event reaches only its own Team | Guard spec | Designed | ADR 0007, ADR 0006 |
 | H3 | The token read from a laptop used for more than events | E | A developer in the Team | Reading the Team's data, or changing a Status | Every developer in the Team can read the token, so it grants writing Agent events into that Team and nothing else: the API never accepts it, so no read, no Status change, no other Team | Guard spec | Designed | ADR 0007, #5 d6 |
-| H4 | A leaked token kept in use | S | A leaked token's holder | Fake or flooding events until it's stopped | Tokens live in Secret Manager and an Admin rotates them per Team. On rotation the old token stays valid for 24 hours, so the managed settings can be redeployed, then stops | Guard spec | Designed | ADR 0007, #5 d6 |
+| H4 | A leaked token kept in use | S | A leaked token's holder | Fake or flooding events until it's stopped | An Admin rotates the Team's token. Each token is stored as a SHA-256 hash in Cloud SQL, shown once; on rotation the old one stays valid 24 h, so the managed settings can be redeployed, and a second rotation ends it at once. The hashes are append-only rows, the audit trail of rotations | Guard spec slice 9a-i, #153 (the store) | Built: the store and its Admin-only routes (#153). Designed: the endpoint's check of each event (slice 10) | ADR 0007, #5 d6, #100 question 4 |
 | H5 | A token in a URL ends up in the logs | I | Anyone who reads the logs | A working token leaks | The token is a header value in the managed settings (the hook's `headers`), never in a URL, because Cloud Run's request logs keep the URL. The redactor masks bearer tokens in Warden's own lines | Guard spec (header); slice 1a, #4 (redactor) | Designed (header); Built (redactor) | SD redaction in logs |
 | H6 | A flood of events | D | An outside attacker with a token; a developer | Each event leads to a paid Judge call: a big bill, a slow endpoint | A per-Team rate limit and a body size limit; events over them are refused, and the refusals are counted in the session record | Guard spec | Designed | SD rate limits on every paid or slow path |
 | H7 | Event content written to the logs | I | Anyone who reads the logs; the operator | Agent event content kept 30 days, outside judge-then-drop | Event bodies are never logged: only the Team, the event name, its size and the outcome | Guard spec | Designed | SD redaction in logs, ADR 0007 |
@@ -320,8 +320,10 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 5. **How a Real-world run's Findings are held** (Guard spec): a Team per repo owner, as `data.md` assumes, or
    another way that keeps them to the owner.
 6. **Where the Judge's local model runs** (Guard spec), and how a Team turns it on.
-7. **How the endpoint checks a token** (Guard spec): read from Secret Manager per request, or a cached copy, and
-   how the 24-hour overlap is held.
+7. **Closed: how the endpoint checks a token** (#100, question 4; built in #153). Not from Secret Manager: Cloud SQL
+   keeps a SHA-256 hash per token issued, one append-only row each. The token names its Team, so the check reads that
+   Team's two newest rows through `withTeam`, with no cross-Team read, and compares the hashes in constant time. The
+   newest is valid; the one before it until 24 hours after the newest was written, which holds the overlap.
 8. **Closed: recovery logs keep 6 days beside 7 backups** (#16). Cloud SQL requires the log setting to be less than
    the backup count, so the setup script sets 6 days of recovery logs beside 7 backups, and the bounds in `data.md`
    hold.
