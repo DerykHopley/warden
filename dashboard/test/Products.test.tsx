@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import type { Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FRAMEWORKS_WAIT_MS, ProductsPage } from "../src/Products.tsx";
-import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
+import { callsTo, deferred, fetchMock, json, noContent, serve, type Routes } from "./fake-api.ts";
 
 const CHAT = {
   id: "prod_chat",
@@ -137,6 +137,22 @@ describe("ProductsPage", () => {
     expect(product("Chat assistant").getByRole("button", { name: /^Edit/ })).toBeEnabled();
     expect(product("Search").getByRole("button", { name: /^Edit/ })).toBeEnabled();
   });
+
+  it.each<[Role, string[]]>([
+    ["lead", ["Delete Chat assistant", "Delete Search"]],
+    ["admin", ["Delete Chat assistant", "Delete Search"]],
+    ["member", []],
+  ])(
+    "offers a %s Delete on each Product only when the Role changes Products",
+    async (role, deletes) => {
+      renderProducts(role);
+      await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+
+      const offered = screen.queryAllByRole("button", { name: /^Delete/ });
+      expect(offered.map((button) => button.getAttribute("aria-label"))).toEqual(deletes);
+      for (const button of offered) expect(button).toBeEnabled();
+    },
+  );
 
   it("shows a name and a Repo URL holding markup as text, and opens each Repo URL in a new tab without an opener", async () => {
     const markup = {
@@ -808,6 +824,30 @@ describe("ProductsPage's Product form", () => {
     });
   });
 
+  it("Enter in a Repo URL field saves nothing: twice on Remove Repo URL 2, or on the 20th Add a Repo URL; Enter in Name still saves", async () => {
+    const saveProduct = vi.fn(() => json(200, CHAT));
+    await openEdit({ saveProduct });
+    act(() => form().getByRole("button", { name: "Remove Repo URL 2" }).focus());
+    await userEvent.keyboard("{Enter}{Enter}");
+
+    expect(form().queryByRole("textbox", { name: "Repo URL 2" })).not.toBeInTheDocument();
+    expect(form().getByRole("textbox", { name: "Repo URL 1" })).toHaveFocus();
+    expect(screen.getByRole("form", { name: "Edit Chat assistant" })).toBeInTheDocument();
+
+    for (let i = 0; i < 18; i++) {
+      await userEvent.click(form().getByRole("button", { name: "Add a Repo URL" }));
+    }
+    act(() => form().getByRole("button", { name: "Add a Repo URL" }).focus());
+    await userEvent.keyboard("{Enter}{Enter}");
+    expect(form().getByRole("textbox", { name: "Repo URL 20" })).toHaveFocus();
+    expect(screen.getByRole("form")).toBeInTheDocument();
+    expect(saveProduct).not.toHaveBeenCalled();
+
+    act(() => form().getByRole("textbox", { name: "Name" }).focus());
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() => expect(saveProduct).toHaveBeenCalledTimes(1));
+  });
+
   it("opens one form at a time, its name field focused", async () => {
     await openAdd();
     expect(form().getByRole("textbox", { name: "Name" })).toHaveFocus();
@@ -901,5 +941,257 @@ describe("ProductsPage's Product form", () => {
     expect(product("Chat assistant").getByRole("button", { name: /^Edit/ })).toBeEnabled();
     expect(screen.queryByText("Couldn't load the frameworks.")).not.toBeInTheDocument();
     expect(dependencyRows("Chat assistant")[0]).toBe("Langflow 1.4.0 Self-hosted internet-facing");
+  });
+});
+
+// Story 1: a Lead or an Admin deletes a Product after confirming. The server checks the Role; the confirm shows its
+// refusals in its own line and stays open.
+describe("ProductsPage's delete confirm", () => {
+  const CONFIRM = "Delete Chat assistant? Its CVE Findings turn Fixed.";
+  /** Chat assistant's open confirm. */
+  const confirm = () => within(screen.getByRole("group", { name: CONFIRM }));
+  const deleteOf = (name: string) => product(name).getByRole("button", { name: `Delete ${name}` });
+
+  /** The DELETEs the fake API received, by path. */
+  const deletes = () =>
+    fetchMock.mock.calls
+      .filter(([, init]) => init?.method === "DELETE")
+      .map(([input]) => String(input));
+  const listReads = () => callsTo("/api/products").filter(([, init]) => init?.method === "GET");
+
+  /** Renders the page as an Admin and opens Chat assistant's confirm once the list shows. */
+  async function openConfirm(routes: Routes = {}) {
+    const props = renderProducts("admin", routes);
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+    await userEvent.click(deleteOf("Chat assistant"));
+    return props;
+  }
+
+  /** Presses the confirm's Delete. */
+  const confirmDelete = () => userEvent.click(confirm().getByRole("button", { name: "Delete" }));
+
+  const refusesWith =
+    (status: number, error?: string, headers: Record<string, string> = {}) =>
+    () =>
+      json(status, error === undefined ? {} : { error }, headers);
+
+  it("sends nothing until the confirm's Delete is pressed, then one DELETE of the Product", async () => {
+    await openConfirm({ deleteProduct: noContent });
+    expect(screen.getByRole("group", { name: CONFIRM })).toBeInTheDocument();
+    expect(deletes()).toEqual([]);
+
+    await confirmDelete();
+    await vi.waitFor(() => expect(deletes()).toEqual(["/api/products/prod_chat"]));
+  });
+
+  it("opens with focus on Cancel; Cancel and Esc each close it and put focus back on the Product's Delete", async () => {
+    await openConfirm();
+    expect(confirm().getByRole("button", { name: "Cancel" })).toHaveFocus();
+
+    await userEvent.click(confirm().getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
+    expect(deleteOf("Chat assistant")).toHaveFocus();
+
+    await userEvent.click(deleteOf("Chat assistant"));
+    act(() => confirm().getByRole("button", { name: "Delete" }).focus());
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
+    expect(deleteOf("Chat assistant")).toHaveFocus();
+    expect(deletes()).toEqual([]);
+  });
+
+  it("after a delete, closes the confirm, reads the list again and puts focus on Add a Product", async () => {
+    const lists = [productsAnswer([CHAT, SEARCH])];
+    await openConfirm({
+      products: () => lists.shift() ?? productsAnswer([SEARCH]),
+      deleteProduct: noContent,
+    });
+    await confirmDelete();
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus(),
+    );
+    expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(listReads()).toHaveLength(2));
+    expect(screen.queryByRole("heading", { level: 2, name: "Chat assistant" })).toBeNull();
+  });
+
+  it("while the delete runs, its Delete is busy, both buttons are disabled, Esc does nothing, and a second press sends nothing", async () => {
+    const answer = deferred<Response>();
+    await openConfirm({ deleteProduct: () => answer.promise });
+    const remove = confirm().getByRole("button", { name: "Delete" });
+    await userEvent.click(remove);
+
+    await vi.waitFor(() => expect(deletes()).toHaveLength(1));
+    expect(remove).toBeDisabled();
+    expect(remove).toHaveAttribute("aria-busy", "true");
+    expect(confirm().getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await userEvent.click(remove);
+    act(() => {
+      remove.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(screen.getByRole("group", { name: CONFIRM })).toBeInTheDocument();
+    expect(deletes()).toHaveLength(1);
+
+    answer.resolve(noContent());
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument(),
+    );
+    expect(deletes()).toHaveLength(1);
+  });
+
+  it("while a form or a confirm is open, Add, every Edit and every Delete are disabled", async () => {
+    const buttons = () => [
+      screen.getByRole("button", { name: "Add a Product" }),
+      ...screen.getAllByRole("button", { name: /^(Edit|Delete) / }),
+    ];
+    await openConfirm();
+    expect(buttons()).toHaveLength(5);
+    for (const button of buttons()) expect(button).toBeDisabled();
+
+    await userEvent.click(confirm().getByRole("button", { name: "Cancel" }));
+    await userEvent.click(product("Search").getByRole("button", { name: /^Edit/ }));
+    // Search's entry is its form now: Add, Chat assistant's Edit and Delete wait.
+    expect(buttons()).toHaveLength(3);
+    for (const button of buttons()) expect(button).toBeDisabled();
+  });
+
+  it("a 403 says only a Lead or an Admin can change Products, and asks /api/me again", async () => {
+    const props = await openConfirm({ deleteProduct: refusesWith(403, "Your Role can't do this") });
+    await confirmDelete();
+
+    expect(await confirm().findByRole("alert")).toHaveTextContent(
+      "Only a Lead or an Admin can change Products.",
+    );
+    expect(props.refreshMe).toHaveBeenCalled();
+  });
+
+  it("a 404 closes the confirm, shows the gone notice above the list and reads the list again; opening a form removes it", async () => {
+    const lists = [productsAnswer([CHAT, SEARCH])];
+    await openConfirm({
+      products: () => lists.shift() ?? productsAnswer([SEARCH]),
+      deleteProduct: refusesWith(404, "No such Product"),
+    });
+    await confirmDelete();
+
+    const notice = await screen.findByText("This Product is no longer in your Team.");
+    expect(notice).toHaveAttribute("role", "alert");
+    expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
+    await vi.waitFor(() => expect(listReads()).toHaveLength(2));
+    // Above the list: before its first Product.
+    const first = screen.getByRole("heading", { level: 2, name: "Search" });
+    expect(notice.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "Add a Product" }));
+    expect(screen.queryByText("This Product is no longer in your Team.")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "a 429 says too many changes to Products",
+      refusesWith(429, "Too many Product saves", { "Retry-After": "30" }),
+      "Too many changes to Products. Try again in 30 seconds.",
+    ],
+    [
+      "a 409 shows the server's words",
+      refusesWith(409, "Your Team's Admin must open Warden first"),
+      "Your Team's Admin must open Warden first",
+    ],
+    ["a 409 with no words says Warden refused it", refusesWith(409), "Warden refused this change."],
+    [
+      "no answer says the server isn't answering",
+      () => Promise.reject(new TypeError("Failed to fetch")),
+      "Warden's server isn't answering. Try again.",
+    ],
+    [
+      "a 500 says the server isn't answering",
+      refusesWith(500, "Something went wrong"),
+      "Warden's server isn't answering. Try again.",
+    ],
+  ])("%s in the confirm, which stays open", async (_case, answer, words) => {
+    await openConfirm({ deleteProduct: answer });
+    await confirmDelete();
+
+    expect(await confirm().findByRole("alert")).toHaveTextContent(words);
+    expect(confirm().getByRole("alert")).not.toHaveTextContent(/sign-in/);
+    expect(confirm().getByRole("button", { name: "Delete" })).toBeEnabled();
+  });
+
+  it("a 401 ends the session", async () => {
+    const props = await openConfirm({ deleteProduct: refusesWith(401, "Not signed in") });
+    await confirmDelete();
+    await vi.waitFor(() => expect(props.onSessionEnded).toHaveBeenCalled());
+  });
+
+  it("sends no DELETE while /api/me names another Team, and says the server isn't answering", async () => {
+    const deleteProduct = vi.fn(noContent);
+    await openConfirm({
+      me: () => json(200, { userId: "user_1", team: "org_b", role: "admin", level: "quick" }),
+      deleteProduct,
+    });
+    await confirmDelete();
+
+    expect(await confirm().findByRole("alert", {}, { timeout: 3000 })).toHaveTextContent(
+      "Warden's server isn't answering. Try again.",
+    );
+    expect(deleteProduct).not.toHaveBeenCalled();
+  });
+
+  it("drops a delete's answer that arrives after a Team switch", async () => {
+    const answer = deferred<Response>();
+    let team = "org_a";
+    const bluebird = { ...SEARCH, id: "prod_b", name: "Bluebird" };
+    const props = await openConfirm({
+      products: () =>
+        team === "org_a" ? productsAnswer([CHAT, SEARCH]) : productsAnswer([bluebird], "org_b"),
+      deleteProduct: () => answer.promise,
+    });
+    await confirmDelete();
+    await vi.waitFor(() => expect(deletes()).toHaveLength(1));
+
+    team = "org_b";
+    props.rerender({ team });
+    await screen.findByRole("heading", { level: 2, name: "Bluebird" });
+    const reads = listReads().length;
+    await act(async () => {
+      answer.resolve(json(404, { error: "No such Product" }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("This Product is no longer in your Team.")).not.toBeInTheDocument();
+    expect(listReads()).toHaveLength(reads);
+    expect(deleteOf("Bluebird")).toBeEnabled();
+  });
+
+  it.each([
+    ["a Team switch", { team: "org_b" }, { team: "org_a" }],
+    ["a Role lowered to Member", { role: "member" as Role }, { role: "admin" as Role }],
+  ])(
+    "closes the confirm on %s, and doesn't open it again on the way back",
+    async (_case, away, back) => {
+      const props = await openConfirm();
+      props.rerender(away);
+      expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
+      props.rerender(back);
+      await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+      expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
+      expect(deleteOf("Chat assistant")).toBeEnabled();
+    },
+  );
+
+  it("with the frameworks failing, Delete stays enabled, and after a delete focus is on the Products heading", async () => {
+    await openConfirm({
+      frameworks: () => json(500, { error: "Something went wrong" }),
+      deleteProduct: noContent,
+    });
+    expect(screen.getByRole("button", { name: "Add a Product" })).toBeDisabled();
+    await confirmDelete();
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1, name: "Products" })).toHaveFocus(),
+    );
+    expect(deleteOf("Search")).toBeEnabled();
   });
 });

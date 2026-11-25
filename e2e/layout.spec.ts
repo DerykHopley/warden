@@ -131,6 +131,30 @@ for (const scheme of SCHEMES) {
   }
 }
 
+for (const scheme of SCHEMES) {
+  for (const width of WIDTHS) {
+    test(
+      `Products at ${width}px in ${scheme}, with the delete confirm open: nothing scrolls sideways`,
+      SIGNS_IN_ITSELF,
+      async ({ page, signIn }) => {
+        await signIn(HEDY, CEDAR);
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme: scheme });
+        await page.goto("/products");
+        await page.getByRole("button", { name: "Delete Chat assistant" }).click();
+        await expect(
+          page.getByRole("group", { name: "Delete Chat assistant? Its CVE Findings turn Fixed." }),
+        ).toBeVisible();
+        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }));
+        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+      },
+    );
+  }
+}
+
 test(
   "the Product form under 640px: a framework row's controls stack in one column; from 640px they sit side by side",
   SIGNS_IN_ITSELF,

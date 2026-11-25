@@ -312,3 +312,62 @@ test(
     await expect(edit).toBeFocused();
   },
 );
+
+/** The delete confirm on Chat assistant, and its two buttons. */
+function deleteConfirm(page: Page) {
+  const confirm = page.getByRole("group", {
+    name: "Delete Chat assistant? Its CVE Findings turn Fixed.",
+  });
+  return {
+    confirm,
+    remove: confirm.getByRole("button", { name: "Delete", exact: true }),
+    cancel: confirm.getByRole("button", { name: "Cancel" }),
+  };
+}
+
+test(
+  "on Products at 390px, an Admin's Delete and the delete confirm's Delete and Cancel are at least 44 by 44px",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await ensureProduct(CEDAR, CHAT_ASSISTANT);
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const open = page.getByRole("button", { name: "Delete Chat assistant" });
+    await expectTargets([open]);
+
+    await open.click();
+    const { remove, cancel } = deleteConfirm(page);
+    await expectTargets([remove, cancel]);
+  },
+);
+
+test(
+  "the keyboard alone opens the delete confirm, reaches its Delete and Cancel with a visible ring, and leaves it, Esc putting focus back on Delete",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await ensureProduct(CEDAR, CHAT_ASSISTANT);
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const open = page.getByRole("button", { name: "Delete Chat assistant" });
+    await expectRings(page, [open]);
+
+    await expect(open).toBeFocused();
+    await page.keyboard.press("Enter");
+    const { confirm, remove, cancel } = deleteConfirm(page);
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(remove).toBeFocused();
+    await expectRings(page, [remove, cancel]);
+
+    // Past Cancel, focus leaves the confirm; nothing is sent until its Delete is pressed.
+    await page.keyboard.press("Tab");
+    expect(await confirm.evaluate((el) => el.contains(document.activeElement))).toBe(false);
+    await page.keyboard.press("Shift+Tab");
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(confirm).toHaveCount(0);
+    await expect(open).toBeFocused();
+  },
+);
