@@ -223,9 +223,19 @@ export function DetailCard(props: {
     element?.focus();
   });
 
+  /**
+   * Renew acceptance opens with the current acceptance reason, to edit; every other form opens empty. Reopens on stays
+   * empty: picking the next day is what renewing is for. Set once, here: a refusal keeps what the person typed.
+   */
+  function draftFor(action: Action): Draft {
+    const renews =
+      action.kind === "decide" && action.decision === "accept" && finding.status === "accepted";
+    return renews ? { ...EMPTY_DRAFT, reason: finding.accepted_reason ?? "" } : EMPTY_DRAFT;
+  }
+
   function open(action: Action) {
     setForm(action);
-    setDraft(EMPTY_DRAFT);
+    setDraft(draftFor(action));
     setLine(null);
     focusNext.current = "reason";
   }

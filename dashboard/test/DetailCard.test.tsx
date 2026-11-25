@@ -399,9 +399,14 @@ const whyField = (form: Form) => form.getByRole("textbox", { name: WHY });
 const pickUntil = (form: Form, day: string) =>
   fireEvent.change(form.getByLabelText(REOPENS_ON), { target: { value: day } });
 
-/** Fills each field the form has: the reason (or an accept's why), Reopens on (DAY), and the first candidate. */
+/**
+ * Fills each field the form has: the reason (or an accept's why) in place of any prefill, Reopens on (DAY), and the
+ * first candidate.
+ */
 async function fill(form: Form, reason = "Checked by hand") {
-  await userEvent.type(form.queryByRole("textbox", { name: "Reason" }) ?? whyField(form), reason);
+  const reasonBox = form.queryByRole("textbox", { name: "Reason" }) ?? whyField(form);
+  await userEvent.clear(reasonBox);
+  await userEvent.type(reasonBox, reason);
   if (form.queryByLabelText(REOPENS_ON) !== null) pickUntil(form, DAY);
   const [candidate] = form.queryAllByRole("radio");
   if (candidate !== undefined) await userEvent.click(candidate);
@@ -1013,6 +1018,59 @@ describe("a Lead's decision", () => {
     await userEvent.click(form.getByRole("button", { name: "Mark False positive" }));
 
     await vi.waitFor(() => expect(shown.onSessionEnded).toHaveBeenCalledOnce());
+  });
+});
+
+describe("the reason an accept form opens with", () => {
+  it("Renew acceptance opens with the current acceptance reason, editable, and no Reopens on: its submit waits for a day", async () => {
+    const { card } = show(ACCEPTED, listed([]), { role: "lead" });
+    const form = await openForm(card, "Renew acceptance");
+    const submit = form.getByRole("button", { name: "Renew acceptance" });
+
+    expect(whyField(form)).toHaveValue("Fixed next sprint");
+    expect(form.getByLabelText(REOPENS_ON)).toHaveValue("");
+    expect(submit).toBeDisabled();
+    await userEvent.type(whyField(form), ", then the one after");
+    expect(whyField(form)).toHaveValue("Fixed next sprint, then the one after");
+    pickUntil(form, DAY);
+    expect(submit).toBeEnabled();
+  });
+
+  it("Renew acceptance opens with the current reason again after a Cancel, not what was typed before it", async () => {
+    const { card } = show(ACCEPTED, listed([]), { role: "lead" });
+    const first = await openForm(card, "Renew acceptance");
+    await userEvent.type(whyField(first), " and more");
+    await userEvent.click(first.getByRole("button", { name: "Cancel" }));
+
+    const again = await openForm(card, "Renew acceptance");
+    expect(whyField(again)).toHaveValue("Fixed next sprint");
+  });
+
+  it.each<[string, string, Finding, Role]>([
+    ["Accept", "an Open", OPEN, "lead"],
+    ["Propose accepting", "an Accepted", ACCEPTED, "member"],
+    ["Propose accepting", "an Open", OPEN, "member"],
+  ])("%s on %s Finding opens with an empty reason", async (button, _status, focused, role) => {
+    const { card } = show(focused, listed([]), { role });
+    const form = await openForm(card, button);
+    expect(whyField(form)).toHaveValue("");
+  });
+
+  it("after a refusal, Renew acceptance keeps what the person typed, not the prefill, even as the Finding comes back changed", async () => {
+    serve({ findingAction: () => json(409, {}) });
+    const { card, update } = show(ACCEPTED, listed([]), { role: "lead" });
+    const form = await openForm(card, "Renew acceptance");
+    await fill(form, "Waiting on the vendor's patch");
+    await userEvent.click(form.getByRole("button", { name: "Renew acceptance" }));
+    await form.findByRole("alert");
+
+    update({ ...ACCEPTED, accepted_reason: "Someone else's reason" });
+
+    const kept = formNamed(card, "Renew acceptance");
+    expect(kept.getByRole("alert")).toHaveTextContent(
+      "This Finding changed since you opened it. Look again before deciding.",
+    );
+    expect(whyField(kept)).toHaveValue("Waiting on the vendor's patch");
   });
 });
 
