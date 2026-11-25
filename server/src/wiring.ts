@@ -3,8 +3,11 @@
 // index.ts and seed.ts, the one file outside the modules that may import them. Not a registry: a module is wired by
 // its line here and never registers itself, so adding one adds a line to each list and changes no shared code.
 import type { Module } from "@warden/contracts";
+import type { GitHubReaderSettings } from "./config.ts";
 import type { MoveRule } from "./findings/index.ts";
+import type { Fetch } from "./http-call.ts";
 import type { Logger } from "./log.ts";
+import { createGitHubReader } from "./modules/guard/github-reader.ts";
 import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { createRepoAssets } from "./modules/guard/repo-assets.ts";
 import type { RepoReader } from "./modules/guard/repo-reader.ts";
@@ -34,4 +37,16 @@ export function scanners({
   logger: Logger;
 }): Scanners {
   return { guard: guardScanner({ repoAssets: createRepoAssets({ withTeam }), reader, logger }) };
+}
+
+/**
+ * The RepoReader the Scan Job reads repos through on GitHub, built here as the Job may not import Guard (ADR 0005).
+ * Tests hand it a fake `fetch`.
+ */
+export function gitHubRepoReader(
+  settings: GitHubReaderSettings,
+  logger: Logger,
+  fetch?: Fetch,
+): RepoReader {
+  return createGitHubReader({ ...settings, logger, fetch });
 }

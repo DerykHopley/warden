@@ -1,6 +1,7 @@
 // Stories 3 and 4 end to end: a Lead starts a Guard Scan of a linked repo (`POST /api/scans`), the Scan Job runs in
 // process with Guard's scanner as the wiring builds it over a fake RepoReader, and `GET /api/findings` shows what it
-// found; the next Scan, with the secrets gone, marks them Fixed. Through the real app on the suite's shared database,
+// found; the next Scan, with the secrets gone, marks them Fixed. One case reads the repo through the GitHub reader on
+// a fake fetch serving built tarballs, so the whole path from GitHub's HTTP boundary is covered. Through the real app on the suite's shared database,
 // each case with a Team of its own. The planted secrets are joined from parts, so the source never holds a whole one.
 import { randomUUID } from "node:crypto";
 import { FindingsBody, type Asset } from "@warden/contracts";
@@ -9,18 +10,21 @@ import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createFindings } from "../src/findings/index.ts";
-import { createLogger } from "../src/log.ts";
+import type { Fetch } from "../src/http-call.ts";
+import { createLogger, type Logger } from "../src/log.ts";
 import { packRule } from "../src/modules/guard/default-pack.ts";
 import { createRepoAssets, guardAssetCheck } from "../src/modules/guard/repo-assets.ts";
 import type { RepoFile, RepoReader } from "../src/modules/guard/repo-reader.ts";
 import { runScanJob } from "../src/scan-job.ts";
 import { createScans, type ScanJobStarter } from "../src/scans.ts";
-import { MOVE_RULES, scanners } from "../src/wiring.ts";
+import { gitHubRepoReader, MOVE_RULES, scanners } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { AWS_KEY, GITHUB_TOKEN } from "./secret-fixtures.ts";
+import { chunks, tarballOf } from "./tarballs.ts";
 import {
   activeOrganization,
+  gitHubAppKey,
   linkRepos,
   seedTeam,
   sessionToken,
@@ -60,14 +64,20 @@ const removed: RepoFile[] = [
   { path: ".claude/settings.local.json", text: '{\n  "env": {}\n}\n' },
 ];
 
+/** A RepoReader that yields what `read` does for any repo. */
+const readerOf = (read: () => AsyncIterable<RepoFile>) => (): RepoReader => ({
+  readRepo: () => read(),
+});
+
 /**
  * The app wired as index.ts wires it, except that its starter runs the Scan Job in process, as scan-job.ts wires it,
- * with Guard's scanner given `read` as its RepoReader. Each Job's promise is kept to await, and every log line too.
+ * with Guard's scanner given the RepoReader `makeReader` builds over the Job's logger. Each Job's promise is kept to
+ * await, and every log line too.
  */
-function guardApp(read: () => AsyncIterable<RepoFile>) {
+function guardApp(makeReader: (logger: Logger) => RepoReader) {
   const jobLines: string[] = [];
   const logger = createLogger((line) => jobLines.push(line));
-  const reader: RepoReader = { readRepo: () => read() };
+  const reader = makeReader(logger);
   const repoAssets = createRepoAssets({ withTeam });
   const jobs: Promise<0 | 1>[] = [];
   const startScanJob: ScanJobStarter = async ({ scanId, team }) => {
@@ -128,11 +138,60 @@ const files = (list: RepoFile[]) =>
     yield* list;
   };
 
+/** Each row of the Team's Findings, their history and its Scans, whole and read as text: every column, whatever its type. */
+async function storedRows(team: string) {
+  return withTeam(team, async (tx) => {
+    const tables = ["findings", "finding_history", "scan_requests", "scans", "scan_coverage"];
+    const rows = await Promise.all(
+      tables.map((table) =>
+        sql<{ row: string }>`select t::text as row from ${sql.table(table)} t`.execute(tx),
+      ),
+    );
+    return rows.flatMap((result) => result.rows.map(({ row }) => row));
+  });
+}
+
+const INSTALLATION_TOKEN = "ghs_the-fake-installation-token";
+
+/**
+ * GitHub at its HTTP boundary (spec decision 11): an installation token for any installation, and the repo's tarball,
+ * built from `served()`, for a call carrying that token. fetch follows GitHub's redirect to the download itself, so the
+ * fake answers the tarball call with the archive. Anything else, a tarball call without the token included, is a 404.
+ */
+function fakeGitHubFetch(served: () => RepoFile[]) {
+  const calls: string[] = [];
+  const fetch: Fetch = async (url, init) => {
+    const method = init.method ?? "GET";
+    calls.push(`${method} ${url}`);
+    if (
+      method === "POST" &&
+      /^https:\/\/api\.github\.com\/app\/installations\/\d+\/access_tokens$/.test(url)
+    ) {
+      return Response.json(
+        { token: INSTALLATION_TOKEN, expires_at: "2026-11-25T13:00:00Z" },
+        { status: 201 },
+      );
+    }
+    if (
+      method === "GET" &&
+      url === "https://api.github.com/repos/example/guarded/tarball" &&
+      new Headers(init.headers).get("Authorization") === `Bearer ${INSTALLATION_TOKEN}`
+    ) {
+      return new Response(ReadableStream.from(chunks(tarballOf(served()), 512)), {
+        status: 200,
+        headers: { "Content-Type": "application/x-gzip" },
+      });
+    }
+    return Response.json({ message: "Not Found" }, { status: 404 });
+  };
+  return { fetch, calls };
+}
+
 describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
   it("opens a Finding per secret Rule with masked evidence and the fix, then marks both Fixed once removed", async () => {
     const team = await newTeam();
     let current = planted;
-    const guard = guardApp(() => files(current)());
+    const guard = guardApp(readerOf(() => files(current)()));
     await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
 
     const first = await scanRepo(guard, team);
@@ -190,22 +249,13 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
 
   it("keeps the planted secrets out of every column of the Team's Findings, their history, its Scans and the log", async () => {
     const team = await newTeam();
-    const guard = guardApp(files(planted));
+    const guard = guardApp(readerOf(files(planted)));
     await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
 
     expect((await scanRepo(guard, team)).exit).toBe(0);
     expect(await listFindings(guard, team)).toHaveLength(2);
 
-    // Each row whole, read as text: every column, whatever its type.
-    const stored = await withTeam(team, async (tx) => {
-      const tables = ["findings", "finding_history", "scan_requests", "scans", "scan_coverage"];
-      const rows = await Promise.all(
-        tables.map((table) =>
-          sql<{ row: string }>`select t::text as row from ${sql.table(table)} t`.execute(tx),
-        ),
-      );
-      return rows.flatMap((result) => result.rows.map(({ row }) => row));
-    });
+    const stored = await storedRows(team);
     expect(stored.some((row) => row.includes("AKIA********"))).toBe(true);
     for (const secret of [AWS_KEY, GITHUB_TOKEN]) {
       expect(stored.filter((row) => row.includes(secret))).toEqual([]);
@@ -214,14 +264,58 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     expect(guard.logLines().join("")).toContain('"files":3');
   });
 
+  it("reads the repo through GitHub's HTTP boundary: opens both Findings, then marks them Fixed, with the token and the secrets in no log line and no table", async () => {
+    const team = await newTeam();
+    let current = planted;
+    const github = fakeGitHubFetch(() => current);
+    const guard = guardApp((logger) =>
+      gitHubRepoReader(
+        { clientId: "Iv23li-the-client-id", privateKey: gitHubAppKey() },
+        logger,
+        github.fetch,
+      ),
+    );
+    await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
+
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+    const opened = await listFindings(guard, team);
+    expect(opened.map(({ rule_id, status }) => ({ rule_id, status }))).toEqual(
+      expect.arrayContaining([
+        { rule_id: "guard/secret-in-repo", status: "open" },
+        { rule_id: "guard/secret-in-agent-settings", status: "open" },
+      ]),
+    );
+    expect(opened).toHaveLength(2);
+
+    current = removed;
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+    const after = await listFindings(guard, team);
+    expect(after.map(({ id, status }) => ({ id, status }))).toEqual(
+      expect.arrayContaining(opened.map(({ id }) => ({ id, status: "fixed" }))),
+    );
+    expect(after).toHaveLength(2);
+
+    // Each Scan asked for a token, then the tarball with it.
+    expect(github.calls.filter((call) => call.endsWith("/tarball"))).toHaveLength(2);
+    const stored = await storedRows(team);
+    const logged = guard.logLines();
+    expect(logged.join("")).toContain('"files":3');
+    for (const secret of [INSTALLATION_TOKEN, AWS_KEY, GITHUB_TOKEN]) {
+      expect(stored.filter((row) => row.includes(secret))).toEqual([]);
+      expect(logged.filter((line) => line.includes(secret))).toEqual([]);
+    }
+  });
+
   it("fails a Scan whose repo the reader can't read, reconciling nothing and logging why", async () => {
     const team = await newTeam();
     let unreadable = false;
-    const guard = guardApp(async function* () {
-      yield planted[0]!;
-      if (unreadable) throw new Error("the repo's archive is cut short");
-      yield* planted.slice(1);
-    });
+    const guard = guardApp(
+      readerOf(async function* () {
+        yield planted[0]!;
+        if (unreadable) throw new Error("the repo's archive is cut short");
+        yield* planted.slice(1);
+      }),
+    );
     await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
     expect((await scanRepo(guard, team)).exit).toBe(0);
     const before = await listFindings(guard, team);

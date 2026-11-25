@@ -57,16 +57,16 @@ const Env = z.object({
   }),
 });
 
+/** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
+const appPrivateKey = required.refine(isRsaPrivateKey, { message: "isn't an RSA private key" });
+
 /** The read-only GitHub App's settings, read only when one of them is set: they come together or not at all. */
 const GitHubApp = z
   .object({
     /** The App's client id: the JWT's issuer, as GitHub recommends, and the user flow's client. */
     GITHUB_APP_CLIENT_ID: required,
     GITHUB_APP_CLIENT_SECRET: required,
-    /** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
-    GITHUB_APP_PRIVATE_KEY: required.refine(isRsaPrivateKey, {
-      message: "isn't an RSA private key",
-    }),
+    GITHUB_APP_PRIVATE_KEY: appPrivateKey,
   })
   .transform((app) => ({
     clientId: app.GITHUB_APP_CLIENT_ID,
@@ -158,4 +158,35 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     },
     github: github?.data,
   };
+}
+
+/** What the Scan Job reads repos with: the App's client id and private key, never its client secret. */
+export type GitHubReaderSettings = { clientId: string; privateKey: string };
+
+const GitHubReader = z
+  .object({ GITHUB_APP_CLIENT_ID: required, GITHUB_APP_PRIVATE_KEY: appPrivateKey })
+  .transform((app) => ({
+    clientId: app.GITHUB_APP_CLIENT_ID,
+    privateKey: app.GITHUB_APP_PRIVATE_KEY,
+  }));
+
+const GITHUB_READER_VARIABLES = ["GITHUB_APP_CLIENT_ID", "GITHUB_APP_PRIVATE_KEY"] as const;
+
+/**
+ * The Scan Job's GitHub settings, or undefined with neither variable set: a Guard Scan then fails, as GitHub isn't set
+ * up for it. An empty value counts as unset, as in `loadConfig`. One without the other, or a key that isn't RSA, throws
+ * ConfigError naming the variables, never their values. GITHUB_APP_CLIENT_SECRET is ignored.
+ */
+export function gitHubReaderSettings(
+  env: Record<string, string | undefined>,
+): GitHubReaderSettings | undefined {
+  const present = Object.fromEntries(
+    GITHUB_READER_VARIABLES.flatMap((name) => (env[name] ? [[name, env[name]]] : [])),
+  );
+  if (Object.keys(present).length === 0) return undefined;
+  const parsed = GitHubReader.safeParse(present);
+  if (!parsed.success) {
+    throw new ConfigError([...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))]);
+  }
+  return parsed.data;
 }

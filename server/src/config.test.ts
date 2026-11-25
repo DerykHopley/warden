@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { FRONTEND_API_HOST, testPublishableKey as publishableKey } from "../test/helpers.ts";
-import { ConfigError, loadConfig } from "./config.ts";
+import { ConfigError, gitHubReaderSettings, loadConfig } from "./config.ts";
 
 /** A GitHub App's key as GitHub downloads it: PKCS#1 PEM, `BEGIN RSA PRIVATE KEY`. */
 const { privateKey: appKey, publicKey } = generateKeyPairSync("rsa", {
@@ -229,5 +229,64 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...env, CLERK_AUTHORIZED_PARTIES: value })).toThrow(
       /CLERK_AUTHORIZED_PARTIES/,
     );
+  });
+});
+
+describe("gitHubReaderSettings (the Scan Job's)", () => {
+  const reader = { GITHUB_APP_CLIENT_ID: "Iv23li-client-id-value", GITHUB_APP_PRIVATE_KEY: appKey };
+
+  it("answers undefined with neither variable, or both empty", () => {
+    expect(gitHubReaderSettings({})).toBeUndefined();
+    expect(
+      gitHubReaderSettings({ GITHUB_APP_CLIENT_ID: "", GITHUB_APP_PRIVATE_KEY: "" }),
+    ).toBeUndefined();
+  });
+
+  it("answers the client id and key with both, needing no client secret", () => {
+    expect(gitHubReaderSettings(reader)).toEqual({
+      clientId: reader.GITHUB_APP_CLIENT_ID,
+      privateKey: appKey,
+    });
+  });
+
+  it("ignores the client secret, set or alone", () => {
+    expect(
+      gitHubReaderSettings({ ...reader, GITHUB_APP_CLIENT_SECRET: "client-secret-value" }),
+    ).toEqual({ clientId: reader.GITHUB_APP_CLIENT_ID, privateKey: appKey });
+    expect(
+      gitHubReaderSettings({ GITHUB_APP_CLIENT_SECRET: "client-secret-value" }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "the client id alone",
+      { GITHUB_APP_CLIENT_ID: reader.GITHUB_APP_CLIENT_ID },
+      "GITHUB_APP_PRIVATE_KEY",
+    ],
+    ["the key alone", { GITHUB_APP_PRIVATE_KEY: appKey }, "GITHUB_APP_CLIENT_ID"],
+    [
+      "the key with an empty client id",
+      { ...reader, GITHUB_APP_CLIENT_ID: "" },
+      "GITHUB_APP_CLIENT_ID",
+    ],
+  ])("refuses %s, naming the missing variable and no value", (_name, some, missing) => {
+    const error = configError(() => gitHubReaderSettings(some));
+    expect(error.variables).toEqual([missing]);
+    expect(error.message).not.toContain("BEGIN");
+    expect(error.message).not.toContain(reader.GITHUB_APP_CLIENT_ID);
+  });
+
+  it.each([
+    ["a value that isn't a PEM", "not-a-key-value"],
+    ["a public key", publicKey],
+    ["a private key that isn't RSA", ecKey],
+  ])("refuses a key that is %s, naming GITHUB_APP_PRIVATE_KEY and no value", (_name, value) => {
+    const error = configError(() =>
+      gitHubReaderSettings({ ...reader, GITHUB_APP_PRIVATE_KEY: value }),
+    );
+    expect(error.variables).toEqual(["GITHUB_APP_PRIVATE_KEY"]);
+    expect(error.message).not.toContain(value);
+    expect(error.message).not.toContain("BEGIN");
   });
 });

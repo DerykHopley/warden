@@ -33,6 +33,25 @@ describe("the Scan Job's process", () => {
     expect(output).not.toMatch(/ECONNREFUSED/);
   });
 
+  it("exits 1 before connecting with GITHUB_APP_CLIENT_ID set alone, naming GITHUB_APP_PRIVATE_KEY", async () => {
+    const { code, output } = await runJob({
+      WARDEN_SCAN_ID: randomUUID(),
+      WARDEN_TEAM: "org_a",
+      GITHUB_APP_CLIENT_ID: "Iv23li-client-id-value",
+      // Empty counts as unset, whatever the shell running the tests holds.
+      GITHUB_APP_PRIVATE_KEY: "",
+      PGHOST: "127.0.0.1",
+      PGPORT: String(await closedPort()),
+    });
+
+    expect(code, output).toBe(1);
+    expect(logEntries(output)).toContainEqual(
+      expect.objectContaining({ severity: "ERROR", variables: ["GITHUB_APP_PRIVATE_KEY"] }),
+    );
+    expect(output).not.toContain("Iv23li-client-id-value");
+    expect(output).not.toMatch(/ECONNREFUSED/);
+  });
+
   it("exits 1 naming the role when PGUSER can bypass row-level security", async () => {
     const { code, output } = await runJob({
       PGUSER: "warden_migrate",
