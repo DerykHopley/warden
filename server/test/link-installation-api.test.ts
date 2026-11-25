@@ -3,21 +3,30 @@
 // with Guard's routes and the real GitHub client, GitHub faked at `fetch` (spec decision 11), on the suite's shared
 // database, each case with Teams and installation ids of its own.
 import { randomUUID } from "node:crypto";
-import { LinkedInstallationBody, ReposBody } from "@warden/contracts";
+import { LinkedInstallationBody, ReposBody, ScanBody } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { Fetch } from "../src/http-call.ts";
 import { createLogger } from "../src/log.ts";
+import { DEFAULT_PACK_RULE_IDS } from "../src/modules/guard/default-pack.ts";
 import { createGitHub } from "../src/modules/guard/github.ts";
 import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { guardRoutes } from "../src/modules/guard/routes.ts";
+import {
+  createScans,
+  SCANS_PER_HOUR,
+  ScanJobStartUnknown,
+  type ScanJobStarter,
+  type Scans,
+} from "../src/scans.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
   activeOrganization,
   ADMIN,
   gitHubAppKey,
+  logEntries,
   newInstallation,
   newTeam,
   seedTeam,
@@ -105,8 +114,14 @@ function fakeGitHub({
           total_count: reachable.length,
           installations: reachable.map((id) => ({ id })),
         });
-      case `GET ${api}/user/installations/${installationId}/repositories`:
-        return json({ total_count: userRepos.length, repositories: userRepos });
+      case `GET ${api}/user/installations/${installationId}/repositories`: {
+        // GitHub's pages of 100, as the client asks for them.
+        const page = Number(new URL(url).searchParams.get("page") ?? "1");
+        return json({
+          total_count: userRepos.length,
+          repositories: userRepos.slice((page - 1) * 100, page * 100),
+        });
+      }
       case `POST ${api}/app/installations/${installationId}/access_tokens`:
         if (tokenStatus !== undefined) return json({ message: "Not Found" }, tokenStatus);
         return json(
@@ -132,14 +147,19 @@ function fakeGitHub({
 
 /**
  * The app with Guard's routes, linking through `github` (none: GitHub isn't set up) into `assets` (the suite's Repo
- * Assets by default), and every log line it writes.
+ * Assets by default), with `start`'s Scans and Scan Job starter for the first Scan after a link (none by default), and
+ * every log line it writes.
  */
-function linkApp(github?: ReturnType<typeof fakeGitHub>["github"], assets = repoAssets) {
+function linkApp(
+  github?: ReturnType<typeof fakeGitHub>["github"],
+  assets = repoAssets,
+  start: { scans?: Scans; startScanJob?: ScanJobStarter } = {},
+) {
   const guardLines: string[] = [];
   const logger = createLogger((line) => guardLines.push(line));
   const routes = github
-    ? guardRoutes({ repoAssets: assets, github, logger })
-    : guardRoutes({ repoAssets: assets });
+    ? guardRoutes({ repoAssets: assets, github, logger, ...start })
+    : guardRoutes({ repoAssets: assets, ...start });
   const { app, lines } = testApp({ publicPem, withTeam, moduleRoutes: [routes] });
   return { app, logLines: () => [...lines, ...guardLines] };
 }
@@ -196,6 +216,8 @@ describe("POST /api/github/installations: an Admin links an installation (storie
           listed_at: expect.any(String),
         },
       ],
+      // No Scans or starter given here, so no Scan is started.
+      scan: null,
     });
     expect(await reposOf(app, team)).toEqual([["https://github.com/acme/web", installationId]]);
     // The permissions come from the installation token's answer alone: the App's list is never read.
@@ -238,7 +260,7 @@ describe("POST /api/github/installations: an Admin links an installation (storie
 
     expect(res).toMatchObject({
       status: 201,
-      body: { installation_id: installationId, repos: [] },
+      body: { installation_id: installationId, repos: [], scan: null },
     });
   });
 
@@ -470,4 +492,207 @@ describe("POST /api/github/installations: an Admin links an installation (storie
       for (const secret of SECRETS) expect(log).not.toContain(secret);
     },
   );
+});
+
+const MEMBER = "user_member";
+
+/** A starter that records each call and starts nothing, or throws `error` after recording it. */
+function recordingStarter(error?: Error) {
+  const calls: { scanId: string; team: string }[] = [];
+  const start: ScanJobStarter = async (input) => {
+    calls.push(input);
+    if (error) throw error;
+  };
+  return { calls, start };
+}
+
+/** One of the Team's Scans, as its Member reads it. */
+async function scanAsMember(app: App, team: string, id: string) {
+  const token = await sessionToken(key, MEMBER, 60, activeOrganization(team));
+  const res = await app.request(`/api/scans/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  expect(res.status).toBe(200);
+  return ScanBody.parse(await res.json());
+}
+
+const scanCount = (team: string) =>
+  withTeam(team, async (tx) => {
+    const { count } = await tx
+      .selectFrom("scan_requests")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .executeTakeFirstOrThrow();
+    return Number(count);
+  });
+
+const teamWithMember = () =>
+  newTeam(withTeam, [
+    [ADMIN, "admin"],
+    [MEMBER, "member"],
+  ]);
+
+describe("POST /api/github/installations: the first Scan after a link (story 2)", () => {
+  it("queues a Guard Scan of the linked repos, sorted by ref, with the Default Pack's Rules, as the Admin, and starts its Job", async () => {
+    const team = await teamWithMember();
+    const installationId = newInstallation();
+    const starter = recordingStarter();
+    const { app } = linkApp(
+      fakeGitHub({ installationId, userRepos: [githubRepo("web", 1), githubRepo("api", 2)] })
+        .github,
+      repoAssets,
+      { scans: createScans({ withTeam }), startScanJob: starter.start },
+    );
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res.status).toBe(201);
+    const { scan } = LinkedInstallationBody.parse(res.body);
+    expect(scan).toMatchObject({
+      module: "guard",
+      state: "queued",
+      assets: [
+        { kind: "repo", ref: "https://github.com/acme/api" },
+        { kind: "repo", ref: "https://github.com/acme/web" },
+      ],
+      rules: DEFAULT_PACK_RULE_IDS,
+    });
+    expect(starter.calls).toEqual([{ scanId: scan!.id, team }]);
+    expect(await scanAsMember(app, team, scan!.id)).toEqual(scan);
+    const [row] = await withTeam(team, (tx) =>
+      tx.selectFrom("scan_requests").select("requested_by").execute(),
+    );
+    expect(row!.requested_by).toBe(ADMIN);
+  });
+
+  it("starts nothing for an installation the Admin reads no repo in, and answers scan: null", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const starter = recordingStarter();
+    const { app } = linkApp(fakeGitHub({ installationId, userRepos: [] }).github, repoAssets, {
+      scans: createScans({ withTeam }),
+      startScanJob: starter.start,
+    });
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res).toMatchObject({ status: 201, body: { repos: [], scan: null } });
+    expect(starter.calls).toEqual([]);
+    expect(await scanCount(team)).toBe(0);
+  });
+
+  it.each([
+    ["no Scans", () => ({ startScanJob: recordingStarter().start })],
+    ["no Scan Job starter", () => ({ scans: createScans({ withTeam }) })],
+  ])("answers scan: null and queues nothing with %s given", async (_name, start) => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app } = linkApp(fakeGitHub({ installationId }).github, repoAssets, start());
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res).toMatchObject({ status: 201, body: { scan: null } });
+    expect(LinkedInstallationBody.parse(res.body).repos).toHaveLength(1);
+    expect(await scanCount(team)).toBe(0);
+  });
+
+  it("answers scan: null and queues nothing when the Team has started its hourly limit of Scans", async () => {
+    const team = await newTeam(withTeam);
+    const scans = createScans({ withTeam });
+    for (let i = 0; i < SCANS_PER_HOUR; i++) {
+      await scans.queue(team, {
+        module: "guard",
+        assets: [{ kind: "repo", ref: `https://github.com/acme/earlier-${i}` }],
+        rules: [...DEFAULT_PACK_RULE_IDS],
+        requestedBy: ADMIN,
+      });
+    }
+    const installationId = newInstallation();
+    const starter = recordingStarter();
+    const { app } = linkApp(fakeGitHub({ installationId }).github, repoAssets, {
+      scans,
+      startScanJob: starter.start,
+    });
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res).toMatchObject({ status: 201, body: { scan: null } });
+    expect(LinkedInstallationBody.parse(res.body).repos).toHaveLength(1);
+    expect(starter.calls).toEqual([]);
+    expect(await scanCount(team)).toBe(SCANS_PER_HOUR);
+  });
+
+  it("answers the Scan failed when its Job couldn't be started, and the Member reads it failed", async () => {
+    const team = await teamWithMember();
+    const installationId = newInstallation();
+    const { app } = linkApp(fakeGitHub({ installationId }).github, repoAssets, {
+      scans: createScans({ withTeam }),
+      startScanJob: recordingStarter(new Error("the Job's host refused")).start,
+    });
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res.status).toBe(201);
+    const { scan } = LinkedInstallationBody.parse(res.body);
+    expect(scan?.state).toBe("failed");
+    expect((await scanAsMember(app, team, scan!.id)).state).toBe("failed");
+  });
+
+  it("answers the Scan queued when its Job's start is unknown", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app } = linkApp(fakeGitHub({ installationId }).github, repoAssets, {
+      scans: createScans({ withTeam }),
+      startScanJob: recordingStarter(new ScanJobStartUnknown("the answer was lost")).start,
+    });
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res.status).toBe(201);
+    expect(LinkedInstallationBody.parse(res.body).scan?.state).toBe("queued");
+  });
+
+  it("still answers 201 with the link's repos and scan: null when the Scan can't be queued, logging one error under the Team", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const starter = recordingStarter();
+    const refusing: Scans = {
+      ...createScans({ withTeam }),
+      queue: () => Promise.reject(new Error("the database refused")),
+    };
+    const { app, logLines } = linkApp(fakeGitHub({ installationId }).github, repoAssets, {
+      scans: refusing,
+      startScanJob: starter.start,
+    });
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res).toMatchObject({ status: 201, body: { scan: null } });
+    expect(LinkedInstallationBody.parse(res.body).repos).toEqual([
+      expect.objectContaining({ asset: { kind: "repo", ref: "https://github.com/acme/web" } }),
+    ]);
+    expect(starter.calls).toEqual([]);
+    const errors = logEntries(logLines().join("")).filter((entry) => entry.severity === "ERROR");
+    expect(errors).toEqual([expect.objectContaining({ team })]);
+  });
+
+  it("queues one Scan of the first 100 refs in sorted order for a link of 101 repos", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const names = Array.from({ length: 101 }, (_, i) => `repo-${String(100 - i).padStart(3, "0")}`);
+    const { app } = linkApp(
+      fakeGitHub({ installationId, userRepos: names.map((name, i) => githubRepo(name, i + 1)) })
+        .github,
+      repoAssets,
+      { scans: createScans({ withTeam }), startScanJob: recordingStarter().start },
+    );
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res.status).toBe(201);
+    const body = LinkedInstallationBody.parse(res.body);
+    expect(body.repos).toHaveLength(101);
+    const sorted = names.map((name) => `https://github.com/acme/${name}`).sort();
+    expect(body.scan?.assets).toEqual(sorted.slice(0, 100).map((ref) => ({ kind: "repo", ref })));
+    expect(await scanCount(team)).toBe(1);
+  });
 });

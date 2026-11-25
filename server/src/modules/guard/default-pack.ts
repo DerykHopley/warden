@@ -43,6 +43,9 @@ export const DEFAULT_PACK: readonly PackRule[] = [
   },
 ];
 
+/** The Default Pack's Rules, by id: what a Guard Scan checks when none are chosen. */
+export const DEFAULT_PACK_RULE_IDS: readonly RuleId[] = DEFAULT_PACK.map((rule) => rule.ruleId);
+
 /** The Pack's entry for a Rule; throws for a Rule it doesn't have. */
 export function packRule(ruleId: RuleId): PackRule {
   const entry = DEFAULT_PACK.find((rule) => rule.ruleId === ruleId);

@@ -82,6 +82,10 @@ const clerk = createClerkClient({ secretKey: config.clerk.secretKey });
 const withTeam = createWithTeam(pool);
 const repoAssets = createRepoAssets({ withTeam });
 const hookSettings = createHookSettings({ withTeam });
+const scans = createScans({ withTeam });
+// The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503). A Lead's
+// start and the first Scan after a link both start it.
+const startScanJob = scanJobStarterFor(config, { logger });
 const app = createApp({
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
@@ -92,20 +96,22 @@ const app = createApp({
   }),
   // ADR 0005: the modules come in here, through the wiring the Scan Job and the demo seed share.
   findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
-  scans: createScans({ withTeam }),
+  scans,
   // The Job's own list, so a start names the Rules the Job will run; the server reads no repo, so no RepoReader.
   scanners: scanners({ withTeam, logger }),
   // A Guard Scan names only the Team's Repo Assets.
   assetChecks: { guard: guardAssetCheck(repoAssets) },
-  // Linking a GitHub installation needs the GitHub app's settings; without them its route answers 503.
+  // Linking a GitHub installation needs the GitHub app's settings; without them its route answers 503. A link starts
+  // the first Scan of its repos.
   moduleRoutes: [
     guardRoutes(
-      config.github ? { repoAssets, github: createGitHub(config.github), logger } : { repoAssets },
+      config.github
+        ? { repoAssets, scans, startScanJob, github: createGitHub(config.github), logger }
+        : { repoAssets, scans, startScanJob },
     ),
     hookRoutes({ hookSettings }),
   ],
-  // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503).
-  startScanJob: scanJobStarterFor(config, { logger }),
+  startScanJob,
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,

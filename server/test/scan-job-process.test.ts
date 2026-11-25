@@ -4,7 +4,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, inject, it } from "vitest";
 import { runInServer } from "./databases.ts";
 import { closedPort } from "./ports.ts";
-import { logEntries } from "./server-process.ts";
+import { logEntries } from "./helpers.ts";
 
 /** The Job as its own process, on the suite's shared database as warden_app unless `env` says otherwise. */
 function runJob(env: Record<string, string>) {

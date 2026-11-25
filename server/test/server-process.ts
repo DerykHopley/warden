@@ -22,15 +22,6 @@ export function startServer(env: Record<string, string>) {
   return { child, exited, output: () => output };
 }
 
-/** The server's log lines, parsed. */
-export function logEntries(output: string): Record<string, unknown>[] {
-  return output
-    .trim()
-    .split("\n")
-    .filter((line) => line.startsWith("{"))
-    .map((line) => JSON.parse(line));
-}
-
 export async function waitForListening(output: () => string) {
   for (let i = 0; i < 100; i++) {
     if (output().includes('"message":"listening"')) return;
