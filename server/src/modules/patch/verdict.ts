@@ -43,7 +43,8 @@ export interface OsvRange {
 }
 
 export interface OsvEntry {
-  ecosystem: Ecosystem;
+  /** As the OSV data gives it, so possibly one Patch has no version rules for (crates.io). */
+  ecosystem: string;
   package: string;
   ranges: OsvRange[];
   fixed: string[];
@@ -170,12 +171,16 @@ export function parseVersion(ecosystem: Ecosystem, text: string): ParsedVersion 
   throw new VersionError(`${pyRepr(text)} isn't a ${ECOSYSTEM_LABELS[ecosystem]} version`);
 }
 
-/** parseVersion, handing a VersionError's message to `onBad` (which returns or throws) in place of the error. */
+/**
+ * parseVersion, handing a VersionError's message to `onBad` (which returns or throws) in place of the error. An
+ * ecosystem Patch has no version rules for, as OSV data may name, goes to `onBad` too: it reads no version.
+ */
 function parseOr<T>(
-  ecosystem: Ecosystem,
+  ecosystem: string,
   text: string,
   onBad: (message: string) => T,
 ): ParsedVersion | T {
+  if (!isEcosystem(ecosystem)) return onBad(`no version rules for ${pyRepr(ecosystem)}`);
   try {
     return parseVersion(ecosystem, text);
   } catch (err) {
@@ -294,7 +299,7 @@ export function verdict(
   if (coverage === "commits") return unknown(COMMITS_ONLY);
   if (entries.length === 0) return unknown(NO_CVE_DATA);
   const ecosystems = [...new Set(entries.map((e) => e.ecosystem))];
-  if (new Set(ecosystems.map((eco) => RULES[eco])).size > 1) {
+  if (new Set(ecosystems.map((eco) => (isEcosystem(eco) ? RULES[eco] : undefined))).size > 1) {
     // Patch's Python raised a TypeError here; no CVE in its snapshot mixes them.
     return unknown(
       `OSV lists this CVE under ecosystems whose versions don't compare: ${ecosystems.join(", ")}`,
