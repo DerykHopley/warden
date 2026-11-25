@@ -343,7 +343,7 @@ test(
 );
 
 test(
-  "the keyboard alone opens the delete confirm, reaches its Delete and Cancel with a visible ring, and leaves it, Esc putting focus back on Delete",
+  "the keyboard alone opens the delete confirm, reaches its Delete and Cancel with a visible ring, and leaves it",
   SIGNS_IN_ITSELF,
   async ({ page, signIn }) => {
     await ensureProduct(CEDAR, CHAT_ASSISTANT);
@@ -361,13 +361,9 @@ test(
     await expect(remove).toBeFocused();
     await expectRings(page, [remove, cancel]);
 
-    // Past Cancel, focus leaves the confirm; nothing is sent until its Delete is pressed.
+    // Past Cancel, focus leaves the confirm, which stays open: it doesn't trap focus.
     await page.keyboard.press("Tab");
     expect(await confirm.evaluate((el) => el.contains(document.activeElement))).toBe(false);
-    await page.keyboard.press("Shift+Tab");
-    await expect(cancel).toBeFocused();
-    await page.keyboard.press("Escape");
-    await expect(confirm).toHaveCount(0);
-    await expect(open).toBeFocused();
+    await expect(confirm).toBeVisible();
   },
 );

@@ -27,7 +27,10 @@ import {
   fetchProducts,
   saveProductInTeam,
   USAGE_WORDS,
+  type DeleteResult,
   type ProductsResult,
+  type SaveResult,
+  type TeamCheckRefused,
 } from "./products.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
@@ -159,6 +162,22 @@ const PRODUCT_GONE = "This Product is no longer in your Team.";
 const MAYBE_SAVED =
   "Warden's server didn't answer, so the change may have been saved. Check the list before you try again.";
 
+/** A refusal a save and a delete share, the Team check's included: each shows in its own refusal line alike. */
+type ChangeRefused = Exclude<
+  SaveResult | DeleteResult | TeamCheckRefused,
+  { kind: "saved" | "invalid" | "not-found" | "maybe-saved" | "deleted" }
+>;
+
+/**
+ * A keydown handler that runs `cancel` on Esc, unless a control inside took the key first or an input method is
+ * composing.
+ */
+const onEscape = (cancel: () => void) => (event: KeyboardEvent) => {
+  if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
+  event.preventDefault();
+  cancel();
+};
+
 export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   // Both calls at once. A refusal of the list shows as soon as it comes. The list itself waits for the frameworks'
   // names, so a framework's id doesn't show for a moment before its name; without them in time, it shows the ids.
@@ -190,17 +209,34 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   const [askingNames, setAskingNames] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState<OpenConfirm | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const deletingNow = useRef(false);
+  /**
+   * The delete under way, by an object of its own: a Team or Role change forgets it, so its answer is dropped and the
+   * next confirm can delete at once.
+   */
+  const deleteCall = useRef<object | null>(null);
   /** The gone notice: a delete found the Product already gone (404). */
   const [gone, setGone] = useState(false);
   // A Team switch, or a Role that no longer changes Products (a 403, then /api/me's new answer), closes the form and
-  // the confirm, so they don't come back if the Team or Role does.
+  // the confirm, so they don't come back if the Team or Role does, and forgets a delete under way.
   const [formFor, setFormFor] = useState({ team, changes });
   if (formFor.team !== team || formFor.changes !== changes) {
     setFormFor({ team, changes });
     setOpen(null);
     setConfirmOpen(null);
+    setDeleting(false);
     setGone(false);
+  }
+  useEffect(() => {
+    deleteCall.current = null;
+  }, [team, changes]);
+  // A confirm whose Product leaves the list goes, refusal and all, so a later read that lists it again doesn't bring
+  // it back.
+  if (
+    confirmOpen !== null &&
+    view !== null &&
+    !view.products.some(({ id }) => id === confirmOpen.id)
+  ) {
+    setConfirmOpen(null);
   }
   const form = changes && open !== null && open.team === team ? open : null;
   // A confirm shows in its Product's entry, so it's open only while the list has that Product.
@@ -221,16 +257,20 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
 
   /**
    * What takes focus once the next render lands, by its `data-focus`: an opener, the form's name, a Product's name,
-   * the confirm's Cancel, or the page's heading.
+   * one of the confirm's buttons, or the page's heading. Given several, the first that's there and enabled then.
    */
-  const focusNext = useRef<string | null>(null);
+  const focusNext = useRef<string | readonly string[] | null>(null);
   useEffect(() => {
     const target = focusNext.current;
     if (target === null) return;
     focusNext.current = null;
-    [...document.querySelectorAll<HTMLElement>("[data-focus]")]
-      .find((element) => element.dataset.focus === target)
-      ?.focus();
+    const candidates = [...document.querySelectorAll<HTMLElement>("[data-focus]")];
+    for (const wanted of typeof target === "string" ? [target] : target) {
+      const element = candidates.find(
+        (candidate) => candidate.dataset.focus === wanted && !candidate.matches(":disabled"),
+      );
+      if (element !== undefined) return element.focus();
+    }
   });
 
   function openForm(
@@ -250,9 +290,35 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     setConfirmOpen({ team, id: product.id, refusal: null });
   }
 
+  /**
+   * Shows a refusal a save and a delete share with `show`, in the form's or the confirm's refusal line. A 403 also asks
+   * /api/me again, which closes the form or the confirm for a lowered Role; a session that ended ends instead.
+   */
+  function showRefusal(result: ChangeRefused, show: (refusal: string) => void) {
+    switch (result.kind) {
+      case "forbidden":
+        show(FORBIDDEN);
+        refreshMe();
+        return;
+      case "conflict":
+      case "refused":
+        return show(result.error ?? REFUSED);
+      case "team-not-opened":
+        return show(TEAM_NOT_OPENED);
+      case "too-many-attempts":
+        return show(tryAgainIn(result.retryAfter, "changes to Products"));
+      case "too-many-sign-ins":
+        return show(tryAgainIn(result.retryAfter));
+      case "not-answering":
+        return show(NOT_ANSWERING);
+      case "session-ended":
+        return onSessionEnded();
+    }
+  }
+
   /** Closes the confirm, focus back on its Product's Delete; not while its delete runs. */
   function cancelConfirm() {
-    if (confirming === null || deletingNow.current) return;
+    if (confirming === null || deleteCall.current !== null) return;
     focusNext.current = `delete:${confirming.id}`;
     setConfirmOpen(null);
   }
@@ -269,22 +335,29 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
         : { ...old, products: old.products.filter((product) => product.id !== id) },
     );
     list.refresh();
-    focusNext.current = names === null ? "heading" : "add";
+    focusNext.current = ["add", "heading"];
   }
 
-  const refuseDelete = (refusal: string) =>
+  /**
+   * Shows a delete's refusal in the confirm, focus back on its Delete: the button turned disabled while the call ran,
+   * which took focus off it, and Esc and Tab need focus in the confirm.
+   */
+  function refuseDelete(refusal: string) {
+    focusNext.current = "confirm-delete";
     setConfirmOpen((old) => (old === null ? old : { ...old, refusal }));
+  }
 
   async function remove() {
-    if (confirming === null || deletingNow.current) return;
+    if (confirming === null || deleteCall.current !== null) return;
     const { team: deletedIn, id } = confirming;
-    deletingNow.current = true;
+    const call = {};
+    deleteCall.current = call;
     setDeleting(true);
     const result = await deleteProductInTeam(getToken, deletedIn, id);
-    deletingNow.current = false;
+    // A Team or Role change since forgot this delete: its answer is about a page no longer shown.
+    if (deleteCall.current !== call) return;
+    deleteCall.current = null;
     setDeleting(false);
-    // An answer that arrives after a Team switch is about the Team left: the page now shows another.
-    if (teamNow.current !== deletedIn) return;
     switch (result.kind) {
       case "deleted":
         return afterDelete(id);
@@ -292,21 +365,8 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
         afterDelete(id);
         setGone(true);
         return;
-      case "forbidden":
-        refuseDelete(FORBIDDEN);
-        refreshMe();
-        return;
-      case "conflict":
-        return refuseDelete(result.error ?? REFUSED);
-      case "team-not-opened":
-        return refuseDelete(TEAM_NOT_OPENED);
-      case "too-many-attempts":
-        return refuseDelete(tryAgainIn(result.retryAfter, "changes to Products"));
-      case "not-answering":
-        return refuseDelete(NOT_ANSWERING);
-      case "session-ended":
-        onSessionEnded();
-        return;
+      default:
+        return showRefusal(result, refuseDelete);
     }
   }
 
@@ -339,29 +399,16 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
         return;
       case "invalid":
         return refuse(result.error === null ? REFUSED : onScreen(result.error, draft));
-      case "conflict":
-        return refuse(result.error ?? REFUSED);
-      case "team-not-opened":
-        return refuse(TEAM_NOT_OPENED);
-      case "forbidden":
-        refuse(FORBIDDEN);
-        refreshMe();
-        return;
       case "not-found":
         refuse(PRODUCT_GONE);
         list.refresh();
         return;
-      case "too-many-attempts":
-        return refuse(tryAgainIn(result.retryAfter, "changes to Products"));
       case "maybe-saved":
         refuse(MAYBE_SAVED);
         list.refresh();
         return;
-      case "not-answering":
-        return refuse(NOT_ANSWERING);
-      case "session-ended":
-        onSessionEnded();
-        return;
+      default:
+        return showRefusal(result, refuse);
     }
   }
 
@@ -589,13 +636,13 @@ function DeleteConfirm({
   onCancel,
 }: { product: Product } & ConfirmProps) {
   const questionId = `delete-question-${product.id}`;
-  function onKeyDown(event: KeyboardEvent) {
-    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    onCancel();
-  }
   return (
-    <div className="delete-confirm" role="group" aria-labelledby={questionId} onKeyDown={onKeyDown}>
+    <div
+      className="delete-confirm"
+      role="group"
+      aria-labelledby={questionId}
+      onKeyDown={onEscape(onCancel)}
+    >
       <p id={questionId} className="delete-question">
         Delete {product.name}? Its CVE Findings turn Fixed.
       </p>
@@ -608,6 +655,7 @@ function DeleteConfirm({
         <button
           type="button"
           className="primary"
+          data-focus="confirm-delete"
           disabled={busy}
           aria-busy={busy ? "true" : undefined}
           onClick={onConfirm}
@@ -728,22 +776,18 @@ function ProductForm(props: {
     if (event.key === "Enter" && !event.nativeEvent.isComposing) event.preventDefault();
   }
 
-  // Esc anywhere in the form cancels it (focus back on its opener), as a decision's form does; not while it saves.
-  function onKeyDown(event: KeyboardEvent) {
-    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    if (!busy) props.onCancel();
-  }
-
   return (
-    // noValidate: the server checks each field and its 400 names the one that's wrong, in the refusal line.
+    // noValidate: the server checks each field and its 400 names the one that's wrong, in the refusal line. Esc
+    // anywhere in the form cancels it (focus back on its opener), as a decision's form does; not while it saves.
     <form
       ref={formRef}
       className="product-form"
       aria-label={props.label}
       noValidate
       onSubmit={props.onSubmit}
-      onKeyDown={onKeyDown}
+      onKeyDown={onEscape(() => {
+        if (!busy) props.onCancel();
+      })}
     >
       {/* While a save runs, every control waits, so nothing typed then is lost or sent half-way. */}
       <fieldset className="product-form-fields" disabled={busy}>

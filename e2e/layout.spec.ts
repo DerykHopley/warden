@@ -27,6 +27,16 @@ const SCHEMES = ["light", "dark"] as const;
 
 signInEachTest(GRACE);
 
+/** Fails unless the page is no wider than the window, so nothing scrolls sideways; returns the window's width. */
+async function expectNoSidewaysScroll(page: Page) {
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  return clientWidth;
+}
+
 test.beforeAll(async () => {
   await ensureProduct(CEDAR, CHAT_ASSISTANT);
 });
@@ -69,11 +79,7 @@ for (const { path, person, team, loaded } of PAGES) {
           await page.emulateMedia({ colorScheme: scheme });
           await page.goto(path);
           await expect(loaded(page)).toBeVisible();
-          const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-            scrollWidth: document.documentElement.scrollWidth,
-            clientWidth: document.documentElement.clientWidth,
-          }));
-          expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+          await expectNoSidewaysScroll(page);
         },
       );
     }
@@ -121,11 +127,7 @@ for (const scheme of SCHEMES) {
         await page.setViewportSize({ width, height: 900 });
         await page.emulateMedia({ colorScheme: scheme });
         await openProductForm(page);
-        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-        }));
-        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        await expectNoSidewaysScroll(page);
       },
     );
   }
@@ -145,11 +147,7 @@ for (const scheme of SCHEMES) {
         await expect(
           page.getByRole("group", { name: "Delete Chat assistant? Its CVE Findings turn Fixed." }),
         ).toBeVisible();
-        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-        }));
-        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        await expectNoSidewaysScroll(page);
       },
     );
   }
@@ -207,11 +205,7 @@ for (const scheme of SCHEMES) {
       await expect(
         page.locator(".findings-table", { hasText: "@aws-sdk/client-cognito-identity-provider" }),
       ).toBeVisible();
-      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-      }));
-      expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+      await expectNoSidewaysScroll(page);
       // The page follows the colour scheme: the body wears that scheme's --bg.
       const colours = await page.evaluate(() => {
         const probe = document.createElement("div");
@@ -259,11 +253,7 @@ for (const scheme of SCHEMES) {
             state === "floating" && width < 640 ? "full-screen" : state,
           );
         }
-        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-        }));
-        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        await expectNoSidewaysScroll(page);
       });
     }
   }
@@ -305,11 +295,7 @@ for (const scheme of SCHEMES) {
           await expect(page.locator(".ask-warden")).toHaveAttribute("data-shown", "pinned");
         }
 
-        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-        }));
-        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        await expectNoSidewaysScroll(page);
         const main = await page.locator("main.page").boundingBox();
         expect(main!.width).toBeLessThanOrEqual(1480);
 
@@ -335,11 +321,7 @@ test("at 1100px with the panel pinned 680px wide, nothing scrolls sideways and t
   );
   await openAt(page, 1100, "light");
   await expect(page.locator(".ask-warden")).toHaveAttribute("data-shown", "pinned");
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  await expectNoSidewaysScroll(page);
   // A 420px column is a phone's: the cards stack, and the table drops its Asset column.
   const boxes = await cardBoxes(page);
   expect(new Set(boxes.map((b) => b.top)).size).toBe(5);
@@ -355,11 +337,7 @@ test("at 390px, a title holding a 60-character word with no break in it still do
     .locator(".findings-table .finding-title")
     .first()
     .evaluate((title) => (title.textContent = `${"Unbroken".repeat(7)}Name`));
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  await expectNoSidewaysScroll(page);
 });
 
 // The header's width depends on the fonts the machine has: the four page links fitted with this machine's Noto Sans and
@@ -370,11 +348,7 @@ test("at 390px with the header's text a tenth of an em wider per letter, the hea
 }) => {
   await openAt(page, 390, "light");
   await page.addStyleTag({ content: ".app-header { letter-spacing: 0.1em; }" });
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  const clientWidth = await expectNoSidewaysScroll(page);
   const links = page.getByRole("navigation", { name: "Pages" }).getByRole("link");
   await expect(links).toHaveCount(4);
   for (const box of await links.evaluateAll((all) => all.map((a) => a.getBoundingClientRect()))) {

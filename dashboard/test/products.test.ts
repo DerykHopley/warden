@@ -4,6 +4,7 @@ import type { ProductInput } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tryAgainIn } from "../src/api.ts";
 import {
+  confirmTeam,
   deleteProduct,
   deleteProductInTeam,
   fetchFrameworks,
@@ -241,6 +242,10 @@ describe("deleteProduct", () => {
     [409, {}, { kind: "conflict", error: null }],
     [401, { error: "Not signed in" }, { kind: "session-ended" }],
     [500, { error: "Something went wrong" }, { kind: "not-answering" }],
+    [503, {}, { kind: "not-answering" }],
+    [400, { error: "Bad id" }, { kind: "refused", error: "Bad id" }],
+    [405, {}, { kind: "refused", error: null }],
+    [410, { error: "Gone" }, { kind: "refused", error: "Gone" }],
   ])("reads a %i into its kind", async (status, body, result) => {
     answers(json(status, body));
     expect(await deleteProduct(getToken, "prod_1")).toEqual(result);
@@ -284,6 +289,18 @@ describe("deleteProductInTeam", () => {
     const [[, init] = []] = callsTo("/api/products/prod_1");
     expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer token-2");
     expect(getTokens).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("confirmTeam", () => {
+  it("tells /api/me's 429, a sign-in limit, apart from a change's, and asks no more", async () => {
+    answers(json(429, { error: "Too many attempts" }, { "Retry-After": "30" }));
+
+    expect(await confirmTeam(getToken, "org_a")).toEqual({
+      kind: "too-many-sign-ins",
+      retryAfter: 30,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

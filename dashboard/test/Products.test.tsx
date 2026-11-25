@@ -68,8 +68,8 @@ function renderProducts(role: Role, routes: Routes = {}) {
     panel: { setContext: vi.fn(), open: vi.fn() },
   };
   const page = render(<ProductsPage {...props} />);
-  const rerender = (me: { team?: string; role?: Role }) =>
-    page.rerender(<ProductsPage {...props} me={{ ...props.me, ...me }} />);
+  const rerender = (me: { team?: string; role?: Role }, getToken = props.getToken) =>
+    page.rerender(<ProductsPage {...props} getToken={getToken} me={{ ...props.me, ...me }} />);
   return { ...props, rerender };
 }
 
@@ -87,6 +87,12 @@ const dependencyRows = (name: string) =>
     .map((row) => row.textContent);
 
 const failsWith = (status: number, error: string) => () => json(status, { error });
+
+/** A change (a save or a delete) that answers `status` with `{ error }` (an empty body without one). */
+const refusesWith =
+  (status: number, error?: string, headers: Record<string, string> = {}) =>
+  () =>
+    json(status, error === undefined ? {} : { error }, headers);
 
 describe("ProductsPage", () => {
   it.each<Role>(["member", "admin"])(
@@ -364,12 +370,6 @@ describe("ProductsPage's Product form", () => {
     within(select)
       .getAllByRole("option")
       .map((option) => option.textContent);
-
-  /** A save that answers `status` with `{ error }` (an empty body without one). */
-  const refusesWith =
-    (status: number, error?: string, headers: Record<string, string> = {}) =>
-    () =>
-      json(status, error === undefined ? {} : { error }, headers);
 
   it("lists the frameworks by name in the API's order, never offering one picked in another row", async () => {
     await openAdd();
@@ -970,11 +970,6 @@ describe("ProductsPage's delete confirm", () => {
   /** Presses the confirm's Delete. */
   const confirmDelete = () => userEvent.click(confirm().getByRole("button", { name: "Delete" }));
 
-  const refusesWith =
-    (status: number, error?: string, headers: Record<string, string> = {}) =>
-    () =>
-      json(status, error === undefined ? {} : { error }, headers);
-
   it("sends nothing until the confirm's Delete is pressed, then one DELETE of the Product", async () => {
     await openConfirm({ deleteProduct: noContent });
     expect(screen.getByRole("group", { name: CONFIRM })).toBeInTheDocument();
@@ -1104,11 +1099,7 @@ describe("ProductsPage's delete confirm", () => {
       () => Promise.reject(new TypeError("Failed to fetch")),
       "Warden's server isn't answering. Try again.",
     ],
-    [
-      "a 500 says the server isn't answering",
-      refusesWith(500, "Something went wrong"),
-      "Warden's server isn't answering. Try again.",
-    ],
+    ["another 4xx says Warden refused it", refusesWith(405), "Warden refused this change."],
   ])("%s in the confirm, which stays open", async (_case, answer, words) => {
     await openConfirm({ deleteProduct: answer });
     await confirmDelete();
@@ -1118,10 +1109,69 @@ describe("ProductsPage's delete confirm", () => {
     expect(confirm().getByRole("button", { name: "Delete" })).toBeEnabled();
   });
 
+  it("after a refusal, puts focus back on the confirm's Delete, so Esc still cancels it", async () => {
+    const answer = deferred<Response>();
+    await openConfirm({ deleteProduct: () => answer.promise });
+    const remove = confirm().getByRole("button", { name: "Delete" });
+    await userEvent.click(remove);
+    await vi.waitFor(() => expect(remove).toBeDisabled());
+    // A browser takes focus off a button that turns disabled; jsdom leaves it there, so the test does what a browser does.
+    act(() => remove.blur());
+    answer.resolve(refusesWith(409, "Your Team's Admin must open Warden first")());
+
+    expect(await confirm().findByRole("alert")).toBeInTheDocument();
+    expect(remove).toHaveFocus();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
+    expect(deleteOf("Chat assistant")).toHaveFocus();
+  });
+
+  it("a 429 from the Team check says too many sign-in attempts, never the Products change limit", async () => {
+    const deleteProduct = vi.fn(noContent);
+    await openConfirm({
+      me: refusesWith(429, "Too many attempts", { "Retry-After": "30" }),
+      deleteProduct,
+    });
+    await confirmDelete();
+
+    expect(await confirm().findByRole("alert")).toHaveTextContent(
+      "Too many sign-in attempts. Try again in 30 seconds.",
+    );
+    expect(deleteProduct).not.toHaveBeenCalled();
+  });
+
   it("a 401 ends the session", async () => {
     const props = await openConfirm({ deleteProduct: refusesWith(401, "Not signed in") });
     await confirmDelete();
     await vi.waitFor(() => expect(props.onSessionEnded).toHaveBeenCalled());
+  });
+
+  it("forgets the confirm, refusal and all, once a read of the list no longer has its Product", async () => {
+    let listed = [CHAT, SEARCH];
+    const props = await openConfirm({
+      products: () => productsAnswer(listed),
+      deleteProduct: refusesWith(409, "Your Team's Admin must open Warden first"),
+    });
+    await confirmDelete();
+    await confirm().findByRole("alert");
+
+    // A new getToken is a new read of the list.
+    listed = [SEARCH];
+    props.rerender(
+      {},
+      vi.fn(async () => "session-token-2" as string | null),
+    );
+    await screen.findByRole("heading", { level: 2, name: "Search" });
+    expect(screen.queryByRole("heading", { level: 2, name: "Chat assistant" })).toBeNull();
+
+    listed = [CHAT, SEARCH];
+    props.rerender(
+      {},
+      vi.fn(async () => "session-token-3" as string | null),
+    );
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+    expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
+    expect(deleteOf("Chat assistant")).toBeEnabled();
   });
 
   it("sends no DELETE while /api/me names another Team, and says the server isn't answering", async () => {
@@ -1165,6 +1215,43 @@ describe("ProductsPage's delete confirm", () => {
     expect(deleteOf("Bluebird")).toBeEnabled();
   });
 
+  it("a Team switch forgets a delete under way: the new Team's confirm deletes at once, and the old answer leaves it busy", async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    let team = "org_a";
+    const bluebird = { ...SEARCH, id: "prod_b", name: "Bluebird" };
+    const props = await openConfirm({
+      me: () => json(200, { userId: "user_1", team, role: "admin", level: "quick" }),
+      products: () =>
+        team === "org_a" ? productsAnswer([CHAT, SEARCH]) : productsAnswer([bluebird], "org_b"),
+      deleteProduct: (id) => (id === "prod_chat" ? first.promise : second.promise),
+    });
+    await confirmDelete();
+    await vi.waitFor(() => expect(deletes()).toHaveLength(1));
+
+    team = "org_b";
+    props.rerender({ team });
+    await screen.findByRole("heading", { level: 2, name: "Bluebird" });
+    await userEvent.click(deleteOf("Bluebird"));
+    const bluebirdConfirm = within(
+      screen.getByRole("group", { name: "Delete Bluebird? Its CVE Findings turn Fixed." }),
+    );
+    const remove = bluebirdConfirm.getByRole("button", { name: "Delete" });
+    expect(remove).toBeEnabled();
+    await userEvent.click(remove);
+    await vi.waitFor(() =>
+      expect(deletes()).toEqual(["/api/products/prod_chat", "/api/products/prod_b"]),
+    );
+
+    await act(async () => {
+      first.resolve(noContent());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(remove).toBeDisabled();
+    expect(remove).toHaveAttribute("aria-busy", "true");
+    expect(bluebirdConfirm.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  });
+
   it.each([
     ["a Team switch", { team: "org_b" }, { team: "org_a" }],
     ["a Role lowered to Member", { role: "member" as Role }, { role: "admin" as Role }],
@@ -1193,5 +1280,28 @@ describe("ProductsPage's delete confirm", () => {
       expect(screen.getByRole("heading", { level: 1, name: "Products" })).toHaveFocus(),
     );
     expect(deleteOf("Search")).toBeEnabled();
+  });
+
+  it("after a delete, focus goes to Add a Product when the frameworks answered while it ran", async () => {
+    const answer = deferred<Response>();
+    let frameworksAnswer = false;
+    await openConfirm({
+      frameworks: () =>
+        frameworksAnswer
+          ? json(200, { frameworks: FRAMEWORKS })
+          : json(500, { error: "Something went wrong" }),
+      deleteProduct: () => answer.promise,
+    });
+    await confirmDelete();
+    await vi.waitFor(() => expect(deletes()).toHaveLength(1));
+
+    frameworksAnswer = true;
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() => expect(dependencyRows("Search")[0]).toBe("LlamaIndex 0.12.1 Library"));
+    answer.resolve(noContent());
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus(),
+    );
   });
 });

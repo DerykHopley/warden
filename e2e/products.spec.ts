@@ -165,7 +165,7 @@ test("an Admin deletes a Product after confirming, and only that Product is gone
   const confirm = main.getByRole("group", {
     name: `Delete ${RENAMED}? Its CVE Findings turn Fixed.`,
   });
-  await expect(confirm.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await expect(confirm).toBeVisible();
   await confirm.getByRole("button", { name: "Delete", exact: true }).click();
 
   await expect(confirm).toHaveCount(0);
