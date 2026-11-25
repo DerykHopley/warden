@@ -137,7 +137,7 @@ run_quota_retrying() {
     print_command "$@"
     return
   fi
-  local try=0 error wait status
+  local try=0 error delay status
   while true; do
     status=0
     # Its error kept to read, its output shown as it goes.
@@ -147,11 +147,11 @@ run_quota_retrying() {
       return 0
     fi
     if [[ $error =~ $QUOTA_EXCEEDED ]] && ((try < QUOTA_RETRIES)); then
-      wait=$(quota_wait "$error")
-      if ((wait <= QUOTA_WAIT_MAX)); then
+      delay=$(quota_wait "$error")
+      if ((delay <= QUOTA_WAIT_MAX)); then
         try=$((try + 1))
-        echo "  GCP's quota refused it (429); retrying in ${wait}s ($try of $QUOTA_RETRIES)" >&2
-        sleep "$wait"
+        echo "  GCP's quota refused it (429); retrying in ${delay}s ($try of $QUOTA_RETRIES)" >&2
+        sleep "$delay"
         continue
       fi
     fi

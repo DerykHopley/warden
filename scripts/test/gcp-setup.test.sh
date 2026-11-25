@@ -432,11 +432,11 @@ exec "$real_node" "\$@"
 FAKE
 chmod +x "$scratch/fake-node"
 
-# A sleep that records each wait of 10 seconds or more (a retry's) and returns at once, so a test never waits a
-# minute; shorter ones (the proxy's wait) are real.
+# A sleep that records each wait over 10 seconds (a 429's) and returns at once, so a test never waits a minute;
+# shorter ones (the proxy's wait, and a binding's 10s retry, which no case triggers) are real.
 cat >"$scratch/fake-sleep" <<'FAKE'
 #!/usr/bin/env bash
-if [[ ${1-} =~ ^[0-9]+$ && $1 -ge 10 ]]; then
+if [[ ${1-} =~ ^[0-9]+$ && $1 -gt 10 ]]; then
   printf '%s\n' "$1" >>"$(dirname "$0")/sleeps"
   exit 0
 fi
@@ -474,6 +474,8 @@ adc_file() {
 }
 # A call that changes something: anything but signing in and reading.
 changes() { grep -vE '^auth |describe|get-iam-policy|versions access' <<<"$calls" || true; }
+# How many times the run tried to create the warden-run service account.
+run_sa_creates() { grep -c '^iam service-accounts create warden-run ' <<<"$calls" || true; }
 
 real_run unprepared unprepared
 assert_equal "before the instance and the hand-made secrets exist: exit 1" 1 "$code"
@@ -535,11 +537,17 @@ assert_line "an unreadable credentials file: says nothing was changed" "nothing 
 assert_equal "an unreadable credentials file: it changes nothing" "" "$(changes)"
 
 # GOOGLE_APPLICATION_CREDENTIALS naming a file that doesn't exist: it stops, rather than skipping the check (#66).
-real_run adc-env-missing fresh GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-missing.json"
+# With gcloud failing for its token too, the file is checked first, so the script's own message shows rather than
+# the one for gcloud's failure (#64).
+real_run adc-env-missing no-adc GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-missing.json"
 assert_equal "a missing GOOGLE_APPLICATION_CREDENTIALS file: exit 1" 1 "$code"
 assert_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: says so" \
   "the file GOOGLE_APPLICATION_CREDENTIALS names doesn't exist" "$out"
 assert_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: names it" "$scratch/adc-missing.json" "$out"
+assert_no_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: not the message for gcloud's failure" \
+  "no application-default credentials" "$out"
+assert_no_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: gcloud isn't asked for a token" \
+  "print-access-token" "$calls"
 assert_equal "a missing GOOGLE_APPLICATION_CREDENTIALS file: it changes nothing" "" "$(changes)"
 
 # GOOGLE_CLOUD_QUOTA_PROJECT comes before the file's quota project, as it does for the proxy's Google auth library
@@ -579,23 +587,12 @@ ADC_QUOTA=other-project real_run csql-quota-overrides fresh CSQL_PROXY_QUOTA_PRO
 [[ $code == 0 ]] || fail "CSQL_PROXY_QUOTA_PROJECT set to the target over another everywhere else: the run failed: $out"
 pass "CSQL_PROXY_QUOTA_PROJECT set to the target over another everywhere else: a run ends"
 
-# A missing credentials file is checked before gcloud is asked for a token, so the script's own message shows rather
-# than the one for gcloud's failure (#64).
-real_run adc-env-missing-no-token no-adc GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-missing.json"
-assert_equal "a missing credentials file, with gcloud failing too: exit 1" 1 "$code"
-assert_line "a missing credentials file, with gcloud failing too: the script's message shows" \
-  "the file GOOGLE_APPLICATION_CREDENTIALS names doesn't exist" "$out"
-assert_no_line "a missing credentials file, with gcloud failing too: not the one for gcloud's failure" \
-  "no application-default credentials" "$out"
-assert_no_line "a missing credentials file: gcloud isn't asked for a token" "print-access-token" "$calls"
-
 # GCP's per-minute quota on service-account creates (429, #64): a refused create is tried again, after as long as
 # RetryInfo says (rounded up to a whole second), or a minute when it says nothing; any other error stops at once.
 real_run sa-429-once fresh FAKE_SA_CREATE=429-once FAKE_RETRY_DELAY=41.2s
 [[ $code == 0 ]] || fail "a create refused once with 429: the run failed: $out"
 pass "a create refused once with 429: the run ends"
-assert_equal "a create refused once with 429: it's tried twice" 2 \
-  "$(grep -c '^iam service-accounts create warden-run ' <<<"$calls")"
+assert_equal "a create refused once with 429: it's tried twice" 2 "$(run_sa_creates)"
 assert_equal "a create refused once with 429: it waits as long as RetryInfo says" 42 \
   "$(cat "$scratch/sa-429-once/sleeps")"
 assert_line "a create refused once with 429: the next account is made" \
@@ -605,8 +602,7 @@ real_run sa-429-always fresh FAKE_SA_CREATE=429-always
 assert_equal "a create always refused with 429: exit 1" 1 "$code"
 assert_line "a create always refused with 429: it prints gcloud's error" \
   "RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'Service Account Creation Requests'" "$out"
-assert_equal "a create always refused with 429: it's tried 4 times" 4 \
-  "$(grep -c '^iam service-accounts create warden-run ' <<<"$calls")"
+assert_equal "a create always refused with 429: it's tried 4 times" 4 "$(run_sa_creates)"
 assert_equal "a create always refused with 429: a minute between tries, without RetryInfo" $'60\n60\n60' \
   "$(cat "$scratch/sa-429-always/sleeps")"
 assert_no_line "a create always refused with 429: nothing after it runs" "service-accounts create warden-migrate" \
@@ -615,17 +611,14 @@ assert_no_line "a create always refused with 429: nothing after it runs" "servic
 # A RetryInfo wait far longer than a minute isn't the per-minute quota (a day, for a hard limit): no wait for it.
 real_run sa-429-long fresh FAKE_SA_CREATE=429-always FAKE_RETRY_DELAY=86401s
 assert_equal "a 429 that says to wait a day: exit 1" 1 "$code"
-assert_line "a 429 that says to wait a day: it prints gcloud's error" "RESOURCE_EXHAUSTED" "$out"
-assert_equal "a 429 that says to wait a day: it's tried once" 1 \
-  "$(grep -c '^iam service-accounts create warden-run ' <<<"$calls")"
+assert_equal "a 429 that says to wait a day: it's tried once" 1 "$(run_sa_creates)"
 [[ ! -e $scratch/sa-429-long/sleeps ]] || fail "a 429 that says to wait a day: it waited"
 pass "a 429 that says to wait a day: it doesn't wait"
 
 real_run sa-denied fresh FAKE_SA_CREATE=denied
 assert_equal "a create refused for another reason: exit 1" 1 "$code"
 assert_line "a create refused for another reason: it prints gcloud's error" "PERMISSION_DENIED" "$out"
-assert_equal "a create refused for another reason: it's tried once" 1 \
-  "$(grep -c '^iam service-accounts create warden-run ' <<<"$calls")"
+assert_equal "a create refused for another reason: it's tried once" 1 "$(run_sa_creates)"
 [[ ! -e $scratch/sa-denied/sleeps ]] || fail "a create refused for another reason: it waited"
 pass "a create refused for another reason: it doesn't wait"
 
