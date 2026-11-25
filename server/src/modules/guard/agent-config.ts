@@ -33,10 +33,10 @@ export interface AgentConfigCheck {
 }
 
 /** The root settings files, which Claude Code merges into the repo's agent config. */
-const ROOT_SETTINGS = [".claude/settings.json", ".claude/settings.local.json"];
-const ROOT_CONFIG = ROOT_SETTINGS.join(" or ");
 /** Where each whole-repo Observation sits, with no line: the root settings file a fix goes in. */
 export const WHOLE_REPO_PATH = ".claude/settings.json";
+const ROOT_SETTINGS = [WHOLE_REPO_PATH, ".claude/settings.local.json"];
+const ROOT_CONFIG = ROOT_SETTINGS.join(" or ");
 
 export function agentConfigCheck(asset: Asset): AgentConfigCheck {
   let usesClaudeCode = false;
@@ -78,7 +78,7 @@ function isClaudeSettingsFile(path: string): boolean {
   return /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/.test(path);
 }
 
-type Entry = { rule: string; line: number };
+type PermissionEntry = { rule: string; line: number };
 
 /** A hook that runs a command: its event (`PreToolUse`, `Stop`, …), and the `command` value with its line. */
 type HookCommand = { event: string; command: string; line: number };
@@ -86,9 +86,9 @@ type HookCommand = { event: string; command: string; line: number };
 /** What the agent-config Rules read from a settings file, each value with the line it starts on. */
 type ClaudeSettings = {
   /** `permissions.allow`'s string entries, in order. */
-  allow: readonly Entry[];
+  allow: readonly PermissionEntry[];
   /** `permissions.deny`'s string entries, in order. */
-  deny: readonly Entry[];
+  deny: readonly PermissionEntry[];
   /** `permissions.defaultMode`, when it is a string. */
   defaultMode: { mode: string; line: number } | undefined;
   /** Every `type: "command"` hook with a string `command`, under any event. */
@@ -106,8 +106,8 @@ const SETTINGS_DEPTH = 6;
  * A settings file's permissions and hook commands. Text that starts with a byte order mark is read without it. A file
  * that still isn't valid JSON, and a field of another type, hold nothing.
  */
-function readClaudeSettings(file: string): ClaudeSettings {
-  const text = file.startsWith(BYTE_ORDER_MARK) ? file.slice(1) : file;
+function readClaudeSettings(raw: string): ClaudeSettings {
+  const text = raw.startsWith(BYTE_ORDER_MARK) ? raw.slice(1) : raw;
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -118,7 +118,7 @@ function readClaudeSettings(file: string): ClaudeSettings {
   const lines = valueLines(text, SETTINGS_DEPTH);
   const lineOf = (...path: (string | number)[]) => lines.get(JSON.stringify(path)) ?? 1;
   const permissions = isObject(parsed.permissions) ? parsed.permissions : {};
-  const entries = (key: "allow" | "deny"): Entry[] =>
+  const entries = (key: "allow" | "deny"): PermissionEntry[] =>
     asArray(permissions[key]).flatMap((rule, i) =>
       typeof rule === "string" ? [{ rule, line: lineOf("permissions", key, i) }] : [],
     );
@@ -408,7 +408,7 @@ const where = (count: number, line: number) =>
 // after an optional `./`, `/`, `**/` or `//**/`. `Read(./.env.*)` stops only `.env.local` and the like.
 const DENIES_ENV = /^Read(?:\((?:\.\/|\/|\*\*\/|\/\/\*\*\/)?\.env\*?\))?$/;
 
-function agentCanReadEnv(asset: Asset, deny: readonly Entry[]): Observation | undefined {
+function agentCanReadEnv(asset: Asset, deny: readonly PermissionEntry[]): Observation | undefined {
   if (deny.some(({ rule }) => DENIES_ENV.test(rule))) return undefined;
   return observation(
     asset,
@@ -422,7 +422,7 @@ function agentCanReadEnv(asset: Asset, deny: readonly Entry[]): Observation | un
 /** Whether a guard is set up (a deny rule or a PreToolUse hook command), not whether it works. */
 function noRuntimeGuard(
   asset: Asset,
-  deny: readonly Entry[],
+  deny: readonly PermissionEntry[],
   hooks: readonly HookCommand[],
 ): Observation | undefined {
   if (deny.length > 0 || hooks.some(({ event }) => event === "PreToolUse")) return undefined;
