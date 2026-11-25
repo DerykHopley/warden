@@ -151,7 +151,6 @@ export function DetailCard(props: {
 
   const lead = role !== null && atLeast(role, "lead");
   const decisions = lead ? decisionsFor(finding) : [];
-  const proposes = role === "member" ? proposalsFor(finding) : [];
   const proposalsState =
     props.proposals === "loading"
       ? "loading"
@@ -162,6 +161,12 @@ export function DetailCard(props: {
     props.proposals !== "loading" && props.proposals.kind === "proposals"
       ? props.proposals.proposals.filter((p) => p.finding_id === finding.id)
       : [];
+  // A Finding takes one pending Proposal at a time: while one waits, the waiting line stands in a Member's Propose
+  // buttons' place. Neither shows while the Proposals load; when they couldn't load, the buttons do (the server's 409
+  // is the backstop).
+  const memberProposes = role === "member" ? proposalsFor(finding) : [];
+  const waiting = memberProposes.length > 0 && proposalsState === "listed" && pending.length > 0;
+  const proposes = proposalsState === "loading" || waiting ? [] : memberProposes;
   const mergeable = mergeableCandidates(finding, props.candidates);
 
   const [form, setForm] = useState<Action | null>(null);
@@ -279,14 +284,16 @@ export function DetailCard(props: {
         }
         break;
       case "conflict":
-        // The server's words when its body has them (a Team not opened, a Proposal stale since it was asked).
+        // The server's words when its body has them (a Team not opened, a Proposal stale since it was asked, a
+        // Proposal already waiting on the Finding).
         text =
           result.error !== null
             ? sentence(result.error)
             : onProposal
               ? REFUSED.proposalChanged
               : REFUSED.findingChanged;
-        if (onProposal) props.onProposalsChanged();
+        // A propose's 409 may be a Proposal already pending: the list that comes back shows it, and the waiting line.
+        if (onProposal || action.kind === "propose") props.onProposalsChanged();
         props.onFindingChanged();
         break;
       case "not-answering":
@@ -503,6 +510,7 @@ export function DetailCard(props: {
           {cardLine.text}
         </p>
       )}
+      {waiting && <p className="muted">Waiting for a Lead or Admin to decide.</p>}
       {rowForm ??
         ((decisions.length > 0 || proposes.length > 0) && (
           <div className="card-actions" role="group" aria-label="Decisions">

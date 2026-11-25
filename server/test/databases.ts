@@ -3,11 +3,14 @@
 // Used by the global setup (no vitest imports here) and by tests that need a fresh database of their own.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { createPool, DATABASE_ROLE_NAMES, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
-import { migrate } from "../src/migrate.ts";
+import { migrate, MIGRATIONS_FOLDER } from "../src/migrate.ts";
 import { createRoles } from "../src/roles.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 
@@ -46,32 +49,59 @@ export async function createTestDatabase(
 /** createTestDatabase, then every shipped migration as warden_migrate. A failed migration drops it and throws. */
 export async function createMigratedTestDatabase(connection: pg.PoolConfig = {}) {
   const database = await createTestDatabase(connection);
-  const pool = createPool(logger, {
-    ...connection,
-    user: "warden_migrate",
-    database: database.name,
-    max: 1,
-  });
   try {
-    const result = await migrate(pool);
-    if (result.error)
-      throw new Error("migrating the test database failed", { cause: result.error });
+    await migrateTestDatabase(database.name, MIGRATIONS_FOLDER, connection);
   } catch (error) {
     await database.drop();
     throw error;
-  } finally {
-    await pool.end();
   }
   return database;
 }
 
+/** Applies `folder`'s migrations not yet applied to the test database `name`, as warden_migrate; throws if one fails. */
+async function migrateTestDatabase(name: string, folder: string, connection: pg.PoolConfig = {}) {
+  const pool = createPool(logger, {
+    ...connection,
+    user: "warden_migrate",
+    database: name,
+    max: 1,
+  });
+  try {
+    const result = await migrate(pool, folder);
+    if (result.error)
+      throw new Error("migrating the test database failed", { cause: result.error });
+  } finally {
+    await pool.end();
+  }
+}
+
+/** A folder holding copies of the shipped migrations up to and including `last` (its name without `.sql`), and a way
+ * to remove it. */
+async function migrationsUpTo(last: string) {
+  const folder = await mkdtemp(join(tmpdir(), "warden-migrations-"));
+  const files = (await readdir(MIGRATIONS_FOLDER)).filter(
+    (file) => file.endsWith(".sql") && file.slice(0, -".sql".length) <= last,
+  );
+  for (const file of files) await copyFile(join(MIGRATIONS_FOLDER, file), join(folder, file));
+  return { folder, remove: () => rm(folder, { recursive: true }) };
+}
+
 /**
  * A migrated database of a test file's own, with a pool and a `withTeam` as each of `roles`: for a file that locks a
- * table other files write (a truncate, a drop), which on the suite's shared database can deadlock them. `end` closes
- * the pools and drops the database. Making it waits on a checkpoint: the hook passes a 30 s timeout.
+ * table other files write (a truncate, a drop), which on the suite's shared database can deadlock them. With
+ * `upTo`, it is migrated only up to that shipped migration first, `before` writes data as that schema held it, and
+ * then the later migrations run: what an upgrade does to stored data. `end` closes the pools and drops the database.
+ * Making it waits on a checkpoint: the hook passes a 30 s timeout.
  */
-export async function ownDatabase<R extends DatabaseRole>(roles: readonly R[]) {
-  const database = await createMigratedTestDatabase();
+export async function ownDatabase<R extends DatabaseRole>(
+  roles: readonly R[],
+  {
+    upTo,
+    before,
+  }: { upTo?: string; before?: (withTeamAs: Record<R, WithTeam>) => Promise<void> } = {},
+) {
+  const database =
+    upTo === undefined ? await createMigratedTestDatabase() : await createTestDatabase();
   const pools = {} as Record<R, pg.Pool>;
   const withTeamAs = {} as Record<R, WithTeam>;
   for (const role of roles) {
@@ -82,6 +112,19 @@ export async function ownDatabase<R extends DatabaseRole>(roles: readonly R[]) {
     for (const role of roles) await pools[role].end();
     await database.drop();
   };
+  if (upTo !== undefined) {
+    const older = await migrationsUpTo(upTo);
+    try {
+      await migrateTestDatabase(database.name, older.folder);
+      await before?.(withTeamAs);
+      await migrateTestDatabase(database.name, MIGRATIONS_FOLDER);
+    } catch (error) {
+      await end();
+      throw error;
+    } finally {
+      await older.remove();
+    }
+  }
   return { pools, withTeamAs, end };
 }
 

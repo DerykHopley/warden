@@ -361,6 +361,9 @@ async function openForm(card: Card, name: string): Promise<Form> {
   return formNamed(card, name);
 }
 
+/** A Member's line in place of the Propose buttons while the focused Finding has a pending Proposal. */
+const WAITING = "Waiting for a Lead or Admin to decide.";
+
 const WHY = "Why accept this risk?";
 const REOPENS_ON = "Reopens on";
 const REOPENS_HINT = "Warden reopens it on this date so the Team looks again.";
@@ -492,6 +495,58 @@ describe("a Member's Propose buttons", () => {
   });
 });
 
+describe("a Member's Propose buttons while a Proposal waits", () => {
+  it("give way to the waiting line, plain text, while the focused Finding has a pending Proposal", () => {
+    const { card } = show(OPEN, listed([proposal()]), { role: "member" });
+
+    expect(rowButtons(card)).toEqual([]);
+    expect(card.queryByRole("button", { name: /^Propose/ })).not.toBeInTheDocument();
+    const line = card.getByText(WAITING);
+    expect(line.tagName).toBe("P");
+    expect(line).not.toHaveAttribute("role");
+    expect(card.queryByRole("status")).not.toBeInTheDocument();
+    expect(card.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("show, with no waiting line, when only another Finding has one pending", () => {
+    const { card } = show(OPEN, listed([proposal({ finding_id: OTHER })]), { role: "member" });
+
+    expect(rowButtons(card)).toEqual(["Propose accepting", "Propose False positive"]);
+    expect(card.queryByText(WAITING)).not.toBeInTheDocument();
+  });
+
+  it("and the waiting line are both left out while the Proposals load", () => {
+    const { card } = show(OPEN, "loading", { role: "member" });
+
+    expect(rowButtons(card)).toEqual([]);
+    expect(card.queryByText(WAITING)).not.toBeInTheDocument();
+  });
+
+  it("show when the Proposals couldn't load: the server's 409 is the backstop", () => {
+    const { card } = show(OPEN, { kind: "not-answering" }, { role: "member" });
+
+    expect(rowButtons(card)).toEqual(["Propose accepting", "Propose False positive"]);
+    expect(card.queryByText(WAITING)).not.toBeInTheDocument();
+  });
+
+  it("aren't replaced on a Finding whose Status takes no Proposal: there are none to replace", () => {
+    const { card } = show(FALSE_POSITIVE, listed([proposal({ stale: true })]), { role: "member" });
+
+    expect(rowButtons(card)).toEqual([]);
+    expect(card.queryByText(WAITING)).not.toBeInTheDocument();
+  });
+
+  it.each<Role>(["lead", "admin"])(
+    "leave a %s's decision buttons as they are, with no waiting line",
+    (role) => {
+      const { card } = show(OPEN, listed([proposal()]), { role });
+
+      expect(rowButtons(card)).toEqual(["Accept", "Mark False positive"]);
+      expect(card.queryByText(WAITING)).not.toBeInTheDocument();
+    },
+  );
+});
+
 describe("a Member's Proposal", () => {
   const answer = () => json(201, answeredProposal({ requested_by: { kind: "person", id: ME } }));
 
@@ -590,6 +645,25 @@ describe("a Member's Proposal", () => {
       /^Your Team's Admin must open Warden first\.$/,
     );
     expect(reasonField(form)).toHaveValue("A test fixture");
+  });
+
+  it("a 409 because a Proposal is already pending shows the server's sentence and asks the Proposals again; the list that comes back puts the waiting line in the buttons' place", async () => {
+    const sentence = "This Finding already has a Proposal waiting for a Lead or Admin to decide.";
+    serve({ findingAction: () => json(409, { error: sentence }) });
+    const shown = show(OPEN, listed([]), { role: "member" });
+    const form = await openForm(shown.card, "Propose False positive");
+    await fill(form, "A test fixture");
+    await userEvent.click(form.getByRole("button", { name: "Propose" }));
+
+    expect(await form.findByRole("alert")).toHaveTextContent(sentence);
+    expect(shown.onProposalsChanged).toHaveBeenCalledOnce();
+
+    shown.update(OPEN, listed([proposal({ requested_by: { kind: "agent", id: "guard-bot" } })]));
+
+    expect(shown.card.queryByRole("form")).not.toBeInTheDocument();
+    expect(shown.card.getByRole("alert")).toHaveTextContent(sentence);
+    expect(shown.card.getByText(WAITING, { selector: "p:not([role])" })).toBeInTheDocument();
+    expect(rowButtons(shown.card)).toEqual([]);
   });
 });
 

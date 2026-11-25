@@ -159,9 +159,13 @@ describe("Esc", () => {
   });
 
   it("in an open form's field closes only the form, keeps the panel open, and puts focus on the form's opener", async () => {
-    open();
+    // No Proposal pending on lodash: one would put the waiting line in the Propose buttons' place.
+    open("/findings", { proposals: () => proposalsAnswer([]) });
     await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
-    await userEvent.click(within(card()).getByRole("button", { name: "Propose False positive" }));
+    // A Member's Propose buttons wait for the Proposals to load.
+    await userEvent.click(
+      await within(card()).findByRole("button", { name: "Propose False positive" }),
+    );
     const form = within(card()).getByRole("form", { name: "Propose False positive" });
     await userEvent.type(within(form).getByRole("textbox", { name: "Reason" }), "A fixture");
 

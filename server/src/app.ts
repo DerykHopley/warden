@@ -31,6 +31,7 @@ import {
   OVERVIEW_PERIOD_DAYS,
   ProposalDecided,
   ProposalNotFound,
+  ProposalPending,
   type Findings,
 } from "./findings/index.ts";
 import { teamLevel } from "./level.ts";
@@ -244,7 +245,8 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
   /**
    * What a Findings call's refusal answers: 404 for a Finding or Proposal id the Team doesn't have (another Team's
-   * included), 409 for a Status the decision doesn't take or a Proposal already decided, 403 for a person no longer a
+   * included), 409 for a Status the decision doesn't take, a Proposal already decided or a Finding with a Proposal
+   * still pending, 403 for a person no longer a
    * Lead under the Team's lock. Nothing was written in any of them. Anything else, a zod error included (stored or
    * derived data that broke Finding v1), is thrown on to the logged 500, which shows no schema text: only the route's
    * own body parse answers 400.
@@ -254,6 +256,7 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     if (error instanceof ProposalNotFound) return c.json({ error: "No such Proposal" }, 404);
     if (error instanceof DecisionRefused) return c.json({ error: error.message }, 409);
     if (error instanceof ProposalDecided) return c.json({ error: error.message }, 409);
+    if (error instanceof ProposalPending) return c.json({ error: error.message }, 409);
     if (error instanceof NotALead) return c.json({ error: ROLE_TOO_LOW }, 403);
     throw error;
   }

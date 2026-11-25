@@ -2,6 +2,9 @@
 // Proposal, a change to a pending one's own fields, and every delete and truncate, for warden_app and for the tables'
 // owner, warden_migrate. warden_app has no delete or truncate grant, so Postgres refuses those first; the triggers
 // refuse the rest. Deciding a pending one (its state and decided_* columns) is the one update allowed.
+// A Finding takes one unmarked pending Proposal (0007_one_pending_proposal): the partial unique index refuses a second,
+// and only that migration sets `duplicate_of`, on the pending ones from before the rule. The database is migrated to
+// 0006 first, with three pending Proposals on one Finding, so 0007 marks two of them.
 // It runs on a database of its own: the owner's truncate takes a lock on proposals and, through finding_history's
 // foreign key, on finding_history too, which deadlocks another file writing history on the suite's shared database.
 import { randomUUID } from "node:crypto";
@@ -13,6 +16,9 @@ import { ownDatabase } from "./databases.ts";
 const team = `org_proposals_${randomUUID()}`;
 let withTeamAs: Record<"warden_app" | "warden_migrate", WithTeam>;
 let end: (() => Promise<void>) | undefined;
+
+/** Each test's Proposals sit on a Finding of their own, as a Finding takes one pending Proposal at a time. */
+const FINDINGS = ["f-1", "f-2", "f-once", "f-half", "f-dup", "f-free"];
 
 const finding = (id: string) => ({
   team_id: team,
@@ -36,20 +42,21 @@ const finding = (id: string) => ({
   moved_to: null,
 });
 
-/** A pending Proposal to mark f-1 a False positive, written as warden_app. */
-const pending = (id: string) =>
+/** A pending Proposal to mark `findingId` a False positive, written as warden_app. */
+const pending = (id: string, findingId: string, at?: Date) =>
   withTeamAs.warden_app(team, (tx) =>
     tx
       .insertInto("proposals")
       .values({
         team_id: team,
         id,
-        finding_id: "f-1",
+        finding_id: findingId,
         decision: "mark_false_positive",
         reason: "A test fixture",
         accepted_until: null,
         requested_by_kind: "agent",
         requested_by_id: "guard-bot",
+        ...(at && { requested_at: at }),
       })
       .execute(),
   );
@@ -65,16 +72,22 @@ const decide = (id: string, role: "warden_app" | "warden_migrate" = "warden_app"
   );
 
 beforeAll(async () => {
-  ({ withTeamAs, end } = await ownDatabase(["warden_app", "warden_migrate"]));
-  await withTeamAs.warden_app(team, async (tx) => {
-    await tx.insertInto("teams").values({ id: team }).execute();
-    await tx
-      .insertInto("findings")
-      .values([finding("f-1"), finding("f-2")])
-      .execute();
-  });
-  await pending("p-pending");
-  await pending("p-decided");
+  ({ withTeamAs, end } = await ownDatabase(["warden_app", "warden_migrate"], {
+    upTo: "0006_proposals",
+    before: async (asRole) => {
+      withTeamAs = asRole;
+      await withTeamAs.warden_app(team, async (tx) => {
+        await tx.insertInto("teams").values({ id: team }).execute();
+        await tx.insertInto("findings").values(FINDINGS.map(finding)).execute();
+      });
+      // Before the rule: three pending on one Finding. 0007 marks the later two.
+      await pending("p-dup-first", "f-dup", new Date("2026-11-20T09:00:00Z"));
+      await pending("p-dup-second", "f-dup", new Date("2026-11-20T10:00:00Z"));
+      await pending("p-dup-third", "f-dup", new Date("2026-11-20T11:00:00Z"));
+    },
+  }));
+  await pending("p-pending", "f-1");
+  await pending("p-decided", "f-2");
   await decide("p-decided");
 }, 30_000);
 
@@ -102,6 +115,41 @@ const attempts: Record<string, { statement: RawBuilder<unknown>; app: RegExp; ow
     app: /a Proposal is decided once/,
     owner: /a Proposal is decided once/,
   },
+  "a change to a pending Proposal's duplicate_of": {
+    statement: sql`update proposals set duplicate_of = 'p-decided' where id = 'p-pending'`,
+    app: /a Proposal is decided once/,
+    owner: /a Proposal is decided once/,
+  },
+  "a change to a decided Proposal's duplicate_of": {
+    statement: sql`update proposals set duplicate_of = 'p-pending' where id = 'p-decided'`,
+    app: /a Proposal is decided once/,
+    owner: /a Proposal is decided once/,
+  },
+  "a marked duplicate's duplicate_of cleared": {
+    statement: sql`update proposals set duplicate_of = null where id = 'p-dup-third'`,
+    app: /a Proposal is decided once/,
+    owner: /a Proposal is decided once/,
+  },
+  "a change to a marked duplicate's reason": {
+    statement: sql`update proposals set reason = 'rewritten' where id = 'p-dup-third'`,
+    app: /a Proposal is decided once/,
+    owner: /a Proposal is decided once/,
+  },
+  "an insert with duplicate_of set": {
+    statement: sql`insert into proposals (team_id, id, finding_id, decision, reason, requested_by_kind,
+                   requested_by_id, duplicate_of)
+                   values (${team}, 'p-marked', 'f-free', 'mark_false_positive', 'r', 'agent', 'guard-bot',
+                   'p-pending')`,
+    app: /only 0007_one_pending_proposal marks a Proposal a duplicate/,
+    owner: /only 0007_one_pending_proposal marks a Proposal a duplicate/,
+  },
+  "a second pending Proposal on one Finding, past the server's check": {
+    statement: sql`insert into proposals (team_id, id, finding_id, decision, reason, requested_by_kind,
+                   requested_by_id)
+                   values (${team}, 'p-second', 'f-1', 'mark_false_positive', 'r', 'agent', 'guard-bot')`,
+    app: /proposals_one_pending/,
+    owner: /proposals_one_pending/,
+  },
   "a delete": {
     statement: sql`delete from proposals`,
     app: /permission denied for table proposals/,
@@ -117,7 +165,7 @@ const attempts: Record<string, { statement: RawBuilder<unknown>; app: RegExp; ow
 describe("a Proposal is decided once and then kept", () => {
   it.each(Object.keys(attempts))("refuses warden_app %s, and no row changes", async (name) => {
     const before = await rows();
-    expect(before).toHaveLength(2);
+    expect(before).toHaveLength(5);
 
     await expect(
       withTeamAs.warden_app(team, (tx) => attempts[name]!.statement.execute(tx)),
@@ -140,7 +188,7 @@ describe("a Proposal is decided once and then kept", () => {
   );
 
   it("takes a pending Proposal's state and decided_* columns, once", async () => {
-    await pending("p-once");
+    await pending("p-once", "f-once");
 
     await decide("p-once");
 
@@ -150,7 +198,7 @@ describe("a Proposal is decided once and then kept", () => {
   });
 
   it("refuses a decided state without decided_by, and decided_by on a pending one", async () => {
-    await pending("p-half");
+    await pending("p-half", "f-half");
     const before = await rows();
 
     await expect(
@@ -169,5 +217,29 @@ describe("a Proposal is decided once and then kept", () => {
     ).rejects.toThrow(/proposals_decided_check/);
 
     expect(await rows()).toEqual(before);
+  });
+});
+
+describe("a duplicate 0007 marked", () => {
+  it("is decided like any pending Proposal, approved or rejected, and keeps its mark", async () => {
+    await decide("p-dup-second");
+    await withTeamAs.warden_app(team, (tx) =>
+      tx
+        .updateTable("proposals")
+        .set({
+          state: "rejected",
+          decided_by: "user_lead",
+          decided_at: sql<Date>`now()`,
+          decided_reason: "Asked twice",
+        })
+        .where("id", "=", "p-dup-third")
+        .executeTakeFirstOrThrow(),
+    );
+
+    expect((await rows()).filter((row) => row.finding_id === "f-dup")).toMatchObject([
+      { id: "p-dup-first", state: "pending", duplicate_of: null },
+      { id: "p-dup-second", state: "approved", duplicate_of: "p-dup-first" },
+      { id: "p-dup-third", state: "rejected", duplicate_of: "p-dup-first" },
+    ]);
   });
 });

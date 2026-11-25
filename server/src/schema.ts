@@ -134,5 +134,10 @@ export interface Database {
     decided_by: string | null;
     decided_at: ColumnType<Date | null, never, Date>;
     decided_reason: string | null;
+    /**
+     * The earliest pending Proposal on the same Finding, on a later one stored before a Finding took one pending
+     * Proposal at a time (0007_one_pending_proposal). Only that migration sets it; never in an answer.
+     */
+    duplicate_of: ColumnType<string | null, never, never>;
   };
 }

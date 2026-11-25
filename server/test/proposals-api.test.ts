@@ -70,8 +70,11 @@ const scan = (team: string, id: string, startedAt: string, paths: string[]): Sca
   observations: paths.map(observation),
 });
 
-/** A Team with an Admin, two Leads and a Member, and one Open Finding a Scan opened. */
-async function teamWithFinding() {
+const SETTINGS = ".claude/settings.json";
+
+/** A Team with an Admin, two Leads and a Member, and an Open Finding a Scan opened at each of `paths`. `finding` is
+ * the first path's. */
+async function teamWithFinding(paths = [SETTINGS]) {
   const team = `org_${randomUUID()}`;
   await seedTeam(withTeam, team, [
     [ADMIN, "admin"],
@@ -79,9 +82,11 @@ async function teamWithFinding() {
     [OTHER_LEAD, "lead"],
     [MEMBER, "member"],
   ]);
-  await findings.reconcile(scan(team, "scan-1", "2026-11-24T09:00:00Z", [".claude/settings.json"]));
-  const [finding] = await findings.list(team);
-  return { team, finding: finding! };
+  await findings.reconcile(scan(team, "scan-1", "2026-11-24T09:00:00Z", paths));
+  const listed = await findings.list(team);
+  const at = (path: string) =>
+    listed.find((f) => f.location.kind === "file" && f.location.path === path)!;
+  return { team, finding: at(paths[0]!), at };
 }
 
 async function post(
@@ -183,6 +188,26 @@ describe("story 4: a Member proposes, a Lead approves", () => {
     expect((await stored(team)).proposals).toMatchObject([
       { id: proposal.id, state: "approved", decided_by: LEAD },
     ]);
+  });
+});
+
+describe("a second Proposal while one is pending", () => {
+  it("a Member proposing twice on one Finding gets 409 in plain words, and no row is written", async () => {
+    const { team, finding } = await pendingProposal();
+    const before = await stored(team);
+    expect(before.proposals).toHaveLength(1);
+
+    const answer = await propose(team, finding.id, {
+      decision: "accept",
+      reason: "Fixed next sprint",
+      until: nextWeek(),
+    });
+
+    expect(answer).toEqual({
+      status: 409,
+      body: { error: "This Finding already has a Proposal waiting for a Lead or Admin to decide." },
+    });
+    expect(await stored(team)).toEqual(before);
   });
 });
 
@@ -368,7 +393,7 @@ describe("GET /api/proposals", () => {
     "answers a %s the Team's id and its pending Proposals, oldest first, each marked stale or not",
     async (_role, as) => {
       // Which Proposals are listed, and the stale rule itself, are Findings.pendingProposals' (proposals.test.ts).
-      const { team, finding } = await teamWithFinding();
+      const { team, finding, at } = await teamWithFinding([SETTINGS, "other.json"]);
       const first = Proposal.parse(
         (await propose(team, finding.id, { decision: "mark_false_positive", reason: "First" }))
           .body,
@@ -379,9 +404,10 @@ describe("GET /api/proposals", () => {
         team,
         body: { reason: "Fixed next sprint", until: nextWeek() },
       });
+      // On another Finding: the first still waits on this one.
       const second = Proposal.parse(
         (
-          await propose(team, finding.id, {
+          await propose(team, at("other.json").id, {
             decision: "accept",
             reason: "Second",
             until: nextWeek(),
