@@ -129,9 +129,12 @@ function differences(list: readonly Finding[]): string[] {
 }
 
 /** The Team's demo Product, by its name: a first seed with the Product refuses a Team that already has one, so it's
- * the seed's own unless a Lead named one so after a seed without it (then it must match `DEMO_PRODUCT`). */
-const demoProductIn = (products: readonly Product[]) =>
-  products.find((product) => product.name === DEMO_PRODUCT.name);
+ * the seed's own unless a Lead named one so after a seed without it (then it must match `DEMO_PRODUCT`). Names
+ * compare as the name index (`lower(btrim(name))`) does: whatever their case and the spaces around them. */
+const demoProductIn = (products: readonly Product[]) => {
+  const key = (name: string) => name.replace(/^ +| +$/g, "").toLowerCase();
+  return products.find((product) => key(product.name) === key(DEMO_PRODUCT.name));
+};
 
 /** Whether `finding` is on Product `id`'s Asset. On the demo Product's, it is one of the seed's own. */
 export const onProduct = (finding: Finding, id: string | undefined) =>
