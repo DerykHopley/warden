@@ -291,7 +291,9 @@ describe("a link that names a Finding", () => {
     const { panel } = open(`/findings?finding=${ID.lodash}`);
     expect(panel.open).not.toHaveBeenCalled();
     await screen.findByRole("table");
-    expect(panel.open).toHaveBeenCalledTimes(1);
+    // The page opens the panel in a passive effect, which React runs after the commit that put the table in, in a
+    // later task under load: wait for the effect, not only for the table.
+    await vi.waitFor(() => expect(panel.open).toHaveBeenCalledTimes(1));
   });
 
   it("opens it only on the page's load, not again when the list comes back", async () => {
