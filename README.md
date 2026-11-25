@@ -81,6 +81,22 @@ set, the Job also needs `WARDEN_ADMIN_PASSWORD`; it never sends the app's passwo
 `GET /api/health` answers 200 when the database answers and offers the `vector` extension, and 503 naming the
 failed part otherwise.
 
+## Connecting GitHub
+
+An Admin links the Team's repos once, from the dashboard. Warden needs its GitHub app's settings first (a Warden
+without them says "GitHub isn't set up on this Warden." on Setup), and the app's Setup URL and callback URL on GitHub
+must be this Warden's `/setup/github` and `/setup/github/callback`.
+
+1. Open **Setup** in the header, and choose **Install the GitHub app**.
+2. On GitHub, install the app on the account or organization, for all repos or the ones Warden should scan. GitHub
+   sends you back to Warden's Connect GitHub page, which names the installation and the Team.
+3. Choose **Sign in with GitHub**, and authorize the app. Warden checks, with your own sign-in, that you can reach the
+   installation, and links the repos you can read in it. The page says how many; Setup lists them under Repos.
+
+Only an Admin connects GitHub: a Lead or a Member sees the Team's repos on Setup, and "An Admin connects GitHub.".
+The sign-in must start and end in the same browser tab: Warden keeps the sign-in's check there until GitHub sends you
+back. An installation links to one Team only.
+
 ## Checks
 
 The fast lane (`.github/workflows/fast-lane.yml`) runs on every pull request into `main` or `spec/**`, and on push

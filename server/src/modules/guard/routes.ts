@@ -2,6 +2,7 @@
 // always the session's, never the request's.
 import {
   LinkInstallationBody,
+  type GitHubAppBody,
   type LinkedInstallationBody,
   type RepoAssetBody,
   type ReposBody,
@@ -46,17 +47,57 @@ function repoAssetBody(repo: RepoAsset): RepoAssetBody {
   };
 }
 
-/** Guard's routes; linking needs `github`, which comes with the logger its failures are written to. */
+/** How long the App's slug is kept before GitHub is asked again, so a renamed App's links follow within the hour. */
+const SLUG_KEPT_MS = 3_600_000;
+
+/**
+ * Guard's routes; linking needs `github`, which comes with the logger its failures are written to. `now` is the clock
+ * the kept slug ages by.
+ */
 export function guardRoutes(
-  deps: { repoAssets: RepoAssets } & (
+  deps: { repoAssets: RepoAssets; now?: () => number } & (
     { github: GitHub; logger: Logger } | { github?: undefined; logger?: Logger }
   ),
 ): MountRoutes {
-  const { repoAssets } = deps;
+  const { repoAssets, now = Date.now } = deps;
   // Kept in this instance's memory, keyed by Team id as it is: each Cloud Run instance counts on its own (threat A5).
   const linkLimit = createAttemptLimit({ max: LINKS_PER_HOUR, windowMs: 3_600_000 });
+  // The App's slug, read from GitHub and kept for an hour from when the read began. A read that fails isn't kept, so
+  // the next call asks again; calls while a read runs share it.
+  let slug: { read: Promise<string>; at: number } | undefined;
 
   return (app, requireRole) => {
+    // What an Admin's Setup page builds GitHub's install and sign-in links from (story 1).
+    app.get("/api/github/app", requireRole("admin"), async (c) => {
+      if (deps.github === undefined) return c.json({ error: "GitHub isn't set up here" }, 503);
+      const { github, logger } = deps;
+      if (slug === undefined || now() - slug.at >= SLUG_KEPT_MS) {
+        const reading = {
+          at: now(),
+          read: github.appSlug().catch((error: unknown) => {
+            if (slug === reading) slug = undefined;
+            throw error;
+          }),
+        };
+        slug = reading;
+      }
+      try {
+        return c.json({
+          slug: await slug.read,
+          client_id: github.clientId,
+        } satisfies GitHubAppBody);
+      } catch (error) {
+        if (!(error instanceof GitHubUnavailable)) throw error;
+        // The step and status only, as the link logs them.
+        logger.error("GitHub didn't answer", {
+          team: c.get("team"),
+          step: error.step,
+          status: error.status,
+        });
+        return c.json({ error: "GitHub didn't answer" }, 502);
+      }
+    });
+
     // Any person in the Team reads its Repo Assets, by ref (story 1).
     app.get("/api/repos", requireRole("member"), async (c) => {
       const repos = await repoAssets.list(c.get("team"));
