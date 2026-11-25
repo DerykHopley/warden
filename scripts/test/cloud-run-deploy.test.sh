@@ -163,8 +163,17 @@ run_deploy() {
   calls=$(cat "$scratch/calls")
 }
 
-# flag <name> <call>: the value of --name=... in that recorded call (no value has a space).
+# flag <name> <call>: the value of --name=... in that recorded call (no value has a space, but the one spaced_flag
+# reads).
 flag() { grep -o -- "--$1=[^ ]*" <<<"$2" | head -1 | cut -d= -f2-; }
+# spaced_flag <name> <call>: the value of --name=..., which may hold spaces, up to the next " --" in that call.
+spaced_flag() {
+  local rest=${2#* --$1=}
+  [[ $rest != "$2" ]] || return 1
+  printf '%s\n' "${rest%% --*}"
+}
+# What the migration job runs: the migrations, then the CVE snapshot, in one shell, stopping at the first failure.
+readonly MIGRATE_JOB="sh -c,node server/src/migrate.ts && node server/src/modules/patch/cve-snapshot.ts"
 # call_of <fixed prefix>: the first recorded call that starts with it; fails when none does.
 call_of() {
   local found
@@ -196,8 +205,8 @@ assert_equal "the migration job runs as warden-preview-migrate" \
   "warden-preview-migrate@$project.iam.gserviceaccount.com" "$(flag service-account "$job_deploy")"
 assert_equal "the migration job has the Cloud SQL instance attached" "$connection" \
   "$(flag set-cloudsql-instances "$job_deploy")"
-assert_equal "the migration job runs node server/src/migrate.ts only" "node server/src/migrate.ts" \
-  "$(flag command "$job_deploy") $(flag args "$job_deploy")"
+assert_equal "the migration job runs the migrations, then the CVE snapshot loader" "$MIGRATE_JOB" \
+  "$(flag command "$job_deploy") $(spaced_flag args "$job_deploy")"
 assert_equal "the migration job's plain values: the preview set, as warden_preview_migrate on warden_preview" \
   "PGHOST=/cloudsql/$connection
 WARDEN_DATABASE_ROLES=preview
@@ -312,8 +321,8 @@ assert_equal "release: the migration job runs as warden-migrate" \
   "warden-migrate@$project.iam.gserviceaccount.com" "$(flag service-account "$job_deploy")"
 assert_equal "release: the migration job has the Cloud SQL instance attached" "$connection" \
   "$(flag set-cloudsql-instances "$job_deploy")"
-assert_equal "release: the migration job runs node server/src/migrate.ts only" "node server/src/migrate.ts" \
-  "$(flag command "$job_deploy") $(flag args "$job_deploy")"
+assert_equal "release: the migration job runs the migrations, then the CVE snapshot loader" "$MIGRATE_JOB" \
+  "$(flag command "$job_deploy") $(spaced_flag args "$job_deploy")"
 assert_equal "release: the migration job's plain values: the live set, as warden_migrate on warden" \
   "PGHOST=/cloudsql/$connection
 WARDEN_DATABASE_ROLES=live

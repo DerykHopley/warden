@@ -4,16 +4,36 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
-import type { HealthBody, Role } from "@warden/contracts";
-import { createApp, type MountRoutes } from "../src/app.ts";
+import type pg from "pg";
+import {
+  fingerprint,
+  type Finding,
+  type HealthBody,
+  type ProductInput,
+  type Role,
+} from "@warden/contracts";
+import type { Hono } from "hono";
+import { createApp, type AppEnv, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
-import { createFindings, type Findings } from "../src/findings/index.ts";
-import { createLogger } from "../src/log.ts";
+import {
+  createFindings,
+  DAILY_JOB_LIMITS,
+  type Findings,
+  type TransactionLimits,
+} from "../src/findings/index.ts";
+import { toRow } from "../src/findings/rows.ts";
+import { createLogger, type Logger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import type { HookTables } from "../src/modules/guard/hook-settings.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import type { RepoAssets } from "../src/modules/guard/repo-assets.ts";
+import { createPatchAssessment } from "../src/modules/patch/assessment.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
+import { createProducts } from "../src/modules/patch/products.ts";
+import { createPatchRefresh, type PatchRefresh } from "../src/modules/patch/refresh.ts";
+import { patchRoutes } from "../src/modules/patch/routes.ts";
+import { createSaveLimit, type SaveLimit } from "../src/modules/patch/save-limit.ts";
+import { createPatchScan, PATCH_RULE, type PatchScan } from "../src/modules/patch/scan.ts";
 import {
   createScans,
   type AssetChecks,
@@ -22,6 +42,93 @@ import {
   type Scans,
 } from "../src/scans.ts";
 import type { WithTeam } from "../src/with-team.ts";
+
+/** Each module's move rule, as the start-up file wires them. */
+const MOVE_RULES = { guard: guardMoveRule, patch: patchMoveRule };
+
+/** A logger that keeps nothing, for a test that doesn't read the log. */
+const silent = () => createLogger(() => {});
+
+/**
+ * The Patch Scan as the start-up file wires it: reporting to a Findings module with the start-up file's move rules,
+ * on `withTeam`. `logger` takes its log lines (none are kept unless given). `limits` are its transaction's, as the
+ * daily Job gives them (a save's Scan has none).
+ */
+export function patchScan(
+  withTeam: WithTeam,
+  logger: Logger = silent(),
+  limits?: TransactionLimits,
+): PatchScan {
+  return createPatchScan({
+    findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
+    logger,
+    limits,
+  });
+}
+
+/**
+ * Patch's daily step as the daily Job wires it: the Products store and the Patch Scan, on `withTeam`. `logger` takes
+ * the step's and the Scans' log lines; `limits` stand in for the Job's (DAILY_JOB_LIMITS by default).
+ */
+export function patchRefresh(
+  withTeam: WithTeam,
+  logger: Logger = silent(),
+  limits: TransactionLimits = DAILY_JOB_LIMITS,
+): PatchRefresh {
+  const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
+  return createPatchRefresh({
+    products: createProducts({ withTeam }),
+    findings,
+    scan: createPatchScan({ findings, logger, limits }),
+    logger,
+  });
+}
+
+/**
+ * Patch's routes as the start-up file mounts them: the Products store, the Patch Scan and the assessment, on
+ * `withTeam`. `scan` stands in for the Patch Scan; `logger` takes the routes' log lines (none are kept unless given);
+ * `saveLimit` stands in for the start-up file's (a fresh one by default); `now` is the assessment's clock (the real
+ * time by default).
+ */
+export function patchMount(
+  withTeam: WithTeam,
+  {
+    scan,
+    logger = silent(),
+    saveLimit = createSaveLimit(),
+    now,
+  }: { scan?: PatchScan; logger?: Logger; saveLimit?: SaveLimit; now?: () => Date } = {},
+): MountRoutes {
+  return patchRoutes({
+    products: createProducts({ withTeam }),
+    scan: scan ?? patchScan(withTeam, logger),
+    assessment: createPatchAssessment({
+      findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
+      withTeam,
+      now,
+    }),
+    logger,
+    saveLimit,
+  });
+}
+
+/**
+ * Resolves once a transaction is waiting for `team`'s Findings lock (the one reconcile and decisions take), read
+ * through `probe`'s view of `pg_locks`.
+ */
+export async function queuedBehindFindingsLock(probe: pg.Pool, team: string): Promise<void> {
+  for (let tries = 0; tries < 100; tries++) {
+    const { rows } = await probe.query<{ waiting: number }>(
+      `select count(*)::int as waiting from pg_locks
+        where locktype = 'advisory' and not granted and objsubid = 1
+          and ((classid::bigint << 32) | objid::bigint) = hashtextextended($1, 0)`,
+      [team],
+    );
+    if (rows[0]!.waiting > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("nothing queued behind the Team's Findings lock");
+}
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
 
@@ -150,6 +257,104 @@ export async function linkRepos(
   return installationId;
 }
 
+/**
+ * A request to `app` as `as`, signed in to Team `teamId` with a session token signed by `key`: `body` sent as JSON,
+ * or as it is when it's already a string. Its status, Retry-After, body read as JSON (undefined when empty) and text.
+ */
+export async function call(
+  app: Hono<AppEnv>,
+  key: CryptoKey,
+  method: string,
+  path: string,
+  { as, teamId, body }: { as: string; teamId: string; body?: unknown },
+) {
+  const token = await sessionToken(key, as, 60, activeOrganization(teamId));
+  const res = await app.request(path, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
+  });
+  const text = await res.text();
+  return {
+    status: res.status,
+    retryAfter: res.headers.get("Retry-After"),
+    body: text === "" ? undefined : (JSON.parse(text) as unknown),
+    text,
+  };
+}
+
+/**
+ * A Product of `team`'s put straight into the Products tables through `withTeam`, as the store reads them, with no
+ * Repo URLs and no dependencies unless given. Returns its id.
+ */
+export async function seedProduct(
+  withTeam: WithTeam,
+  team: string,
+  { name, repo_urls = [], dependencies = [] }: Partial<ProductInput> & { name: string },
+): Promise<string> {
+  const id = randomUUID();
+  await withTeam(team, async (tx) => {
+    await tx.insertInto("products").values({ team_id: team, id, name, repo_urls }).execute();
+    for (const dependency of dependencies) {
+      await tx
+        .insertInto("product_dependencies")
+        .values({ team_id: team, product_id: id, ...dependency })
+        .execute();
+    }
+  });
+  return id;
+}
+
+/** What a test Patch Finding is built from: its CVE, package and version, and any field it sets otherwise. */
+export type PatchFindingFields = { cve: string; pkg?: string; version?: string } & Partial<Finding>;
+
+/**
+ * An Open `patch/known-vulnerability` Finding for `cve` on Product `productId` of `team`, as a Scan before this one
+ * would have left it, with any other field `overrides` set. Built only: nothing is written.
+ */
+export function patchFinding(
+  team: string,
+  productId: string,
+  { cve, pkg = "pkg:pypi/langchain", version = "0.0.200", ...overrides }: PatchFindingFields,
+): Finding {
+  const location = { kind: "dependency", package: pkg, version, vulnerability: cve } as const;
+  return {
+    id: randomUUID(),
+    team,
+    asset: { kind: "product", ref: productId },
+    module: "patch",
+    rule_id: PATCH_RULE,
+    fingerprint: fingerprint(PATCH_RULE, location),
+    location,
+    severity: "high",
+    title: `${cve}: a known vulnerability`,
+    evidence: { summary: `Version ${version} is affected.` },
+    status: "open",
+    unconfirmed_fix: null,
+    accepted_reason: null,
+    accepted_until: null,
+    first_seen_scan: "scan-0",
+    last_seen_scan: "scan-0",
+    moved_to: null,
+    ...overrides,
+  };
+}
+
+/**
+ * `patchFinding`'s Finding, written straight into `findings` through `withTeam`: no Scan runs, so the Product needn't
+ * exist. Returns it.
+ */
+export async function seedPatchFinding(
+  withTeam: WithTeam,
+  team: string,
+  productId: string,
+  fields: PatchFindingFields,
+): Promise<Finding> {
+  const finding = patchFinding(team, productId, fields);
+  await withTeam(team, (tx) => tx.insertInto("findings").values(toRow(finding)).execute());
+  return finding;
+}
+
 /** Members and Findings for a test that never reaches the database: any call fails it. */
 const noDatabase = () => Promise.reject(new Error("this test app has no database: pass withTeam"));
 const noMembers: Members = { open: noDatabase, list: noDatabase, changeRole: noDatabase };
@@ -157,7 +362,9 @@ const noFindings: Findings = {
   reconcile: noDatabase,
   report: noDatabase,
   scan: noDatabase,
+  scanLocked: noDatabase,
   list: noDatabase,
+  assetRefs: noDatabase,
   history: noDatabase,
   overview: noDatabase,
   accept: noDatabase,
@@ -225,10 +432,7 @@ export function testApp(options: {
           })
         : noMembers,
       findings: options.withTeam
-        ? createFindings({
-            withTeam: options.withTeam,
-            moveRules: { guard: guardMoveRule, patch: patchMoveRule },
-          })
+        ? createFindings({ withTeam: options.withTeam, moveRules: MOVE_RULES })
         : noFindings,
       scans:
         options.scans ?? (options.withTeam ? createScans({ withTeam: options.withTeam }) : noScans),

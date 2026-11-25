@@ -7,6 +7,9 @@ export const json = (status: number, body: unknown, headers: Record<string, stri
     headers: { "Content-Type": "application/json", ...headers },
   });
 
+/** A 204: no body, as a delete answers. */
+export const noContent = () => new Response(null, { status: 204 });
+
 type Answer = Response | Promise<Response>;
 
 export type Routes = {
@@ -19,6 +22,15 @@ export type Routes = {
   repos?: () => Answer;
   /** POST /api/github/installations, with the parsed body. */
   linkInstallation?: (body: unknown) => Answer;
+  products?: () => Answer;
+  /** GET /api/patch/frameworks. */
+  frameworks?: () => Answer;
+  /** GET /api/patch/findings/:id/assessment, with the Finding id. */
+  assessment?: (id: string) => Answer;
+  /** POST /api/products (id null) or PUT /api/products/:id, with the Product id and the parsed body. */
+  saveProduct?: (id: string | null, body: unknown) => Answer;
+  /** DELETE /api/products/:id, with the Product id. */
+  deleteProduct?: (id: string) => Answer;
   /** PUT /api/team/members/:userId/role, with the user id and the parsed body. */
   changeRole?: (userId: string, body: unknown) => Answer;
   /**
@@ -51,6 +63,24 @@ export function serve(routes: Routes) {
     if (url === "/api/repos" && method === "GET" && routes.repos) return routes.repos();
     if (url === "/api/github/installations" && method === "POST" && routes.linkInstallation) {
       return routes.linkInstallation(sentBody(init));
+    }
+    if (url === "/api/products" && method === "GET" && routes.products) return routes.products();
+    if (url === "/api/patch/frameworks" && method === "GET" && routes.frameworks) {
+      return routes.frameworks();
+    }
+    const assessed = /^\/api\/patch\/findings\/([^/]+)\/assessment$/.exec(url);
+    if (assessed && method === "GET" && routes.assessment) {
+      return routes.assessment(decodeURIComponent(assessed[1] ?? ""));
+    }
+    if (url === "/api/products" && method === "POST" && routes.saveProduct) {
+      return routes.saveProduct(null, sentBody(init));
+    }
+    const onProduct = /^\/api\/products\/([^/]+)$/.exec(url);
+    if (onProduct && method === "PUT" && routes.saveProduct) {
+      return routes.saveProduct(decodeURIComponent(onProduct[1] ?? ""), sentBody(init));
+    }
+    if (onProduct && method === "DELETE" && routes.deleteProduct) {
+      return routes.deleteProduct(decodeURIComponent(onProduct[1] ?? ""));
     }
     const change = /^\/api\/team\/members\/([^/]+)\/role$/.exec(url);
     if (change && method === "PUT" && routes.changeRole) {

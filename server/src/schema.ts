@@ -1,5 +1,6 @@
-// The Kysely table types for what the migrations in server/migrations make. Every table here is Team-owned and kept
-// apart by row-level security (ADR 0006); `findUnprotectedTables` checks that on the real schema. The enum columns
+// The Kysely table types for what the migrations in server/migrations make. Every table here but the CVE snapshot's
+// (last, and named in `NOT_TEAM_DATA`) is Team-owned and kept apart by row-level security (ADR 0006);
+// `findUnprotectedTables` checks that on the real schema. The enum columns
 // carry the contracts' types, which the migrations' check constraints match.
 import type { ColumnType, Generated, JSONColumnType } from "kysely";
 import type {
@@ -17,6 +18,7 @@ import type {
   ScanState,
   Severity,
   Status,
+  Usage,
 } from "@warden/contracts";
 
 /** A jsonb column written as a JSON string and read back parsed. */
@@ -144,7 +146,7 @@ export interface Database {
   };
 
   /**
-   * A queued Scan (0008_scan_requests): what a Lead asked to scan and where its Scan Job is. Written only by the Scans
+   * A queued Scan (0010_scan_requests): what a Lead asked to scan and where its Scan Job is. Written only by the Scans
    * module. Each time is set by the database; a failed Scan stores no message.
    */
   scan_requests: {
@@ -161,7 +163,7 @@ export interface Database {
   };
 
   /**
-   * A GitHub installation a Team linked (0009_repo_assets): one Team per installation id. Written only by the Guard
+   * A GitHub installation a Team linked (0011_repo_assets): one Team per installation id. Written only by the Guard
    * module's Repo Assets store. Ids are bigint, which pg reads back as a string.
    */
   github_installations: {
@@ -172,8 +174,8 @@ export interface Database {
   };
 
   /**
-   * A repo an installation lists, as one of the Team's Repo Assets (0009_repo_assets): one row per installation that
-   * lists it, keyed by (team_id, installation_id, ref) since 0010_repo_assets_per_installation.
+   * A repo an installation lists, as one of the Team's Repo Assets (0011_repo_assets): one row per installation that
+   * lists it, keyed by (team_id, installation_id, ref) since 0012_repo_assets_per_installation.
    */
   repo_assets: {
     team_id: string;
@@ -181,5 +183,91 @@ export interface Database {
     github_id: ColumnType<string, number, number>;
     installation_id: ColumnType<string, number, number>;
     listed_at: ColumnType<Date, Date | undefined, Date>;
+  };
+
+  /** What a Team ships (0008_products): written and read only by the Patch module. A name is unique in a Team, any case. */
+  products: {
+    team_id: string;
+    id: string;
+    name: string;
+    repo_urls: string[];
+    created_at: Generated<Date>;
+  };
+
+  /** One row per framework a Product uses (0008_products); deleting the Product deletes them. */
+  product_dependencies: {
+    team_id: string;
+    product_id: string;
+    framework: string;
+    version: string | null;
+    usage: Usage;
+    internet_facing: boolean;
+  };
+
+  // Patch's CVE snapshot (0009_cve_reference): public reference data, the same for every Team, so not Team-owned and
+  // under no row-level security. The app only reads them; the loader (cve-snapshot.ts) writes them as warden_migrate.
+
+  /** The snapshot loaded now: one row. */
+  cve_snapshot: {
+    only_row: boolean;
+    as_of: Date;
+    digest: string;
+    loaded_at: Date;
+  };
+
+  /** Each source's manifest entry: its licence and attribution. */
+  cve_sources: {
+    id: string;
+    name: string;
+    licence: string;
+    attribution: string;
+    notice: string | null;
+    url: string;
+    retrieved: Date;
+    as_of: Date | null;
+    count: number;
+  };
+
+  /** NVD's CVEs for Patch's frameworks; `product` is a framework id. NVD's severity as given, NONE and null included. */
+  cves: {
+    id: string;
+    product: string;
+    product_source: "text" | "cpe";
+    published: Date;
+    severity: string | null;
+    cvss: number | null;
+    cwes: string[];
+    description: string;
+    url: string;
+  };
+
+  /** CISA's Known Exploited Vulnerabilities entries for those CVEs. */
+  cve_kev: {
+    cve_id: string;
+    name: string;
+    date_added: Date;
+    due_date: Date;
+    ransomware_use: string;
+    required_action: string;
+  };
+
+  /** FIRST's EPSS score and percentile for each CVE. */
+  cve_epss: {
+    cve_id: string;
+    score: number;
+    percentile: number;
+    date: Date;
+  };
+
+  /** OSV's entries, one row each; `position` keeps OSV's order, and `ranges` is OSV's list as stored. */
+  cve_osv: {
+    position: number;
+    cve_id: string;
+    product: string;
+    ecosystem: string;
+    package: string;
+    advisory: string;
+    ranges: { introduced: string | null; fixed: string | null; last_affected: string | null }[];
+    fixed: string[];
   };
 }
