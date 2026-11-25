@@ -1021,6 +1021,51 @@ describe("a Lead's decision", () => {
   });
 });
 
+describe("a Reopens on day that midnight has made today", () => {
+  afterEach(() => vi.useRealTimers());
+
+  /** Opens `button`'s form at 23:58, picks the next day, and submits it at 00:01: the day it picked is now today. */
+  async function submitPastMidnight(button: string, role: Role, submitName: string) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 25, 23, 58));
+    // As the server refuses an until that isn't later than now: the words the form must not show.
+    serve({ findingAction: () => json(400, { error: "until: until must be later than now" }) });
+    const { card } = show(OPEN, listed([]), { role });
+    const form = await openForm(card, button);
+    await userEvent.type(whyField(form), "Fixed next sprint");
+    pickUntil(form, "2026-11-26");
+
+    vi.setSystemTime(new Date(2026, 10, 26, 0, 1));
+    await userEvent.click(form.getByRole("button", { name: submitName }));
+    return form;
+  }
+
+  it.each<[string, Role, string]>([
+    ["Accept", "lead", "Accept"],
+    ["Propose accepting", "member", "Propose"],
+  ])(
+    "%s refuses in the form's own words, keeps the reason, and sends nothing",
+    async (button, role, submitName) => {
+      const form = await submitPastMidnight(button, role, submitName);
+
+      const refusal = await form.findByRole("alert");
+      expect(refusal).toHaveTextContent(
+        /^Reopens on must be a later day\. Pick tomorrow or later\.$/,
+      );
+      expect(refusal).not.toHaveTextContent(/until/i);
+      expect(whyField(form)).toHaveValue("Fixed next sprint");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("after that refusal, Reopens on's earliest day is the day after the new today", async () => {
+    const form = await submitPastMidnight("Accept", "lead", "Accept");
+
+    await form.findByRole("alert");
+    expect(form.getByLabelText(REOPENS_ON)).toHaveAttribute("min", "2026-11-27");
+  });
+});
+
 describe("the reason an accept form opens with", () => {
   it("Renew acceptance opens with the current acceptance reason, editable, and no Reopens on: its submit waits for a day", async () => {
     const { card } = show(ACCEPTED, listed([]), { role: "lead" });
