@@ -2,6 +2,7 @@
 // always the session's, never the request's.
 import {
   LinkInstallationBody,
+  type GitHubAppBody,
   type LinkedInstallationBody,
   type RepoAssetBody,
   type ReposBody,
@@ -55,8 +56,33 @@ export function guardRoutes(
   const { repoAssets } = deps;
   // Kept in this instance's memory, keyed by Team id as it is: each Cloud Run instance counts on its own (threat A5).
   const linkLimit = createAttemptLimit({ max: LINKS_PER_HOUR, windowMs: 3_600_000 });
+  // The App's slug, read from GitHub once and kept for this instance's life. A read that fails isn't kept, so the next
+  // call asks again; calls while a read runs share it.
+  let slug: Promise<string> | undefined;
 
   return (app, requireRole) => {
+    // What an Admin's Setup page builds GitHub's install and sign-in links from (story 1).
+    app.get("/api/github/app", requireRole("admin"), async (c) => {
+      if (deps.github === undefined) return c.json({ error: "GitHub isn't set up here" }, 503);
+      const { github, logger } = deps;
+      slug ??= github.appSlug().catch((error: unknown) => {
+        slug = undefined;
+        throw error;
+      });
+      try {
+        return c.json({ slug: await slug, client_id: github.clientId } satisfies GitHubAppBody);
+      } catch (error) {
+        if (!(error instanceof GitHubUnavailable)) throw error;
+        // The step and status only, as the link logs them.
+        logger.error("GitHub didn't answer", {
+          team: c.get("team"),
+          step: error.step,
+          status: error.status,
+        });
+        return c.json({ error: "GitHub didn't answer" }, 502);
+      }
+    });
+
     // Any person in the Team reads its Repo Assets, by ref (story 1).
     app.get("/api/repos", requireRole("member"), async (c) => {
       const repos = await repoAssets.list(c.get("team"));
