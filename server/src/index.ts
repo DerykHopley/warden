@@ -12,6 +12,7 @@ import { createFindings } from "./findings/index.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
 import { guardMoveRule } from "./modules/guard/move-rule.ts";
+import { createPatchAssessment } from "./modules/patch/assessment.ts";
 import { patchMoveRule } from "./modules/patch/move-rule.ts";
 import { createProducts } from "./modules/patch/products.ts";
 import { patchRoutes } from "./modules/patch/routes.ts";
@@ -104,6 +105,7 @@ const app = createApp(
   patchRoutes({
     products: createProducts({ withTeam }),
     scan: createPatchScan({ findings, logger }),
+    assessment: createPatchAssessment({ findings, withTeam }),
     logger,
     saveLimit: createSaveLimit(),
   }),

@@ -388,6 +388,25 @@ describe("refuses a date compared with the as-of date that isn't a real YYYY-MM-
   });
 });
 
+// Bug slice 1 (#111's verifier): a date the due date isn't counted from is still checked, up front.
+describe("refuses a published or KEV-added date that isn't a real YYYY-MM-DD, whichever date the due date is counted from", () => {
+  it.each([
+    ["published, with the KEV deadline adopted", facts({ ...KEV, published: "2026-13-01" })],
+    ["KEV added, with the KEV deadline adopted", facts({ ...KEV, kev_added: "2025-13-05" })],
+  ] as const)("%s", (_case, f) => {
+    expect(() => priority(f, DEFAULT, AS_OF)).toThrow(RangeError);
+  });
+
+  it("still counts from the published date when KEV gives no added date", () => {
+    const p = priority(
+      facts({ ...KEV, kev_added: null, kev_deadline: null, published: "2026-10-01" }),
+      DEFAULT,
+      AS_OF,
+    );
+    expect([p.due_date, p.due_from]).toEqual(["2026-10-08", "published + 7 days"]);
+  });
+});
+
 describe("refuses an EPSS percentile outside 0 to 1", () => {
   it.each([95, -0.01, 1.01, Number.NaN])("%s", (epss) => {
     expect(() => priority(facts({ epss }), DEFAULT, AS_OF)).toThrow(RangeError);

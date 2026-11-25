@@ -8,7 +8,7 @@
  * mismatches are kept: padSemver, the one trailing "\n" checkVersion accepts, and max()'s tie-breaking.
  */
 import * as pep440 from "@renovatebot/pep440";
-import type { Coverage, Usage } from "@warden/contracts";
+import type { AffectedKind, Coverage, Usage, WhoActs } from "@warden/contracts";
 import semver from "semver";
 import type { SemVer } from "semver";
 import { VersionRefused } from "./errors.ts";
@@ -19,14 +19,14 @@ export const USAGE_LABELS: Record<Usage, string> = {
   transitive: "comes in through another package",
   hosted: "hosted service",
 };
-export type WhoActs = "you" | "upstream" | "vendor";
 export const WHO_ACTS: Record<Usage, WhoActs> = {
   self_hosted: "you",
   library: "you",
   transitive: "upstream",
   hosted: "vendor",
 };
-export type VerdictKind = "affected" | "not_affected" | "unknown";
+/** Whether a CVE touches the version in use: the contracts' AffectedKind, under the name verdict.py gives it. */
+export type VerdictKind = AffectedKind;
 
 const NO_PRODUCT_DATA = "no version data for this product";
 const COMMITS_ONLY = "only code commits";
