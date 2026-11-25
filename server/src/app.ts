@@ -42,6 +42,7 @@ import type { Members, TeamMemberRow } from "./members.ts";
 import {
   SCANS_PER_HOUR,
   ScanJobStartUnknown,
+  type AssetChecks,
   type ScanJobStarter,
   type Scanners,
   type Scans,
@@ -60,8 +61,15 @@ export type AppDeps = {
   scans: Scans;
   /** Each module's scanner, as the start-up file wires them: a start names its Rules, and a module without one is 400. */
   scanners: Scanners;
+  /** Each module's check of a start's Assets, as the start-up file wires them: a start one refuses is 400. */
+  assetChecks: AssetChecks;
   /** Starts the Scan Job for a queued Scan; without one (none wired here), a start answers 503. */
   startScanJob?: ScanJobStarter;
+  /**
+   * Each module's own routes (ADR 0005: this file imports no module), as the start-up file wires them: mounted after
+   * the built-in routes, before `mount` and the API's 404.
+   */
+  moduleRoutes: MountRoutes[];
   /** Config's `behindCloudRun`: there the client's address is the last X-Forwarded-For entry; elsewhere the socket's. */
   behindCloudRun: boolean;
   checkHealth: () => Promise<HealthBody>;
@@ -405,8 +413,12 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
       );
     }
     if (deps.startScanJob === undefined) return c.json({ error: "Scans aren't set up here" }, 503);
-
     const team = c.get("team");
+    // Only the Team's own Assets, such as Guard's Repo Assets (story 15): another Team's are refused like any other,
+    // in the module's own words.
+    const refused = await deps.assetChecks[module]?.(team, assets);
+    if (refused !== undefined) return c.json({ error: refused }, 400);
+
     const queued = await deps.scans.queue(team, {
       module,
       assets,
@@ -457,6 +469,7 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     return c.json(scan satisfies ScanBody);
   });
 
+  for (const mountModule of deps.moduleRoutes) mountModule(app, requireRole);
   mount?.(app, requireRole);
 
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));

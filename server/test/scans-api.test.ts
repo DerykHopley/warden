@@ -7,9 +7,11 @@ import { ScanBody, type Asset } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
+import { createRepoAssets, guardAssetCheck } from "../src/modules/guard/repo-assets.ts";
 import {
   createScans,
   ScanJobStartUnknown,
+  type AssetChecks,
   type ScanJobStarter,
   type Scanner,
   type Scanners,
@@ -18,7 +20,14 @@ import {
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { logEntries } from "./server-process.ts";
-import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
+import {
+  activeOrganization,
+  linkRepos,
+  seedTeam,
+  sessionToken,
+  testApp,
+  testKey,
+} from "./helpers.ts";
 
 let key: CryptoKey;
 let publicPem: string;
@@ -52,13 +61,22 @@ function fakeStarter() {
   return { calls, start };
 }
 
-/** The app with `scanners` (Guard's fake by default) and `startScanJob`, as the start-up file wires them. */
+/**
+ * The app with `scanners` (Guard's fake by default), `startScanJob` and `assetChecks` (none by default), as the
+ * start-up file wires them.
+ */
 function scanApp({
   scanners = { guard: fakeGuard },
   startScanJob,
   scans,
-}: { scanners?: Scanners; startScanJob?: ScanJobStarter; scans?: Scans } = {}) {
-  return testApp({ publicPem, withTeam, scanners, startScanJob, scans });
+  assetChecks,
+}: {
+  scanners?: Scanners;
+  startScanJob?: ScanJobStarter;
+  scans?: Scans;
+  assetChecks?: AssetChecks;
+} = {}) {
+  return testApp({ publicPem, withTeam, scanners, startScanJob, scans, assetChecks });
 }
 
 async function newTeam() {
@@ -332,14 +350,57 @@ describe("POST /api/scans: a Lead starts a Scan (story 2)", () => {
     ]);
   });
 
-  it("answers 503 with no starter wired, writing nothing", async () => {
+  it("answers 503 with no starter wired, before checking the Assets, writing nothing", async () => {
     const team = await newTeam();
-    const { app } = scanApp();
+    const { app } = scanApp({ assetChecks: { guard: async () => "every Asset is refused" } });
 
     const res = await start(app, team);
 
     expect(res).toMatchObject({ status: 503, body: { error: "Scans aren't set up here" } });
     expect(await rows(team)).toEqual([]);
+  });
+});
+
+describe("POST /api/scans: a Guard Scan names only the Team's Repo Assets (stories 2, 15)", () => {
+  /** The app with Guard's check of a start's Assets on the real Repo Assets store, as the start-up file wires it. */
+  function checkedApp(startScanJob: ScanJobStarter) {
+    const repoAssets = createRepoAssets({ withTeam });
+    return {
+      repoAssets,
+      ...scanApp({ startScanJob, assetChecks: { guard: guardAssetCheck(repoAssets) } }),
+    };
+  }
+
+  it("answers 202 and queues the Scan when every Asset is one of the Team's Repo Assets", async () => {
+    const team = await newTeam();
+    const starter = fakeStarter();
+    const { app, repoAssets } = checkedApp(starter.start);
+    await linkRepos(repoAssets, team, [repo(1).ref, repo(2).ref], LEAD);
+
+    const res = await start(app, team, { module: "guard", assets: [repo(2), repo(1)] });
+
+    expect(res.status).toBe(202);
+    expect(await rows(team)).toMatchObject([{ id: res.body.id, state: "queued" }]);
+    expect(starter.calls).toStrictEqual([{ scanId: res.body.id, team }]);
+  });
+
+  it("refuses a repo another Team holds with 400 naming it, queuing nothing and starting nothing", async () => {
+    const team = await newTeam();
+    const other = await newTeam();
+    const starter = fakeStarter();
+    const { app, repoAssets } = checkedApp(starter.start);
+    await linkRepos(repoAssets, team, [repo(1).ref], LEAD);
+    await linkRepos(repoAssets, other, [repo(7).ref], LEAD);
+
+    const res = await start(app, team, { module: "guard", assets: [repo(1), repo(7), repo(8)] });
+
+    expect(res).toMatchObject({
+      status: 400,
+      body: { error: `assets[1]: ${repo(7).ref} isn't one of your Team's repos` },
+    });
+    expect(await rows(team)).toEqual([]);
+    expect(await rows(other)).toEqual([]);
+    expect(starter.calls).toEqual([]);
   });
 });
 

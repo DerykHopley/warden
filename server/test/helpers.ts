@@ -1,4 +1,5 @@
 // Test seams: a key pair standing in for a Clerk instance, and an app wired as production wires it.
+import { randomInt, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,8 +11,15 @@ import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createLogger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import type { RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
-import { createScans, type ScanJobStarter, type Scanners, type Scans } from "../src/scans.ts";
+import {
+  createScans,
+  type AssetChecks,
+  type ScanJobStarter,
+  type Scanners,
+  type Scans,
+} from "../src/scans.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
@@ -82,6 +90,41 @@ export async function seedTeam(
   });
 }
 
+/** The Admin `newTeam` seeds by default, who links the installations `linkRepos` records. */
+export const ADMIN = "user_admin";
+
+/** A Team with an id no other case uses and these people in it (its Admin by default), written through `withTeam`. */
+export async function newTeam(
+  withTeam: WithTeam,
+  people: [userId: string, role: Role][] = [[ADMIN, "admin"]],
+) {
+  const team = `org_${randomUUID()}`;
+  await seedTeam(withTeam, team, people);
+  return team;
+}
+
+/** A GitHub repo's ref, as GitHub's `html_url` names it. */
+export const repoRef = (name: string) => `https://github.com/example/${name}`;
+
+/** An installation id no other case uses: GitHub's are positive integers. */
+export const newInstallation = () => randomInt(1, 2 ** 47);
+
+/** Links a new installation listing `refs` to the Team, and answers its id. */
+export async function linkRepos(
+  repoAssets: RepoAssets,
+  team: string,
+  refs: string[],
+  linkedBy = ADMIN,
+) {
+  const installationId = newInstallation();
+  await repoAssets.link(team, {
+    installationId,
+    linkedBy,
+    repos: refs.map((ref, i) => ({ ref, githubId: i + 1 })),
+  });
+  return installationId;
+}
+
 /** Members and Findings for a test that never reaches the database: any call fails it. */
 const noDatabase = () => Promise.reject(new Error("this test app has no database: pass withTeam"));
 const noMembers: Members = { open: noDatabase, list: noDatabase, changeRole: noDatabase };
@@ -133,6 +176,10 @@ export function testApp(options: {
   startScanJob?: ScanJobStarter;
   /** The queued Scans, in place of the real ones on `withTeam`. */
   scans?: Scans;
+  /** Each module's routes, such as Guard's; none by default. */
+  moduleRoutes?: MountRoutes[];
+  /** Each module's check of a start's Assets; none by default, so any Assets the body's shape allows are queued. */
+  assetChecks?: AssetChecks;
 }) {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
@@ -162,6 +209,8 @@ export function testApp(options: {
         options.scans ?? (options.withTeam ? createScans({ withTeam: options.withTeam }) : noScans),
       scanners: options.scanners ?? {},
       startScanJob: options.startScanJob,
+      moduleRoutes: options.moduleRoutes ?? [],
+      assetChecks: options.assetChecks ?? {},
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),
       frontendApiHost: FRONTEND_API_HOST,
