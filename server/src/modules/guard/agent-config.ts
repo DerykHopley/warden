@@ -363,10 +363,16 @@ const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
     : [];
 
 /**
- * `claude`, or `claude-code` (as `npx @anthropic-ai/claude-code` runs it), as a command word: at the start, or after a
- * space, `;`, `&`, `|`, `(` or `/`, then a space. A hook that only names the flag, to grep for it, doesn't run it.
+ * `claude`, or `claude-code` (as `npx @anthropic-ai/claude-code` runs it), as a command word: at the start, or after
+ * white space, `;`, `&`, `|`, `(` or `/`, then a space. A hook that only names the flag, to grep for it, doesn't run it.
  */
-const RUNS_CLAUDE = /(?:^|[ ;&|(/])claude(?:-code)? /;
+const RUNS_CLAUDE = /(?:^|[\s;&|(/])claude(?:-code)? /g;
+
+/**
+ * A run's arguments, in a command with its quotes masked: up to the first `;`, `&`, `|`, newline or `)`. A backslash
+ * and the character it escapes, a line continuation among them, don't end them.
+ */
+const RUN_ARGUMENTS = /(?:\\(?:\r?\n|[\s\S])|[^;&|\n)\\])*/y;
 
 /**
  * A backslash and the character it escapes, or a single- or double-quoted argument (to the end of the text when it
@@ -376,25 +382,48 @@ const ESCAPE_OR_QUOTED = /\\[\s\S]|"(?:[^"\\]|\\[\s\S])*"?|'[^']*'?/g;
 
 /**
  * A shell command with each quoted argument, its quotes too, masked by `_`, so its length and every index stay the
- * same: text inside quotes is never a command word. `bash -c "claude …"` is missed, as a guard hook that greps for the
- * flag is the commoner case.
+ * same, except those `keep` leaves as written: text inside quotes is never a command word. `bash -c "claude …"` is
+ * missed, as a guard hook that greps for the flag is the commoner case.
  */
-const withQuotesMasked = (command: string) =>
+const withQuotesMasked = (command: string, keep: (quoted: string) => boolean = () => false) =>
   command.replace(ESCAPE_OR_QUOTED, (match) =>
-    match.startsWith("\\") ? match : "_".repeat(match.length),
+    match.startsWith("\\") || keep(match) ? match : "_".repeat(match.length),
   );
 
-/** Each hook command that runs the agent, once per flag after the command word, on the `command` value's line. */
-const hookPlaces = ({ hooks }: ClaudeSettings): Place[] =>
-  hooks.flatMap(({ command, line }) => {
-    // The flag or mode value after the command word may be quoted, so it is searched for in the command as written.
-    const run = RUNS_CLAUDE.exec(withQuotesMasked(command));
-    if (run === null) return [];
-    const after = command.slice(run.index + run[0].length);
-    return SKIP_FLAGS.flatMap(({ kind, pattern }) =>
-      Array.from(after.matchAll(pattern), () => ({ kind, line })),
+/** A quoted argument of one word, as the flag or the mode's value is; a prompt holds more. */
+const isOneWord = (quoted: string) => !/\s/.test(quoted);
+
+/**
+ * Each run of the agent in a shell command, as its own arguments: the flag or mode value may be quoted, so a one-word
+ * quoted argument stays as written. The next run is looked for after this one ends, so no text is in two.
+ */
+function agentRuns(command: string): string[] {
+  const masked = withQuotesMasked(command);
+  const runs: string[] = [];
+  RUNS_CLAUDE.lastIndex = 0;
+  for (let run = RUNS_CLAUDE.exec(masked); run !== null; run = RUNS_CLAUDE.exec(masked)) {
+    RUN_ARGUMENTS.lastIndex = RUNS_CLAUDE.lastIndex;
+    RUN_ARGUMENTS.exec(masked);
+    runs.push(
+      withQuotesMasked(command.slice(RUNS_CLAUDE.lastIndex, RUN_ARGUMENTS.lastIndex), isOneWord),
     );
-  });
+    RUNS_CLAUDE.lastIndex = RUN_ARGUMENTS.lastIndex;
+  }
+  return runs;
+}
+
+/**
+ * Each run of the agent in each hook command, once per flag in that run's own arguments, on the `command` value's
+ * line. A later command, or a quoted argument of more than one word (a prompt), isn't one of them.
+ */
+const hookPlaces = ({ hooks }: ClaudeSettings): Place[] =>
+  hooks.flatMap(({ command, line }) =>
+    agentRuns(command).flatMap((args) =>
+      SKIP_FLAGS.flatMap(({ kind, pattern }) =>
+        Array.from(args.matchAll(pattern), () => ({ kind, line })),
+      ),
+    ),
+  );
 
 function flagPlaces(text: string): Place[] {
   const lines = text.split("\n");

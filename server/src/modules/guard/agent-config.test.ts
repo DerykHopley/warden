@@ -471,6 +471,9 @@ describe("guard/permission-skip", () => {
       `npx @anthropic-ai/claude-code ${MODE} ${BYPASS}`,
       `${MODE} ${BYPASS}`,
     ],
+    [".claude/settings.json", "PreToolUse", `claude -p x && claude ${FLAG} -p y`, FLAG],
+    [".claude/settings.json", "PreToolUse", `claude "${FLAG}" -p x`, FLAG],
+    [".claude/settings.json", "PreToolUse", `claude ${MODE} "${BYPASS}"`, `${MODE} ${BYPASS}`],
   ])(
     "reports a hook in %s whose %s command runs the agent with its checks off, on the command's line",
     (path, event, command, kind) => {
@@ -499,6 +502,23 @@ describe("guard/permission-skip", () => {
     [
       "greps for the flag with claude after ;, | and && in double quotes",
       `grep -qE "(^|;|[|]|&&) claude ${FLAG}" && exit 2`,
+    ],
+    [
+      "runs claude without the flag, then greps for it in double quotes after ;",
+      `claude -p x; grep -q " claude ${FLAG}"`,
+    ],
+    ["has the flag only inside the run's own prompt", `claude -p "never pass ${FLAG}"`],
+    [
+      "runs claude without the flag, then has it in a later command after ;",
+      `claude -p x; echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag, then has it in a later command after &&",
+      `claude -p x && echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag, then has it in a later command after |",
+      `claude -p x | echo ${FLAG}`,
     ],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
