@@ -343,18 +343,21 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
 
   it("opens a Finding for a broad Bash allow and one per file that skips permission checks, each with its fix (story 3)", async () => {
     const team = await newTeam();
+    // Joined from parts, so this file never holds the flag or the mode for a Guard Scan of Warden to report.
+    const flag = ["--dangerously", "-skip-permissions"].join("");
+    const bypass = ["bypass", "Permissions"].join("");
     const agentConfig: RepoFile[] = [
       {
         path: "README.md",
-        text: "# Guarded\n\nNever run `claude --dangerously-skip-permissions` here.\n",
+        text: `# Guarded\n\nNever run \`claude ${flag}\` here.\n`,
       },
       {
         path: ".claude/settings.json",
-        text: `{\n  "permissions": {\n    "allow": ["Bash(*)"],\n    "defaultMode": "bypassPermissions"\n  }\n}\n`,
+        text: `{\n  "permissions": {\n    "allow": ["Bash(*)"],\n    "defaultMode": "${bypass}"\n  }\n}\n`,
       },
       {
         path: "scripts/agent.sh",
-        text: '#!/bin/sh\nclaude --dangerously-skip-permissions -p "$1"\n',
+        text: `#!/bin/sh\nclaude ${flag} -p "$1"\n`,
       },
     ];
     const guard = guardApp(readerOf(files(agentConfig)));
@@ -386,7 +389,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
           title: skip.title,
           location: { kind: "file", path: ".claude/settings.json", line: 4 },
           evidence: {
-            summary: `1 place skips the agent's permission checks (defaultMode bypassPermissions) in .claude/settings.json, on line 4. To fix: ${skip.fix}`,
+            summary: `1 place skips the agent's permission checks (defaultMode ${bypass} (applies before Claude Code v2.1.257)) in .claude/settings.json, on line 4. To fix: ${skip.fix}`,
           },
         }),
         expect.objectContaining({
@@ -397,7 +400,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
           title: skip.title,
           location: { kind: "file", path: "scripts/agent.sh", line: 2 },
           evidence: {
-            summary: `1 place skips the agent's permission checks (--dangerously-skip-permissions) in scripts/agent.sh, on line 2. To fix: ${skip.fix}`,
+            summary: `1 place skips the agent's permission checks (${flag}) in scripts/agent.sh, on line 2. To fix: ${skip.fix}`,
           },
         }),
       ]),

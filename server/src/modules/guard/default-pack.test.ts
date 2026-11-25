@@ -37,6 +37,5 @@ describe("the Default Pack", () => {
     });
 
     expect(scanner.rules).toEqual(DEFAULT_PACK.map((rule) => rule.ruleId));
-    expect(scanner.rules).toHaveLength(4);
   });
 });

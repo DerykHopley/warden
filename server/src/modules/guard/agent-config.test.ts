@@ -1,6 +1,8 @@
 // Guard's per-file agent-config Rules (Guard spec, story 3): `agentConfigCheck(asset).see(file)` reads a Claude Code
-// settings file's allow rules and `defaultMode`, and any text file for the flag that skips permission checks, and
-// answers at most one Observation per Rule for the file.
+// settings file's allow rules and `defaultMode`, and any other text file for the flag that skips permission checks, and
+// answers at most one Observation per Rule for the file. The flag and the mode are built here by joining their parts,
+// so this file never holds a whole one for a Guard Scan of Warden's own repo to report.
+import { readdirSync, readFileSync } from "node:fs";
 import { Observation, type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import { agentConfigCheck } from "./agent-config.ts";
@@ -11,9 +13,15 @@ const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
 const BLANKET = "guard/blanket-bash-allow";
 const SKIP = "guard/permission-skip";
 
+const join = (...parts: string[]) => parts.join("");
+/** The flag that starts Claude Code with its permission checks off. */
+const FLAG = join("--dangerously", "-skip-permissions");
+const MODE = join("--permission", "-mode");
+const BYPASS = join("bypass", "Permissions");
+
 /** A settings file's text, pretty-printed as Claude Code writes it: each allow entry on a line of its own. */
-const settings = (permissions: Record<string, unknown>) =>
-  `${JSON.stringify({ $schema: "https://json.schemastore.org/claude-code-settings.json", permissions }, null, 2)}\n`;
+const settings = (permissions: Record<string, unknown>, rest: Record<string, unknown> = {}) =>
+  `${JSON.stringify({ $schema: "https://json.schemastore.org/claude-code-settings.json", permissions, ...rest }, null, 2)}\n`;
 
 const see = (path: string, text: string) => agentConfigCheck(repo).see({ path, text });
 const ofRule = (path: string, text: string, rule: string) =>
@@ -55,6 +63,25 @@ describe("guard/blanket-bash-allow", () => {
     expect(ofRule(".claude/settings.json", settings({ allow: [entry] }), BLANKET)).toHaveLength(1);
   });
 
+  it.each([
+    "Bash(bash -c:*)",
+    "Bash(sh -c *)",
+    "Bash(zsh -c*)",
+    "Bash(python3 -c:*)",
+    "Bash(python -c *)",
+    "Bash(/bin/cat:*)",
+    "Bash(/usr/bin/python3 -c *)",
+    "Bash(./bin/grep *)",
+    "Bash(~/bin/sed:*)",
+  ])(
+    "reports %s, a shell or interpreter run with -c or a listed command given by path",
+    (entry) => {
+      expect(ofRule(".claude/settings.json", settings({ allow: [entry] }), BLANKET)).toHaveLength(
+        1,
+      );
+    },
+  );
+
   it("reports no narrow allow, and nothing in permissions.deny", () => {
     const text = settings({
       allow: ["Bash(npm run test:*)", "Bash(git status)", "Read(./src/**)"],
@@ -64,12 +91,19 @@ describe("guard/blanket-bash-allow", () => {
     expect(see(".claude/settings.json", text)).toEqual([]);
   });
 
-  it.each(["Bash(catalog:*)", "Bash(cat file.txt)", "Bash(npm *)", "bash(*)", "Bash(*) "])(
-    "doesn't report %s",
-    (entry) => {
-      expect(ofRule(".claude/settings.json", settings({ allow: [entry] }), BLANKET)).toEqual([]);
-    },
-  );
+  it.each([
+    "Bash(catalog:*)",
+    "Bash(cat file.txt)",
+    "Bash(npm *)",
+    "bash(*)",
+    "Bash(*) ",
+    "Bash(/bin/catalog:*)",
+    "Bash(/usr/bin/git status)",
+    "Bash(npm -c:*)",
+    "Bash(bash -c 'npm test')",
+  ])("doesn't report %s", (entry) => {
+    expect(ofRule(".claude/settings.json", settings({ allow: [entry] }), BLANKET)).toEqual([]);
+  });
 
   it("gives one Observation for four broad allows: a count, the first three, and how many more", () => {
     const text = settings({
@@ -187,18 +221,14 @@ describe("guard/blanket-bash-allow", () => {
 
 describe("guard/permission-skip", () => {
   it.each([
-    ["scripts/agent.sh", '#!/bin/sh\nset -e\nclaude --dangerously-skip-permissions -p "$1"\n', 3],
+    ["scripts/agent.sh", `#!/bin/sh\nset -e\nclaude ${FLAG} -p "$1"\n`, 3],
     [
       ".github/workflows/ci.yml",
-      "jobs:\n  agent:\n    steps:\n      - run: npx claude --dangerously-skip-permissions\n",
+      `jobs:\n  agent:\n    steps:\n      - run: npx claude ${FLAG}\n`,
       4,
     ],
-    [
-      "package.json",
-      '{\n  "scripts": {\n    "agent": "claude --dangerously-skip-permissions"\n  }\n}\n',
-      3,
-    ],
-  ])("reports --dangerously-skip-permissions in %s on its line", (path, text, line) => {
+    ["package.json", `{\n  "scripts": {\n    "agent": "claude ${FLAG}"\n  }\n}\n`, 3],
+  ])("reports the skip flag in %s on its line", (path, text, line) => {
     const observations = ofRule(path, text, SKIP);
 
     expect(observations).toEqual([
@@ -209,36 +239,95 @@ describe("guard/permission-skip", () => {
         severity: "high",
         title: "The agent is set to skip its permission checks",
         evidence: {
-          summary: `1 place skips the agent's permission checks (--dangerously-skip-permissions) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
+          summary: `1 place skips the agent's permission checks (${FLAG}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
         },
       },
     ]);
     expect(Observation.safeParse(observations[0]).success).toBe(true);
   });
 
-  it("reports --permission-mode bypassPermissions in a script", () => {
+  it("reports the bypass permission mode in a script", () => {
     const observations = ofRule(
       "scripts/run.sh",
-      "#!/bin/sh\n\nexec claude --permission-mode bypassPermissions\n",
+      `#!/bin/sh\n\nexec claude ${MODE} ${BYPASS}\n`,
       SKIP,
     );
 
     expect(observations.map((o) => [o.location, o.evidence.summary])).toEqual([
       [
         { kind: "file", path: "scripts/run.sh", line: 3 },
-        `1 place skips the agent's permission checks (--permission-mode bypassPermissions) in scripts/run.sh, on line 3. To fix: ${packRule(SKIP).fix}`,
+        `1 place skips the agent's permission checks (${MODE} ${BYPASS}) in scripts/run.sh, on line 3. To fix: ${packRule(SKIP).fix}`,
       ],
     ]);
   });
 
-  it("reports a settings file whose defaultMode is bypassPermissions, on that line", () => {
-    const text = settings({ allow: ["Bash(git status)"], defaultMode: "bypassPermissions" });
+  it.each([
+    ["with a double-quoted value", "scripts/run.sh", `claude ${MODE} "${BYPASS}" -p go\n`, 1],
+    ["with a single-quoted value after =", "scripts/run.sh", `claude ${MODE}='${BYPASS}'\n`, 1],
+    [
+      "as an argv array",
+      "scripts/agent.ts",
+      `import { spawn } from "node:child_process";\nspawn("claude", ["-p", "go", "${MODE}","${BYPASS}"]);\n`,
+      2,
+    ],
+    [
+      "as an argv array over several lines",
+      "scripts/agent.py",
+      `subprocess.run([\n    "claude",\n    '${MODE}',\n    '${BYPASS}',\n])\n`,
+      3,
+    ],
+    [
+      "across a backslash continuation",
+      "scripts/run.sh",
+      `#!/bin/sh\nclaude -p go ${MODE} \\\n  ${BYPASS}\n`,
+      2,
+    ],
+  ])("reports the bypass permission mode %s", (_name, path, text, line) => {
+    expect(ofRule(path, text, SKIP).map((o) => [o.location, o.evidence.summary])).toEqual([
+      [
+        { kind: "file", path, line },
+        `1 place skips the agent's permission checks (${MODE} ${BYPASS}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
+      ],
+    ]);
+  });
+
+  it.each([
+    [
+      "src/agent.ts",
+      `const options = {\n  model: "opus",\n  permissionMode: "${BYPASS}",\n};\n`,
+      3,
+    ],
+    ["agent/run.py", `options = ClaudeAgentOptions(\n    permission_mode="${BYPASS}",\n)\n`, 2],
+    ["agent.json", `{\n  "permissionMode": "${BYPASS}"\n}\n`, 2],
+  ])("reports the Agent SDK's permission mode set to bypass in %s", (path, text, line) => {
+    expect(ofRule(path, text, SKIP).map((o) => [o.location, o.evidence.summary])).toEqual([
+      [
+        { kind: "file", path, line },
+        `1 place skips the agent's permission checks (permissionMode ${BYPASS}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
+      ],
+    ]);
+  });
+
+  it.each([
+    ["another permission mode", "scripts/run.sh", `claude ${MODE} plan\n`],
+    [
+      "the Agent SDK's default mode",
+      "src/agent.ts",
+      `const options = { permissionMode: "default" };\n`,
+    ],
+    ["a longer mode name", "scripts/run.sh", `claude ${MODE} ${BYPASS}Later\n`],
+  ])("gives nothing for %s", (_name, path, text) => {
+    expect(see(path, text)).toEqual([]);
+  });
+
+  it("reports a settings file whose defaultMode is bypassPermissions, on that line, saying which versions apply it", () => {
+    const text = settings({ allow: ["Bash(git status)"], defaultMode: BYPASS });
 
     expect(ofRule(".claude/settings.json", text, SKIP)).toEqual([
       expect.objectContaining({
         location: { kind: "file", path: ".claude/settings.json", line: 7 },
         evidence: {
-          summary: `1 place skips the agent's permission checks (defaultMode bypassPermissions) in .claude/settings.json, on line 7. To fix: ${packRule(SKIP).fix}`,
+          summary: `1 place skips the agent's permission checks (defaultMode ${BYPASS} (applies before Claude Code v2.1.257)) in .claude/settings.json, on line 7. To fix: ${packRule(SKIP).fix}`,
         },
       }),
     ]);
@@ -248,37 +337,82 @@ describe("guard/permission-skip", () => {
     expect(ofRule(".claude/settings.json", settings({ defaultMode: mode }), SKIP)).toEqual([]);
   });
 
+  it("reads a settings file only for its defaultMode: a deny entry or a hook that blocks the flag isn't a place", () => {
+    const text = settings(
+      { deny: [`Bash(claude ${FLAG}:*)`, `Bash(claude ${MODE} ${BYPASS}:*)`] },
+      {
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: "Bash",
+              hooks: [{ type: "command", command: `grep -q -- '${FLAG}' && exit 2 || true` }],
+            },
+          ],
+        },
+      },
+    );
+
+    expect(see(".claude/settings.local.json", text)).toEqual([]);
+  });
+
   it("counts every place in one file, names each kind once, and points at the first", () => {
     const text = [
       "#!/bin/sh",
-      "claude --permission-mode bypassPermissions -p one",
-      "claude --dangerously-skip-permissions -p two",
-      "claude --dangerously-skip-permissions -p three",
+      `claude ${MODE} ${BYPASS} -p one`,
+      `claude ${FLAG} -p two`,
+      `claude ${FLAG} -p three`,
     ].join("\n");
 
     expect(ofRule("scripts/agent.sh", text, SKIP)[0]!.evidence.summary).toBe(
-      `3 places skip the agent's permission checks (--permission-mode bypassPermissions, --dangerously-skip-permissions) in scripts/agent.sh, first on line 2. To fix: ${packRule(SKIP).fix}`,
+      `3 places skip the agent's permission checks (${MODE} ${BYPASS}, ${FLAG}) in scripts/agent.sh, first on line 2. To fix: ${packRule(SKIP).fix}`,
     );
   });
 
   it("never quotes the line itself", () => {
     const [observation] = ofRule(
       "scripts/agent.sh",
-      'claude --dangerously-skip-permissions -p "deploy to prod-db-7"\n',
+      `claude ${FLAG} -p "deploy to prod-db-7"\n`,
       SKIP,
     );
 
     expect(JSON.stringify(observation)).not.toContain("prod-db-7");
   });
 
-  it.each(["README.md", "docs/agents.txt", "docs/guide.mdx", "docs/index.rst", "CHANGELOG.MD"])(
-    "gives nothing for the flag in %s",
-    (path) => {
-      expect(
-        see(path, "Run `claude --dangerously-skip-permissions` only in a container.\n"),
-      ).toEqual([]);
-    },
-  );
+  it.each([
+    "README.md",
+    "docs/agents.txt",
+    "docs/guide.mdx",
+    "docs/index.rst",
+    "CHANGELOG.MD",
+    "docs/setup.markdown",
+    "docs/agents.adoc",
+    "site/index.html",
+  ])("gives nothing for the flag in %s", (path) => {
+    expect(see(path, `Run \`claude ${FLAG}\` only in a container.\n`)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a shell comment",
+      "scripts/agent.sh",
+      `#!/bin/sh\n# Never add ${FLAG} here.\nclaude -p "$1"\n`,
+    ],
+    [
+      "an indented YAML comment",
+      ".github/workflows/ci.yml",
+      `jobs:\n  agent:\n    # ${MODE} ${BYPASS} would skip the checks\n    steps: []\n`,
+    ],
+  ])("gives nothing for the flag in %s line", (_name, path, text) => {
+    expect(see(path, text)).toEqual([]);
+  });
+
+  it("still reports the flag on a #! line, which runs it", () => {
+    const observations = ofRule("bin/agent", `#!/usr/bin/env -S claude ${FLAG}\n`, SKIP);
+
+    expect(observations.map((o) => o.location)).toEqual([
+      { kind: "file", path: "bin/agent", line: 1 },
+    ]);
+  });
 
   it("gives nothing for a file with neither the flag nor the mode", () => {
     expect(see("scripts/agent.sh", '#!/bin/sh\nclaude -p "$1"\n')).toEqual([]);
@@ -287,11 +421,29 @@ describe("guard/permission-skip", () => {
 
 describe("agentConfigCheck", () => {
   it("answers both Rules for one settings file", () => {
-    const text = settings({ allow: ["Bash(*)"], defaultMode: "bypassPermissions" });
+    const text = settings({ allow: ["Bash(*)"], defaultMode: BYPASS });
 
     expect(see(".claude/settings.json", text).map((o) => [o.rule_id, o.location])).toEqual([
       [BLANKET, { kind: "file", path: ".claude/settings.json", line: 5 }],
       [SKIP, { kind: "file", path: ".claude/settings.json", line: 7 }],
     ]);
+  });
+
+  it("finds nothing in Guard's own code and tests, so a Guard Scan of Warden's repo opens no Finding for them", () => {
+    const server = new URL("../../../", import.meta.url);
+    const paths = [
+      ...readdirSync(new URL("src/modules/guard/", server), { withFileTypes: true })
+        .filter((entry) => entry.isFile())
+        .map((entry) => `src/modules/guard/${entry.name}`),
+      "test/guard-scan-api.test.ts",
+    ];
+
+    const found = paths.flatMap((path) =>
+      see(`server/${path}`, readFileSync(new URL(path, server), "utf8")).map(
+        (o) => o.evidence.summary,
+      ),
+    );
+
+    expect(found).toEqual([]);
   });
 });

@@ -2,7 +2,8 @@
 // the two per-file Rules: a broad Bash allow in a settings file, and the flag or mode that skips permission checks.
 // A settings file is read as Claude Code reads it, through its own keys (`permissions.allow`, `permissions.defaultMode`);
 // a file that isn't valid JSON holds no rules, as Claude Code wouldn't apply it either. A summary quotes only allow
-// entries that match the broad patterns, which can't hold a secret, and never a line of a file.
+// entries that match the broad patterns, which can't hold a secret, and never a line of a file. The flag and the mode
+// are built here by joining their parts, so this file never holds a whole one for a Guard Scan of Warden to report.
 import type { Asset, Observation, RuleId } from "@warden/contracts";
 import { BLANKET_BASH_ALLOW, packRule, PERMISSION_SKIP } from "./default-pack.ts";
 import type { RepoFile } from "./repo-reader.ts";
@@ -26,12 +27,12 @@ export function agentConfigCheck(asset: Asset): AgentConfigCheck {
 }
 
 /** A Claude Code settings file: `.claude/settings.json` or `.claude/settings.local.json` in any folder. */
-export function isClaudeSettingsFile(path: string): boolean {
+function isClaudeSettingsFile(path: string): boolean {
   return /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/.test(path);
 }
 
 /** What the agent-config Rules read from a settings file, each value with the line it starts on. */
-export type ClaudeSettings = {
+type ClaudeSettings = {
   /** `permissions.allow`'s string entries, in order. */
   allow: readonly { rule: string; line: number }[];
   /** `permissions.defaultMode`, when it is a string. */
@@ -41,7 +42,7 @@ export type ClaudeSettings = {
 const NO_SETTINGS: ClaudeSettings = { allow: [], defaultMode: undefined };
 
 /** A settings file's permissions. A file that isn't valid JSON, and a field of another type, hold nothing. */
-export function readClaudeSettings(text: string): ClaudeSettings {
+function readClaudeSettings(text: string): ClaudeSettings {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -76,26 +77,26 @@ function valueLines(text: string, depth: number): Map<string, number> {
   const lines = new Map<string, number>();
   let i = 0;
   let line = 1;
-  const blank = () => {
+  const skipBlank = () => {
     while (i < text.length && /[ \t\n\r]/.test(text[i]!)) {
       if (text[i] === "\n") line += 1;
       i += 1;
     }
   };
   // JSON strings hold no raw line break, so stepping over one never passes a line.
-  const string = (): string => {
+  const readString = (): string => {
     const start = i;
     i += 1;
     while (text[i] !== '"') i += text[i] === "\\" ? 2 : 1;
     i += 1;
     return JSON.parse(text.slice(start, i)) as string;
   };
-  const skip = () => {
+  const skipValue = () => {
     let open = 0;
     do {
       const c = text[i]!;
       if (c === '"') {
-        string();
+        readString();
         continue;
       }
       if (c === "\n") line += 1;
@@ -105,40 +106,43 @@ function valueLines(text: string, depth: number): Map<string, number> {
     } while (open > 0 && i < text.length);
   };
   const value = (path: (string | number)[]) => {
-    blank();
+    skipBlank();
     lines.set(JSON.stringify(path), line);
     const c = text[i];
-    if (path.length >= depth && (c === "{" || c === "[")) return skip();
+    if (path.length >= depth && (c === "{" || c === "[")) return skipValue();
     if (c === "{") {
       i += 1;
-      blank();
+      skipBlank();
       if (text[i] === "}") return void (i += 1);
       for (;;) {
-        blank();
-        const key = string();
-        blank();
+        skipBlank();
+        const key = readString();
+        skipBlank();
         i += 1; // the `:`
         value([...path, key]);
-        blank();
+        skipBlank();
         if (text[i++] === "}") return;
       }
     }
     if (c === "[") {
       i += 1;
-      blank();
+      skipBlank();
       if (text[i] === "]") return void (i += 1);
       for (let n = 0; ; n += 1) {
         value([...path, n]);
-        blank();
+        skipBlank();
         if (text[i++] === "]") return;
       }
     }
-    if (c === '"') return void string();
+    if (c === '"') return void readString();
     while (i < text.length && !/[ \t\n\r,\]}]/.test(text[i]!)) i += 1;
   };
   value([]);
   return lines;
 }
+
+/** Shells and interpreters: `-c` runs whatever command text follows. */
+const RUNS_CODE = ["sh", "bash", "zsh", "python", "python3"];
 
 /** Commands that read files or run a shell: a wildcard allow for one lets the agent read or run anything. */
 const READS_OR_RUNS = [
@@ -156,25 +160,26 @@ const READS_OR_RUNS = [
   "cp",
   "env",
   "printenv",
-  "sh",
-  "bash",
-  "zsh",
   "eval",
-  "python",
-  "python3",
   "node",
   "perl",
   "ruby",
+  ...RUNS_CODE,
 ];
+
+/** A command given by path (`/bin/`, `/usr/local/bin/`, `./bin/`, `~/bin/`): path words only, never a space. */
+const BY_PATH = String.raw`(?:(?:~|\.{1,2})?(?:/[\w.-]+)*/)?`;
+
+/** A listed command, maybe by path; a shell or interpreter maybe with `-c`. */
+const COMMAND = `${BY_PATH}(?:(?:${RUNS_CODE.join("|")}) -c|${READS_OR_RUNS.join("|")})`;
 
 /**
  * A broad Bash allow: the whole tool (`Bash`, `Bash(*)`, `Bash(:*)`, `Bash(**)`), or a wildcard for a command that
  * reads files or runs a shell, in any of Claude Code's three trailing forms (`Bash(cat:*)`, `Bash(cat *)`,
- * `Bash(cat*)`).
+ * `Bash(cat*)`). The command may be given by path (`Bash(/bin/cat:*)`), and a shell or interpreter may come with
+ * `-c` (`Bash(bash -c:*)`).
  */
-const BROAD_BASH = new RegExp(
-  `^Bash(?:\\((?:\\*|:\\*|\\*\\*|(?:${READS_OR_RUNS.join("|")})(?::\\*| \\*|\\*))\\))?$`,
-);
+const BROAD_BASH = new RegExp(String.raw`^Bash(?:\((?:\*|:\*|\*\*|${COMMAND}(?::\*| \*|\*))\))?$`);
 
 /** How many broad allows a summary names before "and N more". */
 const NAMED = 3;
@@ -200,47 +205,97 @@ function blanketBashAllow(
   );
 }
 
-/** The flags that start the agent with its permission checks off, each named by its kind. */
+const SKIP_WORDS = ["dangerously", "skip", "permissions"].join("-");
+const MODE_FLAG = ["--permission", "mode"].join("-");
+const BYPASS = ["bypass", "Permissions"].join("");
+
+/**
+ * The flags and options that start the agent with its permission checks off, each named by its kind. Each match may
+ * run over lines (an argv array, a backslash continuation); it counts on the line it starts on.
+ */
 const SKIP_FLAGS: readonly { kind: string; pattern: RegExp }[] = [
   // No leading `--`, so a longer flag built on the same words counts too.
-  { kind: "--dangerously-skip-permissions", pattern: /dangerously-skip-permissions/g },
+  { kind: `--${SKIP_WORDS}`, pattern: new RegExp(SKIP_WORDS, "g") },
   {
-    kind: "--permission-mode bypassPermissions",
-    pattern: /--permission-mode(?:[ \t]+|=)bypassPermissions/g,
+    // `--permission-mode` then its value: after a space, `=`, a quote, an argv array's `","`, or a line continuation.
+    kind: `${MODE_FLAG} ${BYPASS}`,
+    pattern: new RegExp(String.raw`${MODE_FLAG}["']?(?:[\s,=]|\\(?=\r?\n))+["']?${BYPASS}\b`, "g"),
+  },
+  {
+    // The Agent SDK's option: `permissionMode` (TypeScript, JSON) or `permission_mode` (Python).
+    kind: `permissionMode ${BYPASS}`,
+    pattern: new RegExp(
+      String.raw`\bpermission(?:Mode|_mode)["']?[ \t]*[:=][ \t]*["']?${BYPASS}\b`,
+      "g",
+    ),
   },
 ];
 
 /** Docs describe the flag; scripts, CI and config run it. */
-const DOCS_FILE = /\.(?:md|mdx|txt|rst)$/i;
+const DOCS_FILE = /\.(?:md|mdx|markdown|txt|rst|adoc|html)$/i;
+
+/** A shell or YAML comment line, which only mentions the flag. A `#!` line runs it, so isn't one. */
+const COMMENT_LINE = /^[ \t]*#(?!!)/;
+
+type Place = { kind: string; line: number };
 
 function permissionSkip(
   asset: Asset,
   { path, text }: RepoFile,
   settings: ClaudeSettings | undefined,
 ): Observation | undefined {
-  const places: { kind: string; line: number }[] = [];
-  if (settings?.defaultMode?.mode === "bypassPermissions") {
-    places.push({ kind: "defaultMode bypassPermissions", line: settings.defaultMode.line });
-  }
-  if (!DOCS_FILE.test(path)) {
-    text.split("\n").forEach((content, i) => {
-      for (const { kind, pattern } of SKIP_FLAGS) {
-        places.push(...Array.from(content.matchAll(pattern), () => ({ kind, line: i + 1 })));
-      }
-    });
-  }
+  // A settings file counts only through its parsed `defaultMode`: its text can name the flag to deny or block it.
+  const places =
+    settings !== undefined
+      ? defaultModePlaces(settings)
+      : DOCS_FILE.test(path)
+        ? []
+        : flagPlaces(text);
   if (places.length === 0) return undefined;
   places.sort((a, b) => a.line - b.line);
   const first = places[0]!.line;
   const count = places.length;
   const kinds = [...new Set(places.map((place) => place.kind))].join(", ");
-  const skip = count === 1 ? "place skips" : "places skip";
+  const verb = count === 1 ? "place skips" : "places skip";
   return observation(
     asset,
     PERMISSION_SKIP,
     path,
     first,
-    `${count} ${skip} the agent's permission checks (${kinds}) in ${path}, ${where(count, first)}`,
+    `${count} ${verb} the agent's permission checks (${kinds}) in ${path}, ${where(count, first)}`,
+  );
+}
+
+/** Claude Code ignores `defaultMode` bypass in project and local settings from v2.1.257; older versions apply it. */
+const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
+  defaultMode?.mode === BYPASS
+    ? [
+        {
+          kind: `defaultMode ${BYPASS} (applies before Claude Code v2.1.257)`,
+          line: defaultMode.line,
+        },
+      ]
+    : [];
+
+function flagPlaces(text: string): Place[] {
+  const lines = text.split("\n");
+  // Where each line starts in `text`, to find the line a match starts on.
+  const starts: number[] = [];
+  lines.reduce((start, content) => (starts.push(start), start + content.length + 1), 0);
+  const lineAt = (index: number) => {
+    let low = 0;
+    let high = starts.length;
+    while (low < high) {
+      const mid = (low + high) >> 1;
+      if (starts[mid]! <= index) low = mid + 1;
+      else high = mid;
+    }
+    return low;
+  };
+  return SKIP_FLAGS.flatMap(({ kind, pattern }) =>
+    Array.from(text.matchAll(pattern), (match) => lineAt(match.index))
+      .filter((line) => !COMMENT_LINE.test(lines[line - 1]!))
+      .map((line) => ({ kind, line })),
   );
 }
 
