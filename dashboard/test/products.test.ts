@@ -3,8 +3,8 @@
 import type { ProductInput } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tryAgainIn } from "../src/api.ts";
-import { fetchFrameworks, fetchProducts, saveProduct } from "../src/products.ts";
-import { callsTo, fetchMock, json } from "./fake-api.ts";
+import { fetchFrameworks, fetchProducts, saveProduct, saveProductInTeam } from "../src/products.ts";
+import { callsTo, fetchMock, json, serve } from "./fake-api.ts";
 
 const getToken = async () => "session-token" as string | null;
 
@@ -155,6 +155,61 @@ describe("saveProduct", () => {
   it("reads no answer as maybe saved", async () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
     expect(await saveProduct(getToken, null, input)).toEqual({ kind: "maybe-saved" });
+  });
+});
+
+describe("saveProductInTeam", () => {
+  const input: ProductInput = {
+    name: product.name,
+    repo_urls: product.repo_urls,
+    dependencies: [],
+  };
+
+  /** A getToken that hands out a new token on each call, as Clerk can after a Team switch: token-1, token-2, … */
+  const freshTokens = () => {
+    let calls = 0;
+    return vi.fn(async () => `token-${++calls}` as string | null);
+  };
+
+  /** /api/me names `teamFor(token)` for the token it was asked with. */
+  const meNames = (teamFor: (token: string) => string) =>
+    serve({
+      me: () =>
+        json(200, { userId: "user_1", team: teamFor(meToken()), role: "lead", level: "quick" }),
+      saveProduct: () => json(201, product),
+    });
+  const meToken = () => {
+    const [, init] = callsTo("/api/me").at(-1) ?? [];
+    return new Headers(init?.headers).get("Authorization")?.replace("Bearer ", "") ?? "";
+  };
+  const saveToken = () => {
+    const [[, init] = []] = callsTo("/api/products");
+    return new Headers(init?.headers).get("Authorization");
+  };
+
+  it("saves with the token whose /api/me answer named the form's Team, never a later one", async () => {
+    const getTokens = freshTokens();
+    meNames((token) => (token === "token-1" ? "org_a" : "org_b"));
+
+    expect(await saveProductInTeam(getTokens, "org_a", null, input)).toEqual({
+      kind: "saved",
+      product,
+    });
+    expect(saveToken()).toBe("Bearer token-1");
+    expect(getTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it("saves with the second answer's token when the first /api/me names another Team", async () => {
+    const getTokens = freshTokens();
+    meNames((token) => (token === "token-1" ? "org_b" : "org_a"));
+
+    expect(await saveProductInTeam(getTokens, "org_a", null, input)).toEqual({
+      kind: "saved",
+      product,
+    });
+    expect(callsTo("/api/me")).toHaveLength(2);
+    expect(saveToken()).toBe("Bearer token-2");
+    expect(getTokens).toHaveBeenCalledTimes(2);
   });
 });
 
