@@ -10,10 +10,10 @@ import {
   type ReposBody,
   type ScanBody,
 } from "@warden/contracts";
-import type { z } from "zod";
 import type { MountRoutes } from "../../app.ts";
 import { createAttemptLimit } from "../../attempt-limit.ts";
 import type { Logger } from "../../log.ts";
+import { refusedBody } from "../../refused-body.ts";
 import { SCANS_PER_HOUR, startScan, type ScanJobStarter, type Scans } from "../../scans.ts";
 import { DEFAULT_PACK_RULE_IDS } from "./default-pack.ts";
 import {
@@ -34,13 +34,6 @@ const READ_ONLY: Record<string, string> = { contents: "read", metadata: "read" }
 function isReadOnly(permissions: Record<string, string>) {
   const named = Object.entries(permissions);
   return named.length > 0 && named.every(([name, level]) => READ_ONLY[name] === level);
-}
-
-/** A body a schema refused, as one line, worded as the app's own routes word it: each issue's field and message. */
-function refusedBody(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
-    .join("; ");
 }
 
 function repoAssetBody(repo: RepoAsset): RepoAssetBody {

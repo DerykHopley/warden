@@ -39,6 +39,7 @@ import {
 import { teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
+import { refusedBody } from "./refused-body.ts";
 import {
   SCANS_PER_HOUR,
   startScan,
@@ -105,13 +106,6 @@ const ROLE_TOO_LOW = "Your Role can't do this";
 
 function memberBody(member: TeamMemberRow): TeamMember {
   return { userId: member.userId, role: member.role, joinedAt: member.joinedAt.toISOString() };
-}
-
-/** A body a schema refused, as one line: each issue's field and message. */
-function refusedBody(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
-    .join("; ");
 }
 
 export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
