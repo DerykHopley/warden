@@ -7,6 +7,7 @@
     "start": "node src/index.ts",
     "roles": "node src/roles.ts",
     "migrate": "node src/migrate.ts",
+    "load-cves": "node src/modules/patch/cve-snapshot.ts",
     "expire": "PGUSER=warden_app node src/daily-expiry.ts",
     "seed": "PGUSER=warden_app node src/seed.ts",
     "typecheck": "tsc --noEmit",

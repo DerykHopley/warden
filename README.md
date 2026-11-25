@@ -29,11 +29,12 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    compose database. `.env.example` lists every variable Warden reads.
 3. `docker compose up -d --wait`: Postgres 17 with pgvector on `127.0.0.1:54329`, trust auth (no password).
 4. `pnpm install`: also points git's hooks at `.githooks`, so `git push` runs the pre-push checks.
-5. Make the database roles, then migrate, against the compose database:
+5. Make the database roles, migrate, then load the CVE snapshot, against the compose database:
 
    ```sh
    pnpm --filter @warden/server roles
    PGUSER=warden_migrate pnpm --filter @warden/server migrate
+   PGUSER=warden_migrate pnpm --filter @warden/server load-cves
    ```
 
    `roles` runs as the compose superuser `warden` and makes `warden_migrate` (owns the schema and runs the
@@ -41,7 +42,8 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    `BYPASSRLS`: it lists Team ids, for the daily Job, and reads nothing else); it's safe to run again. `migrate` applies the new SQL files in
    `server/migrations`, in file-name order, each in its own transaction; it only goes forwards. It runs only as
    `warden_migrate` (the `.envrc` user `warden` is refused), so every table gets the app's grants. Run it again
-   after pulling new migrations.
+   after pulling new migrations. `load-cves` fills Patch's CVE tables from the snapshot (see "CVE data"), also only
+   as `warden_migrate`; run it after `migrate`. A second run with the same files changes nothing.
 6. `pnpm dev`: the server on `PORT` (default 8080) and the dashboard on Vite's port (5173), which hands `/api` to
    the server. Open http://localhost:5173. The server runs as `warden_app`, whatever `PGUSER` says: `.envrc`
    keeps `PGUSER=warden` for `roles` and the tests, which need the compose superuser.
@@ -80,6 +82,23 @@ line. `warden_admin`'s one grant is select on `teams (id)`: every other table re
 set, the Job also needs `WARDEN_ADMIN_PASSWORD`; it never sends the app's password as the admin's.
 `GET /api/health` answers 200 when the database answers and offers the `vector` extension, and 503 naming the
 failed part otherwise.
+
+## CVE data
+
+Patch matches a Team's Products against a frozen snapshot of public CVE data, **as of 2026-10-13**. It ships in the
+image (`server/src/modules/patch/cve-snapshot/`, copied byte for byte from Patch's own snapshot) and the loader puts
+it in six Postgres tables (`cve_snapshot`, `cve_sources`, `cves`, `cve_kev`, `cve_epss`, `cve_osv`) that every Team
+reads and the app can't change. Warden makes no outside call for CVE data: nothing is fetched from NVD, CISA, OSV or
+FIRST while it runs, so the data stays as of that date until a release ships a newer snapshot.
+
+| Source | Licence | Attribution |
+|---|---|---|
+| NVD CVE API 2.0 | Public (US government) | CVE records from the National Vulnerability Database (NIST) |
+| CISA KEV 2026.10.08 | CC0 1.0 | CISA Known Exploited Vulnerabilities Catalog; no endorsement by CISA implied |
+| OSV.dev | CC-BY 4.0 | Affected and fixed versions from OSV.dev, taken from GitHub Advisory Database records (CC-BY 4.0) |
+| EPSS | Attribution requested by FIRST | EPSS by FIRST |
+
+This product uses the NVD API but is not endorsed or certified by the NVD.
 
 ## Checks
 
@@ -272,7 +291,8 @@ replace the preview.
 3. Sign in to Google Cloud through Workload Identity Federation (no key) as `warden-preview-deploy`, and push the
    image to the `warden-preview` repository, tagged with the commit.
 4. **Migrate:** deploy the `warden-migrate-preview` job with the image, as `warden-preview-migrate`, run
-   `node server/src/migrate.ts` on `warden_preview` and wait for it. A failed migration stops the deploy before any
+   `node server/src/migrate.ts`, then the CVE snapshot loader `node server/src/modules/patch/cve-snapshot.ts`, on
+   `warden_preview` in one execution, and wait for it. A failed migration or load stops the deploy before any
    revision exists.
 5. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
    `warden-preview-run`, tagged `<name>`, with **no traffic**. Every run sets the revision's env vars and secrets
@@ -317,8 +337,9 @@ notice naming each missing variable (a rollback needs the first four).
    `warden-deploy`, and push it to the `warden` repository as
    `europe-west1-docker.pkg.dev/<project-id>/warden/warden:<commit>`.
 3. **Migrate:** deploy the `warden-migrate` job with the image, as `warden-migrate`, run
-   `node server/src/migrate.ts` on `warden` as `warden_migrate`, and wait for it. A failed migration stops the
-   release before any revision exists.
+   `node server/src/migrate.ts`, then the CVE snapshot loader `node server/src/modules/patch/cve-snapshot.ts`, on
+   `warden` as `warden_migrate` in one execution, and wait for it. A failed migration or load stops the release
+   before any revision exists.
 4. **Deploy:** a `warden` revision named `warden-rel-<sha7>-<run>-<attempt>`, as `warden-run`, tagged `candidate`, with **no
    traffic**. Every release sets the revision's env vars and secrets afresh; its `CLERK_AUTHORIZED_PARTIES` is each
    URL Cloud Run gives the service.
