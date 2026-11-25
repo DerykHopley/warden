@@ -315,7 +315,8 @@ Every merge to `main` releases Warden to the live `warden` service. It needs Goo
 the repository variables `GCP_PROJECT_ID`, `GCP_DEPLOY_SA`, `GCP_WIF_PROVIDER`, `CLOUD_SQL_CONNECTION` and
 `VITE_CLERK_PUBLISHABLE_KEY`. Without any of the five, a release deploys nothing and the run stays green, with a
 notice naming each missing variable (a rollback needs the first four). A release also needs
-`WARDEN_GITHUB_APP_CLIENT_ID`: without it, the deploy fails naming it, before anything changes.
+`WARDEN_GITHUB_APP_CLIENT_ID`: without it, the release fails naming it after the image is pushed to Artifact Registry,
+before anything is migrated or deployed.
 
 **What a release does** (`.github/workflows/release.yml`, then `scripts/cloud-run-deploy.sh <image> release`):
 

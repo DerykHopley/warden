@@ -1,8 +1,10 @@
 // The GitHub client an Admin's link checks with (Guard spec, story 1). GitHub's Setup URL hands back an
 // `installation_id` anyone can forge, so a link asks GitHub, as the person, which installations they can reach: their
-// `code` (from GitHub's web application flow with PKCE) becomes a user access token, which lists them. The App then
-// reads an installation's repos with its own installation token. Each token serves one read and is dropped: never
-// stored, logged or returned, and no error this client throws carries one, the code, the verifier or the secret.
+// `code` (from GitHub's web application flow with PKCE) becomes a user access token, which lists them and, in the one
+// linked, the repos the person can read. GitHub lists an installation to anyone who can read one of its repos, so only
+// those repos are the person's to link. The App reads the installation's token permissions with its own installation
+// token. Each token serves one link and is dropped: never stored, logged or returned, and no error this client throws
+// carries one, the code, the verifier or the secret.
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
 import { z } from "zod";
 import { CallFailed, callJson, type Answer, type Fetch } from "../../http-call.ts";
@@ -49,8 +51,16 @@ export class GitHubUnavailable extends Error {
 export type GitHubRepo = { ref: string; githubId: number };
 
 export interface GitHub {
-  /** The installations the person whose `code` this is can reach, by id. */
-  userInstallationIds(code: string, codeVerifier: string): Promise<number[]>;
+  /**
+   * The repos in the installation that the person whose `code` this is can read, through their user token; or
+   * undefined when the installation isn't one they can reach. The code is exchanged once, so one call does both. An id
+   * that isn't a positive integer is refused with a RangeError before any call.
+   */
+  userInstallationRepos(
+    code: string,
+    codeVerifier: string,
+    installationId: number,
+  ): Promise<GitHubRepo[] | undefined>;
   /**
    * The installation's repos, and its token's permissions as GitHub gives them (`{ contents: "read", … }`). An id that
    * isn't a positive integer is refused with a RangeError before any call.
@@ -97,10 +107,20 @@ function reason(body: unknown): string {
   return typeof message === "string" && message !== "" ? ` (${message.slice(0, 200)})` : "";
 }
 
-/** The answer's body as `schema` reads it, or the step's error naming what was missing. */
-function read<T>(schema: z.ZodType<T>, step: string, { status, ok, body }: Answer): T {
-  if (!ok)
-    throw new GitHubUnavailable(step, status, `${step} answered HTTP ${status}${reason(body)}`);
+/**
+ * The answer's body as `schema` reads it, or the step's error naming what was missing. With `quiet`, a non-2xx answer's
+ * own reason isn't repeated: for the token exchange, whose answer may repeat the request, secret and code included.
+ */
+function read<T>(
+  schema: z.ZodType<T>,
+  step: string,
+  { status, ok, body }: Answer,
+  { quiet = false } = {},
+): T {
+  if (!ok) {
+    const why = quiet ? "" : reason(body);
+    throw new GitHubUnavailable(step, status, `${step} answered HTTP ${status}${why}`);
+  }
   const parsed = schema.safeParse(body);
   if (!parsed.success) {
     throw new GitHubUnavailable(
@@ -133,7 +153,16 @@ const apiHeaders = (token: string) => ({
 
 const pageUrl = (path: string, page: number) => `${API}${path}?per_page=${PER_PAGE}&page=${page}`;
 
-const isInstallationId = (id: number) => Number.isSafeInteger(id) && id > 0;
+function checkInstallationId(id: number) {
+  if (!(Number.isSafeInteger(id) && id > 0)) {
+    throw new RangeError(`${id} isn't an installation id (a positive integer)`);
+  }
+}
+
+const gitHubRepo = (repo: { id: number; html_url: string }): GitHubRepo => ({
+  ref: repo.html_url,
+  githubId: repo.id,
+});
 
 export function createGitHub({
   clientId,
@@ -215,11 +244,12 @@ export function createGitHub({
         `${step} answered HTTP ${answer.status} refusing (${error})`,
       );
     }
-    return read(UserToken, step, answer).access_token;
+    return read(UserToken, step, answer, { quiet: true }).access_token;
   }
 
   return {
-    async userInstallationIds(code, codeVerifier) {
+    async userInstallationRepos(code, codeVerifier, installationId) {
+      checkInstallationId(installationId);
       const token = await userToken(code, codeVerifier);
       const installations = await everyPage(
         "GitHub's list of the user's installations",
@@ -227,13 +257,18 @@ export function createGitHub({
         token,
         Installations,
       );
-      return installations.map(({ id }) => id);
+      if (!installations.some(({ id }) => id === installationId)) return undefined;
+      const repositories = await everyPage(
+        `GitHub's list of the user's repositories in installation ${installationId}`,
+        `/user/installations/${installationId}/repositories`,
+        token,
+        Repositories,
+      );
+      return repositories.map(gitHubRepo);
     },
 
     async installationRepos(installationId) {
-      if (!isInstallationId(installationId)) {
-        throw new RangeError(`${installationId} isn't an installation id (a positive integer)`);
-      }
+      checkInstallationId(installationId);
       const tokenStep = `GitHub's installation token for installation ${installationId}`;
       const granted = read(
         InstallationToken,
@@ -250,7 +285,7 @@ export function createGitHub({
         Repositories,
       );
       return {
-        repos: repositories.map((repo) => ({ ref: repo.html_url, githubId: repo.id })),
+        repos: repositories.map(gitHubRepo),
         permissions: granted.permissions ?? {},
       };
     },

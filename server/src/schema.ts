@@ -171,7 +171,10 @@ export interface Database {
     linked_at: ColumnType<Date, Date | undefined, Date>;
   };
 
-  /** A repo an installation lists, as one of the Team's Repo Assets (0009_repo_assets), one row per ref. */
+  /**
+   * A repo an installation lists, as one of the Team's Repo Assets (0009_repo_assets): one row per installation that
+   * lists it, keyed by (team_id, installation_id, ref) since 0010_repo_assets_per_installation.
+   */
   repo_assets: {
     team_id: string;
     ref: string;
