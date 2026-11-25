@@ -2,6 +2,7 @@
 // start failed before why the move did. Fake Scans and starter, no database: the routes' own tests cover the rest.
 import type { ScanBody } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
+import { logEntries } from "../test/helpers.ts";
 import { createLogger } from "./log.ts";
 import { startScan, type Scans } from "./scans.ts";
 
@@ -55,9 +56,7 @@ describe("startScan", () => {
       );
 
       expect(outcome).toEqual({ kind: "start_failed", scan: queuedScan });
-      const errors = lines
-        .map((line) => JSON.parse(line) as Record<string, unknown>)
-        .filter((entry) => entry.severity === "ERROR");
+      const errors = logEntries(lines.join("")).filter((entry) => entry.severity === "ERROR");
       expect(errors.map((entry) => entry.message)).toEqual(errorMessages);
       for (const entry of errors) {
         expect(entry).toMatchObject({ team: TEAM, scanId: queuedScan.id });

@@ -9,7 +9,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { Fetch } from "../src/http-call.ts";
 import { createLogger } from "../src/log.ts";
-import { DEFAULT_PACK } from "../src/modules/guard/default-pack.ts";
+import { DEFAULT_PACK_RULE_IDS } from "../src/modules/guard/default-pack.ts";
 import { createGitHub } from "../src/modules/guard/github.ts";
 import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { guardRoutes } from "../src/modules/guard/routes.ts";
@@ -26,6 +26,7 @@ import {
   activeOrganization,
   ADMIN,
   gitHubAppKey,
+  logEntries,
   newInstallation,
   newTeam,
   seedTeam,
@@ -494,7 +495,6 @@ describe("POST /api/github/installations: an Admin links an installation (storie
 });
 
 const MEMBER = "user_member";
-const DEFAULT_PACK_RULES = DEFAULT_PACK.map((rule) => rule.ruleId);
 
 /** A starter that records each call and starts nothing, or throws `error` after recording it. */
 function recordingStarter(error?: Error) {
@@ -554,7 +554,7 @@ describe("POST /api/github/installations: the first Scan after a link (story 2)"
         { kind: "repo", ref: "https://github.com/acme/api" },
         { kind: "repo", ref: "https://github.com/acme/web" },
       ],
-      rules: DEFAULT_PACK_RULES,
+      rules: DEFAULT_PACK_RULE_IDS,
     });
     expect(starter.calls).toEqual([{ scanId: scan!.id, team }]);
     expect(await scanAsMember(app, team, scan!.id)).toEqual(scan);
@@ -602,7 +602,7 @@ describe("POST /api/github/installations: the first Scan after a link (story 2)"
       await scans.queue(team, {
         module: "guard",
         assets: [{ kind: "repo", ref: `https://github.com/acme/earlier-${i}` }],
-        rules: DEFAULT_PACK_RULES,
+        rules: [...DEFAULT_PACK_RULE_IDS],
         requestedBy: ADMIN,
       });
     }
@@ -671,9 +671,7 @@ describe("POST /api/github/installations: the first Scan after a link (story 2)"
       expect.objectContaining({ asset: { kind: "repo", ref: "https://github.com/acme/web" } }),
     ]);
     expect(starter.calls).toEqual([]);
-    const errors = logLines()
-      .map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((entry) => entry.severity === "ERROR");
+    const errors = logEntries(logLines().join("")).filter((entry) => entry.severity === "ERROR");
     expect(errors).toEqual([expect.objectContaining({ team })]);
   });
 

@@ -6,7 +6,7 @@
 import { assetKey, Location } from "@warden/contracts";
 import type { Logger } from "../../log.ts";
 import type { Scanner } from "../../scans.ts";
-import { DEFAULT_PACK } from "./default-pack.ts";
+import { DEFAULT_PACK_RULE_IDS } from "./default-pack.ts";
 import type { RepoAssets } from "./repo-assets.ts";
 import type { RepoReader } from "./repo-reader.ts";
 import { secretObservations } from "./secrets.ts";
@@ -25,7 +25,7 @@ export function guardScanner({
   logger: Logger;
 }): Scanner {
   return {
-    rules: DEFAULT_PACK.map((rule) => rule.ruleId),
+    rules: DEFAULT_PACK_RULE_IDS,
 
     async held(team, assets) {
       const outside = new Set((await repoAssets.outside(team, assets)).map(assetKey));

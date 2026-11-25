@@ -15,7 +15,7 @@ import type { MountRoutes } from "../../app.ts";
 import { createAttemptLimit } from "../../attempt-limit.ts";
 import type { Logger } from "../../log.ts";
 import { SCANS_PER_HOUR, startScan, type ScanJobStarter, type Scans } from "../../scans.ts";
-import { DEFAULT_PACK } from "./default-pack.ts";
+import { DEFAULT_PACK_RULE_IDS } from "./default-pack.ts";
 import {
   GitHubInstallationUnreachable,
   GitHubRefusedCode,
@@ -95,7 +95,7 @@ export function guardRoutes(
       const outcome = await startScan({ scans, startScanJob, logger }, team, {
         module: "guard",
         assets,
-        rules: DEFAULT_PACK.map((rule) => rule.ruleId),
+        rules: [...DEFAULT_PACK_RULE_IDS],
         requestedBy,
       });
       return outcome.kind === "rate_limited" ? null : outcome.scan;
@@ -207,6 +207,8 @@ export function guardRoutes(
         {
           installation_id: installationId,
           repos: linked.map(repoAssetBody),
+          // The 201 waits for the Scan Job to start: on Cloud Run, a token call and a run call of up to 10 s each, so
+          // a slow start holds the link's answer for up to about 20 s. The link is written either way.
           scan: await firstScan(team, linked, c.get("session").userId, logger),
         } satisfies LinkedInstallationBody,
         201,
