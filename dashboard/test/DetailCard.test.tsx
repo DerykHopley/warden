@@ -425,13 +425,6 @@ const answeredProposal = (fields: Partial<Proposal> = {}): Proposal => {
   return answer as Proposal;
 };
 
-/** A date-time's day in the person's own time zone, as a date input holds it. */
-const localDay = (iso: string) => {
-  const d = new Date(iso);
-  const two = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-};
-
 /** The first instant of `day` (a date input's value) in the person's own time zone, as epoch milliseconds. */
 const dayStart = (day: string) => new Date(`${day}T00:00`).getTime();
 
@@ -849,22 +842,6 @@ describe("a Lead's decision", () => {
     expect(submit).toBeDisabled();
   });
 
-  it("a Reopens on day before tomorrow, typed in, leaves the submit on, and submit refuses it with no call", async () => {
-    const { card } = show(OPEN, listed([]), { role: "lead" });
-    const form = await openForm(card, "Accept");
-    await userEvent.type(whyField(form), "Fixed next sprint");
-    pickUntil(form, localDay(new Date().toISOString()));
-    const submit = form.getByRole("button", { name: "Accept" });
-
-    expect(submit).toBeEnabled();
-    await userEvent.click(submit);
-
-    expect(await form.findByRole("alert")).toHaveTextContent(
-      "Reopens on must be a later day. Pick tomorrow or later.",
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("Mark moved's submit is disabled until a candidate is chosen", async () => {
     const { card } = show(UNCONFIRMED, listed([]), { role: "lead", candidates: [CANDIDATE] });
     const form = await openForm(card, "Mark moved");
@@ -1038,7 +1015,8 @@ describe("a Lead's decision", () => {
   });
 });
 
-describe("a Reopens on day that midnight has made today", () => {
+// One branch for both: a day midnight has made today, and a day before tomorrow typed into the date field.
+describe("a Reopens on day before tomorrow, typed in or made today by midnight", () => {
   afterEach(() => vi.useRealTimers());
 
   /**

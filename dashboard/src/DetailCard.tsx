@@ -406,7 +406,8 @@ export function DetailCard(props: {
 
   function ready(action: Action): boolean {
     if (draft.reason.trim() === "") return false;
-    // A day is needed; whether it's early enough is submit's check, so the button never turns off with no reason shown.
+    // A day is needed; whether it's early enough is submit's check, so the button never turns off without a refusal
+    // line saying why.
     if (asksUntil(action) && draft.until === "") return false;
     if (asksCandidate(action)) {
       return mergeable.some((candidate) => candidate.id === draft.candidate);
