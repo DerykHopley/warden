@@ -2,6 +2,7 @@
 // the page that changes them; an Admin adds a Product on the page and changes it. In Cedar, the Team with no demo
 // Findings.
 import type { ProductInput } from "@warden/contracts";
+import { exactly } from "./cedar-cve.ts";
 import {
   CEDAR,
   CHAT_ASSISTANT,
@@ -61,15 +62,19 @@ test("a Product's save opens its CVE Findings from the loaded snapshot, on the T
   await signIn(HEDY, CEDAR);
   await page.goto("/findings");
 
-  // On the saved Product's Asset (a Finding names it by its id). How many the snapshot gives isn't fixed: a newer
-  // snapshot changes it.
-  const titles = page
+  // On the saved Product's Asset: a Finding carries its id, and the page shows its name. How many the snapshot gives
+  // isn't fixed: a newer snapshot changes it.
+  const rows = page
     .getByRole("table", { name: "All Findings" })
     .getByRole("row")
-    .filter({ has: page.locator(".asset-ref", { hasText: id }) })
-    .locator(".finding-title")
-    .filter({ hasText: /^CVE-\d{4}-\d+/ });
-  await expect(titles.first()).toBeVisible();
+    .filter({ has: page.locator(".asset-ref", { hasText: exactly(VULNERABLE.name) }) });
+  await expect(
+    rows
+      .locator(".finding-title")
+      .filter({ hasText: /^CVE-\d{4}-\d+/ })
+      .first(),
+  ).toBeVisible();
+  await expect(page.locator(".asset-ref", { hasText: id })).toHaveCount(0);
 });
 
 /** This test's own Products, by name, so it never changes the Product another spec reads. */

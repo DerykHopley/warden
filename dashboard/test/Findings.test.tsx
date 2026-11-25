@@ -315,6 +315,65 @@ describe("a link that names a Finding", () => {
   });
 });
 
+describe("a Product Asset's name", () => {
+  // The lodash Finding on a saved Product (its ref the Product's id); minimist keeps the demo seed's made-up "shop".
+  const PRODUCT_ID = "5e1f0000-0000-4000-8000-0000000000aa";
+  const onProduct = demoFindings.map((f) =>
+    f.id === ID.lodash ? { ...f, asset: { kind: "product" as const, ref: PRODUCT_ID } } : f,
+  );
+  const products = (team = TEAM) =>
+    json(200, {
+      team,
+      products: [{ id: PRODUCT_ID, name: "Shop web", repo_urls: [], dependencies: [] }],
+    });
+  const LODASH = "lodash 4.17.20 has a known vulnerability";
+  const MINIMIST = "minimist 1.2.5 has a known vulnerability";
+  /** The Asset cell of the row titled `title`. */
+  const assetCell = (title: string) =>
+    rowButton(title).closest("tr")?.querySelector(".asset-col")?.textContent;
+
+  it("shows the Product's name and Product in its row and card, not the id; a ref no Product has stays", async () => {
+    open("/findings", onProduct, { products: () => products() });
+    await vi.waitFor(() => expect(assetCell(LODASH)).toBe("Shop webProduct"));
+    expect(within(cardOf(LODASH)).getByText("Shop web")).toHaveClass("asset-ref");
+    expect(within(cardOf(LODASH)).getByText("Product")).toBeInTheDocument();
+    expect(screen.queryByText(PRODUCT_ID)).not.toBeInTheDocument();
+    expect(assetCell(MINIMIST)).toBe("shopProduct");
+  });
+
+  it.each<[string, Routes]>([
+    ["isn't answering", {}],
+    ["answers 403", { products: () => json(403, { error: "no Team" }) }],
+  ])("shows each ref, and no refusal, when GET /api/products %s", async (_case, routes) => {
+    open("/findings", onProduct, routes);
+    await vi.waitFor(() => expect(callsTo("/api/products")).toHaveLength(1));
+    await screen.findByRole("table");
+    expect(assetCell(LODASH)).toBe(`${PRODUCT_ID}Product`);
+    expect(within(cardOf(LODASH)).getByText(PRODUCT_ID)).toHaveClass("asset-ref");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("names nothing from an answer about another Team", async () => {
+    open("/findings", onProduct, { products: () => products("org_b") });
+    await vi.waitFor(() => expect(callsTo("/api/products")).toHaveLength(4), { timeout: 3000 });
+    expect(assetCell(LODASH)).toBe(`${PRODUCT_ID}Product`);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("gives the panel the focused Finding's words: its Product's name, or its ref", async () => {
+    const { panel } = open(`/findings?finding=${ID.lodash}`, onProduct, {
+      products: () => products(),
+    });
+    const assetName = () =>
+      (panel.setContext.mock.lastCall?.[0] as { assetName: string | null } | null)?.assetName;
+    await vi.waitFor(() => expect(assetName()).toBe("Shop web"));
+
+    await userEvent.click(rowButton(MINIMIST));
+    expect(assetName()).toBe("shop");
+  });
+});
+
 describe("waiting and refusals", () => {
   it("shows Loading Findings… until the answer arrives, asking with the session token", async () => {
     const late = deferred<Response>();

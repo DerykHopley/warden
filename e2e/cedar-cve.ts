@@ -4,6 +4,10 @@ import type { Page } from "@playwright/test";
 import { FindingsBody, PatchAssessment, type Finding } from "@warden/contracts";
 import { asAdmin, CEDAR, ensureProduct, expect, LANGCHAIN_SERVICE } from "./session.ts";
 
+/** A pattern for `text` as a whole: a Product's name, never a longer one that holds it. */
+export const exactly = (text: string) =>
+  new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
 /** GETs `path` as Hedy, Cedar's Admin, as the page does for her; its body. */
 async function asHedy(path: string): Promise<unknown> {
   const { origin, headers } = await asAdmin(CEDAR);
@@ -43,15 +47,15 @@ export async function cedarCveFinding(
 }
 
 /**
- * Opens `finding`'s detail card from the Findings page (already open, signed in to Cedar), and returns its Patch
- * section without waiting for it. Another Cedar Product can have a Finding with the same CVE title: the row is the one
- * on `finding`'s Product.
+ * Opens `finding` (a `cedarCveFinding`, so on Cedar's LangChain service)'s detail card from the Findings page (already
+ * open, signed in to Cedar), and returns its Patch section without waiting for it. Another Cedar Product can have a
+ * Finding with the same CVE title: the row is the one whose Asset shows the LangChain service's name.
  */
 export async function selectCveRow(page: Page, finding: Finding) {
   await page
     .getByRole("table", { name: "All Findings" })
     .getByRole("row")
-    .filter({ has: page.locator(".asset-ref", { hasText: finding.asset.ref }) })
+    .filter({ has: page.locator(".asset-ref", { hasText: exactly(LANGCHAIN_SERVICE.name) }) })
     .filter({ has: page.locator(".finding-title", { hasText: finding.title }) })
     .locator(".finding-link")
     .click();

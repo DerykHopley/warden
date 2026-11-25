@@ -1,8 +1,9 @@
 // @vitest-environment node
-// The Findings page's counts and orders, below the page: the summary line, the top 5 and the table's view.
-import type { FindingsView } from "@warden/contracts";
+// The Findings page's counts and orders, below the page: the summary line, the top 5, the table's view and an Asset's
+// words.
+import type { FindingsView, Product } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { inView, summaryLine, topFive } from "../src/findings.ts";
+import { assetLabel, inView, summaryLine, topFive } from "../src/findings.ts";
 import { demoFindings, finding, ID } from "./findings-fixture.ts";
 
 const view = (fields: Partial<FindingsView> = {}): FindingsView => ({
@@ -78,5 +79,19 @@ describe("inView", () => {
 
   it("is empty when nothing matches", () => {
     expect(inView(demoFindings, view({ status: "accepted", severity: "critical" }))).toEqual([]);
+  });
+});
+
+describe("assetLabel", () => {
+  const PRODUCT_ID = "5e1f0000-0000-4000-8000-0000000000aa";
+  const products: Product[] = [
+    { id: PRODUCT_ID, name: "Shop web", repo_urls: [], dependencies: [] },
+  ];
+
+  it("names a Product Asset by its Product, and keeps the ref with no such Product, for another kind, or no Products", () => {
+    expect(assetLabel({ kind: "product", ref: PRODUCT_ID }, products)).toBe("Shop web");
+    expect(assetLabel({ kind: "product", ref: "shop" }, products)).toBe("shop");
+    expect(assetLabel({ kind: "repo", ref: PRODUCT_ID }, products)).toBe(PRODUCT_ID);
+    expect(assetLabel({ kind: "product", ref: PRODUCT_ID }, null)).toBe(PRODUCT_ID);
   });
 });

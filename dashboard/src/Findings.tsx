@@ -9,6 +9,7 @@ import {
   Severity,
   type Finding,
   type Level,
+  type Product,
 } from "@warden/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { askAboutTeam } from "./api.ts";
@@ -23,6 +24,7 @@ import {
   UNCONFIRMED_FIX,
 } from "./finding-words.ts";
 import {
+  assetLabel,
   fetchFindings,
   inView,
   shortId,
@@ -31,6 +33,7 @@ import {
   type FindingsResult,
 } from "./findings.ts";
 import { findingsViewWords } from "./panel.ts";
+import { fetchProducts, type ProductsResult } from "./products.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
@@ -72,6 +75,23 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     [getToken, me.team],
   );
   const list = useWardenCall<FindingsResult>(listFindings, onSessionEnded);
+  // The Team's Products, once per page load, only to name a Product Asset: until they come, or when they're refused,
+  // each Asset shows its ref and the page says nothing about it.
+  const listProducts = useCallback(
+    (signal: AbortSignal) =>
+      askAboutTeam(
+        () => fetchProducts(getToken),
+        (result) => (result.kind === "products" ? result.team : undefined),
+        me.team,
+        signal,
+      ),
+    [getToken, me.team],
+  );
+  const productsCall = useWardenCall<ProductsResult>(listProducts, onSessionEnded);
+  const products =
+    productsCall.result !== "loading" && productsCall.result.kind === "products"
+      ? productsCall.result.products
+      : null;
   const [view, setView] = useState(viewInAddress);
 
   // Back and Forward bring back the view their entry's address names.
@@ -107,6 +127,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
   // The Ask Warden panel talks about this view and the focused Finding; its detail card's ✕ clears the focus. A
   // decision in the card asks for the list again, so the card and the table show the new Status.
   const focusedFinding = findings?.find((f) => f.id === focused) ?? null;
+  const assetName = focusedFinding === null ? null : assetLabel(focusedFinding.asset, products);
   // Its Unconfirmed fix's candidates, in its order; one the list doesn't hold is left out.
   const candidates = useMemo(
     () =>
@@ -134,6 +155,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
       onFindingChanged: refresh,
       onFindingGone,
       candidates,
+      assetName,
     });
   }, [
     setContext,
@@ -145,6 +167,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     refresh,
     onFindingGone,
     candidates,
+    assetName,
   ]);
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);
@@ -179,7 +202,12 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
         <>
           {me.level !== null && <LevelLine level={me.level} />}
           <h1 className="summary-line">{summaryLine(findings)}</h1>
-          <TopFive findings={topFive(findings)} focused={focused} onSelect={select} />
+          <TopFive
+            findings={topFive(findings)}
+            products={products}
+            focused={focused}
+            onSelect={select}
+          />
           {findings.length > 0 && (
             <section className="all-findings" aria-labelledby="all-findings">
               <h2 id="all-findings">All Findings</h2>
@@ -206,6 +234,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
               </div>
               <FindingsTable
                 findings={inView(findings, shown)}
+                products={products}
                 focused={focused}
                 onSelect={select}
               />
@@ -229,6 +258,7 @@ function LevelLine({ level }: { level: Level }) {
 /** Up to five Open Findings as cards, most urgent first. Nothing when none is Open. */
 function TopFive(props: {
   findings: Finding[];
+  products: readonly Product[] | null;
   focused: string | undefined;
   onSelect: (id: string) => void;
 }) {
@@ -254,7 +284,7 @@ function TopFive(props: {
               <span className="card-title">{finding.title}</span>
               <span className="card-summary">{finding.evidence.summary}</span>
               <span className="card-asset">
-                <span className="asset-ref">{finding.asset.ref}</span>
+                <span className="asset-ref">{assetLabel(finding.asset, props.products)}</span>
                 <span className="asset-kind">{ASSET_KIND_WORDS[finding.asset.kind]}</span>
               </span>
             </button>
@@ -291,6 +321,7 @@ function FilterTabs<V extends string>(props: {
 
 function FindingsTable(props: {
   findings: Finding[];
+  products: readonly Product[] | null;
   focused: string | undefined;
   onSelect: (id: string) => void;
 }) {
@@ -338,7 +369,7 @@ function FindingsTable(props: {
               </button>
             </td>
             <td className="asset-col">
-              <span className="asset-ref">{finding.asset.ref}</span>
+              <span className="asset-ref">{assetLabel(finding.asset, props.products)}</span>
               <span className="asset-kind">{ASSET_KIND_WORDS[finding.asset.kind]}</span>
             </td>
             <td className="narrow">
