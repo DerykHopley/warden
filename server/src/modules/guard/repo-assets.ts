@@ -31,7 +31,10 @@ export interface RepoAssets {
     team: string,
     input: { installationId: number; linkedBy: string; repos: { ref: string; githubId: number }[] },
   ): Promise<void>;
-  /** The Team's Repo Assets, by ref. */
+  /**
+   * The Team's Repo Assets, by ref: a repo several installations list once, under the one that listed it latest (ties:
+   * the larger installation id).
+   */
   list(team: string): Promise<RepoAsset[]>;
   /**
    * The Assets in `assets` that aren't the Team's Repo Assets, in the order given: matched on `ref` exactly, and any
@@ -66,8 +69,9 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
           .where("installation_id", "=", String(installationId))
           .execute();
         if (repos.length === 0) return;
-        // GitHub's paged list can name a repo twice, and one insert can't upsert a row twice (Postgres 21000).
+        // GitHub's paged list can name a repo twice, and the key holds one row per installation and ref.
         const unique = new Map(repos.map((repo) => [repo.ref, repo])).values();
+        // Another of the Team's installations listing the same repo keeps its own row (0010).
         await tx
           .insertInto("repo_assets")
           .values(
@@ -78,24 +82,21 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
               installation_id: installationId,
             })),
           )
-          // A repo another of the Team's installations listed moves to this one.
-          .onConflict((conflict) =>
-            conflict.columns(["team_id", "ref"]).doUpdateSet((eb) => ({
-              github_id: eb.ref("excluded.github_id"),
-              installation_id: eb.ref("excluded.installation_id"),
-              listed_at: sql<Date>`now()`,
-            })),
-          )
           .execute();
       });
     },
 
     list(team) {
       return withTeam(team, async (tx) => {
+        // One row per installation listing a repo (0010): each ref once, under the installation that listed it latest.
+        const byRef = sql`ref collate "C"`;
         const rows = await tx
           .selectFrom("repo_assets")
           .selectAll()
-          .orderBy(sql`ref collate "C"`)
+          .distinctOn(byRef)
+          .orderBy(byRef)
+          .orderBy("listed_at", "desc")
+          .orderBy("installation_id", "desc")
           .execute();
         return rows.map((row) => ({
           ref: row.ref,

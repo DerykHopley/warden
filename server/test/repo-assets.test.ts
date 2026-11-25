@@ -108,6 +108,92 @@ describe("link and list", () => {
     ]);
   });
 
+  it("keeps a repo two installations list when one is relinked without it, under the other", async () => {
+    const team = await newTeam(withTeam);
+    const [i1, i2] = [newInstallation(), newInstallation()];
+    await repoAssets.link(team, {
+      installationId: i1,
+      linkedBy: ADMIN,
+      repos: [repo("shared", 5)],
+    });
+    await repoAssets.link(team, {
+      installationId: i2,
+      linkedBy: ADMIN,
+      repos: [repo("shared", 5)],
+    });
+
+    await repoAssets.link(team, { installationId: i2, linkedBy: ADMIN, repos: [] });
+
+    expect(await repoAssets.list(team)).toEqual([
+      { ref: repoRef("shared"), githubId: 5, installationId: i1, listedAt: expect.any(Date) },
+    ]);
+  });
+
+  it("lists a repo two installations list once, under the one that listed it latest", async () => {
+    const team = await newTeam(withTeam);
+    const [i1, i2] = [newInstallation(), newInstallation()];
+    await repoAssets.link(team, {
+      installationId: i1,
+      linkedBy: ADMIN,
+      repos: [repo("shared", 5), repo("api", 1)],
+    });
+    await repoAssets.link(team, {
+      installationId: i2,
+      linkedBy: ADMIN,
+      repos: [repo("shared", 5)],
+    });
+
+    expect(await repoAssets.list(team)).toEqual([
+      { ref: repoRef("api"), githubId: 1, installationId: i1, listedAt: expect.any(Date) },
+      { ref: repoRef("shared"), githubId: 5, installationId: i2, listedAt: expect.any(Date) },
+    ]);
+  });
+
+  it("lists a repo two installations listed at the same moment under the larger installation id", async () => {
+    const team = await newTeam(withTeam);
+    const [i1, i2] = [newInstallation(), newInstallation()];
+    const [smaller, larger] = [Math.min(i1, i2), Math.max(i1, i2)];
+    const at = new Date("2026-11-25T09:00:00Z");
+    // Written as one statement would, so both rows carry the same `listed_at`.
+    await withTeam(team, async (tx) => {
+      await tx
+        .insertInto("github_installations")
+        .values(
+          [larger, smaller].map((id) => ({ team_id: team, installation_id: id, linked_by: ADMIN })),
+        )
+        .execute();
+      await tx
+        .insertInto("repo_assets")
+        .values(
+          [larger, smaller].map((id) => ({
+            team_id: team,
+            ref: repoRef("shared"),
+            github_id: 5,
+            installation_id: id,
+            listed_at: at,
+          })),
+        )
+        .execute();
+    });
+
+    expect(await repoAssets.list(team)).toEqual([
+      { ref: repoRef("shared"), githubId: 5, installationId: larger, listedAt: at },
+    ]);
+  });
+
+  it("drops a repo two installations listed once both are relinked without it", async () => {
+    const team = await newTeam(withTeam);
+    const [i1, i2] = [newInstallation(), newInstallation()];
+    for (const installationId of [i1, i2]) {
+      await repoAssets.link(team, { installationId, linkedBy: ADMIN, repos: [repo("shared", 5)] });
+    }
+
+    await repoAssets.link(team, { installationId: i1, linkedBy: ADMIN, repos: [] });
+    await repoAssets.link(team, { installationId: i2, linkedBy: ADMIN, repos: [] });
+
+    expect(await repoAssets.list(team)).toEqual([]);
+  });
+
   it("refuses Team B's link of an installation Team A linked with InstallationLinkedElsewhere, writing nothing and leaving Team A's rows", async () => {
     const teamA = await newTeam(withTeam);
     const teamB = await newTeam(withTeam);
