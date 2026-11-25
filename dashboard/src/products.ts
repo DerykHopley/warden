@@ -1,6 +1,6 @@
 // The Team's Products (GET /api/products), the frameworks Patch knows (GET /api/patch/frameworks) and a Product's save
-// (POST or PUT, once /api/me confirms the session's Team), for the Products page, and the words it shows for a
-// dependency's usage.
+// (POST or PUT) and delete (DELETE), each once /api/me confirms the session's Team, for the Products page, and the
+// words it shows for a dependency's usage.
 import {
   FrameworksBody,
   Product,
@@ -92,6 +92,14 @@ export async function saveProduct(
 }
 
 /**
+ * Why the Team check didn't confirm the Team: /api/me's own answer, with its 429 told apart as `too-many-sign-ins`,
+ * since /api/me counts sign-ins, not changes to Products.
+ */
+export type TeamCheckRefused =
+  | Exclude<MeResult, { kind: "signed-in" | "too-many-attempts" }>
+  | { kind: "too-many-sign-ins"; retryAfter: number | null };
+
+/**
  * Asks /api/me as reads ask (`askAboutTeam`) until it says the session is in `team`, and hands back the token that
  * answer was asked with, as a `GetToken` for the change: Clerk can still hand out a token for the Team just left, and
  * the server takes the Team from the token, so a change sent with a token taken after the check could land in another
@@ -101,7 +109,7 @@ export async function saveProduct(
 export async function confirmTeam(
   getToken: GetToken,
   team: string | null,
-): Promise<{ kind: "confirmed"; getToken: GetToken } | Exclude<MeResult, { kind: "signed-in" }>> {
+): Promise<{ kind: "confirmed"; getToken: GetToken } | TeamCheckRefused> {
   let token: string | null = null;
   const session = await askAboutTeam(
     () =>
@@ -113,6 +121,8 @@ export async function confirmTeam(
     team,
     new AbortController().signal,
   );
+  if (session.kind === "too-many-attempts")
+    return { kind: "too-many-sign-ins", retryAfter: session.retryAfter };
   if (session.kind !== "signed-in") return session;
   const confirmed = token;
   return { kind: "confirmed", getToken: () => Promise.resolve(confirmed) };
@@ -128,10 +138,64 @@ export async function saveProductInTeam(
   team: string | null,
   id: string | null,
   input: ProductInput,
-): Promise<SaveResult | Exclude<MeResult, { kind: "signed-in" }>> {
+): Promise<SaveResult | TeamCheckRefused> {
   const inTeam = await confirmTeam(getToken, team);
   if (inTeam.kind !== "confirmed") return inTeam;
   return saveProduct(inTeam.getToken, id, input);
+}
+
+/** A delete's answer: the Product is gone, or why the server refused it. */
+export type DeleteResult =
+  | { kind: "deleted" }
+  /** 403: the person's Role is too low (or was lowered), or they have no Team. */
+  | { kind: "forbidden" }
+  /** 404: the Team has no Product with that id (another delete may have got there first). */
+  | { kind: "not-found" }
+  /** 409: the Team isn't opened; `error` is the server's words, null when its body has none. */
+  | { kind: "conflict"; error: string | null }
+  /** Any other 4xx: the server refused the delete, and trying again won't help; `error` as for a 409. */
+  | { kind: "refused"; error: string | null }
+  | Refused;
+
+/**
+ * Deletes the Product `id` (DELETE /api/products/:id). The server checks the Role and runs the Product's Patch Scan
+ * with no dependencies before it answers, so its CVE Findings turn Fixed. A 5xx, or any other answer `DeleteResult`
+ * doesn't name outside the 4xx, is not answering: a delete is safe to try again, as a repeat of one that landed gets
+ * the 404.
+ */
+export async function deleteProduct(getToken: GetToken, id: string): Promise<DeleteResult> {
+  const res = await callWarden(getToken, `/api/products/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!(res instanceof Response)) return res;
+  switch (res.status) {
+    case 204:
+      return { kind: "deleted" };
+    case 403:
+      return { kind: "forbidden" };
+    case 404:
+      return { kind: "not-found" };
+    case 409:
+      return { kind: "conflict", error: await serverError(res) };
+  }
+  if (res.status >= 400 && res.status < 500)
+    return { kind: "refused", error: await serverError(res) };
+  return { kind: "not-answering" };
+}
+
+/**
+ * Deletes as `deleteProduct` does, but only once /api/me says the session is in `team`, the Team the confirm was
+ * opened in, and with the token that answer was asked with (`confirmTeam`); while it names another Team, or gives no
+ * answer, nothing is sent.
+ */
+export async function deleteProductInTeam(
+  getToken: GetToken,
+  team: string | null,
+  id: string,
+): Promise<DeleteResult | TeamCheckRefused> {
+  const inTeam = await confirmTeam(getToken, team);
+  if (inTeam.kind !== "confirmed") return inTeam;
+  return deleteProduct(inTeam.getToken, id);
 }
 
 /** How a Product uses a framework, in words. */

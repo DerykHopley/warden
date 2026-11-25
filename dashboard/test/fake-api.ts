@@ -7,6 +7,9 @@ export const json = (status: number, body: unknown, headers: Record<string, stri
     headers: { "Content-Type": "application/json", ...headers },
   });
 
+/** A 204: no body, as a delete answers. */
+export const noContent = () => new Response(null, { status: 204 });
+
 type Answer = Response | Promise<Response>;
 
 export type Routes = {
@@ -20,6 +23,8 @@ export type Routes = {
   frameworks?: () => Answer;
   /** POST /api/products (id null) or PUT /api/products/:id, with the Product id and the parsed body. */
   saveProduct?: (id: string | null, body: unknown) => Answer;
+  /** DELETE /api/products/:id, with the Product id. */
+  deleteProduct?: (id: string) => Answer;
   /** PUT /api/team/members/:userId/role, with the user id and the parsed body. */
   changeRole?: (userId: string, body: unknown) => Answer;
   /**
@@ -56,6 +61,9 @@ export function serve(routes: Routes) {
     const onProduct = /^\/api\/products\/([^/]+)$/.exec(url);
     if (onProduct && method === "PUT" && routes.saveProduct) {
       return routes.saveProduct(decodeURIComponent(onProduct[1] ?? ""), sentBody(init));
+    }
+    if (onProduct && method === "DELETE" && routes.deleteProduct) {
+      return routes.deleteProduct(decodeURIComponent(onProduct[1] ?? ""));
     }
     const change = /^\/api\/team\/members\/([^/]+)\/role$/.exec(url);
     if (change && method === "PUT" && routes.changeRole) {

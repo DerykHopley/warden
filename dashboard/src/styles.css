@@ -182,6 +182,7 @@ button:focus-visible,
 .field select:focus-visible,
 .candidate input:focus-visible,
 .product-name:focus-visible,
+h1[data-focus]:focus-visible,
 .card-line:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
@@ -456,8 +457,8 @@ button[aria-busy="true"],
   }
 }
 
-/* A Lead's or an Admin's controls: Add above the list (with the frameworks' Retry when they failed), Edit beside each
-   Product's name. */
+/* A Lead's or an Admin's controls: Add above the list (with the frameworks' Retry when they failed), Edit and Delete
+   beside each Product's name. */
 .products-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -482,6 +483,41 @@ button[aria-busy="true"],
 
 .product-adding {
   margin: 0 0 12px;
+}
+
+.product-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Delete's confirm, in its Product's entry under the name: the question, its refusal line, then Delete and Cancel,
+   which stack under 640px. */
+.delete-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.delete-question {
+  margin: 0;
+  font-weight: 600;
+}
+
+.delete-confirm .card-line {
+  margin: 0;
+}
+
+@container app-column (max-width: 639px) {
+  .delete-confirm .form-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 /* The Product form: Add's above the list, Edit's in its Product's place. Each framework row lays its five controls

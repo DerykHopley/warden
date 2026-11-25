@@ -144,3 +144,33 @@ test("an Admin adds a Product on the page, then changes it, and both last past a
   ).toHaveText(["https://github.com/cedar/research"]);
   await expect(dependencies(RENAMED)).toHaveText(["LangChain 0.1.0 Library internet-facing"]);
 });
+
+test("an Admin deletes a Product after confirming, and only that Product is gone after a reload", async ({
+  page,
+  signIn,
+}) => {
+  // This test's own Product, so it never deletes the one another spec reads.
+  await removeProducts(CEDAR, [RENAMED]);
+  await ensureProduct(CEDAR, {
+    name: RENAMED,
+    repo_urls: ["https://github.com/cedar/research"],
+    dependencies: [],
+  });
+  await signIn(HEDY, CEDAR);
+  await page.goto("/products");
+  const main = page.getByRole("main");
+  const heading = (name: string) => main.getByRole("heading", { level: 2, name, exact: true });
+
+  await main.getByRole("button", { name: `Delete ${RENAMED}` }).click();
+  const confirm = main.getByRole("group", {
+    name: `Delete ${RENAMED}? Its CVE Findings turn Fixed.`,
+  });
+  await expect(confirm).toBeVisible();
+  await confirm.getByRole("button", { name: "Delete", exact: true }).click();
+
+  await expect(confirm).toHaveCount(0);
+  await expect(heading(RENAMED)).toHaveCount(0);
+  await page.reload();
+  await expect(heading("Chat assistant")).toBeVisible();
+  await expect(heading(RENAMED)).toHaveCount(0);
+});
