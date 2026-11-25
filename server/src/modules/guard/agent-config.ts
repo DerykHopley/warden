@@ -364,15 +364,20 @@ const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
 
 /**
  * Where a word stands in its command: whether it is the command word, after a wrapper, or a word to skip (a redirect's
- * target, a function's name).
+ * target, a function's name); and the options the reserved word `time` before it may still take, in order.
  */
-type Position = { command: boolean; wrapped: boolean; target: boolean };
+type Position = {
+  command: boolean;
+  wrapped: boolean;
+  target: boolean;
+  timeOptions: readonly string[];
+};
 
 /** The first word of a command, as after `;`, `&&`, `|`, a newline, `(` or an opening backquote. */
-const COMMAND_START: Position = { command: true, wrapped: false, target: false };
+const COMMAND_START: Position = { command: true, wrapped: false, target: false, timeOptions: [] };
 
 /** Any word after the command word, when that command isn't a wrapper. */
-const AFTER_COMMAND: Position = { command: false, wrapped: false, target: false };
+const AFTER_COMMAND: Position = { command: false, wrapped: false, target: false, timeOptions: [] };
 
 /** The characters that end a word, unless a backslash escapes them or (an `&` or `|`) a redirect holds them. */
 const ENDS_WORD = new Set([" ", "\t", "\r", "\n", ";", "&", "|", "(", ")", "`"]);
@@ -380,8 +385,14 @@ const ENDS_WORD = new Set([" ", "\t", "\r", "\n", ";", "&", "|", "(", ")", "`"])
 /** The ends of a word that also end its command, so the next word is a command word. */
 const STARTS_COMMAND = new Set(["\n", ";", "&", "|"]);
 
+/** The reserved word `time`, read apart from the `time` program by path (`/usr/bin/time`), which is a wrapper. */
+const TIME = "time";
+
 /** Words that keep the next word a command word, when they are themselves in command position. */
-const RESERVED = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", "time"]);
+const RESERVED = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", TIME]);
+
+/** The options the reserved word `time` takes before its command word, as bash reads them: one `-p`, then one `--`. */
+const TIME_OPTIONS = ["-p", "--"];
 
 /** A word in command position whose next word is a name, with a command after it: `function f { claude …; }`. */
 const NAMES_NEXT = "function";
@@ -397,6 +408,8 @@ const WRAPPERS = new Set([
   "nohup",
   "nice",
   "timeout",
+  // Only the program by path: the bare word is the reserved word, which `RESERVED` reads first.
+  TIME,
   "sudo",
   "xargs",
   "npx",
@@ -422,9 +435,12 @@ const isAgent = (word: string) => /^claude(?:-code)?$/.test(commandName(word));
 function readWord(at: Position, word: string): [runs: boolean, next: Position] {
   if (at.target) return [false, { ...at, target: false }];
   if (!at.command) return at.wrapped && isAgent(word) ? [true, AFTER_COMMAND] : [false, at];
-  if (ASSIGNMENT.test(word) || RESERVED.has(word)) return [false, at];
-  if (word === NAMES_NEXT) return [false, { ...at, target: true }];
-  if (REDIRECT.test(word)) return [false, { ...at, target: REDIRECT_ALONE.test(word) }];
+  const option = at.timeOptions.indexOf(word);
+  if (option >= 0) return [false, { ...at, timeOptions: at.timeOptions.slice(option + 1) }];
+  const afterWord = { ...at, timeOptions: word === TIME ? TIME_OPTIONS : [] };
+  if (ASSIGNMENT.test(word) || RESERVED.has(word)) return [false, afterWord];
+  if (word === NAMES_NEXT) return [false, { ...afterWord, target: true }];
+  if (REDIRECT.test(word)) return [false, { ...afterWord, target: REDIRECT_ALONE.test(word) }];
   if (isAgent(word)) return [true, AFTER_COMMAND];
   return [false, { ...AFTER_COMMAND, wrapped: WRAPPERS.has(commandName(word)) }];
 }
@@ -434,12 +450,13 @@ function readWord(at: Position, word: string): [runs: boolean, next: Position] {
  * it. Reads command words, not the whole shell grammar. A word ends at unescaped white space, `;`, `&`, `|`, `(`, `)`
  * or a backquote; a backslash joins the character it escapes to the word, and a line continuation joins the words
  * either side. A word runs the agent when it is the command word (the first of a command, past `NAME=value`, a
- * redirect and reserved words such as `then` or `!`) or any later word after a wrapper (`env`, `sudo`, `npx`, …). An
- * unescaped `#` at a word's start hides the rest of its line. Each `(` and backquote starts a command, and its close
- * restores where the word before it stood; inside backquotes, an escaped backquote opens or closes a nested one. A
- * backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the word: it goes on after the close. After a `)` that
- * closes nothing (a `case` pattern's) or one whose `(` came after a command's word (a `case` pattern's `(a)`, a
- * function's `()`), a command starts; so it does after `function` and the name that follows it.
+ * redirect and reserved words such as `then` or `!`, and `time`'s `-p` and `--`) or any later word after a wrapper
+ * (`env`, `sudo`, `npx`, `/usr/bin/time`, …). An unescaped `#` at a word's start hides the rest of its line. Each `(`
+ * and backquote starts a command, and its close restores where the word before it stood; inside backquotes, an escaped
+ * backquote opens or closes a nested one. A backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the
+ * word: it goes on after the close. After a `)` that closes nothing (a `case` pattern's) or one whose `(` came after a
+ * command's word (a `case` pattern's `(a)`, a function's `()`), a command starts; so it does after `function` and the
+ * name that follows it.
  */
 function agentRunStarts(masked: string): number[] {
   const starts: number[] = [];
