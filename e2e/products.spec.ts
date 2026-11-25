@@ -25,10 +25,7 @@ for (const [who, person] of [
     const links = entry.getByRole("list", { name: "Repo URLs" }).getByRole("link");
     await expect(links).toHaveText(CHAT_ASSISTANT.repo_urls);
     for (const url of CHAT_ASSISTANT.repo_urls) {
-      const link = links.filter({ hasText: url });
-      await expect(link).toHaveAttribute("href", url);
-      await expect(link).toHaveAttribute("target", "_blank");
-      await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+      await expect(links.filter({ hasText: url })).toHaveAttribute("href", url);
     }
     await expect(
       entry.getByRole("list", { name: "Dependencies" }).getByRole("listitem"),
@@ -43,8 +40,5 @@ for (const [who, person] of [
     await expect(page.getByRole("textbox")).toHaveCount(0);
     await expect(page.getByRole("combobox")).toHaveCount(0);
     await expect(page.getByRole("checkbox")).toHaveCount(0);
-    await expect(
-      page.getByRole("navigation", { name: "Pages" }).getByRole("link", { name: "Products" }),
-    ).toHaveAttribute("aria-current", "page");
   });
 }

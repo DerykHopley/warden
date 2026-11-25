@@ -4,14 +4,19 @@
 // its Repo URL links.
 import type { Page } from "@playwright/test";
 import { expectRings, expectTargets } from "./a11y.ts";
-import { CEDAR, CHAT_ASSISTANT, ensureProduct, expect, GRACE, KATHERINE, test } from "./session.ts";
+import {
+  CEDAR,
+  CHAT_ASSISTANT,
+  ensureProduct,
+  expect,
+  GRACE,
+  KATHERINE,
+  signInEachTest,
+  SIGNS_IN_ITSELF,
+  test,
+} from "./session.ts";
 
-/** Tags a test that signs in to Cedar itself (the Products page), so the sign-in below leaves it alone. */
-const IN_CEDAR = { tag: "@cedar" };
-
-test.beforeEach(async ({ signIn }, testInfo) => {
-  if (!testInfo.tags.includes(IN_CEDAR.tag)) await signIn(GRACE);
-});
+signInEachTest(GRACE);
 
 async function open(page: Page, width: number) {
   await page.setViewportSize({ width, height: 900 });
@@ -169,7 +174,7 @@ test("at 390px, every card, filter tab, row, page link and the Level line's link
 
 test(
   "on Products at 390px, the Products page link and each Repo URL link are at least 44 by 44px, and a Repo URL link shows a ring",
-  IN_CEDAR,
+  SIGNS_IN_ITSELF,
   async ({ page, signIn }) => {
     await ensureProduct(CEDAR, CHAT_ASSISTANT);
     await signIn(KATHERINE, CEDAR);

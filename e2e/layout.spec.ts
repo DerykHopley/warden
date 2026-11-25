@@ -6,41 +6,64 @@
 // Every page, opened directly at each width and scheme, scrolls nothing sideways: Products in Cedar (its Products
 // stay out of Acme's Findings counts), the rest as Grace in Acme.
 import type { Locator, Page } from "@playwright/test";
-import { CEDAR, CHAT_ASSISTANT, ensureProduct, expect, GRACE, KATHERINE, test } from "./session.ts";
+import {
+  ACME,
+  CEDAR,
+  CHAT_ASSISTANT,
+  ensureProduct,
+  expect,
+  GRACE,
+  KATHERINE,
+  signInEachTest,
+  SIGNS_IN_ITSELF,
+  test,
+  type Person,
+  type Team,
+} from "./session.ts";
 
 const WIDTHS = [390, 1024, 1600] as const;
 const SCHEMES = ["light", "dark"] as const;
 
-/** Tags a test that signs in to Cedar itself, so the sign-in below leaves it alone. */
-const IN_CEDAR = { tag: "@cedar" };
-
-test.beforeEach(async ({ signIn }, testInfo) => {
-  if (!testInfo.tags.includes(IN_CEDAR.tag)) await signIn(GRACE);
-});
+signInEachTest(GRACE);
 
 test.beforeAll(async () => {
   await ensureProduct(CEDAR, CHAT_ASSISTANT);
 });
 
 /**
- * What each page shows once it has loaded, so the check runs against its content, not its waiting line. /findings and
- * /overview are opened directly at each width and scheme by their own tests below.
+ * Who opens each page, and what it shows once it has loaded, so the check runs against its content, not its waiting
+ * line. /findings and /overview are opened directly at each width and scheme by their own tests below.
  */
-const PAGES: { path: string; loaded: (page: Page) => Locator }[] = [
+const PAGES: { path: string; person: Person; team: Team; loaded: (page: Page) => Locator }[] = [
   // A Member's landing page is Findings.
-  { path: "/", loaded: (page) => page.locator(".findings-table tbody tr").first() },
-  { path: "/products", loaded: (page) => page.locator(".product").first() },
-  { path: "/people", loaded: (page) => page.locator(".people tbody tr").first() },
+  {
+    path: "/",
+    person: GRACE,
+    team: ACME,
+    loaded: (page) => page.locator(".findings-table tbody tr").first(),
+  },
+  {
+    path: "/products",
+    person: KATHERINE,
+    team: CEDAR,
+    loaded: (page) => page.locator(".product").first(),
+  },
+  {
+    path: "/people",
+    person: GRACE,
+    team: ACME,
+    loaded: (page) => page.locator(".people tbody tr").first(),
+  },
 ];
 
-for (const { path, loaded } of PAGES) {
+for (const { path, person, team, loaded } of PAGES) {
   for (const scheme of SCHEMES) {
     for (const width of WIDTHS) {
       test(
         `${path} opened directly at ${width}px in ${scheme}: nothing scrolls sideways`,
-        path === "/products" ? IN_CEDAR : {},
+        SIGNS_IN_ITSELF,
         async ({ page, signIn }) => {
-          if (path === "/products") await signIn(KATHERINE, CEDAR);
+          await signIn(person, team);
           await page.setViewportSize({ width, height: 900 });
           await page.emulateMedia({ colorScheme: scheme });
           await page.goto(path);
@@ -58,7 +81,7 @@ for (const { path, loaded } of PAGES) {
 
 test(
   "Products under 640px: each Product's parts and dependency rows stack in one column",
-  IN_CEDAR,
+  SIGNS_IN_ITSELF,
   async ({ page, signIn }) => {
     await signIn(KATHERINE, CEDAR);
     await page.setViewportSize({ width: 390, height: 900 });

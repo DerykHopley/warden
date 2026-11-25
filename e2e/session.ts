@@ -2,7 +2,7 @@
 // setup made (the server trusts its public half through CLERK_JWT_KEY), handed to the dashboard's Clerk stand-in
 // before the page loads.
 import { test as base, type Page } from "@playwright/test";
-import type { ProductInput } from "@warden/contracts";
+import { ProductsBody, type ProductInput } from "@warden/contracts";
 import { importJWK, SignJWT, type JWK } from "jose";
 
 /** The Clerk Frontend API host the test publishable key names. Nothing is ever fetched from it. */
@@ -121,27 +121,48 @@ export async function signingKey() {
 }
 
 /**
- * Creates `product` in `team` through the API, as the Team's Admin. A name the Team already has is left as it is, so a
- * spec's `beforeAll` can run again in a restarted worker.
+ * Creates `product` in `team` through the API, as the Team's Admin, unless the Team already has a Product by that
+ * name, so a spec's `beforeAll` can run again in a restarted worker.
  */
 export async function ensureProduct(team: Team, product: ProductInput) {
   const origin = process.env.E2E_BASE_URL;
   if (!origin) throw new Error("E2E_BASE_URL is unset: run the browser tests with `pnpm e2e`");
   const token = await sessionToken(await signingKey(), origin, team.admin, team, "admin");
+  const headers = { Authorization: `Bearer ${token}` };
+  const alreadyThere = async () => {
+    const res = await fetch(`${origin}/api/products`, { headers });
+    if (!res.ok)
+      throw new Error(`listing ${team.name}'s Products: ${res.status} ${await res.text()}`);
+    const { products } = ProductsBody.parse(await res.json());
+    return products.some(({ name }) => name === product.name);
+  };
+  if (await alreadyThere()) return;
   const res = await fetch(`${origin}/api/products`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify(product),
   });
   if (res.status === 201) return;
-  // A 409 is also the answer for a Team not opened yet: only the name taken counts as already there.
-  const body = await res.text();
-  if (res.status !== 409 || !body.includes("already called")) {
-    throw new Error(`creating ${product.name} in ${team.name}: ${res.status} ${body}`);
-  }
+  // Workers run at once: another may have created it between the look and the post. Then it's there now.
+  if (res.status === 409 && (await alreadyThere())) return;
+  throw new Error(`creating ${product.name} in ${team.name}: ${res.status} ${await res.text()}`);
 }
 
-/** The browser tests' `test`:`baseURL` is the server the global setup started, and `signIn` signs a person in. */
+/**
+ * Tags a test that signs in itself, as someone other than its file's usual person (in Cedar, say), so
+ * `signInEachTest` leaves it alone: Playwright doesn't fix the order of two init scripts, so a second sign-in can't be
+ * relied on to win.
+ */
+export const SIGNS_IN_ITSELF = { tag: "@signs-in-itself" };
+
+/** Signs `person` in to `team` before each test of the calling file, except a test tagged `SIGNS_IN_ITSELF`. */
+export function signInEachTest(person: Person, team: Team = ACME) {
+  test.beforeEach(async ({ signIn }, testInfo) => {
+    if (!testInfo.tags.includes(SIGNS_IN_ITSELF.tag)) await signIn(person, team);
+  });
+}
+
+/** The browser tests' `test`: `baseURL` is the server the global setup started, and `signIn` signs a person in. */
 export const test = base.extend<{
   signIn: (person: Person, team?: Team) => Promise<void>;
 }>({

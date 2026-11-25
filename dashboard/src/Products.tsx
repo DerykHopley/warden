@@ -2,40 +2,59 @@
 // uses, the same for every Role. Nothing here changes a Product: the form for a Lead or an Admin comes later.
 import type { Framework, Product, ProductDependency } from "@warden/contracts";
 import { useCallback } from "react";
-import { askAboutTeam } from "./api.ts";
+import { askAboutTeam, type GetToken } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import { fetchFrameworks, fetchProducts, USAGE_WORDS, type ProductsResult } from "./products.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
-/** The Products, with the frameworks' display names by id: null when the frameworks couldn't be read. */
+/** The frameworks' display names by id: null when the frameworks couldn't be read in time. */
+type FrameworkNames = ReadonlyMap<string, string> | null;
+
+/** The Products, with the frameworks' display names. */
 type ProductsView =
   | Exclude<ProductsResult, { kind: "products" }>
-  | { kind: "products"; products: Product[]; names: ReadonlyMap<string, string> | null };
+  | { kind: "products"; products: Product[]; names: FrameworkNames };
+
+/** How long the list waits for the frameworks' names before it shows their ids instead. */
+export const FRAMEWORKS_WAIT_MS = 3000;
 
 const namesOf = (frameworks: Framework[]) =>
   new Map(frameworks.map(({ id, name }) => [id, name] as const));
 
+/**
+ * The frameworks' names, or null when their call fails or takes longer than FRAMEWORKS_WAIT_MS: they only name things.
+ * A session that ended is passed on, so the page ends it.
+ */
+async function frameworkNames(
+  getToken: GetToken,
+): Promise<FrameworkNames | { kind: "session-ended" }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), FRAMEWORKS_WAIT_MS);
+  });
+  const answer = await Promise.race([fetchFrameworks(getToken), late]);
+  clearTimeout(timer);
+  if (answer === null || answer.kind === "session-ended") return answer;
+  return answer.kind === "frameworks" ? namesOf(answer.frameworks) : null;
+}
+
 export function ProductsPage({ getToken, me, onSessionEnded }: PageProps) {
-  // Both calls at once, and the page waits for both, so a framework's id never shows for a moment before its name. The
-  // frameworks only name things: without them the list still shows, with each framework's id.
+  // Both calls at once. A refusal of the list shows as soon as it comes. The list itself waits for the frameworks'
+  // names, so a framework's id doesn't show for a moment before its name; without them in time, it shows the ids.
   const team = me.team;
   const ask = useCallback(
     async (signal: AbortSignal): Promise<ProductsView> => {
-      const [products, frameworks] = await Promise.all([
-        askAboutTeam(
-          () => fetchProducts(getToken),
-          (result) => (result.kind === "products" ? result.team : undefined),
-          team,
-          signal,
-        ),
-        fetchFrameworks(getToken),
-      ]);
+      const names = frameworkNames(getToken);
+      const products = await askAboutTeam(
+        () => fetchProducts(getToken),
+        (result) => (result.kind === "products" ? result.team : undefined),
+        team,
+        signal,
+      );
       if (products.kind !== "products") return products;
-      return {
-        kind: "products",
-        products: products.products,
-        names: frameworks.kind === "frameworks" ? namesOf(frameworks.frameworks) : null,
-      };
+      const frameworks = await names;
+      if (frameworks !== null && "kind" in frameworks) return frameworks;
+      return { kind: "products", products: products.products, names: frameworks };
     },
     [getToken, team],
   );
@@ -65,13 +84,7 @@ export function ProductsPage({ getToken, me, onSessionEnded }: PageProps) {
   );
 }
 
-function ProductEntry({
-  product,
-  names,
-}: {
-  product: Product;
-  names: ReadonlyMap<string, string> | null;
-}) {
+function ProductEntry({ product, names }: { product: Product; names: FrameworkNames }) {
   const reposId = `repos-${product.id}`;
   const dependenciesId = `dependencies-${product.id}`;
   return (
@@ -97,7 +110,7 @@ function ProductEntry({
         <section className="product-part">
           <h3 id={dependenciesId}>Dependencies</h3>
           {product.dependencies.length === 0 ? (
-            <p className="muted">No dependencies.</p>
+            <p className="muted">No Dependencies.</p>
           ) : (
             <ul className="dependencies" aria-labelledby={dependenciesId}>
               {product.dependencies.map((dependency) => (
@@ -117,10 +130,10 @@ function DependencyRow({
   names,
 }: {
   dependency: ProductDependency;
-  names: ReadonlyMap<string, string> | null;
+  names: FrameworkNames;
 }) {
   const { framework, version, usage, internet_facing: internetFacing } = dependency;
-  // The spaces between the parts keep them apart for a screen reader; the grid's gap spaces them on screen.
+  // The spaces between the parts keep them apart for a screen reader; the row's flex gap spaces them on screen.
   return (
     <li className="dependency">
       <span className="dependency-name">{names?.get(framework) ?? framework}</span>{" "}

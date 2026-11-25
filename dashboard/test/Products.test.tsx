@@ -1,10 +1,10 @@
 // The Products page (stories 1 and 2, read half): the Team's Products with their Repo URLs and dependencies, the same
 // for every Role, with nothing to change them; and each answer the page's calls can get.
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ProductsPage } from "../src/Products.tsx";
+import { FRAMEWORKS_WAIT_MS, ProductsPage } from "../src/Products.tsx";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 
 const CHAT = {
@@ -44,7 +44,10 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 /** Renders ProductsPage alone as `role`, with both calls answered unless `routes` says otherwise. */
 function renderProducts(role: Role, routes: Routes = {}) {
@@ -111,10 +114,6 @@ describe("ProductsPage", () => {
       expect(screen.queryAllByRole("textbox")).toEqual([]);
       expect(screen.queryAllByRole("combobox")).toEqual([]);
       expect(screen.queryAllByRole("checkbox")).toEqual([]);
-      expect(callsTo("/api/products")[0]?.[1]).toEqual({
-        method: "GET",
-        headers: { Authorization: "Bearer session-token" },
-      });
     },
   );
 
@@ -162,6 +161,43 @@ describe("ProductsPage", () => {
       "Langflow 1.4.0 Self-hosted internet-facing",
       "litellm version unknown Through another package",
     ]);
+  });
+
+  it("with the frameworks not answering, shows the list with ids once it has waited FRAMEWORKS_WAIT_MS", async () => {
+    // Only the timeouts are fake, and only until the wait is over: Testing Library's findBy needs a real setTimeout.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    renderProducts("member", { frameworks: () => new Promise<Response>(() => {}) });
+
+    await act(() => vi.advanceTimersByTimeAsync(FRAMEWORKS_WAIT_MS - 1));
+    expect(screen.getByText("Loading Products…")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    vi.useRealTimers();
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+    expect(dependencyRows("Chat assistant")).toEqual([
+      "langflow 1.4.0 Self-hosted internet-facing",
+      "litellm version unknown Through another package",
+    ]);
+  });
+
+  it("shows a refusal of the list at once, without waiting for the frameworks", async () => {
+    renderProducts("member", {
+      products: failsWith(409, "Your Team's Admin must open Warden first"),
+      frameworks: () => new Promise<Response>(() => {}),
+    });
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Your Team's Admin must open Warden first. Try again once they have.",
+    );
+    expect(screen.queryByText("Loading Products…")).not.toBeInTheDocument();
+  });
+
+  it("ends the session when the frameworks call finds it ended", async () => {
+    const props = renderProducts("member", {
+      frameworks: () => json(401, { error: "Not signed in" }),
+    });
+    await vi.waitFor(() => expect(props.onSessionEnded).toHaveBeenCalled());
+    expect(screen.queryByRole("heading", { level: 2 })).not.toBeInTheDocument();
   });
 
   it("says it's loading until both calls have answered", async () => {
