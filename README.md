@@ -77,8 +77,10 @@ PGHOST=127.0.0.1 PGPORT=5433 PGDATABASE=warden_preview PGUSER=warden_preview_app
 ```
 
 `pnpm --filter @warden/server expire` runs the daily Job once against the compose database: as `warden_app`, with
-`warden_admin` listing the Teams, it reopens every Accepted Finding whose expiry has passed, and logs one summary
-line. `warden_admin`'s one grant is select on `teams (id)`: every other table refuses it. Where `PGPASSWORD` is
+`warden_admin` listing the Teams, it reopens every Accepted Finding whose expiry has passed, refreshes Patch's CVE
+Findings (one Patch Scan per Product, against the loaded CVE snapshot, plus the Findings of a deleted Product), and
+logs one summary line. Before `load-cves` has run, each Patch Scan fails without changing a Finding, and the Job
+exits 1. `warden_admin`'s one grant is select on `teams (id)`: every other table refuses it. Where `PGPASSWORD` is
 set, the Job also needs `WARDEN_ADMIN_PASSWORD`; it never sends the app's password as the admin's.
 `GET /api/health` answers 200 when the database answers and offers the `vector` extension, and 503 naming the
 failed part otherwise.

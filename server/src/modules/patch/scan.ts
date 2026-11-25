@@ -2,8 +2,8 @@
  * The Patch Scan (spec #101, stories 3, 4 and 8): for each of a Product's dependencies and each CVE on its framework,
  * the verdict decides; `affected` and `unknown` are each one Observation on the Product, `not_affected` none. One
  * Product is one Scan through `findings.scanLocked`, so a Finding the Scan doesn't see again turns Fixed: an upgrade
- * past the fix, a dependency removed, or the Product deleted (stored with no dependencies). Saving a Product runs it;
- * the daily refresh will too.
+ * past the fix, a dependency removed, or the Product deleted (stored with no dependencies). Saving a Product runs it,
+ * and so does the daily Job's Patch step (refresh.ts). It refuses to run before `load-cves` has loaded the snapshot.
  */
 import type { Framework, Observation, Product, ProductDependency } from "@warden/contracts";
 import type { Transaction } from "kysely";
@@ -183,9 +183,23 @@ async function readCves(
 }
 
 /**
+ * Throws unless the CVE snapshot is loaded (`cve_snapshot` has its row). Before `load-cves` has run the CVE tables are
+ * empty, and a Scan reconciling against them would see no CVE and turn every CVE Finding on the Product Fixed.
+ */
+async function requireSnapshot(tx: Transaction<Database>): Promise<void> {
+  const loaded = await tx.selectFrom("cve_snapshot").select("as_of").executeTakeFirst();
+  if (loaded === undefined) {
+    throw new Error(
+      "the CVE snapshot isn't loaded (cve_snapshot has no row): run load-cves " +
+        "(pnpm --filter @warden/server load-cves) before a Patch Scan. Nothing was changed",
+    );
+  }
+}
+
+/**
  * The Product, its CVE tables and its Findings are all read in the one Team transaction that reconciles, under the
- * Team's Findings lock. The CVE tables are reference data, the same for every Team. `logger` records a dependency
- * the Scan skips.
+ * Team's Findings lock. The CVE tables are reference data, the same for every Team; with no snapshot loaded the Scan
+ * throws (`requireSnapshot`), recording nothing. `logger` records a dependency the Scan skips.
  */
 export function createPatchScan({
   findings,
@@ -199,6 +213,7 @@ export function createPatchScan({
       findings.scanLocked(
         { team, module: "patch", assets: [{ kind: "product", ref: id }], rules: [PATCH_RULE] },
         async (scan, tx) => {
+          await requireSnapshot(tx);
           const known: { dependency: ProductDependency; framework: Framework }[] = [];
           for (const dependency of await readDependencies(tx, id)) {
             const framework = PATCH_FRAMEWORKS.find((f) => f.id === dependency.framework);

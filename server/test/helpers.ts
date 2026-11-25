@@ -5,17 +5,24 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
 import type pg from "pg";
-import type { HealthBody, ProductInput, Role } from "@warden/contracts";
+import {
+  fingerprint,
+  type Finding,
+  type HealthBody,
+  type ProductInput,
+  type Role,
+} from "@warden/contracts";
 import { createApp, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
+import { toRow } from "../src/findings/rows.ts";
 import { createLogger, type Logger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
 import { patchRoutes } from "../src/modules/patch/routes.ts";
-import { createPatchScan, type PatchScan } from "../src/modules/patch/scan.ts";
+import { createPatchScan, PATCH_RULE, type PatchScan } from "../src/modules/patch/scan.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 /** Each module's move rule, as the start-up file wires them. */
@@ -153,6 +160,45 @@ export async function seedProduct(
     }
   });
   return id;
+}
+
+/**
+ * An Open `patch/known-vulnerability` Finding for `cve` on Product `productId` of `team`, written straight into
+ * `findings` through `withTeam`, as a Scan before this one would have left it: no Scan runs, so the Product needn't
+ * exist. Returns it.
+ */
+export async function seedPatchFinding(
+  withTeam: WithTeam,
+  team: string,
+  productId: string,
+  {
+    cve,
+    pkg = "pkg:pypi/langchain",
+    version = "0.0.200",
+  }: { cve: string; pkg?: string; version?: string },
+): Promise<Finding> {
+  const location = { kind: "dependency", package: pkg, version, vulnerability: cve } as const;
+  const finding: Finding = {
+    id: randomUUID(),
+    team,
+    asset: { kind: "product", ref: productId },
+    module: "patch",
+    rule_id: PATCH_RULE,
+    fingerprint: fingerprint(PATCH_RULE, location),
+    location,
+    severity: "high",
+    title: `${cve}: a known vulnerability`,
+    evidence: { summary: `Version ${version} is affected.` },
+    status: "open",
+    unconfirmed_fix: null,
+    accepted_reason: null,
+    accepted_until: null,
+    first_seen_scan: "scan-0",
+    last_seen_scan: "scan-0",
+    moved_to: null,
+  };
+  await withTeam(team, (tx) => tx.insertInto("findings").values(toRow(finding)).execute());
+  return finding;
 }
 
 /** Members and Findings for a test that never reaches the database: any call fails it. */

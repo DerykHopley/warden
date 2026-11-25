@@ -4,15 +4,21 @@
 // Teams the Job lists are only the ones it made.
 import { fingerprint, type Finding } from "@warden/contracts";
 import { afterEach, describe, expect, inject, it } from "vitest";
-import { checkAdminRole, runDailyExpiry } from "../src/daily-expiry.ts";
+import { checkAdminRole, runDailyExpiry, type DailyStep } from "../src/daily-expiry.ts";
 import { createPool, DATABASE_ROLE_NAMES } from "../src/database.ts";
 import { applyExpiry } from "../src/findings/expiry.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { createLogger } from "../src/log.ts";
+import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
+import { createProducts } from "../src/modules/patch/products.ts";
+import { createPatchRefresh } from "../src/modules/patch/refresh.ts";
+import { createPatchScan } from "../src/modules/patch/scan.ts";
 import { createWithAdmin, type WithAdmin } from "../src/with-admin.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createMigratedTestDatabase, poolAs, testName } from "./databases.ts";
+import { seedPatchFinding, seedProduct } from "./helpers.ts";
 
 const ends: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -285,6 +291,140 @@ describe("runDailyExpiry", () => {
     expect(lines.join("\n")).toContain("permission denied for table teams");
     expect(lines.join("\n")).not.toContain("never called");
   });
+});
+
+describe("runDailyExpiry's per-Team steps", () => {
+  /** A step that records each Team it runs for, throws for `throwsFor`, and reports `failsFor` as failed. */
+  function fakeStep(name: string, { throwsFor = "", failsFor = "" } = {}) {
+    const ran: string[] = [];
+    const step: DailyStep = {
+      name,
+      run: async (team) => {
+        ran.push(team);
+        if (team === throwsFor) throw new Error(`${name} broke for ${team}`);
+        return { failed: team === failsFor, counts: { things: 1 } };
+      },
+    };
+    return { step, ran };
+  }
+
+  it("a step throwing for one Team is logged with the Team and the step's name; the rest still run, and it returns 1", async () => {
+    const db = await freshDatabase();
+    const teams = ["org_step_a", "org_step_b", "org_step_c"];
+    for (const team of teams) await newTeam(db, team, [PAST]);
+    const first = fakeStep("first", { throwsFor: "org_step_a" });
+    const second = fakeStep("second");
+    const lines: string[] = [];
+
+    const code = await runDailyExpiry({
+      ...db,
+      steps: [first.step, second.step],
+      logger: createLogger((line) => lines.push(line)),
+      now: NOW,
+    });
+
+    expect(code).toBe(1);
+    expect(first.ran).toEqual(teams);
+    expect(second.ran).toEqual(teams);
+    for (const team of teams) expect(await statuses(db, team)).toEqual(["open"]);
+    const logged = lines.map((line) => JSON.parse(line));
+    expect(logged.filter((e) => e.severity === "ERROR")).toEqual([
+      expect.objectContaining({
+        team: "org_step_a",
+        step: "first",
+        error: expect.objectContaining({ message: "first broke for org_step_a" }),
+      }),
+    ]);
+    expect(logged.at(-1)).toMatchObject({
+      message: "daily expiry done",
+      teamsVisited: 3,
+      teamsFailed: 1,
+      findingsReopened: 3,
+      steps: { first: { things: 2 }, second: { things: 3 } },
+    });
+  }, 30_000);
+
+  it("a step reporting a Team as failed counts the Team failed, logged with the step's name, and returns 1", async () => {
+    const db = await freshDatabase();
+    for (const team of ["org_report_a", "org_report_b"]) await newTeam(db, team, [PAST]);
+    const reporting = fakeStep("reporting", { failsFor: "org_report_b" });
+    const lines: string[] = [];
+
+    const code = await runDailyExpiry({
+      ...db,
+      steps: [reporting.step],
+      logger: createLogger((line) => lines.push(line)),
+      now: NOW,
+    });
+
+    expect(code).toBe(1);
+    const logged = lines.map((line) => JSON.parse(line));
+    expect(logged.filter((e) => e.severity === "ERROR")).toEqual([
+      expect.objectContaining({ team: "org_report_b", step: "reporting" }),
+    ]);
+    expect(logged.at(-1)).toMatchObject({ teamsFailed: 1, steps: { reporting: { things: 2 } } });
+  }, 30_000);
+
+  it("with the expiry and every step passing for every Team, returns 0", async () => {
+    const db = await freshDatabase();
+    for (const team of ["org_pass_a", "org_pass_b"]) await newTeam(db, team, [PAST]);
+    const one = fakeStep("one");
+    const two = fakeStep("two");
+    const lines: string[] = [];
+
+    const code = await runDailyExpiry({
+      ...db,
+      steps: [one.step, two.step],
+      logger: createLogger((line) => lines.push(line)),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    expect(lines.map((line) => JSON.parse(line).severity)).not.toContain("ERROR");
+    expect(JSON.parse(lines.at(-1)!)).toMatchObject({
+      teamsFailed: 0,
+      steps: { one: { things: 2 }, two: { things: 2 } },
+    });
+  }, 30_000);
+
+  // Bug slice 6: on a database where load-cves hasn't run, Patch's step must change no Finding.
+  it("with the CVE snapshot not loaded, Patch's step changes no Patch Finding and logs why, the expiry still runs, and it returns 1", async () => {
+    const db = await freshDatabase();
+    const team = "org_no_snapshot";
+    await newTeam(db, team, [PAST]);
+    const productId = await seedProduct(db.withTeam, team, { name: "Chatbot" });
+    const patch = await seedPatchFinding(db.withTeam, team, productId, { cve: "CVE-2023-36188" });
+    const findings = createFindings({
+      withTeam: db.withTeam,
+      moveRules: { guard: guardMoveRule, patch: patchMoveRule },
+    });
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+
+    const code = await runDailyExpiry({
+      withAdmin: db.withAdmin,
+      findings,
+      steps: [
+        createPatchRefresh({
+          products: createProducts({ withTeam: db.withTeam }),
+          findings,
+          scan: createPatchScan({ findings, logger }),
+          logger,
+        }),
+      ],
+      logger,
+      now: NOW,
+    });
+
+    expect(code).toBe(1);
+    const after = await findings.list(team);
+    expect(after.find((f) => f.id === patch.id)).toEqual(patch);
+    expect(after.filter((f) => f.module === "guard").map((f) => f.status)).toEqual(["open"]);
+    const errors = lines.map((line) => JSON.parse(line)).filter((e) => e.severity === "ERROR");
+    expect(errors.length).toBeGreaterThan(0);
+    expect(JSON.stringify(errors)).toContain("cve_snapshot");
+    expect(JSON.stringify(errors)).toContain("load-cves");
+  }, 30_000);
 });
 
 // The Job's check on its admin connection, before it lists anything: on the suite's shared database.
