@@ -70,9 +70,10 @@ rel_of() { printf 'warden-rel-%s-9-1' "${1:0:7}"; }
 # execution fails the way `gcloud run jobs execute --wait` reports it). FAKE_DESCRIBE=fail makes reading the service
 # fail, as when the deploy account can't; FAKE_DESCRIBE=nourl describes a service with no URL at all (no status.url,
 # no annotation), as before its first revision is ready. FAKE_DAILY=fail makes updating the daily Job fail, and
-# FAKE_SCAN=fail updating the Scan Job. The
-# service's traffic is all on FAKE_SERVING (default: a release revision, <service>-rel-0000000-11-1, of a commit
-# that isn't in the checkout), and FAKE_PREVIOUS, when set, is the revision tagged previous.
+# FAKE_SCAN=fail updating the Scan Job; FAKE_SCAN=missing makes describing the Scan Job fail, as before the setup
+# script makes it. The service's traffic is all on FAKE_SERVING (default: a release revision,
+# <service>-rel-0000000-11-1, of a commit that isn't in the checkout), and FAKE_PREVIOUS, when set, is the revision
+# tagged previous.
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
@@ -118,6 +119,13 @@ JSON
       echo "ERROR: (gcloud.run.jobs.update) PERMISSION_DENIED" >&2
       exit 1
     fi
+    ;;
+  "run jobs describe warden-scan "*)
+    if [[ ${FAKE_SCAN-} == missing ]]; then
+      echo "ERROR: (gcloud.run.jobs.describe) Cannot find job [warden-scan]." >&2
+      exit 1
+    fi
+    echo '{"metadata":{"name":"warden-scan"}}'
     ;;
 esac
 exit 0
@@ -379,10 +387,15 @@ WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
 assert_equal "release: each of the daily Job's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$daily_secrets" || true)"
 
+(($(line_no "gcloud run jobs describe warden-scan ") < $(line_no "gcloud run jobs deploy warden-migrate "))) ||
+  fail "release: the migration runs before the Scan Job is found"
+pass "release: the Scan Job is found before anything is migrated or deployed"
 scan=$(call_of "gcloud run jobs update warden-scan ")
-(($(line_no "gcloud run jobs update warden-daily-expiry ") < $(line_no "gcloud run jobs update warden-scan "))) ||
-  fail "release: the Scan Job is updated before the daily Job"
-pass "release: the Scan Job is updated after the daily Job"
+(($(line_no "curl ") < $(line_no "gcloud run jobs update warden-scan "))) ||
+  fail "release: the Scan Job is updated before the health gate answers"
+(($(line_no "gcloud run jobs update warden-scan ") < $(line_no "gcloud run services update-traffic"))) ||
+  fail "release: traffic moves before the Scan Job is updated"
+pass "release: the Scan Job is updated after the health gate, before traffic moves"
 assert_equal "release: the Scan Job runs the release's image" "$release_image" "$(flag image "$scan")"
 assert_equal "release: the Scan Job runs as warden-scan" "warden-scan@$project.iam.gserviceaccount.com" \
   "$(flag service-account "$scan")"
@@ -478,15 +491,22 @@ assert_line "release, with the daily Job's update failing: traffic had moved" \
   "gcloud run services update-traffic warden " "$calls"
 assert_line "release, with the daily Job's update failing: names the Job" "warden-daily-expiry" "$out"
 
-# --- A release whose Scan Job update fails: traffic and the daily Job have moved, and the run names warden-scan ---
+# --- A release whose Scan Job update fails: traffic stays, and the run names warden-scan ---
 run_deploy 200 ok FAKE_SCAN=fail -- "$release_image" release
 assert_equal "release, with the Scan Job's update failing: exit 1" 1 "$code"
-assert_line "release, with the Scan Job's update failing: traffic had moved" \
-  "gcloud run services update-traffic warden " "$calls"
-assert_line "release, with the Scan Job's update failing: the daily Job was updated" \
-  "gcloud run jobs update warden-daily-expiry " "$calls"
 assert_line "release, with the Scan Job's update failing: names the Job" "warden-scan" "$out"
-assert_line "release, with the Scan Job's update failing: says traffic moved" "traffic moved" "$out"
+assert_line "release, with the Scan Job's update failing: says traffic didn't move" "no traffic moved" "$out"
+assert_no_match "release, with the Scan Job's update failing: no traffic moves" 'update-traffic' "$calls"
+assert_no_match "release, with the Scan Job's update failing: the daily Job isn't touched" 'warden-daily-expiry' \
+  "$calls"
+
+# --- A release with no Scan Job yet (the setup script not rerun): nothing is migrated, deployed or moved ---
+run_deploy 200 ok FAKE_SCAN=missing -- "$release_image" release
+assert_equal "release, with no Scan Job: exit 1" 1 "$code"
+assert_line "release, with no Scan Job: names the Job" "warden-scan" "$out"
+assert_line "release, with no Scan Job: says what makes it" "scripts/gcp-setup.sh" "$out"
+assert_no_match "release, with no Scan Job: nothing is migrated, deployed, moved or updated" \
+  '^gcloud run (jobs (deploy|execute|update)|deploy|services update-traffic) ' "$calls"
 
 # --- A secret with no pinned version stops the deploy before the gcloud call that would name it ---
 # without_pin <secret>: a copy of the script and its library, whose version table has no row for that secret.

@@ -4,8 +4,8 @@
 # themselves, two sets of service accounts (live, with the daily Job's and the Scan Job's, and owner previews),
 # GitHub's deploy identities, the two public services, the preview migration job, the daily expiry Job with the Cloud
 # Scheduler job that starts it, and the Scan Job (warden-scan), which the service starts for a Lead's Scan. Safe to run
-# again: it creates only what's missing, and sets each setting to the value below
-# whatever it was. README.md's "Setting up Google Cloud" says what it makes, and why.
+# again: it creates only what's missing, and sets each setting to the value below whatever it was. README.md's "Setting
+# up Google Cloud" says what it makes, and why.
 #
 # Usage: [DRY_RUN=1] scripts/gcp-setup.sh <project-id> <instance>
 #        DRY_RUN=1 prints each command instead of running it, needs no credentials, and assumes nothing exists yet.

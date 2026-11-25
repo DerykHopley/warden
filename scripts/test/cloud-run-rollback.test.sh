@@ -186,22 +186,15 @@ WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
   "$(sed 's/:[^:]*$//' <<<"$job_secrets")"
 assert_equal "each of the daily Job's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$job_secrets" || true)"
-scan=$(call_of "gcloud run jobs update warden-scan ")
+# The Scan Job's configuration comes from update_scan_job, which the deploy test checks; here, only what a rollback
+# adds: the target's image, and when.
 (($(line_no "gcloud run jobs update warden-daily-expiry ") < $(line_no "gcloud run jobs update warden-scan "))) ||
   fail "the Scan Job moves before the daily Job does"
 (($(line_no "gcloud run jobs update warden-scan ") < $(line_no "curl -sS -o /dev/null -w %{http_code} --max-time 10 $service_url"))) ||
   fail "the service's health check runs before the Scan Job moves"
 pass "the Scan Job moves after the daily Job, before the service's health check"
-assert_equal "the Scan Job runs aaaaaaa-10-1's image by digest" "$registry@sha256:aaaa" "$(flag image "$scan")"
-assert_equal "the Scan Job's whole configuration is set: as warden-scan" \
-  "warden-scan@$project.iam.gserviceaccount.com" "$(flag service-account "$scan")"
-assert_equal "the Scan Job's whole configuration is set: scan-job.ts, one retry, an hour, the instance" \
-  "node server/src/scan-job.ts 1 3600s $connection" \
-  "$(flag command "$scan") $(flag args "$scan") $(flag max-retries "$scan") $(flag task-timeout "$scan") $(flag set-cloudsql-instances "$scan")"
-scan_secrets=$(gcloud_dict "$(flag set-secrets "$scan")")
-[[ $scan_secrets =~ ^PGPASSWORD=warden-db-app-password:[1-9][0-9]*$ ]] ||
-  fail "the Scan Job's only secret is PGPASSWORD, a pinned version of the app password: $scan_secrets"
-pass "the Scan Job's only secret is PGPASSWORD, a pinned version of the app password"
+assert_equal "the Scan Job runs aaaaaaa-10-1's image by digest" "$registry@sha256:aaaa" \
+  "$(flag image "$(call_of "gcloud run jobs update warden-scan ")")"
 assert_no_match "no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
 assert_line "it says where traffic went" "warden-rel-aaaaaaa-10-1" "$out"
 assert_line "its last line names the daily Job" "warden-daily-expiry" "$(tail -1 <<<"$out")"

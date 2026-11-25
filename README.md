@@ -318,8 +318,9 @@ notice naming each missing variable (a rollback needs the first four).
 2. **Build** the image, then sign in to Google Cloud through Workload Identity Federation (no key) as
    `warden-deploy`, and push it to the `warden` repository as
    `europe-west1-docker.pkg.dev/<project-id>/warden/warden:<commit>`.
-3. **Migrate:** deploy the `warden-migrate` job with the image, as `warden-migrate`, run
-   `node server/src/migrate.ts` on `warden` as `warden_migrate`, and wait for it. A failed migration stops the
+3. **Migrate:** first check that the Scan Job `warden-scan` exists; if it doesn't, the release fails before anything
+   changes (rerun `scripts/gcp-setup.sh`). Then deploy the `warden-migrate` job with the image, as `warden-migrate`,
+   run `node server/src/migrate.ts` on `warden` as `warden_migrate`, and wait for it. A failed migration stops the
    release before any revision exists.
 4. **Deploy:** a `warden` revision named `warden-rel-<sha7>-<run>-<attempt>`, as `warden-run`, tagged `candidate`, with **no
    traffic**. Every release sets the revision's env vars and secrets afresh; its `CLERK_AUTHORIZED_PARTIES` is each
@@ -329,19 +330,21 @@ notice naming each missing variable (a rollback needs the first four).
 5. **Health gate:** call `/api/health` on the tag's URL (`https://candidate---warden-<project-number>.europe-west1.run.app`)
    for up to about 90 seconds until it answers 200. If it never does, the release fails and the revision gets no
    traffic.
-6. **Traffic:** 100% of the service's traffic to that revision, by its name. The same call tags the release it took
+6. **The Scan Job:** `warden-scan` gets the same image and its settings afresh (`node server/src/scan-job.ts`, as
+   `warden-scan`, one retry, a task timeout of an hour, the app password alone, pinned), before any traffic moves, so
+   the revision that takes the traffic never starts a Job still on an older image. If this step fails, the release
+   fails with no traffic moved: dispatch it again.
+7. **Traffic:** 100% of the service's traffic to that revision, by its name. The same call tags the release it took
    the traffic from `previous` (a tag moves no traffic), which is where a rollback goes by default. So only a
    revision that served is ever tagged `previous`: one whose health gate failed never is. When the revision it took
    the traffic from isn't a release (Google's placeholder before the first release, or after a rollback by hand), the same call removes the
    `previous` tag instead, so a rollback never goes to a stale release.
-7. **The Jobs:** `warden-daily-expiry` gets the same image and its settings afresh (`node
-   server/src/daily-expiry.ts`, as `warden-daily`, one retry, its two passwords pinned), then `warden-scan` does
-   (`node server/src/scan-job.ts`, as `warden-scan`, one retry, a task timeout of an hour, the app password alone,
-   pinned), so the Jobs and the service run the same code. The Cloud Scheduler job that starts the daily Job isn't
-   changed. If this step fails, the run fails after the traffic has moved, naming the Job: dispatch the release
-   again, or set the image by hand (below).
+8. **The daily Job:** `warden-daily-expiry` gets the same image and its settings afresh (`node
+   server/src/daily-expiry.ts`, as `warden-daily`, one retry, its two passwords pinned), so both Jobs and the service
+   run the same code. The Cloud Scheduler job that starts it isn't changed. If this step fails, the run fails after
+   the traffic has moved, naming the Job: dispatch the release again, or set the image by hand (below).
 
-**One at a time, and never backwards.** Only the deploy job (steps 2 to 7) holds the `release` lock; full lanes run
+**One at a time, and never backwards.** Only the deploy job (steps 2 to 8) holds the `release` lock; full lanes run
 side by side. (GitHub applies a called workflow's `concurrency` with the caller's context, so `full-lane.yml` and the
 `fast-lane.yml` it calls give each called run a group of its own, the release run's id: one group for every merge
 would queue them.) A running deploy is never cancelled. While one runs, GitHub keeps only the newest waiting behind it: an
@@ -351,8 +354,8 @@ workflow checks out whole):
 
 - this commit isn't on `main`: the run fails, before anything changes;
 - a release of a newer commit is serving: the run skips, exits green, and says so;
-- a release of this same commit is serving (a re-run after step 7 failed): only the two Jobs, `warden-daily-expiry`
-  and `warden-scan`, are set (step 7);
+- a release of this same commit is serving (a re-run after step 8 failed): only the two Jobs, `warden-scan` and
+  `warden-daily-expiry`, are set (steps 6 and 8);
 - otherwise (an older release serves, or a revision that isn't a release, or one whose commit isn't in the
   history): it releases. So a good commit still releases when a newer one never does (its full lane failed, or it
   skipped CI).
@@ -381,7 +384,7 @@ nothing changes if a release lands before the rollback starts:
 gh workflow run rollback.yml --ref main -f revision=<revision to go back to> -f from=<revision serving now>
 ```
 
-With no `revision`, it goes back to the release tagged `previous` (step 6 above). In order, it:
+With no `revision`, it goes back to the release tagged `previous` (step 7 above). In order, it:
 
 1. tags the revision `rollback` and waits for `https://rollback---warden-<project-number>.europe-west1.run.app/api/health`
    to answer 200. If it never does, it stops there and traffic stays where it is;
