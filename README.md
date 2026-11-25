@@ -29,11 +29,12 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    compose database. `.env.example` lists every variable Warden reads.
 3. `docker compose up -d --wait`: Postgres 17 with pgvector on `127.0.0.1:54329`, trust auth (no password).
 4. `pnpm install`: also points git's hooks at `.githooks`, so `git push` runs the pre-push checks.
-5. Make the database roles, then migrate, against the compose database:
+5. Make the database roles, migrate, then load the CVE snapshot, against the compose database:
 
    ```sh
    pnpm --filter @warden/server roles
    PGUSER=warden_migrate pnpm --filter @warden/server migrate
+   PGUSER=warden_migrate pnpm --filter @warden/server load-cves
    ```
 
    `roles` runs as the compose superuser `warden` and makes `warden_migrate` (owns the schema and runs the
@@ -41,7 +42,8 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    `BYPASSRLS`: it lists Team ids, for the daily Job, and reads nothing else); it's safe to run again. `migrate` applies the new SQL files in
    `server/migrations`, in file-name order, each in its own transaction; it only goes forwards. It runs only as
    `warden_migrate` (the `.envrc` user `warden` is refused), so every table gets the app's grants. Run it again
-   after pulling new migrations.
+   after pulling new migrations. `load-cves` fills Patch's CVE tables from the snapshot (see "CVE data"), also only
+   as `warden_migrate`; run it after `migrate`. A second run with the same files changes nothing.
 6. `pnpm dev`: the server on `PORT` (default 8080) and the dashboard on Vite's port (5173), which hands `/api` to
    the server. Open http://localhost:5173. The server runs as `warden_app`, whatever `PGUSER` says: `.envrc`
    keeps `PGUSER=warden` for `roles` and the tests, which need the compose superuser.
@@ -55,13 +57,25 @@ succeeds.
 
 `WARDEN_SEED_DEMO=1 pnpm --filter @warden/server seed <team-id>` fills one Team with demo Findings, so the Findings
 page has something to show: 11 Findings from Guard and Patch on a Repo, a Product, a Device and an Agent session, 7
-of them Open (2 Critical), 2 Fixed (one an Unconfirmed fix), 1 Accepted and 1 False positive. The data lives in
-`@warden/contracts/demo`, which the dashboard's tests read too. The Team id is its Clerk Organization id (`org_…`, the
-Organization switcher's Manage screen shows it), and the Team's Admin must have opened Warden in it first. It runs as
-`warden_app` and writes only through the Findings module (Scans, a Spot run, and two decisions made as the Team's
-oldest Admin or Lead). Run again, it says the Team is already seeded. It exits 1, writing nothing, for a Team with
-Findings of its own, and for one whose demo Findings aren't as it leaves them (a seed cut short); one seed runs per
-Team at a time.
+of them Open (2 Critical), 2 Fixed (one an Unconfirmed fix), 1 Accepted and 1 False positive. Then it adds the demo
+Product, "Shop web" (the demo Repo, LangChain 0.0.200), and runs its Patch Scan as a save does, so the Products page
+has a Product and the Findings page has its CVE Findings from the loaded CVE snapshot (how many depends on the
+snapshot). Load the snapshot first, once per database:
+
+```sh
+PGUSER=warden_migrate pnpm --filter @warden/server load-cves
+```
+
+The data lives in `@warden/contracts/demo`, which the dashboard's tests read too. The Team id is its Clerk
+Organization id (`org_…`, the Organization switcher's Manage screen shows it), and the Team's Admin must have opened
+Warden in it first. It runs as `warden_app` and writes only through the Findings module and the Products store
+(Scans, a Spot run, two decisions made as the Team's oldest Admin or Lead, the Product and its Scan). Run again, it
+says the Team is already seeded; on a Team seeded without the demo Product (with `--no-product`, or before the seed
+made one), it adds the Product and runs its Scan. It exits 1, writing nothing, for a Team with Findings of its own, for
+a Team with Products of its own, when the CVE snapshot isn't loaded (naming `load-cves`), and for a Team whose demo
+Findings or demo Product aren't as it leaves them (a seed cut short, the Product changed since, or the Findings a
+deleted demo Product left); one seed runs per Team at a time. `--no-product` after the Team id seeds the demo Findings
+only, with no Product and no snapshot needed: the browser tests seed Acme and Bluebird that way.
 
 It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database (a `PGHOST` other than `127.0.0.1`,
 `localhost` or `::1`, or any `PGPASSWORD`), `WARDEN_SEED_DEMO` must be the database's name, and the live database,
@@ -75,9 +89,12 @@ PGHOST=127.0.0.1 PGPORT=5433 PGDATABASE=warden_preview PGUSER=warden_preview_app
 ```
 
 `pnpm --filter @warden/server expire` runs the daily Job once against the compose database: as `warden_app`, with
-`warden_admin` listing the Teams, it reopens every Accepted Finding whose expiry has passed, and logs one summary
-line. `warden_admin`'s one grant is select on `teams (id)`: every other table refuses it. Where `PGPASSWORD` is
-set, the Job also needs `WARDEN_ADMIN_PASSWORD`; it never sends the app's password as the admin's.
+`warden_admin` listing the Teams, it reopens every Accepted Finding whose expiry has passed, refreshes Patch's CVE
+Findings (one Patch Scan per Product, against the loaded CVE snapshot, plus the Findings of a deleted Product), and
+logs one summary line. Before `load-cves` has run, each Patch Scan fails without changing a Finding, so the Job exits
+1 when any Team has a Product, or a deleted Product's Findings, to scan. `warden_admin`'s one grant is select on
+`teams (id)`: every other table refuses it. Where `PGPASSWORD` is set, the Job also needs `WARDEN_ADMIN_PASSWORD`; it
+never sends the app's password as the admin's.
 `GET /api/health` answers 200 when the database answers and offers the `vector` extension, and 503 naming the
 failed part otherwise.
 
@@ -96,6 +113,23 @@ must be this Warden's `/setup/github` and `/setup/github/callback`.
 Only an Admin connects GitHub: a Lead or a Member sees the Team's repos on Setup, and "An Admin connects GitHub.".
 The sign-in must start and end in the same browser tab: Warden keeps the sign-in's check there until GitHub sends you
 back. An installation links to one Team only.
+
+## CVE data
+
+Patch matches a Team's Products against a frozen snapshot of public CVE data, **as of 2026-10-13**. It ships in the
+image (`server/src/modules/patch/cve-snapshot/`, copied byte for byte from Patch's own snapshot) and the loader puts
+it in six Postgres tables (`cve_snapshot`, `cve_sources`, `cves`, `cve_kev`, `cve_epss`, `cve_osv`) that every Team
+reads and the app can't change. Warden makes no outside call for CVE data: nothing is fetched from NVD, CISA, OSV or
+FIRST while it runs, so the data stays as of that date until a release ships a newer snapshot.
+
+| Source | Licence | Attribution |
+|---|---|---|
+| NVD CVE API 2.0 | Public (US government) | CVE records from the National Vulnerability Database (NIST) |
+| CISA KEV 2026.10.08 | CC0 1.0 | CISA Known Exploited Vulnerabilities Catalog; no endorsement by CISA implied |
+| OSV.dev | CC-BY 4.0 | Affected and fixed versions from OSV.dev, taken from GitHub Advisory Database records (CC-BY 4.0) |
+| EPSS | Attribution requested by FIRST | EPSS by FIRST |
+
+This product uses the NVD API but is not endorsed or certified by the NVD.
 
 ## Checks
 
@@ -118,10 +152,10 @@ to `main`:
 They need the compose Postgres (as the server's tests do) and Playwright's Chromium, installed once with
 `pnpm --filter @warden/e2e exec playwright install chromium`. No Clerk keys are needed, and none is read: the global
 setup builds the dashboard in Vite's `e2e` mode, where a stand-in replaces `@clerk/react`, signs session tokens with a
-key pair it makes, and starts the server with that key's public half as `CLERK_JWT_KEY`. It opens two Teams through the
-API as their Admins and fills them with the demo seed, then drops the database when the tests end. A production build
-holds no part of the stand-in (a dashboard test checks). `pnpm e2e --ui` opens Playwright's UI; a failed test leaves
-its trace in `e2e/test-results/`.
+key pair it makes, and starts the server with that key's public half as `CLERK_JWT_KEY`. It opens three Teams through
+the API as their Admins, fills two with the demo seed (the third holds only the Products tests' Products), then drops
+the database when the tests end. A production build holds no part of the stand-in (a dashboard test checks).
+`pnpm e2e --ui` opens Playwright's UI; a failed test leaves its trace in `e2e/test-results/`.
 
 The pre-push hook (`.githooks/pre-push`) runs `pnpm lint`, `pnpm format:check`, `pnpm typecheck` and
 `pnpm design-lint`.
@@ -295,7 +329,8 @@ replace the preview.
 3. Sign in to Google Cloud through Workload Identity Federation (no key) as `warden-preview-deploy`, and push the
    image to the `warden-preview` repository, tagged with the commit.
 4. **Migrate:** deploy the `warden-migrate-preview` job with the image, as `warden-preview-migrate`, run
-   `node server/src/migrate.ts` on `warden_preview` and wait for it. A failed migration stops the deploy before any
+   `node server/src/migrate.ts`, then the CVE snapshot loader `node server/src/modules/patch/cve-snapshot.ts`, on
+   `warden_preview` in one execution, and wait for it. A failed migration or load stops the deploy before any
    revision exists.
 5. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
    `warden-preview-run`, tagged `<name>`, with **no traffic**. Every run sets the revision's env vars and secrets
@@ -343,8 +378,9 @@ before anything is migrated or deployed.
    `europe-west1-docker.pkg.dev/<project-id>/warden/warden:<commit>`.
 3. **Migrate:** first check that the Scan Job `warden-scan` exists; if it doesn't, the release fails before anything
    changes (rerun `scripts/gcp-setup.sh`). Then deploy the `warden-migrate` job with the image, as `warden-migrate`,
-   run `node server/src/migrate.ts` on `warden` as `warden_migrate`, and wait for it. A failed migration stops the
-   release before any revision exists.
+   run `node server/src/migrate.ts`, then the CVE snapshot loader `node server/src/modules/patch/cve-snapshot.ts`, on
+   `warden` as `warden_migrate` in one execution, and wait for it. A failed migration or load stops the release
+   before any revision exists.
 4. **Deploy:** a `warden` revision named `warden-rel-<sha7>-<run>-<attempt>`, as `warden-run`, tagged `candidate`, with **no
    traffic**. Every release sets the revision's env vars and secrets afresh; its `CLERK_AUTHORIZED_PARTIES` is each
    URL Cloud Run gives the service, and its `WARDEN_SCAN_JOB` names the Scan Job

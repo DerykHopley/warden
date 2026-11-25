@@ -18,6 +18,7 @@ import { fetchMe, type MeResult } from "./me.ts";
 import { OverviewPage } from "./Overview.tsx";
 import type { PagePanel, PanelContext } from "./panel.ts";
 import { PeoplePage } from "./People.tsx";
+import { ProductsPage } from "./Products.tsx";
 import { ROLE_WORDS } from "./roles.ts";
 import { GitHubSetupPage, SetupPage } from "./Setup.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
@@ -133,6 +134,7 @@ type Page = { path: string; label: string; Page: ComponentType<PageProps> };
 const PAGES: (Page & { alsoAt?: Record<string, ComponentType<PageProps>> })[] = [
   { path: "/findings", label: "Findings", Page: FindingsPage },
   { path: "/overview", label: "Overview", Page: OverviewPage },
+  { path: "/products", label: "Products", Page: ProductsPage },
   { path: "/people", label: "People", Page: PeoplePage },
   {
     path: "/setup",
@@ -226,6 +228,7 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
     onFindingChanged: nothingToDo,
     onFindingGone: nothingToDo,
     candidates: [],
+    assetName: null,
   };
 
   return (

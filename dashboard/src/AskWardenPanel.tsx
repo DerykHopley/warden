@@ -253,6 +253,7 @@ export function AskWardenPanel(props: {
             userId={props.userId}
             getToken={getToken}
             candidates={context.candidates}
+            assetName={context.assetName}
             onRetryProposals={proposals.retry}
             onClear={() => {
               focusNext.current = "input";

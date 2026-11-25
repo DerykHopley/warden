@@ -1,5 +1,5 @@
-// 0010_repo_assets_per_installation on data 0009_repo_assets stored (#158): every Repo Asset row is kept field for
-// field, under the key (team_id, installation_id, ref). A database of its own, migrated to 0009, written as the app
+// 0012_repo_assets_per_installation on data 0011_repo_assets stored (#158): every Repo Asset row is kept field for
+// field, under the key (team_id, installation_id, ref). A database of its own, migrated to 0011, written as the app
 // wrote it then, then migrated to the shipped migrations.
 import { randomUUID } from "node:crypto";
 import type { Selectable } from "kysely";
@@ -20,7 +20,7 @@ type Row = Selectable<Database["repo_assets"]>;
 let withTeam: WithTeam;
 let owner: pg.Pool;
 let end: (() => Promise<void>) | undefined;
-/** Each Team's Repo Asset rows as 0009 stored them, read before 0010 ran. */
+/** Each Team's Repo Asset rows as 0011 stored them, read before 0012 ran. */
 const before: Record<string, Row[]> = {};
 
 const repoAssetRows = (run: WithTeam, team: string) =>
@@ -30,7 +30,7 @@ const repoAssetRows = (run: WithTeam, team: string) =>
 
 beforeAll(async () => {
   const { pools, withTeamAs, ...made } = await ownDatabase(["warden_app", "warden_migrate"], {
-    upTo: "0009_repo_assets",
+    upTo: "0011_repo_assets",
     before: async (withTeamAs) => {
       const app = withTeamAs.warden_app;
       const written = {
@@ -80,7 +80,7 @@ beforeAll(async () => {
 
 afterAll(() => end?.(), 30_000);
 
-describe("0010_repo_assets_per_installation on a database 0009 wrote", () => {
+describe("0012_repo_assets_per_installation on a database 0011 wrote", () => {
   it("keeps every Repo Asset row as it was, field for field", async () => {
     expect(before[teamA]).toHaveLength(3);
     expect(await repoAssetRows(withTeam, teamA)).toEqual(before[teamA]);

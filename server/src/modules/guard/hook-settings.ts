@@ -1,8 +1,8 @@
 // A Team's hook token (Guard spec, story 7): what a laptop's managed hook sends so the hook endpoint knows its Team.
-// Kept as one append-only row per token issued (0011_hook_tokens), holding its SHA-256 hash, never the token; the
+// Kept as one append-only row per token issued (0013_hook_tokens), holding its SHA-256 hash, never the token; the
 // Team's newest row is its current token, and the one before it stays valid 24 h after a rotation. The token names its
 // Team, so `teamFor` reads only that Team's rows: every call runs inside `withTeam`, never across Teams (ADR 0006).
-// Beside it, the Team's Privacy tier: one row per Team in `guard_settings` (0012), replaced on each change.
+// Beside it, the Team's Privacy tier: one row per Team in `guard_settings` (0014), replaced on each change.
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import type { PrivacyTier } from "@warden/contracts";
 import { sql, type Generated, type Selectable, type Transaction } from "kysely";
@@ -22,7 +22,7 @@ export type HookTables = {
     issued_by: string;
     issued_at: Date;
   };
-  /** One row per Team that set its Privacy tier; a change replaces it (0012_guard_settings). */
+  /** One row per Team that set its Privacy tier; a change replaces it (0014_guard_settings). */
   guard_settings: {
     team_id: string;
     privacy_tier: PrivacyTier;

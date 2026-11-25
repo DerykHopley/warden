@@ -44,6 +44,7 @@ import {
   UNCONFIRMED_FIX,
 } from "./finding-words.ts";
 import { shortId } from "./findings.ts";
+import { PatchSection } from "./PatchSection.tsx";
 import { personName, type ClerkUser } from "./person-name.ts";
 import type { ProposalsResult } from "./proposals.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
@@ -133,6 +134,8 @@ export function DetailCard(props: {
   getToken: GetToken;
   /** The focused Finding's Unconfirmed-fix candidates the page's list holds: Mark moved's choices. */
   candidates: Finding[];
+  /** The Asset's words from the page (a Product's name); null shows the Asset's ref. */
+  assetName: string | null;
   /** The card's ✕: clears the page's focus. */
   onClear: () => void;
   /** Asks for the Proposals again, after they couldn't load. */
@@ -479,7 +482,7 @@ export function DetailCard(props: {
         <dt>Asset</dt>
         <dd>
           {ASSET_KIND_WORDS[finding.asset.kind]}{" "}
-          <span className="asset-ref">{finding.asset.ref}</span>
+          <span className="asset-ref">{props.assetName ?? finding.asset.ref}</span>
         </dd>
         <dt>Location</dt>
         <dd>
@@ -523,6 +526,15 @@ export function DetailCard(props: {
           </>
         )}
       </dl>
+      {finding.module === "patch" && (
+        // Keyed by what a decision changes, so the section asks again after one and drops the earlier ask's answer.
+        <PatchSection
+          key={`${finding.status} ${finding.accepted_until ?? ""}`}
+          finding={finding}
+          getToken={getToken}
+          onSessionEnded={props.onSessionEnded}
+        />
+      )}
       {cardLine?.kind === "done" && (
         <p className="card-line" role="status" tabIndex={-1}>
           {cardLine.text}
@@ -773,7 +785,13 @@ function Proposals(props: {
     return (
       <p className="proposals-failed">
         <span className="muted">Couldn't load Proposals</span>
-        <button type="button" className="secondary" onClick={props.onRetry}>
+        {/* Named apart from a Patch Finding's assessment Retry, which can show in the same card. */}
+        <button
+          type="button"
+          className="secondary"
+          onClick={props.onRetry}
+          aria-label="Retry Proposals"
+        >
           Retry
         </button>
       </p>

@@ -57,6 +57,10 @@ every object and array in it are frozen, and its type is readonly.
 
 - A file's `line` is left out, so a problem that moves lines in the same file is the same Finding.
 - A package's `version` is left out, so an upgrade isn't a new problem.
+- A `dependency`'s `package` is a [purl](https://github.com/package-url/purl-spec) without its version, so one
+  package has one spelling: `pkg:pypi/langchain`, `pkg:npm/flowise`, `pkg:golang/github.com/ollama/ollama`. A PyPI
+  name is in lower case with each `_` as `-` (`Some_Name` is `pkg:pypi/some-name`). Patch spells a framework with
+  no package (llama.cpp, Dify, AnythingLLM) `pkg:generic/<framework id>`.
 - The Asset is never part of it, so the same problem on two Assets has the same Fingerprint.
 - No part holds a `|`: a Rule id (which also holds no whitespace), a `package`, a `vulnerability` and a setting's
   `name` with one are refused, so a Fingerprint splits back into its parts one way.

@@ -1,10 +1,12 @@
-// One throwaway database for the server's tests: the roles, every migration as warden_migrate, then the tests; dropped
-// at the end. Tests reach it with `inject("testDatabase")`. First, it clears out what killed runs left behind.
+// One throwaway database for the server's tests: the roles, every migration as warden_migrate, Patch's CVE snapshot
+// loaded as the release loads it, then the tests; dropped at the end. Tests reach it with `inject("testDatabase")`.
+// First, it clears out what killed runs left behind.
 import type { TestProject } from "vitest/node";
 import {
   createMigratedTestDatabase,
   dropStaleTestDatabases,
   dropStaleTestRoles,
+  loadTestCveSnapshot,
 } from "./databases.ts";
 
 declare module "vitest" {
@@ -25,6 +27,12 @@ export default async function setup(project: TestProject) {
   await dropStaleTestDatabases(connection);
   await dropStaleTestRoles(connection);
   const database = await createMigratedTestDatabase(connection);
+  try {
+    await loadTestCveSnapshot(database.name, connection);
+  } catch (error) {
+    await database.drop();
+    throw error;
+  }
 
   project.provide("testDatabase", database.name);
   return database.drop;

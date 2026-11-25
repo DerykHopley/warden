@@ -8,7 +8,7 @@ import type { AssetCheck } from "../../scans.ts";
 import type { Database } from "../../schema.ts";
 import type { WithTeam } from "../../with-team.ts";
 
-/** The constraint 0009_repo_assets puts on an installation's id across every Team. */
+/** The constraint 0011_repo_assets puts on an installation's id across every Team. */
 const ONE_TEAM = "github_installations_one_team";
 
 /** A link of an installation another Team already linked: nothing was written, and that Team's rows are unchanged. */
@@ -80,7 +80,7 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
         if (repos.length === 0) return [];
         // GitHub's paged list can name a repo twice, and the key holds one row per installation and ref.
         const unique = new Map(repos.map((repo) => [repo.ref, repo])).values();
-        // Another of the Team's installations listing the same repo keeps its own row (0010).
+        // Another of the Team's installations listing the same repo keeps its own row (0012).
         const rows = await tx
           .insertInto("repo_assets")
           .values(
@@ -99,7 +99,7 @@ export function createRepoAssets({ withTeam }: { withTeam: WithTeam }): RepoAsse
 
     list(team) {
       return withTeam(team, async (tx) => {
-        // One row per installation listing a repo (0010): each ref once, under the installation that listed it latest.
+        // One row per installation listing a repo (0012): each ref once, under the installation that listed it latest.
         const byRef = sql`ref collate "C"`;
         const rows = await tx
           .selectFrom("repo_assets")

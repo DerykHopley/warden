@@ -3,6 +3,7 @@
 // its own, since history can't be deleted between tests.
 import { randomUUID } from "node:crypto";
 import { fingerprint, Finding, type Observation, type Scan, type SpotRun } from "@warden/contracts";
+import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import {
@@ -16,14 +17,18 @@ import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
+import { queuedBehindFindingsLock, seedPatchFinding } from "./helpers.ts";
 
 const pools: pg.Pool[] = [];
+let probe: pg.Pool;
 let withTeam: WithTeam;
 let findings: Findings;
 
 beforeAll(() => {
   const pool = poolAs("warden_app", inject("testDatabase"));
-  pools.push(pool);
+  // The probe holds the Team's lock and watches pg_locks on connections of its own, apart from the Findings' pool.
+  probe = poolAs("warden_app", inject("testDatabase"));
+  pools.push(pool, probe);
   withTeam = createWithTeam(pool);
   findings = createFindings({
     withTeam,
@@ -272,6 +277,41 @@ describe("findings.scan: the call a module writes", () => {
     ).rejects.toThrow("the scanner crashed");
 
     expect(() => kept!.saw(observation())).toThrow(/ended/);
+  });
+});
+
+describe("findings.scanLocked: a Scan whose reads must be current when it reconciles", () => {
+  it("runs its work once it holds the Team's Findings lock, in the Team's transaction that reconciles", async () => {
+    // The probe holds the Team's lock, as another Scan's reconcile would. The work must wait for it, so what it reads
+    // is what that Scan left; then the work's Observations reconcile in the same transaction.
+    const team = await newTeam();
+    let readTeam: string | undefined;
+    const holder = await probe.connect();
+    try {
+      await holder.query("begin");
+      await holder.query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))", [team]);
+
+      const scanning = findings.scanLocked(
+        { team, module: "guard", assets: [app], rules: [ENV] },
+        async (scan, tx) => {
+          const { rows } = await sql<{
+            team: string;
+          }>`select current_setting('warden.team_id') as team`.execute(tx);
+          readTeam = rows[0]!.team;
+          scan.saw(observation());
+        },
+      );
+      await queuedBehindFindingsLock(probe, team);
+      expect(readTeam).toBeUndefined();
+      await holder.query("commit");
+
+      const outcome = await scanning;
+      expect(readTeam).toBe(team);
+      expect(outcome.opened).toHaveLength(1);
+      expect((await findings.list(team)).map((f) => f.status)).toEqual(["open"]);
+    } finally {
+      holder.release();
+    }
   });
 });
 
@@ -588,5 +628,42 @@ describe("two Teams", () => {
     }
     expect((await findings.list(b)).map((f) => f.team)).toEqual([b]);
     await expect(findings.history(b, aFinding!.id)).rejects.toBeInstanceOf(FindingNotFound);
+  });
+});
+
+describe("assetRefs: the Assets a module's Findings in some Statuses are on", () => {
+  it("lists each ref once, of the module's Findings on that kind of Asset in those Statuses, and none of another Team's", async () => {
+    const [team, other] = [await newTeam(), await newTeam()];
+    const accepted = {
+      status: "accepted",
+      accepted_reason: "Fixed next sprint",
+      accepted_until: "2027-06-01T00:00:00.000Z",
+    } as const;
+    for (const [ref, fields] of [
+      ["p-open", { cve: "CVE-2023-1" }],
+      ["p-open", { cve: "CVE-2023-2" }],
+      ["p-accepted", { cve: "CVE-2023-3", ...accepted }],
+      ["p-fixed", { cve: "CVE-2023-4", status: "fixed" }],
+      ["p-false-positive", { cve: "CVE-2023-5", status: "false_positive" }],
+    ] as const)
+      await seedPatchFinding(withTeam, team, ref, fields);
+    // Not listed: Patch's on a Repo, another module's on a Product, and another Team's.
+    await seedPatchFinding(withTeam, team, "unused", { cve: "CVE-2023-6", asset: app });
+    const onGuardProduct = { kind: "product", ref: "p-guard" } as const;
+    await findings.reconcile(
+      scanOf(team, {
+        assets: [onGuardProduct],
+        observations: [observation({ asset: onGuardProduct })],
+      }),
+    );
+    await seedPatchFinding(withTeam, other, "p-other-team", { cve: "CVE-2023-7" });
+
+    const refs = await findings.assetRefs(team, {
+      module: "patch",
+      kind: "product",
+      statuses: ["open", "accepted"],
+    });
+
+    expect(refs).toEqual(["p-accepted", "p-open"]);
   });
 });

@@ -1,3 +1,5 @@
 pnpm-lock.yaml
 **/dist
 *.md
+# Patch's CVE snapshot, kept byte for byte as Patch built it.
+server/src/modules/patch/cve-snapshot/

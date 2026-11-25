@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createClerkClient } from "@clerk/backend";
 import { serve } from "@hono/node-server";
-import { createApp } from "./app.ts";
+import { createApp, type AppDeps } from "./app.ts";
 import { createClerkVerifier } from "./auth.ts";
 import { clerkOrganizations } from "./clerk-organizations.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
@@ -16,6 +16,11 @@ import { hookRoutes } from "./modules/guard/hook-routes.ts";
 import { createHookSettings } from "./modules/guard/hook-settings.ts";
 import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
+import { createPatchAssessment } from "./modules/patch/assessment.ts";
+import { createProducts } from "./modules/patch/products.ts";
+import { patchRoutes } from "./modules/patch/routes.ts";
+import { createSaveLimit } from "./modules/patch/save-limit.ts";
+import { createPatchScan } from "./modules/patch/scan.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";
 import { createScans } from "./scans.ts";
 import { createShutdown } from "./shutdown.ts";
@@ -86,7 +91,9 @@ const scans = createScans({ withTeam });
 // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503). A Lead's
 // start and the first Scan after a link both start it.
 const startScanJob = scanJobStarterFor(config, { logger });
-const app = createApp({
+// ADR 0005: the modules come in here, through the wiring the Scan Job and the demo seed share.
+const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
+const appDeps: AppDeps = {
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
   members: createMembers({
@@ -94,15 +101,16 @@ const app = createApp({
     clerkOrganizations: clerkOrganizations(clerk.organizations),
     logger,
   }),
-  // ADR 0005: the modules come in here, through the wiring the Scan Job and the demo seed share.
-  findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
+  findings,
   scans,
   // The Job's own list, so a start names the Rules the Job will run; the server reads no repo, so no RepoReader.
   scanners: scanners({ withTeam, logger }),
   // A Guard Scan names only the Team's Repo Assets.
   assetChecks: { guard: guardAssetCheck(repoAssets) },
-  // Linking a GitHub installation needs the GitHub app's settings; without them its route answers 503. A link starts
-  // the first Scan of its repos.
+  // Each module's routes, behind the app's middleware (ADR 0005). Linking a GitHub installation needs the GitHub app's
+  // settings; without them its route answers 503. A link starts the first Scan of its repos. Saving a Product runs its
+  // Patch Scan into Findings, so each Team may save 30 times a minute (createSaveLimit's defaults), counted in this
+  // instance's memory.
   moduleRoutes: [
     guardRoutes(
       config.github
@@ -110,13 +118,21 @@ const app = createApp({
         : { repoAssets, scans, startScanJob },
     ),
     hookRoutes({ hookSettings }),
+    patchRoutes({
+      products: createProducts({ withTeam }),
+      scan: createPatchScan({ findings, logger }),
+      assessment: createPatchAssessment({ findings, withTeam }),
+      logger,
+      saveLimit: createSaveLimit(),
+    }),
   ],
   startScanJob,
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,
   dashboardDir: existsSync(`${dashboardDir}/index.html`) ? dashboardDir : undefined,
-});
+};
+const app = createApp(appDeps);
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   logger.info("listening", { port });
