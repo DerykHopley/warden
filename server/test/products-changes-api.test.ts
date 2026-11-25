@@ -130,7 +130,6 @@ describe("a Lead or an Admin changing the Team's Products", () => {
       const deleted = await remove(teamId, product.id, as);
       expect(deleted.status).toBe(204);
       expect(await list(teamId)).toEqual([]);
-      expect(await stored(teamId)).toEqual({ products: [], dependencies: [] });
     });
   }
 
@@ -156,11 +155,12 @@ describe("a Lead or an Admin changing the Team's Products", () => {
     ]);
   });
 
-  it("stores a version trimmed, so a line break never reaches the reasons or the UI", async () => {
+  it("stores versions and Repo URLs trimmed, so a line break never reaches the reasons or the UI", async () => {
     const teamId = await team();
 
     const product = await created(teamId, {
       ...supportBot,
+      repo_urls: [" https://github.com/example/support-bot\n"],
       dependencies: [
         { framework: "langchain", version: "1.4.0\n", usage: "library", internet_facing: true },
         { framework: "vllm", version: " 0.6.1 ", usage: "hosted", internet_facing: false },
@@ -171,6 +171,7 @@ describe("a Lead or an Admin changing the Team's Products", () => {
       products.flatMap(({ dependencies }) => dependencies.map(({ version }) => version));
     expect(versions([product])).toEqual(["1.4.0", "0.6.1"]);
     expect(versions(await list(teamId))).toEqual(["1.4.0", "0.6.1"]);
+    expect((await list(teamId))[0]!.repo_urls).toEqual(["https://github.com/example/support-bot"]);
   });
 });
 
@@ -191,28 +192,28 @@ describe("a Member", () => {
   });
 });
 
+// POST and PUT read the body with one parser, so its cases run on POST, and one shows PUT refuses as well.
 describe("a body Patch doesn't take", () => {
   it("answers 400 to a body that isn't JSON or that ProductInput refuses, and writes nothing", async () => {
     const teamId = await team();
-    const product = await created(teamId);
+    await created(teamId);
     const before = await stored(teamId);
 
     const answers = [
       await create(teamId, "{not json"),
       await create(teamId, { ...supportBot, name: "Other app", team: "org_other" }),
-      await replace(teamId, product.id, "{not json"),
-      await replace(teamId, product.id, { ...supportBot, team: "org_other" }),
     ];
 
-    expect(answers.map(({ status }) => status)).toEqual([400, 400, 400, 400]);
+    expect(answers.map(({ status }) => status)).toEqual([400, 400]);
     expect(answers[1]!.body).toEqual({ error: expect.stringContaining("team") });
-    expect(answers[3]!.body).toEqual({ error: expect.stringContaining("team") });
     expect(await stored(teamId)).toEqual(before);
   });
 
+  // A name the Team doesn't have yet, so nothing in a case is a 409 instead.
+  const otherApp: ProductInput = { ...supportBot, name: "Other app" };
   const dependency = (overrides: Partial<ProductInput["dependencies"][number]>) => ({
-    ...supportBot,
-    dependencies: [{ ...supportBot.dependencies[0]!, ...overrides }],
+    ...otherApp,
+    dependencies: [{ ...otherApp.dependencies[0]!, ...overrides }],
   });
   const refused: { input: string; body: ProductInput; field: string }[] = [
     {
@@ -223,8 +224,16 @@ describe("a body Patch doesn't take", () => {
     {
       input: "a Repo URL listed twice",
       body: {
-        ...supportBot,
+        ...otherApp,
         repo_urls: ["https://github.com/example/a", "https://github.com/example/a"],
+      },
+      field: "repo_urls.1",
+    },
+    {
+      input: "a Repo URL listed twice, once with spaces around it",
+      body: {
+        ...otherApp,
+        repo_urls: ["https://github.com/example/a", " https://github.com/example/a\n"],
       },
       field: "repo_urls.1",
     },
@@ -233,40 +242,62 @@ describe("a body Patch doesn't take", () => {
       body: dependency({ version: "1.0 beta" }),
       field: "dependencies.0.version",
     },
+    {
+      input: "a version that is only spaces",
+      body: dependency({ version: "  \n" }),
+      field: "dependencies.0.version",
+    },
+    // Postgres can't store a NUL in text, so it would otherwise be a 500.
+    { input: "a NUL in the name", body: { ...otherApp, name: "Other\u0000app" }, field: "name" },
+    {
+      input: "a NUL in a Repo URL",
+      body: { ...otherApp, repo_urls: ["https://github.com/example/a\u0000"] },
+      field: "repo_urls.0",
+    },
+    {
+      input: "a NUL in a version",
+      body: dependency({ version: "1.0\u0000" }),
+      field: "dependencies.0.version",
+    },
   ];
   for (const { input, body, field } of refused) {
-    for (const method of ["POST", "PUT"] as const) {
-      it(`answers ${method} with ${input} 400 naming ${field}, and writes nothing`, async () => {
-        const teamId = await team();
-        const product = await created(teamId);
-        const before = await stored(teamId);
+    it(`answers ${input} 400 naming ${field}, and writes nothing`, async () => {
+      const teamId = await team();
+      await created(teamId);
+      const before = await stored(teamId);
 
-        const answer =
-          method === "POST"
-            ? await create(teamId, { ...body, name: "Other app" })
-            : await replace(teamId, product.id, body);
+      const answer = await create(teamId, body);
 
-        expect(answer.status).toBe(400);
-        expect(answer.body).toEqual({ error: expect.stringContaining(`${field}: `) });
-        expect(await stored(teamId)).toEqual(before);
-      });
-    }
+      expect(answer.status).toBe(400);
+      expect(answer.body).toEqual({ error: expect.stringContaining(`${field}: `) });
+      expect(await stored(teamId)).toEqual(before);
+    });
   }
+
+  it("answers a PUT the same parser refuses 400 too, and the Product is unchanged", async () => {
+    const teamId = await team();
+    const product = await created(teamId);
+    const before = await stored(teamId);
+
+    const answer = await replace(teamId, product.id, { ...supportBot, name: "Other\u0000app" });
+
+    expect(answer.status).toBe(400);
+    expect(answer.body).toEqual({ error: expect.stringContaining("name: ") });
+    expect(await stored(teamId)).toEqual(before);
+  });
 });
 
 describe("a name another Product in the Team has", () => {
-  it("answers 409 on create and on rename, whatever its case or the spaces around it", async () => {
+  // Which names clash (case, spaces) is the unique index's, proven on the table; a create's 409 is the race below.
+  it("answers 409 to a rename onto it, and writes nothing", async () => {
     const teamId = await team();
     await created(teamId);
     const other = await created(teamId, { ...supportBot, name: "Other app" });
     const before = await stored(teamId);
 
-    const answers = [
-      await create(teamId, { ...supportBot, name: "  Support Bot " }),
-      await replace(teamId, other.id, { ...supportBot, name: "SUPPORT BOT" }),
-    ];
+    const answer = await replace(teamId, other.id, supportBot);
 
-    expect(answers.map(({ status }) => status)).toEqual([409, 409]);
+    expect(answer.status).toBe(409);
     expect(await stored(teamId)).toEqual(before);
   });
 

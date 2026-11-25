@@ -29,12 +29,12 @@ export interface Products {
 }
 
 /**
- * The Team's Products, or only the one with `id`. One statement, so a Product and its dependencies come from one
- * snapshot: a change committed between two reads can't split a Product from its rows.
+ * Each Product with its dependencies, a row per dependency; a Product with none comes as one row of nulls. Each read
+ * is one statement, so a Product and its dependencies come from one snapshot: a change committed between two reads
+ * can't split a Product from its rows.
  */
-async function read(tx: Transaction<Database>, id?: string): Promise<Product[]> {
-  // A Product with no dependencies comes as one row of nulls.
-  const rows = await tx
+function productRows(tx: Transaction<Database>) {
+  return tx
     .selectFrom("products as p")
     .leftJoin("product_dependencies as d", (join) =>
       join.onRef("d.team_id", "=", "p.team_id").onRef("d.product_id", "=", "p.id"),
@@ -47,13 +47,13 @@ async function read(tx: Transaction<Database>, id?: string): Promise<Product[]> 
       "d.version",
       "d.usage",
       "d.internet_facing",
-    ])
-    .$if(id !== undefined, (query) => query.where("p.id", "=", id!))
-    // lower(name) is unique in the Team, so the order is total; how two names compare (accents, punctuation)
-    // follows the database's collation, as the framework ids do.
-    .orderBy(sql`lower(p.name)`)
-    .orderBy("d.framework")
-    .execute();
+    ]);
+}
+
+type ProductRow = Awaited<ReturnType<ReturnType<typeof productRows>["execute"]>>[number];
+
+/** The rows as Products, in the order each first appears. */
+function grouped(rows: ProductRow[]): Product[] {
   const products = new Map<string, Product>();
   for (const { id, name, repo_urls, framework, version, usage, internet_facing } of rows) {
     let product = products.get(id);
@@ -69,10 +69,26 @@ async function read(tx: Transaction<Database>, id?: string): Promise<Product[]> 
   return [...products.values()];
 }
 
-/**
- * The Product's dependency rows. A version is stored trimmed: `"1.4.0\n"` is `"1.4.0"`, so a line break never reaches
- * the reasons or the UI.
- */
+/** Every Product of the Team, by name whatever its case. */
+async function readAll(tx: Transaction<Database>): Promise<Product[]> {
+  const rows = await productRows(tx)
+    // lower(name) is unique in the Team, so the order is total; how two names compare (accents, punctuation)
+    // follows the database's collation, as the framework ids do.
+    .orderBy(sql`lower(p.name)`)
+    .orderBy("d.framework")
+    .execute();
+  return grouped(rows);
+}
+
+/** The one Product `id` as stored, read in the transaction that wrote it. */
+async function readOne(tx: Transaction<Database>, id: string): Promise<Product> {
+  const rows = await productRows(tx).where("p.id", "=", id).orderBy("d.framework").execute();
+  const [product] = grouped(rows);
+  if (product === undefined) throw new ProductNotFound(id);
+  return product;
+}
+
+/** The Product's dependency rows, each version as the routes give it (trimmed). */
 async function writeDependencies(
   tx: Transaction<Database>,
   team: string,
@@ -82,27 +98,13 @@ async function writeDependencies(
   if (dependencies.length === 0) return;
   await tx
     .insertInto("product_dependencies")
-    .values(
-      dependencies.map(({ version, ...dependency }) => ({
-        team_id: team,
-        product_id: id,
-        ...dependency,
-        version: version?.trim() ?? null,
-      })),
-    )
+    .values(dependencies.map((dependency) => ({ team_id: team, product_id: id, ...dependency })))
     .execute();
-}
-
-/** The one Product `id` as stored, read in the transaction that wrote it. */
-async function readOne(tx: Transaction<Database>, id: string): Promise<Product> {
-  const [product] = await read(tx, id);
-  if (product === undefined) throw new ProductNotFound(id);
-  return product;
 }
 
 export function createProducts({ withTeam }: { withTeam: WithTeam }): Products {
   /** `withTeam`, with the name index's refusal (on create or rename) as ProductNameTaken. */
-  async function change<T>(
+  async function withNameCheck<T>(
     team: string,
     { name }: ProductInput,
     work: (tx: Transaction<Database>) => Promise<T>,
@@ -117,10 +119,10 @@ export function createProducts({ withTeam }: { withTeam: WithTeam }): Products {
   }
 
   return {
-    list: (team) => withTeam(team, (tx) => read(tx)),
+    list: (team) => withTeam(team, readAll),
 
     create: (team, input) =>
-      change(team, input, async (tx) => {
+      withNameCheck(team, input, async (tx) => {
         const id = randomUUID();
         await tx
           .insertInto("products")
@@ -131,7 +133,7 @@ export function createProducts({ withTeam }: { withTeam: WithTeam }): Products {
       }),
 
     update: (team, id, input) =>
-      change(team, input, async (tx) => {
+      withNameCheck(team, input, async (tx) => {
         const updated = await tx
           .updateTable("products")
           .set({ name: input.name, repo_urls: input.repo_urls })
