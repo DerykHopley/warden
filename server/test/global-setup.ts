@@ -25,8 +25,7 @@ export default async function setup(project: TestProject) {
     user: env.PGUSER,
     database: env.PGDATABASE,
   };
-  // A Postgres container started just before the run takes no TCP connection for its first seconds.
-  await waitForPostgres(connection);
+  await waitForPostgres(connection); // a container started just before the run (#99)
   await dropStaleTestDatabases(connection);
   await dropStaleTestRoles(connection);
   const database = await createMigratedTestDatabase(connection);
