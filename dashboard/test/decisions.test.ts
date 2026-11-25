@@ -1,7 +1,7 @@
 // The detail card's Until (story 4): the earliest day a person may pick, and the start of the picked day in their own
 // time zone, as an AcceptBody or ProposeBody sends it. What the card sends and shows is DetailCard.test.tsx's.
 import { AcceptBody } from "@warden/contracts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dayWords } from "../src/date-words.ts";
 import { earliestUntil, startOfDay } from "../src/decisions.ts";
 
@@ -12,6 +12,13 @@ afterEach(() => {
 });
 
 describe("startOfDay", () => {
+  // AcceptBody's until must be later than now: a fixed now keeps these fixed days valid whenever the test runs.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T00:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
   it.each([
     ["America/New_York", "2027-12-01", "2027-12-01T00:00:00.000-05:00"],
     ["America/New_York", "2027-07-01", "2027-07-01T00:00:00.000-04:00"],

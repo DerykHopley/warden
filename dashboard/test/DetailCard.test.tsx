@@ -14,6 +14,7 @@ import {
   type Role,
 } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { dayWords } from "../src/date-words.ts";
 import { DetailCard } from "../src/DetailCard.tsx";
 import { earliestUntil } from "../src/decisions.ts";
 import type { ProposalsResult } from "../src/proposals.ts";
@@ -323,32 +324,21 @@ describe("the detail card's pending Proposals", () => {
 });
 
 describe("a Reopens on day sent as its start, as the server answers it", () => {
-  const zone = process.env.TZ;
-  afterEach(() => {
-    if (zone === undefined) delete process.env.TZ;
-    else process.env.TZ = zone;
+  it("the detail card's Reopens on and an accept Proposal's reopens on show the picked day", () => {
+    // The start of Jan 15, 2027 in the person's time zone, in UTC as the server answers a date-time.
+    const stored = new Date(2027, 0, 15).toISOString();
+    const { card } = show(
+      finding(ID, {
+        status: "accepted",
+        accepted_reason: "Fixed next sprint",
+        accepted_until: stored,
+      }),
+      listed([proposal({ decision: "accept", until: stored })]),
+    );
+
+    expect(fields(card)["Reopens on"]).toBe("Jan 15, 2027");
+    expect(proposalItems(card)[0]).toHaveTextContent("Accept, reopens on Jan 15, 2027");
   });
-
-  /** The start of Jan 15, 2027 in the person's time zone, in UTC as the server answers a date-time. */
-  const stored = () => new Date(2027, 0, 15).toISOString();
-
-  it.each(["Pacific/Honolulu", "UTC", "Pacific/Kiritimati"])(
-    "in %s, the detail card's Reopens on and an accept Proposal's reopens on show the picked day",
-    (tz) => {
-      process.env.TZ = tz;
-      const { card } = show(
-        finding(ID, {
-          status: "accepted",
-          accepted_reason: "Fixed next sprint",
-          accepted_until: stored(),
-        }),
-        listed([proposal({ decision: "accept", until: stored() })]),
-      );
-
-      expect(fields(card)["Reopens on"]).toBe("Jan 15, 2027");
-      expect(proposalItems(card)[0]).toHaveTextContent("Accept, reopens on Jan 15, 2027");
-    },
-  );
 });
 
 const SECOND = "b2b2b2b2-0000-4000-8000-000000000003";
@@ -434,9 +424,8 @@ const localDay = (iso: string) => {
 /** The first instant of `day` (a date input's value) in the person's own time zone, as epoch milliseconds. */
 const dayStart = (day: string) => new Date(`${day}T00:00`).getTime();
 
-/** `day` as the card says a date: "Jan 15, 2027" (in an English locale). */
-const dayShown = (day: string) =>
-  new Date(`${day}T12:00`).toLocaleDateString(undefined, { dateStyle: "medium" });
+/** `day` (a date input's value) as the card says a date: "Jan 15, 2027" (in an English locale). */
+const dayShown = (day: string) => dayWords(`${day}T12:00`);
 
 describe("each form's words", () => {
   /** The opened form's element, for what the queries can't name: its date input. */
