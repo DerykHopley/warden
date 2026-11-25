@@ -51,10 +51,11 @@ export const KATHERINE: Person = {
 };
 
 /**
- * Two Teams, each opened by its Admin and seeded with the demo Findings. Acme also has Grace, a Member; Bluebird has
- * Margaret, a Member (only e2e/decisions.spec.ts reads Bluebird, so its decisions can't touch Acme's tests). A third,
- * Cedar, has no demo Findings: the Products tests create their Products there, as a Product's Scan opens Findings that
- * would change the counts Acme's and Bluebird's tests read.
+ * Two Teams, each opened by its Admin and seeded with the demo Findings but not the demo Product (`--no-product`), so
+ * no CVE Findings join the counts their tests read. Acme also has Grace, a Member; Bluebird has Margaret, a Member
+ * (only e2e/decisions.spec.ts reads Bluebird, so its decisions can't touch Acme's tests). A third, Cedar, has no demo
+ * seed: the Products tests create their Products there, and with the CVE snapshot loaded, each save's Patch Scan opens
+ * CVE Findings that would change Acme's and Bluebird's counts.
  */
 export const ACME = { id: "org_e2e_acme", name: "Acme", admin: ADA, people: [ADA, GRACE] };
 export const BLUEBIRD = {

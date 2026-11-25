@@ -82,12 +82,7 @@ describe("Patch's daily step", () => {
   it("logs a Scan that throws with the Team and Product id, scans the rest, and reports the Team as failed", async () => {
     const { scan, ids } = countingScan(["p-b"]);
     const lines: string[] = [];
-    const { step } = refresh(
-      [product("p-a"), product("p-b"), product("p-c")],
-      [GONE],
-      scan,
-      lines,
-    );
+    const { step } = refresh([product("p-a"), product("p-b"), product("p-c")], [GONE], scan, lines);
 
     const result = await step.run(TEAM);
 

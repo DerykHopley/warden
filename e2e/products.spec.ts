@@ -42,6 +42,21 @@ test("a Member sees each Product's name, Repo URLs and dependencies, with nothin
   await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
 });
 
+test("a Product's save opens its CVE Findings from the loaded snapshot, on the Team's Findings page", async ({
+  page,
+  signIn,
+}) => {
+  await signIn(HEDY, CEDAR);
+  await page.goto("/findings");
+
+  // How many the snapshot gives isn't fixed: a newer snapshot changes it.
+  const titles = page
+    .getByRole("table", { name: "All Findings" })
+    .locator(".finding-title")
+    .filter({ hasText: /^CVE-\d{4}-\d+/ });
+  await expect(titles.first()).toBeVisible();
+});
+
 /** This test's own Products, by name, so it never changes the Product another spec reads. */
 const ADDED = "Hedy's research bot";
 const RENAMED = "Hedy's research assistant";

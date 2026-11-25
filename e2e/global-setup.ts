@@ -1,8 +1,9 @@
-// Before the browser tests: a throwaway Postgres database with every migration, a key pair standing in for Clerk's,
-// the dashboard built in Vite's `e2e` mode, and the real server process on a free port serving that build. Acme,
-// Bluebird and Cedar are opened through the API as their Admins would (each Team's Member joins too); Acme and Bluebird
-// are then filled by the demo seed (`server/src/seed.ts`). Returns the teardown: the server stopped, the database
-// dropped, the build removed.
+// Before the browser tests: a throwaway Postgres database with every migration and Patch's CVE snapshot loaded (as the
+// release does, so a Product's save opens its CVE Findings), a key pair standing in for Clerk's, the dashboard built in
+// Vite's `e2e` mode, and the real server process on a free port serving that build. Acme, Bluebird and Cedar are
+// opened through the API as their Admins would (each Team's Member joins too); Acme and Bluebird are then filled by the
+// demo seed (`server/src/seed.ts`) without its demo Product (`--no-product`), so the Findings their tests count stay
+// the demo ones. Returns the teardown: the server stopped, the database dropped, the build removed.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
@@ -10,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exportJWK, exportSPKI, generateKeyPair } from "jose";
-import { createMigratedTestDatabase } from "../server/test/databases.ts";
+import { createMigratedTestDatabase, loadTestCveSnapshot } from "../server/test/databases.ts";
 import {
   ACME,
   BLUEBIRD,
@@ -87,11 +88,11 @@ export default async function globalSetup() {
     for (const step of cleanup.splice(0).reverse()) await step();
   };
   try {
-    const database = await createMigratedTestDatabase({
-      ...postgres,
-      port: Number(postgres.port),
-    });
+    const connection = { ...postgres, port: Number(postgres.port) };
+    const database = await createMigratedTestDatabase(connection);
     cleanup.push(database.drop);
+    // As warden_migrate, before the server starts: what the release does after migrating.
+    await loadTestCveSnapshot(database.name, connection);
 
     const { privateKey, publicKey } = await generateKeyPair("RS256", { extractable: true });
 
@@ -156,11 +157,11 @@ export default async function globalSetup() {
     await open(GRACE, ACME, "member");
     await open(BLUEBIRD.admin, BLUEBIRD, "admin");
     await open(MARGARET, BLUEBIRD, "member");
-    // Cedar gets no demo seed: the Products tests create its Products.
+    // Cedar gets no demo seed: the Products tests create its Products, and their saves open its CVE Findings.
     await open(CEDAR.admin, CEDAR, "admin");
     await open(KATHERINE, CEDAR, "member");
     for (const team of [ACME, BLUEBIRD]) {
-      await run(process.execPath, ["server/src/seed.ts", team.id], {
+      await run(process.execPath, ["server/src/seed.ts", team.id, "--no-product"], {
         ...db,
         WARDEN_SEED_DEMO: database.name,
       });

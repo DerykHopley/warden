@@ -57,13 +57,24 @@ succeeds.
 
 `WARDEN_SEED_DEMO=1 pnpm --filter @warden/server seed <team-id>` fills one Team with demo Findings, so the Findings
 page has something to show: 11 Findings from Guard and Patch on a Repo, a Product, a Device and an Agent session, 7
-of them Open (2 Critical), 2 Fixed (one an Unconfirmed fix), 1 Accepted and 1 False positive. The data lives in
-`@warden/contracts/demo`, which the dashboard's tests read too. The Team id is its Clerk Organization id (`org_…`, the
-Organization switcher's Manage screen shows it), and the Team's Admin must have opened Warden in it first. It runs as
-`warden_app` and writes only through the Findings module (Scans, a Spot run, and two decisions made as the Team's
-oldest Admin or Lead). Run again, it says the Team is already seeded. It exits 1, writing nothing, for a Team with
-Findings of its own, and for one whose demo Findings aren't as it leaves them (a seed cut short); one seed runs per
-Team at a time.
+of them Open (2 Critical), 2 Fixed (one an Unconfirmed fix), 1 Accepted and 1 False positive. Then it adds the demo
+Product, "Shop web" (the demo Repo, LangChain 0.0.200), and runs its Patch Scan as a save does, so the Products page
+has a Product and the Findings page has its CVE Findings from the loaded CVE snapshot (how many depends on the
+snapshot). Load the snapshot first, once per database:
+
+```sh
+PGUSER=warden_migrate pnpm --filter @warden/server load-cves
+```
+
+The data lives in `@warden/contracts/demo`, which the dashboard's tests read too. The Team id is its Clerk
+Organization id (`org_…`, the Organization switcher's Manage screen shows it), and the Team's Admin must have opened
+Warden in it first. It runs as `warden_app` and writes only through the Findings module and the Products store
+(Scans, a Spot run, two decisions made as the Team's oldest Admin or Lead, the Product and its Scan). Run again, it
+says the Team is already seeded. It exits 1, writing nothing, for a Team with Findings of its own, for a Team with
+Products of its own, when the CVE snapshot isn't loaded (naming `load-cves`), and for a Team whose demo Findings or
+demo Product aren't as it leaves them (a seed cut short, or the Product changed or deleted since); one seed runs per
+Team at a time. `--no-product` after the Team id seeds the demo Findings only, with no Product and no snapshot needed:
+the browser tests seed Acme and Bluebird that way.
 
 It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database (a `PGHOST` other than `127.0.0.1`,
 `localhost` or `::1`, or any `PGPASSWORD`), `WARDEN_SEED_DEMO` must be the database's name, and the live database,
