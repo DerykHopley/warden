@@ -5,6 +5,7 @@
 import {
   ProductInput,
   type FrameworksBody,
+  type PatchAssessment,
   type Product,
   type ProductsBody,
 } from "@warden/contracts";
@@ -12,7 +13,14 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { z } from "zod";
 import type { AppEnv, MountRoutes } from "../../app.ts";
 import type { Logger } from "../../log.ts";
-import { ProductNameTaken, ProductNotFound, VersionRefused } from "./errors.ts";
+import type { PatchAssessments } from "./assessment.ts";
+import {
+  CveNotInSnapshot,
+  PatchFindingNotFound,
+  ProductNameTaken,
+  ProductNotFound,
+  VersionRefused,
+} from "./errors.ts";
 import { PATCH_FRAMEWORKS } from "./frameworks.ts";
 import type { Products } from "./products.ts";
 import type { SaveLimit } from "./save-limit.ts";
@@ -144,22 +152,23 @@ async function withProduct(
  * Patch's routes. After a Product's change commits, `scan` runs its Patch Scan before the answer, so its CVE Findings
  * open and turn Fixed with the change (stories 3 and 4). The Scan reads the Product as stored, so two close changes
  * end with the newer one's Findings. A Scan that throws leaves the change standing and answering as usual: `logger`
- * records it, and slice 5's daily refresh catches the Product up. After a DELETE there's no Product row left to
- * refresh: that refresh will also scan each Product Asset with Open Findings and no Product row (slice 5's work, not
- * this one's).
+ * records it, and the daily refresh catches the Product up. After a DELETE there's no Product row left to refresh:
+ * the daily refresh sweeps each Product Asset with Open Findings and no Product row instead.
  *
  * `saveLimit` counts each Team's saves (POST, PUT and DELETE together) once requireRole has let the request through,
  * so a Member's 403 never counts; a save past it is a 429 with Retry-After, before the body is read, so nothing is
- * written and nothing scanned.
+ * written and nothing scanned. Reads, the assessment included, aren't counted.
  */
 export function patchRoutes({
   products,
   scan,
+  assessment,
   logger,
   saveLimit,
 }: {
   products: Products;
   scan: PatchScan;
+  assessment: PatchAssessments;
   logger: Logger;
   saveLimit: SaveLimit;
 }): MountRoutes {
@@ -211,7 +220,7 @@ export function patchRoutes({
     );
 
     // A deleted Product's Scan reads no dependencies, so every Finding on it turns Fixed. If that Scan fails, the
-    // daily refresh's sweep of Product Assets with no Product row (slice 5) turns them Fixed.
+    // daily refresh's sweep of Product Assets with Open Findings and no Product row turns them Fixed.
     app.delete("/api/products/:id", requireRole("lead"), limited, (c) =>
       refusing(c, async () => {
         const id = productId(c);
@@ -225,5 +234,21 @@ export function patchRoutes({
     app.get("/api/patch/frameworks", requireRole("member"), (c) =>
       c.json({ frameworks: [...PATCH_FRAMEWORKS] } satisfies FrameworksBody),
     );
+
+    // Any person in the Team reads one Patch Finding's assessment, worked out now (stories 5 and 6). An id that isn't
+    // one of the Team's Patch Findings is a 404 naming nothing of anyone's (story 8); so is a CVE the loaded snapshot
+    // doesn't hold, naming that CVE.
+    app.get("/api/patch/findings/:id/assessment", requireRole("member"), async (c) => {
+      try {
+        const answer = await assessment.read(c.get("team"), c.req.param("id"));
+        return c.json(answer satisfies PatchAssessment);
+      } catch (error) {
+        if (error instanceof PatchFindingNotFound) {
+          return c.json({ error: "No such Patch Finding" }, 404);
+        }
+        if (error instanceof CveNotInSnapshot) return c.json({ error: error.message }, 404);
+        throw error;
+      }
+    });
   };
 }

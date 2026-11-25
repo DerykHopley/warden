@@ -12,6 +12,7 @@ import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createLogger, type Logger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import { createPatchAssessment } from "../src/modules/patch/assessment.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
 import { patchRoutes } from "../src/modules/patch/routes.ts";
@@ -34,9 +35,10 @@ export function patchScan(withTeam: WithTeam, logger: Logger = silent()): PatchS
 }
 
 /**
- * Patch's routes as the start-up file mounts them: the Products store and the Patch Scan, on `withTeam`. `scan`
- * stands in for the Patch Scan; `logger` takes the routes' log lines (none are kept unless given); `saveLimit` stands
- * in for the start-up file's (a fresh one by default).
+ * Patch's routes as the start-up file mounts them: the Products store, the Patch Scan and the assessment, on
+ * `withTeam`. `scan` stands in for the Patch Scan; `logger` takes the routes' log lines (none are kept unless given);
+ * `saveLimit` stands in for the start-up file's (a fresh one by default); `now` is the assessment's clock (the real
+ * time by default).
  */
 export function patchMount(
   withTeam: WithTeam,
@@ -44,11 +46,17 @@ export function patchMount(
     scan,
     logger = silent(),
     saveLimit = createSaveLimit(),
-  }: { scan?: PatchScan; logger?: Logger; saveLimit?: SaveLimit } = {},
+    now,
+  }: { scan?: PatchScan; logger?: Logger; saveLimit?: SaveLimit; now?: () => Date } = {},
 ): MountRoutes {
   return patchRoutes({
     products: createProducts({ withTeam }),
     scan: scan ?? patchScan(withTeam, logger),
+    assessment: createPatchAssessment({
+      findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
+      withTeam,
+      now,
+    }),
     logger,
     saveLimit,
   });
