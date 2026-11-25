@@ -4,7 +4,7 @@
  * transaction. The Role checks are the routes'.
  */
 import { randomUUID } from "node:crypto";
-import type { Product, ProductInput } from "@warden/contracts";
+import type { Product, ProductDependency, ProductInput } from "@warden/contracts";
 import { sql, type Transaction } from "kysely";
 import { isPgError } from "../../database.ts";
 import type { Database } from "../../schema.ts";
@@ -80,6 +80,18 @@ async function readAll(tx: Transaction<Database>): Promise<Product[]> {
   return grouped(rows);
 }
 
+/**
+ * Product `id`'s dependencies as stored, by framework id, read in the caller's Team transaction: none for an id the
+ * Team doesn't have, such as a Product just deleted. The Patch Scan reads them so.
+ */
+export async function readDependencies(
+  tx: Transaction<Database>,
+  id: string,
+): Promise<ProductDependency[]> {
+  const rows = await productRows(tx).where("p.id", "=", id).orderBy("d.framework").execute();
+  return grouped(rows)[0]?.dependencies ?? [];
+}
+
 /** The one Product `id` as stored, read in the transaction that wrote it. */
 async function readOne(tx: Transaction<Database>, id: string): Promise<Product> {
   const rows = await productRows(tx).where("p.id", "=", id).orderBy("d.framework").execute();
@@ -88,7 +100,10 @@ async function readOne(tx: Transaction<Database>, id: string): Promise<Product> 
   return product;
 }
 
-/** The Product's dependency rows, each version as the routes give it (trimmed). */
+/**
+ * The Product's dependency rows, each version trimmed as ProductChange trims it, so every caller (the routes, the
+ * daily step, the seed) stores a version with no line break, whatever it was given.
+ */
 async function writeDependencies(
   tx: Transaction<Database>,
   team: string,
@@ -98,7 +113,14 @@ async function writeDependencies(
   if (dependencies.length === 0) return;
   await tx
     .insertInto("product_dependencies")
-    .values(dependencies.map((dependency) => ({ team_id: team, product_id: id, ...dependency })))
+    .values(
+      dependencies.map(({ version, ...dependency }) => ({
+        team_id: team,
+        product_id: id,
+        ...dependency,
+        version: version?.trim() ?? null,
+      })),
+    )
     .execute();
 }
 

@@ -11,6 +11,7 @@ import pg from "pg";
 import { createPool, DATABASE_ROLE_NAMES, type DatabaseRoleNames } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { migrate, MIGRATIONS_FOLDER } from "../src/migrate.ts";
+import { loadCveSnapshot } from "../src/modules/patch/cve-snapshot.ts";
 import { createRoles } from "../src/roles.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 
@@ -56,6 +57,21 @@ export async function createMigratedTestDatabase(connection: pg.PoolConfig = {})
     throw error;
   }
   return database;
+}
+
+/** Loads Patch's CVE snapshot into the test database `name`, as warden_migrate, as the release does after migrating. */
+export async function loadTestCveSnapshot(name: string, connection: pg.PoolConfig = {}) {
+  const pool = createPool(logger, {
+    ...connection,
+    user: "warden_migrate",
+    database: name,
+    max: 1,
+  });
+  try {
+    await loadCveSnapshot(pool);
+  } finally {
+    await pool.end();
+  }
 }
 
 /** Applies `folder`'s migrations not yet applied to the test database `name`, as warden_migrate; throws if one fails. */

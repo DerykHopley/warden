@@ -92,7 +92,8 @@ export class VersionError extends Error {
   }
 }
 
-const isEcosystem = (name: string): name is Ecosystem => Object.hasOwn(RULES, name);
+/** Whether Patch has rules for the ecosystem OSV names. */
+export const isEcosystem = (name: string): name is Ecosystem => Object.hasOwn(RULES, name);
 
 /**
  * An ecosystem name as OSV data gives it. Throws, naming it, for one Patch has no version rules for (crates.io,

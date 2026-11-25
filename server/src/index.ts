@@ -15,6 +15,7 @@ import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { patchMoveRule } from "./modules/patch/move-rule.ts";
 import { createProducts } from "./modules/patch/products.ts";
 import { patchRoutes } from "./modules/patch/routes.ts";
+import { createPatchScan } from "./modules/patch/scan.ts";
 import { createShutdown } from "./shutdown.ts";
 import { createWithTeam } from "./with-team.ts";
 
@@ -76,6 +77,11 @@ pool.query("select 1").catch((error: unknown) => {
 // Clerk's Backend API, with the secret key: a Warden Admin is Clerk's org:admin too (ADR 0008).
 const clerk = createClerkClient({ secretKey: config.clerk.secretKey });
 const withTeam = createWithTeam(pool);
+// ADR 0005: the modules come in here, the one shared file that may import them.
+const findings = createFindings({
+  withTeam,
+  moveRules: { guard: guardMoveRule, patch: patchMoveRule },
+});
 const appDeps: AppDeps = {
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
@@ -84,18 +90,21 @@ const appDeps: AppDeps = {
     clerkOrganizations: clerkOrganizations(clerk.organizations),
     logger,
   }),
-  // ADR 0005: the modules come in here, the one shared file that may import them.
-  findings: createFindings({
-    withTeam,
-    moveRules: { guard: guardMoveRule, patch: patchMoveRule },
-  }),
+  findings,
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,
   dashboardDir: existsSync(`${dashboardDir}/index.html`) ? dashboardDir : undefined,
 };
-// Each module's routes, behind the app's middleware (ADR 0005).
-const app = createApp(appDeps, patchRoutes({ products: createProducts({ withTeam }) }));
+// Each module's routes, behind the app's middleware (ADR 0005). Saving a Product runs its Patch Scan into Findings.
+const app = createApp(
+  appDeps,
+  patchRoutes({
+    products: createProducts({ withTeam }),
+    scan: createPatchScan({ findings, logger }),
+    logger,
+  }),
+);
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   logger.info("listening", { port });

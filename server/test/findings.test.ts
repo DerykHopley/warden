@@ -3,6 +3,7 @@
 // its own, since history can't be deleted between tests.
 import { randomUUID } from "node:crypto";
 import { fingerprint, Finding, type Observation, type Scan, type SpotRun } from "@warden/contracts";
+import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import {
@@ -15,14 +16,18 @@ import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
+import { queuedBehindFindingsLock } from "./helpers.ts";
 
 const pools: pg.Pool[] = [];
+let probe: pg.Pool;
 let withTeam: WithTeam;
 let findings: Findings;
 
 beforeAll(() => {
   const pool = poolAs("warden_app", inject("testDatabase"));
-  pools.push(pool);
+  // The probe holds the Team's lock and watches pg_locks on connections of its own, apart from the Findings' pool.
+  probe = poolAs("warden_app", inject("testDatabase"));
+  pools.push(pool, probe);
   withTeam = createWithTeam(pool);
   findings = createFindings({
     withTeam,
@@ -216,6 +221,41 @@ describe("findings.scan: the call a module writes", () => {
     ).rejects.toThrow("the scanner crashed");
 
     expect(() => kept!.saw(observation())).toThrow(/ended/);
+  });
+});
+
+describe("findings.scanLocked: a Scan whose reads must be current when it reconciles", () => {
+  it("runs its work once it holds the Team's Findings lock, in the Team's transaction that reconciles", async () => {
+    // The probe holds the Team's lock, as another Scan's reconcile would. The work must wait for it, so what it reads
+    // is what that Scan left; then the work's Observations reconcile in the same transaction.
+    const team = await newTeam();
+    let readTeam: string | undefined;
+    const holder = await probe.connect();
+    try {
+      await holder.query("begin");
+      await holder.query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))", [team]);
+
+      const scanning = findings.scanLocked(
+        { team, module: "guard", assets: [app], rules: [ENV] },
+        async (scan, tx) => {
+          const { rows } = await sql<{
+            team: string;
+          }>`select current_setting('warden.team_id') as team`.execute(tx);
+          readTeam = rows[0]!.team;
+          scan.saw(observation());
+        },
+      );
+      await queuedBehindFindingsLock(probe, team);
+      expect(readTeam).toBeUndefined();
+      await holder.query("commit");
+
+      const outcome = await scanning;
+      expect(readTeam).toBe(team);
+      expect(outcome.opened).toHaveLength(1);
+      expect((await findings.list(team)).map((f) => f.status)).toEqual(["open"]);
+    } finally {
+      holder.release();
+    }
   });
 });
 
