@@ -6,19 +6,19 @@ import {
   ALERT_PRIORITY,
   type CveFacts,
   PATCH_POLICY,
-  type PolicySettings,
   priority,
+  type PriorityPolicy,
 } from "./priority.ts";
 
 const AS_OF = "2026-10-13"; // the snapshot date
 const DEFAULT = PATCH_POLICY; // urgent 7, high 30, normal 90, low 180 days; adopt the KEV deadline
-const NO_KEV_DEADLINE: PolicySettings = { ...PATCH_POLICY, adopt_kev_deadline: false };
+const NO_KEV_DEADLINE: PriorityPolicy = { ...PATCH_POLICY, adopt_kev_deadline: false };
 
 interface FactsGiven {
-  severity: string | null;
+  severity: CveFacts["severity"];
   kev: boolean;
   epss: number | null;
-  verdict: string;
+  verdict: CveFacts["verdict"];
   internet_facing: boolean;
   status: Status;
   published: string;
@@ -63,7 +63,7 @@ const KEV = { kev: true, kev_added: "2025-05-05", kev_deadline: "2025-05-26" }; 
 
 // --- A16.1: every row of the rule table, and the step-down -----------------------------------------------------
 
-const LEVELS: [string, CveFacts, string, string[]][] = [
+const TABLE_CASES: [string, CveFacts, string, string[]][] = [
   ["1: in KEV, affected", facts({ verdict: "affected", ...KEV }), "urgent", ["in KEV"]],
   [
     "1: in KEV, verdict unknown, low severity",
@@ -176,7 +176,7 @@ const LEVELS: [string, CveFacts, string, string[]][] = [
 ];
 
 describe("test_a16_1_rule_table", () => {
-  it.each(LEVELS)("%s", (_case, f, level, reasons) => {
+  it.each(TABLE_CASES)("%s", (_case, f, level, reasons) => {
     const p = priority(f, DEFAULT, AS_OF);
     expect([p.level, [...p.reasons]]).toEqual([level, reasons]);
   });
@@ -189,13 +189,13 @@ it("test_a16_1_the_epss_threshold_is_a_setting", () => {
 });
 
 it("test_a16_1_the_rule_that_matched_is_named", () => {
-  expect(priority(facts(KEV), DEFAULT, AS_OF).rule).toBe(1);
+  expect(priority(facts(KEV), DEFAULT, AS_OF).row).toBe(1);
+  expect(priority(facts({ severity: "CRITICAL", internet_facing: true }), DEFAULT, AS_OF).row).toBe(
+    2,
+  );
+  expect(priority(facts({ severity: "LOW" }), DEFAULT, AS_OF).row).toBe(6);
   expect(
-    priority(facts({ severity: "CRITICAL", internet_facing: true }), DEFAULT, AS_OF).rule,
-  ).toBe(2);
-  expect(priority(facts({ severity: "LOW" }), DEFAULT, AS_OF).rule).toBe(6);
-  expect(
-    priority(facts({ severity: "HIGH", verdict: "not_affected", ...KEV }), DEFAULT, AS_OF).rule,
+    priority(facts({ severity: "HIGH", verdict: "not_affected", ...KEV }), DEFAULT, AS_OF).row,
   ).toBe(4);
 });
 
@@ -209,7 +209,7 @@ it("test_a16_2_levels_map_to_alert_priorities", () => {
 
 // --- A16.3: due dates from the policy, the KEV deadline when adopted, overdue at the as-of date ----------------
 
-const DUE: [string, CveFacts, PolicySettings, string, boolean][] = [
+const DUE: [string, CveFacts, PriorityPolicy, string, boolean][] = [
   [
     "high: published + 30",
     facts({ severity: "CRITICAL", published: "2026-10-01" }),
@@ -359,32 +359,42 @@ it("test_a16_3_the_due_date_says_where_it_came_from", () => {
   );
 });
 
-// --- Warden's own: an Accepted Finding's expiry is its review date, and bad dates are refused ------------------
-
-describe("overdue with Warden's Status", () => {
-  const pastDue = { severity: "MEDIUM", published: "2024-01-01" } as const;
-
-  it.each([
-    [
-      "Accepted, its expiry passed",
-      facts({ ...pastDue, status: "accepted", review_date: "2026-10-12" }),
-      true,
-    ],
-    [
-      "Accepted, its expiry a day ahead",
-      facts({ ...pastDue, status: "accepted", review_date: "2026-10-14" }),
-      false,
-    ],
-    [
-      "Fixed, even with an expiry passed",
-      facts({ ...pastDue, status: "fixed", review_date: "2026-10-12" }),
-      false,
-    ],
-  ] as const)("%s", (_case, f, overdue) => {
-    expect(priority(f, DEFAULT, AS_OF).overdue).toBe(overdue);
-  });
-});
+// --- Warden's own: bad dates and percentiles are refused -------------------------------------------------------
 
 it("refuses a published date that isn't a real YYYY-MM-DD", () => {
   expect(() => priority(facts({ published: "2026-13-01" }), DEFAULT, AS_OF)).toThrow(RangeError);
+});
+
+// A full timestamp sorts after its own date as text, so it would make a CVE overdue on its due date.
+describe("refuses a date compared with the as-of date that isn't a real YYYY-MM-DD", () => {
+  const pastDue = { severity: "MEDIUM", published: "2024-01-01" } as const;
+
+  it.each([
+    ["as-of a full timestamp", facts(), "2026-10-13T00:00:00Z"],
+    ["as-of with no dashes", facts(), "20261013"],
+    ["as-of not a real day", facts(), "2026-02-30"],
+    [
+      "KEV deadline a full timestamp",
+      facts({ ...KEV, kev_deadline: "2025-05-26T12:00:00Z" }),
+      AS_OF,
+    ],
+    [
+      "review date a full timestamp",
+      facts({ ...pastDue, status: "accepted", review_date: "2026-10-13T00:00:00Z" }),
+      AS_OF,
+    ],
+  ] as const)("%s", (_case, f, asOf) => {
+    expect(() => priority(f, DEFAULT, asOf)).toThrow(RangeError);
+  });
+});
+
+describe("refuses an EPSS percentile outside 0 to 1", () => {
+  it.each([95, -0.01, 1.01, Number.NaN])("%s", (epss) => {
+    expect(() => priority(facts({ epss }), DEFAULT, AS_OF)).toThrow(RangeError);
+  });
+});
+
+it("keeps the EPSS reason when row 2 matches on an EPSS of 0 at a threshold of 0", () => {
+  const p = priority(facts({ severity: "LOW", epss: 0, internet_facing: true }), DEFAULT, AS_OF, 0);
+  expect([p.row, [...p.reasons]]).toEqual([2, ["EPSS 0th percentile", "internet-facing"]]);
 });

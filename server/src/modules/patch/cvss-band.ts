@@ -8,12 +8,20 @@ export interface CvssSeverity {
   readonly scored: boolean;
 }
 
-const NVD_SEVERITY: Readonly<Record<string, Severity>> = {
+/** NVD's four severity words. NVD also sends NONE, or nothing, for a CVE it hasn't scored. */
+export type NvdSeverity = "CRITICAL" | "HIGH" | "MEDIUM" | "LOW";
+
+const NVD_SEVERITY: Readonly<Record<NvdSeverity, Severity>> = {
   CRITICAL: "critical",
   HIGH: "high",
   MEDIUM: "medium",
   LOW: "low",
 };
+
+/** One of NVD's four severity words; NONE, null and anything else are not. */
+export function isNvdSeverity(word: string | null): word is NvdSeverity {
+  return word !== null && Object.hasOwn(NVD_SEVERITY, word);
+}
 
 /** A score that isn't a number from 0 to 10 counts as no score; an NVD severity other than the four words as none. */
 export function cvssSeverity(score: number | null, nvdSeverity: string | null): CvssSeverity {
@@ -23,9 +31,7 @@ export function cvssSeverity(score: number | null, nvdSeverity: string | null): 
     if (score >= 4.0) return { severity: "medium", scored: true };
     return { severity: "low", scored: true };
   }
-  const fromNvd =
-    nvdSeverity !== null && Object.hasOwn(NVD_SEVERITY, nvdSeverity)
-      ? NVD_SEVERITY[nvdSeverity]
-      : undefined;
-  return fromNvd ? { severity: fromNvd, scored: true } : { severity: "medium", scored: false };
+  return isNvdSeverity(nvdSeverity)
+    ? { severity: NVD_SEVERITY[nvdSeverity], scored: true }
+    : { severity: "medium", scored: false };
 }
