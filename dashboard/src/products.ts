@@ -1,5 +1,6 @@
 // The Team's Products (GET /api/products), the frameworks Patch knows (GET /api/patch/frameworks) and a Product's save
-// (POST or PUT), for the Products page, and the words it shows for a dependency's usage.
+// (POST or PUT, once /api/me confirms the session's Team), for the Products page, and the words it shows for a
+// dependency's usage.
 import {
   FrameworksBody,
   Product,
@@ -8,7 +9,15 @@ import {
   type ProductInput,
   type Usage,
 } from "@warden/contracts";
-import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
+import {
+  askAboutTeam,
+  callWarden,
+  parsed,
+  serverError,
+  type GetToken,
+  type Refused,
+} from "./api.ts";
+import { fetchMe, type MeResult } from "./me.ts";
 
 export type ProductsResult =
   /** The Products of `team`, the Team the server answered about, by name. */
@@ -48,7 +57,9 @@ export type SaveResult =
   | { kind: "not-found" }
   /** 409: the name is taken, or the Team isn't opened; `error` is the server's words, null when its body has none. */
   | { kind: "conflict"; error: string | null }
-  | Refused;
+  /** No answer, or a 2xx whose body isn't a Product: the change may have been saved. */
+  | { kind: "maybe-saved" }
+  | Exclude<Refused, { kind: "not-answering" }>;
 
 /**
  * Creates a Product (`id` null: POST /api/products) or replaces the Product `id` whole (PUT /api/products/:id). The
@@ -64,7 +75,8 @@ export async function saveProduct(
     id === null ? "/api/products" : `/api/products/${encodeURIComponent(id)}`,
     { method: id === null ? "POST" : "PUT", body: input },
   );
-  if (!(res instanceof Response)) return res;
+  if (!(res instanceof Response))
+    return res.kind === "not-answering" ? { kind: "maybe-saved" } : res;
   switch (res.status) {
     case 400:
       return { kind: "invalid", error: await serverError(res) };
@@ -76,7 +88,29 @@ export async function saveProduct(
       return { kind: "conflict", error: await serverError(res) };
   }
   const product = await parsed(res, Product);
-  return product === undefined ? { kind: "not-answering" } : { kind: "saved", product };
+  return product === undefined ? { kind: "maybe-saved" } : { kind: "saved", product };
+}
+
+/**
+ * Saves as `saveProduct` does, but only once /api/me says the session is in `team`, the Team the form was opened in:
+ * Clerk can still hand out a token for the Team just left, and the server takes the Team from the token, so a save
+ * sent then would land in the other Team. /api/me is asked as reads ask (`askAboutTeam`); while it names another Team,
+ * or gives no answer, nothing is sent.
+ */
+export async function saveProductInTeam(
+  getToken: GetToken,
+  team: string | null,
+  id: string | null,
+  input: ProductInput,
+): Promise<SaveResult | Exclude<MeResult, { kind: "signed-in" }>> {
+  const session = await askAboutTeam(
+    () => fetchMe(getToken),
+    (result) => (result.kind === "signed-in" ? result.team : undefined),
+    team,
+    new AbortController().signal,
+  );
+  if (session.kind !== "signed-in") return session;
+  return saveProduct(getToken, id, input);
 }
 
 /** How a Product uses a framework, in words. */

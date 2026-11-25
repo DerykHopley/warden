@@ -1,7 +1,7 @@
 // The People page: everyone in the Team who has opened Warden, with their Role. An Admin gives Roles here.
 import { Role, type TeamMember } from "@warden/contracts";
 import { useCallback, useState } from "react";
-import { tryAgainIn } from "./api.ts";
+import { NOT_ANSWERING, tryAgainIn } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import { dayWords } from "./date-words.ts";
 import { changeMemberRole, fetchMembers, type MembersResult } from "./members.ts";
@@ -16,7 +16,7 @@ const MESSAGES = {
   "not-admin": "Only an Admin can change Roles.",
   "last-admin": "A Team needs at least one Admin.",
   "clerk-unreachable": "Clerk couldn't be reached, so nothing changed. Try again.",
-  "not-answering": "Warden's server isn't answering. Try again.",
+  "not-answering": NOT_ANSWERING,
 } as const;
 
 // Said above the list, not in the row: the list is asked for again, and the person's row goes with it.

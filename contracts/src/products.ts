@@ -23,8 +23,14 @@ export type ProductDependency = z.infer<typeof ProductDependency>;
 /** A Repo URL: https only. Stored as text; nothing links it to a Guard Repo Asset yet. */
 const RepoUrl = z.url({ protocol: /^https$/ }).max(2000);
 
+/** The most Repo URLs a Product holds. */
+export const PRODUCT_REPO_URLS_MAX = 20;
+
+/** The longest a Product's name is, in characters, once trimmed. */
+export const PRODUCT_NAME_MAX = 200;
+
 /** A Product's name: 1 to 200 characters once the spaces around it are trimmed, which the stored name then is. */
-const ProductName = z.string().trim().pipe(Text(200));
+const ProductName = z.string().trim().pipe(Text(PRODUCT_NAME_MAX));
 
 /**
  * A Product's dependencies: each framework at most once, as two versions of one would share a Fingerprint, so at most
@@ -50,7 +56,7 @@ const Dependencies = z
 /** What a Lead sends to create or change a Product: at most 20 Repo URLs, and one row per framework it uses. */
 export const ProductInput = z.strictObject({
   name: ProductName,
-  repo_urls: z.array(RepoUrl).max(20),
+  repo_urls: z.array(RepoUrl).max(PRODUCT_REPO_URLS_MAX),
   dependencies: Dependencies,
 });
 export type ProductInput = z.infer<typeof ProductInput>;

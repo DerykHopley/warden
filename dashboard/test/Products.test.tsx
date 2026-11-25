@@ -49,9 +49,13 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-/** Renders ProductsPage alone as `role`, with both calls answered unless `routes` says otherwise. */
+/**
+ * Renders ProductsPage alone as `role` in org_a, with its calls (and /api/me, which a save asks first) answered unless
+ * `routes` says otherwise. `rerender` gives the page a new Team or Role, as App does after /api/me answers again.
+ */
 function renderProducts(role: Role, routes: Routes = {}) {
   serve({
+    me: () => json(200, { userId: "user_1", team: "org_a", role, level: "quick" }),
     products: () => productsAnswer([CHAT, SEARCH]),
     frameworks: () => json(200, { frameworks: FRAMEWORKS }),
     ...routes,
@@ -63,8 +67,10 @@ function renderProducts(role: Role, routes: Routes = {}) {
     refreshMe: vi.fn(),
     panel: { setContext: vi.fn(), open: vi.fn() },
   };
-  render(<ProductsPage {...props} />);
-  return props;
+  const page = render(<ProductsPage {...props} />);
+  const rerender = (me: { team?: string; role?: Role }) =>
+    page.rerender(<ProductsPage {...props} me={{ ...props.me, ...me }} />);
+  return { ...props, rerender };
 }
 
 /** One Product's entry in the list, found by its name. */
@@ -446,7 +452,7 @@ describe("ProductsPage's Product form", () => {
     });
   });
 
-  it("Edit opens the form filled with the Product, and Save PUTs the whole Product", async () => {
+  it("Edit opens the form filled with the Product, and Save PUTs the whole Product as changed", async () => {
     const sent: unknown[] = [];
     await openEdit({
       saveProduct: (id, body) => {
@@ -471,22 +477,7 @@ describe("ProductsPage's Product form", () => {
     expect(form().getByRole("combobox", { name: "Usage, LiteLLM" })).toHaveValue("transitive");
     expect(form().getByRole("checkbox", { name: "Internet-facing, LiteLLM" })).not.toBeChecked();
 
-    await userEvent.click(form().getByRole("button", { name: "Save" }));
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
-    expect(sent[0]).toEqual({
-      id: "prod_chat",
-      body: { name: CHAT.name, repo_urls: CHAT.repo_urls, dependencies: CHAT.dependencies },
-    });
-  });
-
-  it("Edit sends what was changed: a rename, a new version, a Repo URL and a framework removed", async () => {
-    const sent: unknown[] = [];
-    await openEdit({
-      saveProduct: (_id, body) => {
-        sent.push(body);
-        return json(200, CHAT);
-      },
-    });
+    // A rename, a new version, a Repo URL and a framework removed: the PUT carries the whole Product as it now is.
     const name = form().getByRole("textbox", { name: "Name" });
     await userEvent.clear(name);
     await userEvent.type(name, "Chat helper");
@@ -499,11 +490,14 @@ describe("ProductsPage's Product form", () => {
 
     await vi.waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toEqual({
-      name: "Chat helper",
-      repo_urls: ["https://github.com/acme/chat-infra"],
-      dependencies: [
-        { framework: "langflow", version: "1.5.0", usage: "self_hosted", internet_facing: true },
-      ],
+      id: "prod_chat",
+      body: {
+        name: "Chat helper",
+        repo_urls: ["https://github.com/acme/chat-infra"],
+        dependencies: [
+          { framework: "langflow", version: "1.5.0", usage: "self_hosted", internet_facing: true },
+        ],
+      },
     });
   });
 
@@ -519,20 +513,11 @@ describe("ProductsPage's Product form", () => {
       'Another Product in this Team is already called "Search"',
     ],
     ["a 409 with no words says Warden refused it", refusesWith(409), "Warden refused this change."],
+    // tryAgainIn's own tests hold its wording; this only shows the save limit's refusal reaches the form.
     [
-      "a 429 with Retry-After says how long to wait for a change",
+      "a 429 says too many changes",
       refusesWith(429, "Too many Product saves", { "Retry-After": "30" }),
-      "Too many changes to Products. Try again in 30 seconds.",
-    ],
-    [
-      "a 429 without Retry-After says a minute",
-      refusesWith(429, "Too many Product saves"),
-      "Too many changes to Products. Try again in a minute.",
-    ],
-    [
-      "no answer says the server isn't answering",
-      () => Promise.reject(new TypeError("Failed to fetch")),
-      "Warden's server isn't answering. Try again.",
+      "Too many changes to Products",
     ],
   ])("%s in the form, keeping everything typed", async (_case, answer, words) => {
     await openEdit({ saveProduct: answer });
@@ -551,6 +536,131 @@ describe("ProductsPage's Product form", () => {
     );
     expect(form().getByRole("button", { name: "Save" })).toBeEnabled();
   });
+
+  it.each([
+    ["no answer", () => Promise.reject(new TypeError("Failed to fetch"))],
+    ["a 201 whose body isn't a Product", () => json(201, { ...CHAT, usage: "everywhere" })],
+  ])(
+    "on %s, says the change may have been saved, reads the list again, and keeps what was typed",
+    async (_case, answer) => {
+      await openEdit({ saveProduct: answer });
+      await userEvent.type(form().getByRole("textbox", { name: "Name" }), " 2");
+      await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+      expect(await form().findByRole("alert")).toHaveTextContent(
+        "Warden's server didn't answer, so the change may have been saved. Check the list before you try again.",
+      );
+      await vi.waitFor(() => expect(listReads()).toHaveLength(2));
+      expect(form().getByRole("textbox", { name: "Name" })).toHaveValue("Chat assistant 2");
+    },
+  );
+
+  it("a 400 about a Repo URL names the row on screen, counting the blank rows the save left out", async () => {
+    await openAdd({
+      saveProduct: refusesWith(400, "repo_urls.1: Invalid URL; name: Too long"),
+    });
+    await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+    for (let i = 0; i < 3; i++) {
+      await userEvent.click(form().getByRole("button", { name: "Add a Repo URL" }));
+    }
+    // Row 1 is blank, so the server's repo_urls.1 is the third row on screen.
+    await userEvent.type(form().getByRole("textbox", { name: "Repo URL 2" }), "https://a.example");
+    await userEvent.type(form().getByRole("textbox", { name: "Repo URL 3" }), "not a url");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    expect(await form().findByRole("alert")).toHaveTextContent(
+      "Repo URL 3: Invalid URL; name: Too long",
+    );
+  });
+
+  it("checks the session is still in the form's Team before it saves, and sends nothing while it names another", async () => {
+    const saveProduct = vi.fn(() => json(201, CHAT));
+    await openAdd({
+      me: () => json(200, { userId: "user_1", team: "org_b", role: "admin", level: "quick" }),
+      saveProduct,
+    });
+    await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    expect(await form().findByRole("alert", {}, { timeout: 3000 })).toHaveTextContent(
+      "Warden's server isn't answering. Try again.",
+    );
+    expect(callsTo("/api/me").length).toBeGreaterThan(1);
+    expect(saveProduct).not.toHaveBeenCalled();
+  });
+
+  it("saves once /api/me names the form's Team", async () => {
+    const order: string[] = [];
+    const teams = ["org_b"];
+    await openAdd({
+      me: () => {
+        const team = teams.shift() ?? "org_a";
+        order.push(`me:${team}`);
+        return json(200, { userId: "user_1", team, role: "admin", level: "quick" });
+      },
+      saveProduct: () => {
+        order.push("save");
+        return json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" });
+      },
+    });
+    await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    await vi.waitFor(() => expect(order).toEqual(["me:org_b", "me:org_a", "save"]));
+  });
+
+  it("drops a save's answer that arrives after a Team switch", async () => {
+    const answer = deferred<Response>();
+    let team = "org_a";
+    let posted = false;
+    const bluebirdReads = [
+      productsAnswer([{ ...SEARCH, id: "prod_b", name: "Bluebird" }], "org_b"),
+    ];
+    const props = await openAdd({
+      products: () =>
+        team === "org_a"
+          ? productsAnswer([CHAT, SEARCH])
+          : (bluebirdReads.shift() ?? new Promise<Response>(() => {})),
+      saveProduct: () => {
+        posted = true;
+        return answer.promise;
+      },
+    });
+    await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(posted).toBe(true));
+
+    team = "org_b";
+    props.rerender({ team });
+    await screen.findByRole("heading", { level: 2, name: "Bluebird" });
+    await act(async () => {
+      answer.resolve(json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(screen.queryByRole("heading", { level: 2, name: "Docs bot" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
+      "Bluebird",
+    ]);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a Team switch", { team: "org_b" }, { team: "org_a" }],
+    ["a Role lowered to Member", { role: "member" as Role }, { role: "admin" as Role }],
+  ])(
+    "closes the form on %s, and doesn't open it again on the way back",
+    async (_case, away, back) => {
+      const props = await openAdd();
+      await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+
+      props.rerender(away);
+      expect(screen.queryByRole("form")).not.toBeInTheDocument();
+      props.rerender(back);
+      await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+      expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    },
+  );
 
   it("a 403 says only a Lead or an Admin can change Products, and asks /api/me again", async () => {
     const props = await openEdit({ saveProduct: refusesWith(403, "Your Role can't do this") });
@@ -588,6 +698,8 @@ describe("ProductsPage's Product form", () => {
     );
     expect(form().getByRole("alert")).toHaveTextContent("This Product is no longer in your Team.");
     expect(form().getByRole("textbox", { name: "Name" })).toHaveValue("Chat assistant");
+    // Its name is the Product's as Edit opened it, though the list no longer has it.
+    expect(screen.getByRole("form", { name: "Edit Chat assistant" })).toBeInTheDocument();
   });
 
   it("a 401 ends the session", async () => {
@@ -660,15 +772,19 @@ describe("ProductsPage's Product form", () => {
     );
   });
 
-  it("Save is busy and disabled while its call runs, and a second click sends nothing", async () => {
+  it("Save is busy and every control disabled while its call runs, and a second click sends nothing", async () => {
     const answer = deferred<Response>();
     const saveProduct = vi.fn(() => answer.promise);
     await openEdit({ saveProduct });
     const save = form().getByRole("button", { name: "Save" });
     await userEvent.click(save);
 
+    await vi.waitFor(() => expect(saveProduct).toHaveBeenCalled());
     expect(save).toBeDisabled();
     expect(save).toHaveAttribute("aria-busy", "true");
+    expect(form().getByRole("textbox", { name: "Name" })).toBeDisabled();
+    expect(form().getByRole("combobox", { name: "Usage, Langflow" })).toBeDisabled();
+    expect(form().getByRole("button", { name: "Remove Repo URL 1" })).toBeDisabled();
     await userEvent.click(save);
     // A submit that gets past the disabled button (Enter in a field, say) still sends nothing.
     act(() => screen.getByRole<HTMLFormElement>("form").requestSubmit());

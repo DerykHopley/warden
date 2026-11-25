@@ -147,9 +147,14 @@ describe("saveProduct", () => {
     });
   });
 
-  it("reads a 2xx whose body isn't a Product as not answering", async () => {
+  it("reads a 2xx whose body isn't a Product as maybe saved", async () => {
     answers(json(201, { ...product, usage: "everywhere" }));
-    expect(await saveProduct(getToken, null, input)).toEqual({ kind: "not-answering" });
+    expect(await saveProduct(getToken, null, input)).toEqual({ kind: "maybe-saved" });
+  });
+
+  it("reads no answer as maybe saved", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    expect(await saveProduct(getToken, null, input)).toEqual({ kind: "maybe-saved" });
   });
 });
 

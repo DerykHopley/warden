@@ -125,9 +125,10 @@ export async function signingKey() {
  * name, so a spec's `beforeAll` can run again in a restarted worker.
  */
 export async function ensureProduct(team: Team, product: ProductInput) {
-  const { origin, headers } = await asAdmin(team);
+  const admin = await asAdmin(team);
+  const { origin, headers } = admin;
   const alreadyThere = async () =>
-    (await listProducts(team)).some(({ name }) => name === product.name);
+    (await listProducts(team, admin)).some(({ name }) => name === product.name);
   if (await alreadyThere()) return;
   const res = await fetch(`${origin}/api/products`, {
     method: "POST",
@@ -145,8 +146,9 @@ export async function ensureProduct(team: Team, product: ProductInput) {
  * Product through the page clears what an earlier run (a retry, say) left behind.
  */
 export async function removeProducts(team: Team, names: readonly string[]) {
-  const { origin, headers } = await asAdmin(team);
-  for (const { id, name } of await listProducts(team)) {
+  const admin = await asAdmin(team);
+  const { origin, headers } = admin;
+  for (const { id, name } of await listProducts(team, admin)) {
     if (!names.includes(name)) continue;
     const res = await fetch(`${origin}/api/products/${encodeURIComponent(id)}`, {
       method: "DELETE",
@@ -167,8 +169,8 @@ async function asAdmin(team: Team) {
   return { origin, headers: { Authorization: `Bearer ${token}` } };
 }
 
-async function listProducts(team: Team) {
-  const { origin, headers } = await asAdmin(team);
+/** `team`'s Products, asked with the Admin call the caller already made, so its token is minted once. */
+async function listProducts(team: Team, { origin, headers }: Awaited<ReturnType<typeof asAdmin>>) {
   const res = await fetch(`${origin}/api/products`, { headers });
   if (!res.ok)
     throw new Error(`listing ${team.name}'s Products: ${res.status} ${await res.text()}`);

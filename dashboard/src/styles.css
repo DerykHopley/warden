@@ -486,10 +486,15 @@ button[aria-busy="true"],
 
 /* The Product form: Add's above the list, Edit's in its Product's place. Each framework row lays its five controls
    side by side from a 640px column and stacks them below it; nothing scrolls sideways. */
-.product-form {
+/* The form's controls sit in one fieldset, disabled while a save runs; it draws nothing of its own. */
+.product-form-fields {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
 }
 
 .product-form fieldset.field {

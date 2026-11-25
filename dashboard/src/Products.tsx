@@ -1,7 +1,15 @@
 // The Products page (stories 1 and 2): every Product of the Team, with its Repo URLs and the frameworks it uses, the
 // same list for every Role. A Lead or an Admin adds and changes Products in a form on the page; a Member is offered no
 // change. The server checks the Role on every save: the page only hides what the server would refuse.
-import { Usage, type Framework, type Product, type ProductDependency } from "@warden/contracts";
+import {
+  PRODUCT_NAME_MAX,
+  PRODUCT_REPO_URLS_MAX,
+  Usage,
+  type Framework,
+  type Product,
+  type ProductDependency,
+  type ProductInput,
+} from "@warden/contracts";
 import {
   useCallback,
   useEffect,
@@ -10,12 +18,12 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { askAboutTeam, tryAgainIn, type GetToken } from "./api.ts";
+import { askAboutTeam, NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import {
   fetchFrameworks,
   fetchProducts,
-  saveProduct,
+  saveProductInTeam,
   USAGE_WORDS,
   type ProductsResult,
 } from "./products.ts";
@@ -31,9 +39,6 @@ type ProductsView =
 
 /** How long the list waits for the frameworks' names before it shows their ids instead. */
 export const FRAMEWORKS_WAIT_MS = 3000;
-
-/** The most Repo URLs a Product holds (`ProductInput`'s limit). */
-const MAX_REPO_URLS = 20;
 
 const namesOf = (frameworks: Framework[]) =>
   new Map(frameworks.map(({ id, name }) => [id, name] as const));
@@ -72,12 +77,14 @@ type ProductDraft = {
 };
 
 /**
- * The open form: the Team it was opened in, the Product it changes (null: a new one), the frameworks it was opened
- * with (a later read of the list may fail to name them), what's typed, and its refusal line.
+ * The open form: the Team it was opened in, the Product it changes (null: a new one) and its name as Edit opened it
+ * (the form's own name, kept if the list later loses the Product), the frameworks it was opened with (a later read of
+ * the list may fail to name them), what's typed, and its refusal line.
  */
 type OpenForm = {
   team: string | null;
   id: string | null;
+  name: string;
   frameworks: ReadonlyMap<string, string>;
   draft: ProductDraft;
   refusal: string | null;
@@ -101,10 +108,14 @@ const draftOf = (product: Product): ProductDraft => ({
   })),
 });
 
+/** The Repo URL rows a save sends, by their place on screen: a blank row is left out. */
+const sentRows = (draft: ProductDraft) =>
+  draft.repoUrls.flatMap(({ url }, row) => (url.trim() === "" ? [] : [row]));
+
 /** What a save sends: a blank Repo URL row left out, a blank version as null. */
-const inputOf = (draft: ProductDraft) => ({
+const inputOf = (draft: ProductDraft): ProductInput => ({
   name: draft.name,
-  repo_urls: draft.repoUrls.map(({ url }) => url.trim()).filter((url) => url !== ""),
+  repo_urls: sentRows(draft).map((row) => draft.repoUrls[row]!.url.trim()),
   dependencies: draft.dependencies.map((dependency) => ({
     framework: dependency.framework,
     version: dependency.version.trim() === "" ? null : dependency.version.trim(),
@@ -125,10 +136,23 @@ function withSaved(old: ProductsView | "loading", saved: Product): ProductsView 
   };
 }
 
+/**
+ * A 400's words with each `repo_urls.N` named as the row on screen ("Repo URL 3"): the server counts the Repo URLs
+ * sent from 0, and a blank row on screen wasn't sent.
+ */
+function onScreen(error: string, draft: ProductDraft): string {
+  const rows = sentRows(draft);
+  return error.replace(/\brepo_urls\.(\d+)\b/g, (words, sent: string) => {
+    const row = rows[Number(sent)];
+    return row === undefined ? words : `Repo URL ${row + 1}`;
+  });
+}
+
 const REFUSED = "Warden refused this change.";
 const FORBIDDEN = "Only a Lead or an Admin can change Products.";
 const PRODUCT_GONE = "This Product is no longer in your Team.";
-const NOT_ANSWERING = "Warden's server isn't answering. Try again.";
+const MAYBE_SAVED =
+  "Warden's server didn't answer, so the change may have been saved. Check the list before you try again.";
 
 export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   // Both calls at once. A refusal of the list shows as soon as it comes. The list itself waits for the frameworks'
@@ -158,9 +182,19 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   const [saving, setSaving] = useState(false);
   const savingNow = useRef(false);
   const [askingNames, setAskingNames] = useState(false);
-  // The form shows only for a Role that changes Products, in the Team it was opened in: a lowered Role (a 403, then
-  // /api/me's new answer) or a Team switch closes it.
+  // A Team switch, or a Role that no longer changes Products (a 403, then /api/me's new answer), closes the form, so
+  // it doesn't come back if the Team or Role does.
+  const [formFor, setFormFor] = useState({ team, changes });
+  if (formFor.team !== team || formFor.changes !== changes) {
+    setFormFor({ team, changes });
+    setOpen(null);
+  }
   const form = changes && open !== null && open.team === team ? open : null;
+  // The Team the page shows now, for a save whose answer arrives after a switch.
+  const teamNow = useRef(team);
+  useEffect(() => {
+    teamNow.current = team;
+  }, [team]);
 
   /** What takes focus once the next render lands, by its `data-focus`: an opener, the form's name, a Product's name. */
   const focusNext = useRef<string | null>(null);
@@ -174,12 +208,13 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   });
 
   function openForm(
-    id: string | null,
+    product: Product | null,
     frameworks: ReadonlyMap<string, string>,
     draft: ProductDraft,
   ) {
     focusNext.current = "form-name";
-    setOpen({ team, id, frameworks, draft, refusal: null });
+    const [id, name] = product === null ? [null, ""] : [product.id, product.name];
+    setOpen({ team, id, name, frameworks, draft, refusal: null });
   }
 
   function cancel() {
@@ -194,11 +229,14 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   async function save(event: FormEvent) {
     event.preventDefault();
     if (form === null || savingNow.current || form.draft.name.trim() === "") return;
+    const { team: savedIn, id, draft } = form;
     savingNow.current = true;
     setSaving(true);
-    const result = await saveProduct(getToken, form.id, inputOf(form.draft));
+    const result = await saveProductInTeam(getToken, savedIn, id, inputOf(draft));
     savingNow.current = false;
     setSaving(false);
+    // An answer that arrives after a Team switch is about the Team left: the page now shows another.
+    if (teamNow.current !== savedIn) return;
     switch (result.kind) {
       case "saved":
         list.setResult((old) => withSaved(old, result.product));
@@ -207,8 +245,11 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
         setOpen(null);
         return;
       case "invalid":
+        return refuse(result.error === null ? REFUSED : onScreen(result.error, draft));
       case "conflict":
         return refuse(result.error ?? REFUSED);
+      case "team-not-opened":
+        return refuse(TEAM_NOT_OPENED);
       case "forbidden":
         refuse(FORBIDDEN);
         refreshMe();
@@ -219,6 +260,10 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
         return;
       case "too-many-attempts":
         return refuse(tryAgainIn(result.retryAfter, "changes to Products"));
+      case "maybe-saved":
+        refuse(MAYBE_SAVED);
+        list.refresh();
+        return;
       case "not-answering":
         return refuse(NOT_ANSWERING);
       case "session-ended":
@@ -241,7 +286,7 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
 
   const productForm = (current: OpenForm) => (
     <ProductForm
-      label={current.id === null ? "Add a Product" : `Edit ${nameOf(current.id)}`}
+      label={current.id === null ? "Add a Product" : `Edit ${current.name}`}
       frameworks={current.frameworks}
       draft={current.draft}
       onDraft={(draft) => setOpen((old) => (old === null ? old : { ...old, draft }))}
@@ -251,7 +296,6 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
       onCancel={cancel}
     />
   );
-  const nameOf = (id: string) => view?.products.find((product) => product.id === id)?.name ?? "";
   // Edit's form takes its entry's place; Add's, and an Edit whose Product left the list (a 404), sits above the list.
   const formAbove =
     form !== null && (form.id === null || !view?.products.some(({ id }) => id === form.id));
@@ -311,7 +355,7 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
                 names={view.names}
                 onEdit={
                   changes
-                    ? () => names !== null && openForm(product.id, names, draftOf(product))
+                    ? () => names !== null && openForm(product, names, draftOf(product))
                     : null
                 }
                 editDisabled={names === null || form !== null}
@@ -467,166 +511,171 @@ function ProductForm(props: {
       onSubmit={props.onSubmit}
       onKeyDown={onKeyDown}
     >
-      <label className="field">
-        <span className="field-label">Name</span>
-        <input
-          type="text"
-          data-focus="form-name"
-          required
-          maxLength={200}
-          value={draft.name}
-          onChange={(event) => set({ name: event.target.value })}
-        />
-      </label>
-      <fieldset className="field">
-        <legend className="field-label">Repo URLs</legend>
-        {draft.repoUrls.map((row, i) => (
-          <div key={row.key} className="form-row">
-            <input
-              type="text"
-              inputMode="url"
-              autoComplete="off"
-              aria-label={`Repo URL ${i + 1}`}
-              value={row.url}
-              onChange={(event) => setUrl(row.key, event.target.value)}
-            />
-            <button
-              type="button"
-              className="secondary"
-              aria-label={`Remove Repo URL ${i + 1}`}
-              onClick={() => set({ repoUrls: draft.repoUrls.filter(({ key }) => key !== row.key) })}
-            >
-              Remove
-            </button>
-          </div>
-        ))}
-        {draft.repoUrls.length < MAX_REPO_URLS && (
-          <button
-            type="button"
-            className="secondary add-row"
-            onClick={() => set({ repoUrls: [...draft.repoUrls, { key: rowKey(), url: "" }] })}
-          >
-            Add a Repo URL
-          </button>
-        )}
-      </fieldset>
-      <fieldset className="field">
-        <legend className="field-label">Frameworks</legend>
-        {draft.dependencies.map((row) => {
-          const name = nameOf(row.framework);
-          // The row's own framework, then those no other row has picked, in the API's order; a framework Warden no
-          // longer knows stays offered in its own row, by its id.
-          const choices = [...frameworks.keys()].filter(
-            (framework) => framework === row.framework || !picked.has(framework),
-          );
-          if (!frameworks.has(row.framework)) choices.unshift(row.framework);
-          return (
-            <div key={row.key} className="dependency-fields">
-              <label className="field">
-                <span className="field-label">Framework</span>
-                <select
-                  aria-label={`Framework, ${name}`}
-                  value={row.framework}
-                  onChange={(event) => setDependency(row.key, { framework: event.target.value })}
-                >
-                  {choices.map((framework) => (
-                    <option key={framework} value={framework}>
-                      {nameOf(framework)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span className="field-label">Version</span>
-                <input
-                  type="text"
-                  autoComplete="off"
-                  aria-label={`Version, ${name}`}
-                  value={row.version}
-                  onChange={(event) => setDependency(row.key, { version: event.target.value })}
-                />
-              </label>
-              <label className="field">
-                <span className="field-label">Usage</span>
-                <select
-                  aria-label={`Usage, ${name}`}
-                  value={row.usage}
-                  onChange={(event) =>
-                    setDependency(row.key, { usage: Usage.parse(event.target.value) })
-                  }
-                >
-                  {Usage.options.map((usage) => (
-                    <option key={usage} value={usage}>
-                      {USAGE_WORDS[usage]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="check">
-                <input
-                  type="checkbox"
-                  aria-label={`Internet-facing, ${name}`}
-                  checked={row.internetFacing}
-                  onChange={(event) =>
-                    setDependency(row.key, { internetFacing: event.target.checked })
-                  }
-                />
-                <span>Internet-facing</span>
-              </label>
+      {/* While a save runs, every control waits, so nothing typed then is lost or sent half-way. */}
+      <fieldset className="product-form-fields" disabled={busy}>
+        <label className="field">
+          <span className="field-label">Name</span>
+          <input
+            type="text"
+            data-focus="form-name"
+            required
+            maxLength={PRODUCT_NAME_MAX}
+            value={draft.name}
+            onChange={(event) => set({ name: event.target.value })}
+          />
+        </label>
+        <fieldset className="field">
+          <legend className="field-label">Repo URLs</legend>
+          {draft.repoUrls.map((row, i) => (
+            <div key={row.key} className="form-row">
+              <input
+                type="text"
+                inputMode="url"
+                autoComplete="off"
+                aria-label={`Repo URL ${i + 1}`}
+                value={row.url}
+                onChange={(event) => setUrl(row.key, event.target.value)}
+              />
               <button
                 type="button"
                 className="secondary"
-                aria-label={`Remove ${name}`}
+                aria-label={`Remove Repo URL ${i + 1}`}
                 onClick={() =>
-                  set({ dependencies: draft.dependencies.filter(({ key }) => key !== row.key) })
+                  set({ repoUrls: draft.repoUrls.filter(({ key }) => key !== row.key) })
                 }
               >
                 Remove
               </button>
             </div>
-          );
-        })}
-        {unpicked[0] !== undefined && (
-          <button
-            type="button"
-            className="secondary add-row"
-            onClick={() =>
-              set({
-                dependencies: [
-                  ...draft.dependencies,
-                  {
-                    key: rowKey(),
-                    framework: unpicked[0]!,
-                    version: "",
-                    usage: "library",
-                    internetFacing: false,
-                  },
-                ],
-              })
-            }
-          >
-            Add a framework
-          </button>
+          ))}
+          {draft.repoUrls.length < PRODUCT_REPO_URLS_MAX && (
+            <button
+              type="button"
+              className="secondary add-row"
+              onClick={() => set({ repoUrls: [...draft.repoUrls, { key: rowKey(), url: "" }] })}
+            >
+              Add a Repo URL
+            </button>
+          )}
+        </fieldset>
+        <fieldset className="field">
+          <legend className="field-label">Frameworks</legend>
+          {draft.dependencies.map((row) => {
+            const name = nameOf(row.framework);
+            // The row's own framework, then those no other row has picked, in the API's order; a framework Warden no
+            // longer knows stays offered in its own row, by its id.
+            const choices = [...frameworks.keys()].filter(
+              (framework) => framework === row.framework || !picked.has(framework),
+            );
+            if (!frameworks.has(row.framework)) choices.unshift(row.framework);
+            return (
+              <div key={row.key} className="dependency-fields">
+                <label className="field">
+                  <span className="field-label">Framework</span>
+                  <select
+                    aria-label={`Framework, ${name}`}
+                    value={row.framework}
+                    onChange={(event) => setDependency(row.key, { framework: event.target.value })}
+                  >
+                    {choices.map((framework) => (
+                      <option key={framework} value={framework}>
+                        {nameOf(framework)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span className="field-label">Version</span>
+                  <input
+                    type="text"
+                    autoComplete="off"
+                    aria-label={`Version, ${name}`}
+                    value={row.version}
+                    onChange={(event) => setDependency(row.key, { version: event.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  <span className="field-label">Usage</span>
+                  <select
+                    aria-label={`Usage, ${name}`}
+                    value={row.usage}
+                    onChange={(event) =>
+                      setDependency(row.key, { usage: Usage.parse(event.target.value) })
+                    }
+                  >
+                    {Usage.options.map((usage) => (
+                      <option key={usage} value={usage}>
+                        {USAGE_WORDS[usage]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    aria-label={`Internet-facing, ${name}`}
+                    checked={row.internetFacing}
+                    onChange={(event) =>
+                      setDependency(row.key, { internetFacing: event.target.checked })
+                    }
+                  />
+                  <span>Internet-facing</span>
+                </label>
+                <button
+                  type="button"
+                  className="secondary"
+                  aria-label={`Remove ${name}`}
+                  onClick={() =>
+                    set({ dependencies: draft.dependencies.filter(({ key }) => key !== row.key) })
+                  }
+                >
+                  Remove
+                </button>
+              </div>
+            );
+          })}
+          {unpicked[0] !== undefined && (
+            <button
+              type="button"
+              className="secondary add-row"
+              onClick={() =>
+                set({
+                  dependencies: [
+                    ...draft.dependencies,
+                    {
+                      key: rowKey(),
+                      framework: unpicked[0]!,
+                      version: "",
+                      usage: "library",
+                      internetFacing: false,
+                    },
+                  ],
+                })
+              }
+            >
+              Add a framework
+            </button>
+          )}
+        </fieldset>
+        {props.refusal !== null && (
+          <p className="card-line refused" role="alert">
+            {props.refusal}
+          </p>
         )}
+        <div className="form-actions">
+          <button
+            type="submit"
+            className="primary"
+            disabled={draft.name.trim() === "" || busy}
+            aria-busy={busy ? "true" : undefined}
+          >
+            Save
+          </button>
+          <button type="button" className="secondary" disabled={busy} onClick={props.onCancel}>
+            Cancel
+          </button>
+        </div>
       </fieldset>
-      {props.refusal !== null && (
-        <p className="card-line refused" role="alert">
-          {props.refusal}
-        </p>
-      )}
-      <div className="form-actions">
-        <button
-          type="submit"
-          className="primary"
-          disabled={draft.name.trim() === "" || busy}
-          aria-busy={busy ? "true" : undefined}
-        >
-          Save
-        </button>
-        <button type="button" className="secondary" disabled={busy} onClick={props.onCancel}>
-          Cancel
-        </button>
-      </div>
     </form>
   );
 }

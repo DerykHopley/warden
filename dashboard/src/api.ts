@@ -83,6 +83,9 @@ export async function askAboutTeam<T extends { kind: string }>(
 export const TEAM_NOT_OPENED =
   "Your Team's Admin must open Warden first. Try again once they have.";
 
+/** A change's line when the server gave no answer and nothing was changed. */
+export const NOT_ANSWERING = "Warden's server isn't answering. Try again.";
+
 /**
  * A 429's words: what was done too often (sign-in attempts unless told, as `callWarden` reads every 429 alike), and
  * how long to wait.
