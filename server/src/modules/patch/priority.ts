@@ -3,6 +3,7 @@
 // port of Patch's backend/app/priority.py. Same behaviour; the policy is fixed in code (no Team setting).
 import type { Status } from "@warden/contracts";
 import { isNvdSeverity, type NvdSeverity } from "./cvss-band.ts";
+import type { VerdictKind } from "./verdict.ts";
 
 export type PriorityLevel = "urgent" | "high" | "normal" | "low";
 
@@ -31,14 +32,11 @@ export const PATCH_POLICY: PriorityPolicy = Object.freeze({
   adopt_kev_deadline: true,
 });
 
-/** Whether a CVE touches the version in use (A15). The verdict file (#107) has its own; slice 6 joins them. */
-type AffectedVerdict = "affected" | "not_affected" | "unknown";
-
 export interface CveFacts {
   readonly severity: NvdSeverity | "NONE" | null; // NONE or null when NVD hasn't scored it
   readonly kev: boolean;
   readonly epss_percentile: number | null; // 0 to 1, EPSS by FIRST
-  readonly verdict: AffectedVerdict;
+  readonly verdict: VerdictKind; // whether the CVE touches the version in use (A15)
   readonly internet_facing: boolean;
   readonly status: Status;
   readonly published: string; // YYYY-MM-DD
@@ -163,7 +161,8 @@ function isOpen(status: Status, reviewDate: string | null, asOf: string): boolea
 
 /**
  * The level, reasons, due date and overdue for one CVE. `epssPercentile`: row 2's threshold. Throws a RangeError for
- * a date that isn't YYYY-MM-DD or an EPSS percentile outside 0 to 1.
+ * a date that isn't YYYY-MM-DD, every date given checked up front, whichever one the due date is counted from, or an
+ * EPSS percentile outside 0 to 1.
  */
 export function priority(
   facts: CveFacts,
@@ -171,7 +170,10 @@ export function priority(
   asOf: string,
   epssPercentile = 90,
 ): Priority {
-  for (const date of [asOf, facts.kev_deadline, facts.review_date]) if (date) isoDate(date);
+  for (const date of [asOf, facts.published]) isoDate(date);
+  for (const date of [facts.kev_added, facts.kev_deadline, facts.review_date]) {
+    if (date) isoDate(date);
+  }
   const epss = facts.epss_percentile;
   if (epss !== null && !(epss >= 0 && epss <= 1)) {
     throw new RangeError(`EPSS percentile must be from 0 to 1, got ${epss}`);
