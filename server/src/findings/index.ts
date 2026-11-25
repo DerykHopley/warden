@@ -34,7 +34,7 @@ import {
 import { applyExpiry, type ExpiryLimits } from "./expiry.ts";
 import { readOverview, type FindingsOverview } from "./overview.ts";
 import { applyApprove, applyPropose, applyReject, listPending } from "./proposals.ts";
-import { applyRun, type MoveRule, type ReconcileOutcome } from "./reconcile.ts";
+import { applyRun, type MoveRule, type ReconcileOutcome, type UnreadPath } from "./reconcile.ts";
 import { fromRow, isoDateTime, loadFinding } from "./rows.ts";
 
 export {
@@ -78,10 +78,15 @@ export type DecisionMethod<C extends DecisionCall> = (
   input: DecisionInput<C> & { actor: Actor },
 ) => Promise<Finding>;
 
-/** What a module's scan callback gets: `saw` reports one Observation. */
+/** What a module's scan callback gets: `saw` reports one Observation, `unread` one file it couldn't read. */
 export interface ScanRecorder {
   /** Parses the Observation, and throws at once for one outside the Scan's Assets and Rules, or one seen twice. */
   saw(observation: Observation): void;
+  /**
+   * A file on `asset` whose text the module couldn't read (too large, binary, not UTF-8): the Scan neither sees nor
+   * marks Fixed the Findings located in it. Throws at once for an Asset outside the Scan.
+   */
+  unread(asset: Asset, path: string): void;
 }
 
 export interface ScanCoverage {
@@ -184,12 +189,12 @@ export function createFindings({
   /** Each module's "may have moved" rule. A module without one never gets an Unconfirmed fix. */
   moveRules: Partial<Record<Module, MoveRule>>;
 }): Findings {
-  const reconcile = async (value: Scan) => {
+  const reconcile = async (value: Scan, unread: readonly UnreadPath[] = []) => {
     const scan = Scan.parse(value);
     return withTeam(scan.team, (tx) =>
       applyRun(
         tx,
-        { ...scan, kind: "scan", covered: { assets: scan.assets, rules: scan.rules } },
+        { ...scan, kind: "scan", covered: { assets: scan.assets, rules: scan.rules }, unread },
         moveRules[scan.module],
       ),
     );
@@ -208,7 +213,7 @@ export function createFindings({
     };
 
   return {
-    reconcile,
+    reconcile: (scan) => reconcile(scan),
 
     accept: decision("accept"),
     markFalsePositive: decision("markFalsePositive"),
@@ -256,9 +261,17 @@ export function createFindings({
       const coveredRules = new Set<string>(rules);
       const observations: Observation[] = [];
       const reported = new Map<string, number>();
+      const unread: UnreadPath[] = [];
       let open = true;
 
       const recorder: ScanRecorder = {
+        unread(asset, path) {
+          if (!open) throw new Error("unread: this Scan has ended");
+          if (!covered.has(assetKey(asset))) {
+            throw new Error(`unread: the Asset ${assetKey(asset)} isn't one this Scan covers`);
+          }
+          unread.push({ asset, path });
+        },
         saw(value) {
           if (!open) throw new Error("saw: this Scan has ended");
           const observation = Observation.parse(value);
@@ -286,7 +299,7 @@ export function createFindings({
         // Returned or thrown, the Scan has ended: a recorder kept past it refuses what it's handed.
         open = false;
       }
-      return reconcile({ id, team, module, started_at, assets, rules, observations });
+      return reconcile({ id, team, module, started_at, assets, rules, observations }, unread);
     },
 
     list(team) {

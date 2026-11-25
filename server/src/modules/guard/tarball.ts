@@ -3,16 +3,18 @@
 // every file under one `<owner>-<repo>-<sha>/` folder, which is stripped. Long names come from pax `path` records or
 // GNU `././@LongLink` entries. Nothing touches disk.
 //
-// What a Scan can't read is skipped and counted, never yielded: anything that isn't a regular file (a directory, a
-// link, a device), a file over the size limit, a binary one (a NUL in its first 8 KiB), one that isn't UTF-8, and a
-// path that could escape the repo (a `..` segment, a leading `/`, a `\`, a drive letter). An archive past its
-// compressed or uncompressed limit, or one that's malformed (not gzip, a bad header, cut short), throws
+// What a Scan can't read is skipped and counted, its text never yielded: anything that isn't a regular file (a
+// directory, a link, a device), a file over the size limit, a binary one (a NUL in its first 8 KiB), one that isn't
+// UTF-8, and a path that could escape the repo (a `..` segment, a leading `/`, a `\`, a drive letter). A too-large,
+// binary or non-UTF-8 file is yielded as unread, so the Scan leaves the Findings in it as they are. An archive past
+// its compressed or uncompressed limit, or one that's malformed (not gzip, a bad header, cut short), throws
 // GitHubUnavailable and isn't read further. No error keeps its source's cause: a lost download's error may name its
 // URL, which carries a token.
 import { pipeline, Readable } from "node:stream";
 import { createGunzip } from "node:zlib";
+import { timedOut } from "../../http-call.ts";
 import { GitHubUnavailable } from "./github.ts";
-import type { RepoFile } from "./repo-reader.ts";
+import type { RepoFile, UnreadFile } from "./repo-reader.ts";
 
 const MiB = 1024 * 1024;
 const BLOCK = 512;
@@ -51,10 +53,6 @@ export const newArchiveCounts = (): ArchiveCounts => ({
   compressedBytes: 0,
   uncompressedBytes: 0,
 });
-
-/** Whether `error` is a fetch's signal firing: its timeout, or an abort. */
-const timedOut = (error: unknown) =>
-  error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 
 /** The gzipped bytes, counted against the compressed limit; a source that throws is lost, its error dropped. */
 async function* compressed(
@@ -261,7 +259,8 @@ const padded = (size: number) => Math.ceil(size / BLOCK) * BLOCK;
 const REGULAR = new Set(["0", "\0", "7"]);
 
 /**
- * The archive's regular files, one at a time. `counts` gathers what was read and skipped; `limits` defaults to
+ * The archive's regular files, one at a time: each one's text, or, for one at a repo path whose text it can't read
+ * (too large, binary, not UTF-8), that it's unread. `counts` gathers what was read and skipped; `limits` defaults to
  * ARCHIVE_LIMITS. Throws GitHubUnavailable, naming `step`, for an archive past a limit or a malformed one.
  */
 export async function* readTarball(
@@ -271,7 +270,7 @@ export async function* readTarball(
     limits: given,
     counts = newArchiveCounts(),
   }: { step?: string; limits?: Partial<ArchiveLimits>; counts?: ArchiveCounts } = {},
-): AsyncGenerator<RepoFile> {
+): AsyncGenerator<RepoFile | UnreadFile> {
   const limits = { ...ARCHIVE_LIMITS, ...given };
   const malformed = (why: string) => new GitHubUnavailable(step, undefined, `${step} ${why}`);
   const bytes = new Bytes(uncompressed(gzipped, step, limits, counts), () =>
@@ -334,17 +333,20 @@ export async function* readTarball(
       }
       if (size > limits.fileBytes) {
         await skip("tooLarge");
+        yield { path, unread: true };
         continue;
       }
       const body = await bytes.read(size);
       await bytes.skip(padded(size) - size);
       if (body.subarray(0, BINARY_SNIFF_BYTES).includes(0)) {
         counts.skipped.binary += 1;
+        yield { path, unread: true };
         continue;
       }
       const fileText = decode(body);
       if (fileText === undefined) {
         counts.skipped.notUtf8 += 1;
+        yield { path, unread: true };
         continue;
       }
       counts.files += 1;

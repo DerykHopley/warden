@@ -3,16 +3,17 @@
 // and yields its files. The fake answers the tarball call with the archive itself, as fetch hands it back after
 // following GitHub's redirect. Every failure throws GitHubInstallationUnreachable or GitHubUnavailable, and none
 // carries the token, the App's JWT or the download URL.
-import { createPublicKey } from "node:crypto";
+import { createPublicKey, randomBytes } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { jwtVerify } from "jose";
 import { describe, expect, it } from "vitest";
 import { gitHubAppKey, rejection } from "../../../test/helpers.ts";
-import { chunks, file, gitHubTarball } from "../../../test/tarballs.ts";
+import { chunks, file, gitHubTarball, tar } from "../../../test/tarballs.ts";
 import type { Fetch } from "../../http-call.ts";
 import { createLogger } from "../../log.ts";
 import { GitHubInstallationUnreachable, GitHubUnavailable } from "./github.ts";
 import { createGitHubReader } from "./github-reader.ts";
-import type { RepoFile } from "./repo-reader.ts";
+import type { RepoFile, UnreadFile } from "./repo-reader.ts";
 
 const PRIVATE_KEY = gitHubAppKey();
 const CLIENT_ID = "Iv23li-the-client-id";
@@ -31,16 +32,51 @@ const ARCHIVE = gitHubTarball([
   file("src/config.ts", "export const a = 1;\n"),
   file("logo.png", Buffer.from([0x89, 0x50, 0x00])),
 ]);
+/** An archive of about 30 chunks: random bytes don't compress. */
+const NOISY = gitHubTarball([
+  file("README.md", "# Guarded\n"),
+  file("noise.bin", randomBytes(15_000)),
+]);
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-/** A gzipped body, streamed in small chunks as a download would be. */
-const archive = (bytes: Uint8Array = ARCHIVE) =>
-  new Response(ReadableStream.from(chunks(bytes, 512)), { status: 200 });
-
 type Call = { url: string; init: RequestInit };
 type Answer = (call: Call) => Promise<Response> | Response;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The call's download: `bytes` gzipped, streamed in 512-byte chunks `gapMs` apart, or stalling for good after
+ * `stallAfter` chunks. As fetch's own body does, it errors with the call's signal's reason once that fires.
+ */
+function archive(
+  { init }: Call,
+  {
+    bytes = ARCHIVE,
+    gapMs = 0,
+    stallAfter = Infinity,
+  }: { bytes?: Uint8Array; gapMs?: number; stallAfter?: number } = {},
+): Response {
+  const signal = init.signal!;
+  const source = chunks(bytes, 512);
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      signal.addEventListener("abort", () => controller.error(signal.reason), { once: true });
+    },
+    async pull(controller) {
+      if (sent >= stallAfter) return new Promise<void>(() => {});
+      await sleep(gapMs);
+      const next = await source.next();
+      if (signal.aborted) return;
+      sent += 1;
+      if (next.done) controller.close();
+      else controller.enqueue(next.value);
+    },
+  });
+  return new Response(body, { status: 200 });
+}
 
 /** An answer that never comes: it waits for the call's signal and rejects as fetch does when it fires. */
 const never: Answer = ({ init }) =>
@@ -66,8 +102,9 @@ function fakeGitHub({
       },
       201,
     ),
-  tarball = () => archive(),
-}: { accessToken?: Answer; tarball?: Answer } = {}) {
+  tarball = (call) => archive(call),
+  archiveTimeoutMs = 50,
+}: { accessToken?: Answer; tarball?: Answer; archiveTimeoutMs?: number } = {}) {
   const calls: Call[] = [];
   const lines: string[] = [];
   const fetch: Fetch = async (url, init) => {
@@ -87,7 +124,7 @@ function fakeGitHub({
     logger: createLogger((line) => lines.push(line)),
     fetch,
     timeoutMs: 50,
-    archiveTimeoutMs: 50,
+    archiveTimeoutMs,
   });
   return { reader, calls, lines };
 }
@@ -96,8 +133,8 @@ async function readAll(
   reader: ReturnType<typeof createGitHubReader>,
   installationId = INSTALLATION_ID,
   repo = REPO,
-): Promise<RepoFile[]> {
-  const files: RepoFile[] = [];
+): Promise<(RepoFile | UnreadFile)[]> {
+  const files: (RepoFile | UnreadFile)[] = [];
   for await (const repoFile of reader.readRepo(installationId, repo)) files.push(repoFile);
   return files;
 }
@@ -126,6 +163,7 @@ describe("createGitHubReader", () => {
     expect(await readAll(reader)).toEqual([
       { path: "README.md", text: "# Guarded\n" },
       { path: "src/config.ts", text: "export const a = 1;\n" },
+      { path: "logo.png", unread: true },
     ]);
 
     const [tokenCall, tarballCall] = calls;
@@ -170,9 +208,51 @@ describe("createGitHubReader", () => {
     }
   });
 
+  describe("ends the download, its signal fired, when the read stops before the archive's end", () => {
+    it("because the scanner stopped after the first file", async () => {
+      const { reader, calls } = fakeGitHub({
+        tarball: (call) => archive(call, { bytes: NOISY }),
+        archiveTimeoutMs: 60_000,
+      });
+
+      for await (const repoFile of reader.readRepo(INSTALLATION_ID, REPO)) {
+        expect(repoFile.path).toBe("README.md");
+        break;
+      }
+
+      expect(calls[1]!.init.signal!.aborted).toBe(true);
+    });
+
+    it("because the archive has a bad header", async () => {
+      const bytes = tar([file("a.txt", "a\n"), file("noise.bin", randomBytes(15_000))]);
+      bytes[0] = "b".charCodeAt(0);
+      const { reader, calls } = fakeGitHub({
+        tarball: (call) => archive(call, { bytes: gzipSync(bytes) }),
+        archiveTimeoutMs: 60_000,
+      });
+
+      expect(await rejection(readAll(reader))).toBeInstanceOf(GitHubUnavailable);
+
+      expect(calls[1]!.init.signal!.aborted).toBe(true);
+    });
+  });
+
+  it("reads a download slower in all than its time limit, as long as no gap between chunks reaches it", async () => {
+    const { reader } = fakeGitHub({
+      tarball: (call) => archive(call, { bytes: NOISY, gapMs: 20 }),
+      archiveTimeoutMs: 200,
+    });
+
+    expect((await readAll(reader)).map((repoFile) => repoFile.path)).toEqual([
+      "README.md",
+      "noise.bin",
+    ]);
+  });
+
   it.each([
     ["403", 403],
     ["404", 404],
+    ["422, as for a repo the App no longer reaches", 422],
   ])(
     "throws GitHubInstallationUnreachable when the token call answers %s",
     async (_name, status) => {
@@ -241,14 +321,14 @@ describe("createGitHubReader", () => {
       ["a tarball that never answers", { tarball: never }, tarballStep, undefined],
       ["a download lost on the redirect", { tarball: lostOnRedirect }, tarballStep, undefined],
       [
-        "a tarball that isn't gzip",
-        { tarball: () => new Response("<html>oops</html>", { status: 200 }) },
+        "a tarball cut short",
+        { tarball: (call) => archive(call, { bytes: ARCHIVE.subarray(0, ARCHIVE.length - 30) }) },
         tarballStep,
         undefined,
       ],
       [
-        "a tarball cut short",
-        { tarball: () => archive(ARCHIVE.subarray(0, ARCHIVE.length - 30)) },
+        "a download that stalls partway",
+        { tarball: (call) => archive(call, { bytes: NOISY, stallAfter: 2 }) },
         tarballStep,
         undefined,
       ],

@@ -7,7 +7,7 @@
 // It signs its own App JWT, the same RS256 shape as `github.ts`'s, so that file is left as it is here.
 import { createPrivateKey, sign, type KeyObject } from "node:crypto";
 import { z } from "zod";
-import { CallFailed, callJson, type Answer, type Fetch } from "../../http-call.ts";
+import { CallFailed, callJson, timedOut, type Answer, type Fetch } from "../../http-call.ts";
 import type { Logger } from "../../log.ts";
 import { GitHubInstallationUnreachable, GitHubUnavailable, type GitHubRepo } from "./github.ts";
 import type { RepoReader } from "./repo-reader.ts";
@@ -18,7 +18,10 @@ const API = "https://api.github.com";
 const API_VERSION = "2026-03-10";
 /** How long the token call may take, its answer's body included. */
 const CALL_TIMEOUT_MS = 10_000;
-/** How long a repo's whole download may take, its redirect and body included. */
+/**
+ * How long GitHub may keep a repo's download waiting: for its answer, the redirect included, or for any one chunk of
+ * its body. The time the Scan spends on the files between chunks doesn't count, so a big repo isn't cut off.
+ */
 const ARCHIVE_TIMEOUT_MS = 5 * 60_000;
 
 /**
@@ -48,9 +51,35 @@ const apiHeaders = (token: string) => ({
   "User-Agent": "Warden",
 });
 
-/** Whether `error` is the call's signal firing: its timeout, or an abort. */
-const timedOut = (error: unknown) =>
-  error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+/**
+ * `waiting`, settled as it settles, with `download` aborted by a TimeoutError if it takes `ms`. fetch then rejects, or
+ * errors its answer's body, with that error.
+ */
+async function awaitWithin<T>(waiting: Promise<T>, download: AbortController, ms: number) {
+  const timer = setTimeout(
+    () => download.abort(new DOMException(`no answer in ${ms} ms`, "TimeoutError")),
+    ms,
+  );
+  try {
+    return await waiting;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** The body's chunks, GitHub given `ms` to send each one. */
+async function* chunksWithin(
+  body: ReadableStream<Uint8Array>,
+  download: AbortController,
+  ms: number,
+): AsyncGenerator<Uint8Array> {
+  const iterator = body[Symbol.asyncIterator]();
+  for (;;) {
+    const next = await awaitWithin(iterator.next(), download, ms);
+    if (next.done) return;
+    yield next.value;
+  }
+}
 
 function checkInstallationId(id: number) {
   if (!(Number.isSafeInteger(id) && id > 0)) {
@@ -87,7 +116,10 @@ export function createGitHubReader({
 }): RepoReader {
   const key = createPrivateKey(privateKey);
 
-  /** A token for this one repo, contents read only. Throws GitHubInstallationUnreachable on a 403 or 404. */
+  /**
+   * A token for this one repo, contents read only. Throws GitHubInstallationUnreachable on a 403 or 404, and on a 422,
+   * GitHub's answer for a repo the installation no longer reaches.
+   */
   async function repoToken(installationId: number, repo: GitHubRepo): Promise<string> {
     const step = `GitHub's installation token for installation ${installationId}`;
     let answer: Answer;
@@ -110,7 +142,7 @@ export function createGitHubReader({
       // fetch's own error, from before any token came, is kept as the cause.
       throw new GitHubUnavailable(step, error.status, error.message, { cause: error.cause });
     }
-    if (answer.status === 403 || answer.status === 404) {
+    if (answer.status === 403 || answer.status === 404 || answer.status === 422) {
       throw new GitHubInstallationUnreachable(installationId, answer.status);
     }
     // The answer's body isn't repeated: a 2xx one holds the token.
@@ -136,30 +168,43 @@ export function createGitHubReader({
 
       const step = `GitHub's tarball of ${repo.ref}`;
       // GitHub answers with a redirect to a short-lived download URL, which fetch follows; one signal covers the
-      // redirect and the body. fetch's errors aren't kept: one on the redirect's leg may name that URL.
-      let response: Response;
+      // redirect and the body. It fires when GitHub keeps the download waiting too long, and once the read stops for
+      // any reason (the archive's end, a limit, a bad archive, the Scan stopping), so the connection never lingers.
+      // fetch's errors aren't kept: one on the redirect's leg may name that URL.
+      const download = new AbortController();
       try {
-        response = await fetch(
-          `${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/tarball`,
-          { headers: apiHeaders(token), signal: AbortSignal.timeout(archiveTimeoutMs) },
-        );
-      } catch (error) {
-        const why = timedOut(error) ? `timed out after ${archiveTimeoutMs} ms` : "failed";
-        throw new GitHubUnavailable(step, undefined, `${step} ${why}`);
-      }
-      if (!response.ok || response.body === null) {
-        await response.body?.cancel().catch(() => undefined);
-        // An empty repo's tarball may answer 404 (GitHub documents it for the zip archive).
-        throw new GitHubUnavailable(
-          step,
-          response.status,
-          `${step} answered HTTP ${response.status}`,
-        );
-      }
+        let response: Response;
+        try {
+          response = await awaitWithin(
+            fetch(`${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/tarball`, {
+              headers: apiHeaders(token),
+              signal: download.signal,
+            }),
+            download,
+            archiveTimeoutMs,
+          );
+        } catch (error) {
+          const why = timedOut(error) ? `timed out after ${archiveTimeoutMs} ms` : "failed";
+          throw new GitHubUnavailable(step, undefined, `${step} ${why}`);
+        }
+        if (!response.ok || response.body === null) {
+          // An empty repo's tarball may answer 404 (GitHub documents it for the zip archive).
+          throw new GitHubUnavailable(
+            step,
+            response.status,
+            `${step} answered HTTP ${response.status}`,
+          );
+        }
 
-      const counts = newArchiveCounts();
-      yield* readTarball(response.body, { step, counts });
-      logger.info("guard scan: archive read", { repo: repo.ref, ...counts });
+        const counts = newArchiveCounts();
+        yield* readTarball(chunksWithin(response.body, download, archiveTimeoutMs), {
+          step,
+          counts,
+        });
+        logger.info("guard scan: archive read", { repo: repo.ref, ...counts });
+      } finally {
+        download.abort();
+      }
     },
   };
 }

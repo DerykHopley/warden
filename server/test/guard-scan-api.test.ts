@@ -1,8 +1,9 @@
 // Stories 3 and 4 end to end: a Lead starts a Guard Scan of a linked repo (`POST /api/scans`), the Scan Job runs in
 // process with Guard's scanner as the wiring builds it over a fake RepoReader, and `GET /api/findings` shows what it
-// found; the next Scan, with the secrets gone, marks them Fixed. One case reads the repo through the GitHub reader on
-// a fake fetch serving built tarballs, so the whole path from GitHub's HTTP boundary is covered. Through the real app on the suite's shared database,
-// each case with a Team of its own. The planted secrets are joined from parts, so the source never holds a whole one.
+// found; the next Scan, with the secrets gone, marks them Fixed. Two cases read the repo through the GitHub reader on
+// a fake fetch serving built tarballs, so the whole path from GitHub's HTTP boundary is covered. Through the real app
+// on the suite's shared database, each case with a Team of its own. The planted secrets are joined from parts, so the
+// source never holds a whole one.
 import { randomUUID } from "node:crypto";
 import { FindingsBody, type Asset } from "@warden/contracts";
 import type { CryptoKey } from "jose";
@@ -138,7 +139,10 @@ const files = (list: RepoFile[]) =>
     yield* list;
   };
 
-/** Each row of the Team's Findings, their history and its Scans, whole and read as text: every column, whatever its type. */
+/**
+ * Each row of the Team's Findings, their history and its Scans, whole and read as text: every column, whatever its
+ * type.
+ */
 async function storedRows(team: string) {
   return withTeam(team, async (tx) => {
     const tables = ["findings", "finding_history", "scan_requests", "scans", "scan_coverage"];
@@ -185,6 +189,19 @@ function fakeGitHubFetch(served: () => RepoFile[]) {
     return Response.json({ message: "Not Found" }, { status: 404 });
   };
   return { fetch, calls };
+}
+
+/** The app, its Scan Job reading the repo through the GitHub reader from fake GitHub serving `served()`. */
+function gitHubGuardApp(served: () => RepoFile[]) {
+  const github = fakeGitHubFetch(served);
+  const guard = guardApp((logger) =>
+    gitHubRepoReader(
+      { clientId: "Iv23li-the-client-id", privateKey: gitHubAppKey() },
+      logger,
+      github.fetch,
+    ),
+  );
+  return { github, guard };
 }
 
 describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
@@ -267,14 +284,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
   it("reads the repo through GitHub's HTTP boundary: opens both Findings, then marks them Fixed, with the token and the secrets in no log line and no table", async () => {
     const team = await newTeam();
     let current = planted;
-    const github = fakeGitHubFetch(() => current);
-    const guard = guardApp((logger) =>
-      gitHubRepoReader(
-        { clientId: "Iv23li-the-client-id", privateKey: gitHubAppKey() },
-        logger,
-        github.fetch,
-      ),
-    );
+    const { github, guard } = gitHubGuardApp(() => current);
     await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
 
     expect((await scanRepo(guard, team)).exit).toBe(0);
@@ -304,6 +314,31 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
       expect(stored.filter((row) => row.includes(secret))).toEqual([]);
       expect(logged.filter((line) => line.includes(secret))).toEqual([]);
     }
+  });
+
+  it("keeps a secret's Finding Open, unchanged, once its file grows past the 1 MiB a Scan reads, and marks the removed one Fixed", async () => {
+    const team = await newTeam();
+    let current = planted;
+    const { guard } = gitHubGuardApp(() => current);
+    await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+    const opened = await listFindings(guard, team);
+    const inConfig = opened.find((finding) => finding.rule_id === "guard/secret-in-repo")!;
+    const inSettings = opened.find((finding) => finding.id !== inConfig.id)!;
+
+    const config = planted[1]!;
+    const grown = { path: config.path, text: `${config.text}// ${"x".repeat(1024 * 1024)}\n` };
+    current = [removed[0]!, grown, removed[2]!];
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+
+    const after = await listFindings(guard, team);
+    expect(after).toEqual(
+      expect.arrayContaining([
+        inConfig,
+        expect.objectContaining({ id: inSettings.id, status: "fixed" }),
+      ]),
+    );
+    expect(after).toHaveLength(2);
   });
 
   it("fails a Scan whose repo the reader can't read, reconciling nothing and logging why", async () => {

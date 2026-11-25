@@ -226,6 +226,40 @@ describe("findings.scan: the call a module writes", () => {
     expect(await findings.history(team, listBefore[0]!.id)).toEqual(historyBefore);
   });
 
+  it("leaves the Findings in a file the module couldn't read as they are, and marks the rest it didn't see Fixed", async () => {
+    const team = await newTeam();
+    const elsewhere = { kind: "file", path: "src/other.json", line: 1 } as const;
+    await findings.reconcile(
+      scanOf(team, { observations: [observation(), observation({ location: elsewhere })] }),
+    );
+    const before = await findings.list(team);
+    let outside: unknown;
+
+    const outcome = await findings.scan(
+      { team, module: "guard", assets: [app], rules: [ENV] },
+      async (scan) => {
+        scan.unread(app, ".claude/settings.json");
+        try {
+          scan.unread(api, "src/other.json");
+        } catch (error) {
+          outside = error;
+        }
+      },
+    );
+
+    const kept = before.find(
+      (finding) =>
+        finding.location.kind === "file" && finding.location.path === ".claude/settings.json",
+    )!;
+    const gone = before.find((finding) => finding.id !== kept.id)!;
+    expect(outcome).toMatchObject({ seen: [], fixed: [gone.id] });
+    expect(await findings.list(team)).toEqual(
+      expect.arrayContaining([kept, expect.objectContaining({ id: gone.id, status: "fixed" })]),
+    );
+    expect(await findings.history(team, kept.id)).toHaveLength(1);
+    expect(String(outside)).toMatch(/Asset .*api.* isn't one this Scan covers/);
+  });
+
   it("refuses a saw after the callback rejected", async () => {
     const team = await newTeam();
     let kept: ScanRecorder | undefined;

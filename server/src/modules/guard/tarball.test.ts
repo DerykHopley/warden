@@ -24,11 +24,15 @@ const MiB = 1024 * 1024;
 async function read(
   source: AsyncIterable<Uint8Array>,
   limits?: Partial<ArchiveLimits>,
-): Promise<{ files: RepoFile[]; counts: ReturnType<typeof newArchiveCounts> }> {
+): Promise<{ files: RepoFile[]; unread: string[]; counts: ReturnType<typeof newArchiveCounts> }> {
   const counts = newArchiveCounts();
   const files: RepoFile[] = [];
-  for await (const repoFile of readTarball(source, { counts, limits })) files.push(repoFile);
-  return { files, counts };
+  const unread: string[] = [];
+  for await (const entry of readTarball(source, { counts, limits })) {
+    if ("text" in entry) files.push(entry);
+    else unread.push(entry.path);
+  }
+  return { files, unread, counts };
 }
 
 const readAll = (entries: TarEntry[]) => read(chunks(gitHubTarball(entries)));
@@ -78,8 +82,8 @@ describe("readTarball", () => {
     ]);
   });
 
-  it("skips and counts a symlink, a directory, a binary file, a non-UTF-8 file, one over 1 MiB and a bad path", async () => {
-    const { files, counts } = await readAll([
+  it("skips and counts a symlink, a directory, a binary file, a non-UTF-8 file, one over 1 MiB and a bad path, naming the files it couldn't read", async () => {
+    const { files, unread, counts } = await readAll([
       file("kept.txt", "kept\n"),
       { path: `${TOP}/link`, type: "2", linkname: "/etc/passwd" },
       { path: `${TOP}/hard`, type: "1", linkname: `${TOP}/kept.txt` },
@@ -98,6 +102,8 @@ describe("readTarball", () => {
     ]);
 
     expect(files.map((f) => f.path)).toEqual(["kept.txt", "exactly-1MiB.txt", "src/kept.ts"]);
+    // A regular file at a repo path whose text the Scan can't read: the Findings in it stay as they are.
+    expect(unread).toEqual(["image.png", "latin1.txt", "big.txt"]);
     expect(counts.files).toBe(3);
     // The top folder itself is a directory too.
     expect(counts.skipped).toEqual({
