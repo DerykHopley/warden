@@ -3,17 +3,10 @@
 // Nothing here logs: the app's request line is the only line, and it holds no token or hash.
 import { PrivacyTierBody, type HookSettingsBody, type HookTokenBody } from "@warden/contracts";
 import type { Context } from "hono";
-import type { z } from "zod";
 import type { MountRoutes } from "../../app.ts";
+import { refusedBody } from "../../refused-body.ts";
 import type { HookSettings } from "./hook-settings.ts";
 import { managedSettings } from "./managed-settings.ts";
-
-/** A body a schema refused, as one line, worded as the app's own routes word it: each issue's field and message. */
-function refusedBody(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
-    .join("; ");
-}
 
 /**
  * Warden's own origin, as the request reached it: its host, and `https` when the front end says TLS ended there
