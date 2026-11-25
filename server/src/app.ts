@@ -39,7 +39,7 @@ import {
 import { teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
 import type { Members, RoleChanged, TeamMemberRow } from "./members.ts";
-import { pathId } from "./path-id.ts";
+import { idParam, pathId } from "./path-id.ts";
 import { refusedBody } from "./refused-body.ts";
 import {
   SCANS_PER_HOUR,
@@ -292,38 +292,18 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   });
 
   /**
-   * The path's `:id` as a Finding's or a Proposal's (`missing` names which), or the refusal of one that can be no
-   * stored id: the same 404 as an id the Team doesn't have, before any store sees it.
-   */
-  function findingsPathId(
-    c: Context<AppEnv>,
-    missing: typeof FindingNotFound | typeof ProposalNotFound,
-  ): string | Response {
-    const raw = c.req.param("id") ?? "";
-    return pathId(raw) ?? findingRefusal(c, new missing(raw));
-  }
-
-  /**
    * One POST route that changes a Finding or a Proposal (story 4): `requireRole(role)`, the body parsed with its
-   * contracts schema (none: no body is read), the path's id read as `missing` names (a Finding's or a Proposal's), the
-   * Team and the person taken from the session, never the request. Each refusal answers through findingRefusal;
-   * success answers `status` with what `act` returns.
+   * contracts schema (none: no body is read), the path's id read as the path names it (a Finding's or a Proposal's,
+   * `idParam`), the Team and the person taken from the session, never the request. Each refusal answers through
+   * findingRefusal; success answers `status` with what `act` returns.
    */
   function findingsRoute<Body extends object, Answer>(
-    path: string,
-    {
-      role,
-      schema,
-      missing,
-      status = 200,
-    }: {
-      role: Role;
-      schema?: z.ZodType<Body>;
-      missing: typeof FindingNotFound | typeof ProposalNotFound;
-      status?: 200 | 201;
-    },
+    path: `/api/${"findings" | "proposals"}/:id/${string}`,
+    { role, schema, status = 200 }: { role: Role; schema?: z.ZodType<Body>; status?: 200 | 201 },
     act: (team: string, id: string, body: Body, actor: Actor) => Promise<Answer>,
   ) {
+    // The path says whose id it holds, so the 404 for an id that can be none can't disagree with it.
+    const missing = path.startsWith("/api/proposals/") ? ProposalNotFound : FindingNotFound;
     app.post(path, requireRole(role), async (c) => {
       let body = {} as Body;
       if (schema) {
@@ -332,10 +312,8 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
         if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
         body = parsed.data;
       }
-      const id = findingsPathId(c, missing);
-      if (id instanceof Response) return id;
       try {
-        const answer = await act(c.get("team"), id, body, sessionActor(c));
+        const answer = await act(c.get("team"), idParam(c, missing), body, sessionActor(c));
         return c.json(answer, status);
       } catch (error) {
         return findingRefusal(c, error);
@@ -349,10 +327,8 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     schema: z.ZodType<Body>,
     decide: (team: string, id: string, input: Body & { actor: Actor }) => Promise<Finding>,
   ) =>
-    findingsRoute(
-      `/api/findings/:id/${path}`,
-      { role: "lead", schema, missing: FindingNotFound },
-      (team, id, body, actor) => decide(team, id, { ...body, actor }),
+    findingsRoute(`/api/findings/:id/${path}`, { role: "lead", schema }, (team, id, body, actor) =>
+      decide(team, id, { ...body, actor }),
     );
 
   const { findings } = deps;
@@ -372,18 +348,18 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   // Lead approves it (the decision is made as that Lead) or rejects it with a reason. Each answers the Proposal.
   findingsRoute(
     "/api/findings/:id/proposals",
-    { role: "member", schema: ProposeBody, missing: FindingNotFound, status: 201 },
+    { role: "member", schema: ProposeBody, status: 201 },
     (team, id, body, requester): Promise<Proposal> =>
       findings.propose(team, id, { ...body, requester }),
   );
   findingsRoute(
     "/api/proposals/:id/approve",
-    { role: "lead", missing: ProposalNotFound },
+    { role: "lead" },
     (team, id, _body, actor): Promise<Proposal> => findings.approveProposal(team, id, { actor }),
   );
   findingsRoute(
     "/api/proposals/:id/reject",
-    { role: "lead", schema: ReasonBody, missing: ProposalNotFound },
+    { role: "lead", schema: ReasonBody },
     (team, id, body, actor): Promise<Proposal> =>
       findings.rejectProposal(team, id, { ...body, actor }),
   );
@@ -418,10 +394,8 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
   // Any person in the Team reads a Finding's history, oldest first.
   app.get("/api/findings/:id/history", requireRole("member"), async (c) => {
-    const id = findingsPathId(c, FindingNotFound);
-    if (id instanceof Response) return id;
     try {
-      const history = await findings.history(c.get("team"), id);
+      const history = await findings.history(c.get("team"), idParam(c, FindingNotFound));
       return c.json({ history } satisfies HistoryBody);
     } catch (error) {
       return findingRefusal(c, error);

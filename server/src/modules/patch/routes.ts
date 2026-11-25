@@ -13,7 +13,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { z } from "zod";
 import type { AppEnv, MountRoutes } from "../../app.ts";
 import type { Logger } from "../../log.ts";
-import { pathId } from "../../path-id.ts";
+import { idParam } from "../../path-id.ts";
 import type { PatchAssessments } from "./assessment.ts";
 import {
   CveNotInSnapshot,
@@ -132,25 +132,6 @@ async function refusing(c: Context<AppEnv>, work: () => Promise<Response>): Prom
 }
 
 /**
- * The path's Product id. One that can be no stored id (`pathId`) is ProductNotFound before the store sees it: the same
- * 404 as an id the Team doesn't have.
- */
-function productId(c: Context<AppEnv>): string {
-  const raw = c.req.param("id") ?? "";
-  const id = pathId(raw);
-  if (id === undefined) throw new ProductNotFound(raw);
-  return id;
-}
-
-/** The path's Finding id: one that can be no stored id is PatchFindingNotFound, as `productId` does. */
-function findingId(c: Context<AppEnv>): string {
-  const raw = c.req.param("id") ?? "";
-  const id = pathId(raw);
-  if (id === undefined) throw new PatchFindingNotFound(raw);
-  return id;
-}
-
-/**
  * `refusing`, with `work` given the request's Product. A body that isn't JSON (read as undefined) or that
  * ProductChange refuses is a 400, before any write.
  */
@@ -228,7 +209,7 @@ export function patchRoutes({
     // PUT replaces the whole Product: Repo URLs and dependencies left out are gone.
     app.put("/api/products/:id", requireRole("lead"), limited, (c) =>
       withProduct(c, async (input) => {
-        const product = await products.update(c.get("team"), productId(c), input);
+        const product = await products.update(c.get("team"), idParam(c, ProductNotFound), input);
         await scanAfterChange(c.get("team"), product);
         return c.json(product);
       }),
@@ -238,7 +219,7 @@ export function patchRoutes({
     // daily refresh's sweep of Product Assets with Open Findings and no Product row turns them Fixed.
     app.delete("/api/products/:id", requireRole("lead"), limited, (c) =>
       refusing(c, async () => {
-        const id = productId(c);
+        const id = idParam(c, ProductNotFound);
         await products.remove(c.get("team"), id);
         await scanAfterChange(c.get("team"), { id });
         return c.body(null, 204);
@@ -255,7 +236,11 @@ export function patchRoutes({
     // doesn't hold, naming that CVE. The answer is parsed, not only typed, so its Text limits and URLs hold at run time.
     app.get("/api/patch/findings/:id/assessment", requireRole("member"), (c) =>
       refusing(c, async () =>
-        c.json(PatchAssessment.parse(await assessment.read(c.get("team"), findingId(c)))),
+        c.json(
+          PatchAssessment.parse(
+            await assessment.read(c.get("team"), idParam(c, PatchFindingNotFound)),
+          ),
+        ),
       ),
     );
   };
