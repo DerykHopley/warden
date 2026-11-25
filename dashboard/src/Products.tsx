@@ -471,6 +471,17 @@ function DependencyRow({
  * screen reader reads them apart. Save is disabled while the name is blank, and busy while its call (and the Patch
  * Scan it runs) is under way.
  */
+/**
+ * The `data-row-focus` value of each control in `ProductForm` that a vanished button hands focus to. Both the
+ * attribute and the focus target come from here, so they can't drift apart.
+ */
+const rowFocus = {
+  repoUrl: (key: number) => `repo-url:${key}`,
+  addRepoUrl: "add-repo-url",
+  framework: (key: number) => `framework:${key}`,
+  addFramework: "add-framework",
+} as const;
+
 function ProductForm(props: {
   label: string;
   frameworks: ReadonlyMap<string, string>;
@@ -495,6 +506,30 @@ function ProductForm(props: {
   const picked = new Set(draft.dependencies.map(({ framework }) => framework));
   const unpicked = [...frameworks.keys()].filter((framework) => !picked.has(framework));
 
+  // A button that goes away while it has focus (a row's Remove, an add button at its limit) hands focus to a control
+  // in the form, by its `data-row-focus`, so it doesn't fall to the page and Esc still reaches the form: the next row,
+  // else the row before, else the add button; an add button that goes hands it to the row it added.
+  const formRef = useRef<HTMLFormElement>(null);
+  const focusNext = useRef<string | null>(null);
+  useEffect(() => {
+    const target = focusNext.current;
+    if (target === null) return;
+    focusNext.current = null;
+    [...(formRef.current?.querySelectorAll<HTMLElement>("[data-row-focus]") ?? [])]
+      .find((element) => element.dataset.rowFocus === target)
+      ?.focus();
+  });
+  /** After removing the row at `i` of `rows`: its neighbour's control (`control(key)`), else `add`. */
+  const afterRemoving = (
+    rows: readonly { key: number }[],
+    i: number,
+    control: (key: number) => string,
+    add: string,
+  ) => {
+    const neighbour = rows[i + 1] ?? rows[i - 1];
+    return neighbour === undefined ? add : control(neighbour.key);
+  };
+
   // Esc anywhere in the form cancels it (focus back on its opener), as a decision's form does; not while it saves.
   function onKeyDown(event: KeyboardEvent) {
     if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
@@ -505,6 +540,7 @@ function ProductForm(props: {
   return (
     // noValidate: the server checks each field and its 400 names the one that's wrong, in the refusal line.
     <form
+      ref={formRef}
       className="product-form"
       aria-label={props.label}
       noValidate
@@ -533,6 +569,7 @@ function ProductForm(props: {
                 inputMode="url"
                 autoComplete="off"
                 aria-label={`Repo URL ${i + 1}`}
+                data-row-focus={rowFocus.repoUrl(row.key)}
                 value={row.url}
                 onChange={(event) => setUrl(row.key, event.target.value)}
               />
@@ -540,9 +577,15 @@ function ProductForm(props: {
                 type="button"
                 className="secondary"
                 aria-label={`Remove Repo URL ${i + 1}`}
-                onClick={() =>
-                  set({ repoUrls: draft.repoUrls.filter(({ key }) => key !== row.key) })
-                }
+                onClick={() => {
+                  focusNext.current = afterRemoving(
+                    draft.repoUrls,
+                    i,
+                    rowFocus.repoUrl,
+                    rowFocus.addRepoUrl,
+                  );
+                  set({ repoUrls: draft.repoUrls.filter(({ key }) => key !== row.key) });
+                }}
               >
                 Remove
               </button>
@@ -552,7 +595,14 @@ function ProductForm(props: {
             <button
               type="button"
               className="secondary add-row"
-              onClick={() => set({ repoUrls: [...draft.repoUrls, { key: rowKey(), url: "" }] })}
+              data-row-focus={rowFocus.addRepoUrl}
+              onClick={() => {
+                const key = rowKey();
+                if (draft.repoUrls.length + 1 === PRODUCT_REPO_URLS_MAX) {
+                  focusNext.current = rowFocus.repoUrl(key);
+                }
+                set({ repoUrls: [...draft.repoUrls, { key, url: "" }] });
+              }}
             >
               Add a Repo URL
             </button>
@@ -560,7 +610,7 @@ function ProductForm(props: {
         </fieldset>
         <fieldset className="field">
           <legend className="field-label">Frameworks</legend>
-          {draft.dependencies.map((row) => {
+          {draft.dependencies.map((row, i) => {
             const name = nameOf(row.framework);
             // The row's own framework, then those no other row has picked, in the API's order; a framework Warden no
             // longer knows stays offered in its own row, by its id.
@@ -574,6 +624,7 @@ function ProductForm(props: {
                   <span className="field-label">Framework</span>
                   <select
                     aria-label={`Framework, ${name}`}
+                    data-row-focus={rowFocus.framework(row.key)}
                     value={row.framework}
                     onChange={(event) => setDependency(row.key, { framework: event.target.value })}
                   >
@@ -625,9 +676,15 @@ function ProductForm(props: {
                   type="button"
                   className="secondary"
                   aria-label={`Remove ${name}`}
-                  onClick={() =>
-                    set({ dependencies: draft.dependencies.filter(({ key }) => key !== row.key) })
-                  }
+                  onClick={() => {
+                    focusNext.current = afterRemoving(
+                      draft.dependencies,
+                      i,
+                      rowFocus.framework,
+                      rowFocus.addFramework,
+                    );
+                    set({ dependencies: draft.dependencies.filter(({ key }) => key !== row.key) });
+                  }}
                 >
                   Remove
                 </button>
@@ -638,20 +695,23 @@ function ProductForm(props: {
             <button
               type="button"
               className="secondary add-row"
-              onClick={() =>
+              data-row-focus={rowFocus.addFramework}
+              onClick={() => {
+                const key = rowKey();
+                if (unpicked.length === 1) focusNext.current = rowFocus.framework(key);
                 set({
                   dependencies: [
                     ...draft.dependencies,
                     {
-                      key: rowKey(),
+                      key,
                       framework: unpicked[0]!,
                       version: "",
                       usage: "library",
                       internetFacing: false,
                     },
                   ],
-                })
-              }
+                });
+              }}
             >
               Add a framework
             </button>
