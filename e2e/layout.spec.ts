@@ -13,6 +13,7 @@ import {
   ensureProduct,
   expect,
   GRACE,
+  HEDY,
   KATHERINE,
   signInEachTest,
   SIGNS_IN_ITSELF,
@@ -97,6 +98,56 @@ test(
 
     await page.setViewportSize({ width: 1024, height: 900 });
     expect(new Set(await lefts(".product-part")).size).toBe(2);
+  },
+);
+
+/** Opens Edit's form on Chat assistant (two Repo URLs, two framework rows) as Cedar's Admin. */
+async function openProductForm(page: Page) {
+  await page.goto("/products");
+  await page.getByRole("button", { name: "Edit Chat assistant" }).click();
+  const form = page.getByRole("form", { name: "Edit Chat assistant" });
+  await expect(form.locator(".dependency-fields")).toHaveCount(2);
+  await expect(form.getByRole("textbox", { name: /^Repo URL/ })).toHaveCount(2);
+  return form;
+}
+
+for (const scheme of SCHEMES) {
+  for (const width of WIDTHS) {
+    test(
+      `Products at ${width}px in ${scheme}, with the Product form open: nothing scrolls sideways`,
+      SIGNS_IN_ITSELF,
+      async ({ page, signIn }) => {
+        await signIn(HEDY, CEDAR);
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme: scheme });
+        await openProductForm(page);
+        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+        }));
+        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+      },
+    );
+  }
+}
+
+test(
+  "the Product form under 640px: a framework row's controls stack in one column; from 640px they sit side by side",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    const form = await openProductForm(page);
+    const lefts = () =>
+      form
+        .locator(".dependency-fields")
+        .first()
+        .locator(":scope > *")
+        .evaluateAll((all) => all.map((el) => Math.round(el.getBoundingClientRect().left)));
+    expect(new Set(await lefts()).size).toBe(1);
+
+    await page.setViewportSize({ width: 1024, height: 900 });
+    expect(new Set(await lefts()).size).toBe(5);
   },
 );
 

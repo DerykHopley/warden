@@ -125,17 +125,10 @@ export async function signingKey() {
  * name, so a spec's `beforeAll` can run again in a restarted worker.
  */
 export async function ensureProduct(team: Team, product: ProductInput) {
-  const origin = process.env.E2E_BASE_URL;
-  if (!origin) throw new Error("E2E_BASE_URL is unset: run the browser tests with `pnpm e2e`");
-  const token = await sessionToken(await signingKey(), origin, team.admin, team, "admin");
-  const headers = { Authorization: `Bearer ${token}` };
-  const alreadyThere = async () => {
-    const res = await fetch(`${origin}/api/products`, { headers });
-    if (!res.ok)
-      throw new Error(`listing ${team.name}'s Products: ${res.status} ${await res.text()}`);
-    const { products } = ProductsBody.parse(await res.json());
-    return products.some(({ name }) => name === product.name);
-  };
+  const admin = await asAdmin(team);
+  const { origin, headers } = admin;
+  const alreadyThere = async () =>
+    (await listProducts(team, admin)).some(({ name }) => name === product.name);
   if (await alreadyThere()) return;
   const res = await fetch(`${origin}/api/products`, {
     method: "POST",
@@ -146,6 +139,42 @@ export async function ensureProduct(team: Team, product: ProductInput) {
   // Workers run at once: another may have created it between the look and the post. Then it's there now.
   if (res.status === 409 && (await alreadyThere())) return;
   throw new Error(`creating ${product.name} in ${team.name}: ${res.status} ${await res.text()}`);
+}
+
+/**
+ * Deletes each Product of `team` named one of `names`, through the API as the Team's Admin: a test that creates a
+ * Product through the page clears what an earlier run (a retry, say) left behind.
+ */
+export async function removeProducts(team: Team, names: readonly string[]) {
+  const admin = await asAdmin(team);
+  const { origin, headers } = admin;
+  for (const { id, name } of await listProducts(team, admin)) {
+    if (!names.includes(name)) continue;
+    const res = await fetch(`${origin}/api/products/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers,
+    });
+    // 404: another worker deleted it first.
+    if (res.status !== 204 && res.status !== 404) {
+      throw new Error(`deleting ${name} in ${team.name}: ${res.status} ${await res.text()}`);
+    }
+  }
+}
+
+/** The server's origin and the headers that call the API as `team`'s Admin. */
+async function asAdmin(team: Team) {
+  const origin = process.env.E2E_BASE_URL;
+  if (!origin) throw new Error("E2E_BASE_URL is unset: run the browser tests with `pnpm e2e`");
+  const token = await sessionToken(await signingKey(), origin, team.admin, team, "admin");
+  return { origin, headers: { Authorization: `Bearer ${token}` } };
+}
+
+/** `team`'s Products, asked with the Admin call the caller already made, so its token is minted once. */
+async function listProducts(team: Team, { origin, headers }: Awaited<ReturnType<typeof asAdmin>>) {
+  const res = await fetch(`${origin}/api/products`, { headers });
+  if (!res.ok)
+    throw new Error(`listing ${team.name}'s Products: ${res.status} ${await res.text()}`);
+  return ProductsBody.parse(await res.json()).products;
 }
 
 /**

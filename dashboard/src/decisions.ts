@@ -13,7 +13,7 @@ import {
   type ProposeBody,
   type ReasonBody,
 } from "@warden/contracts";
-import { callWarden, parsed, type GetToken, type Refused } from "./api.ts";
+import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
 
 /**
  * The decisions a Lead may take on `finding` now, in the card's order: the Status rule the server checks (the
@@ -56,14 +56,6 @@ export type ActionResult<T> =
    */
   | { kind: "conflict"; error: string | null }
   | Refused;
-
-/** A refusal's `error`: the server's words for it, or null when its body has none. */
-async function serverError(res: Response): Promise<string | null> {
-  const body: unknown = await res.json().catch(() => null);
-  const error =
-    typeof body === "object" && body !== null ? (body as { error?: unknown }).error : null;
-  return typeof error === "string" && error.trim() !== "" ? error : null;
-}
 
 /**
  * The candidates Mark moved may merge into `finding`, as the server checks them: Open, not merged into another, and

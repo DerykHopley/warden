@@ -1,6 +1,9 @@
-// The Products page's calls: GET /api/products and GET /api/patch/frameworks, each answer read into what the page shows.
+// The Products page's calls: GET /api/products, GET /api/patch/frameworks, and a Product's save (POST or PUT), each
+// answer read into what the page shows; and the save limit's words.
+import type { ProductInput } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchFrameworks, fetchProducts } from "../src/products.ts";
+import { tryAgainIn } from "../src/api.ts";
+import { fetchFrameworks, fetchProducts, saveProduct } from "../src/products.ts";
 import { callsTo, fetchMock, json } from "./fake-api.ts";
 
 const getToken = async () => "session-token" as string | null;
@@ -77,5 +80,95 @@ describe("fetchFrameworks", () => {
   it("reads any other answer as not answering", async () => {
     answers(json(500, { error: "Something went wrong" }));
     expect(await fetchFrameworks(getToken)).toEqual({ kind: "not-answering" });
+  });
+});
+
+describe("saveProduct", () => {
+  const input: ProductInput = {
+    name: product.name,
+    repo_urls: product.repo_urls,
+    dependencies: [
+      { framework: "langflow", version: "1.4.0", usage: "self_hosted", internet_facing: true },
+    ],
+  };
+
+  it("POSTs a new Product to /api/products and reads its 201 as saved", async () => {
+    answers(json(201, product));
+
+    expect(await saveProduct(getToken, null, input)).toEqual({ kind: "saved", product });
+    const [init] = callsTo("/api/products").map(([, init]) => init);
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(input);
+  });
+
+  it("PUTs a change to /api/products/:id, its id encoded, and reads its 200 as saved", async () => {
+    answers(json(200, { ...product, id: "prod/1" }));
+
+    expect(await saveProduct(getToken, "prod/1", input)).toEqual({
+      kind: "saved",
+      product: { ...product, id: "prod/1" },
+    });
+    const [init] = callsTo("/api/products/prod%2F1").map(([, init]) => init);
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual(input);
+  });
+
+  it.each([
+    [
+      400,
+      { error: "dependencies.0.version: a version has no spaces in it, such as 1.4.0" },
+      {
+        kind: "invalid",
+        error: "dependencies.0.version: a version has no spaces in it, such as 1.4.0",
+      },
+    ],
+    [403, { error: "Your Role can't do this" }, { kind: "forbidden" }],
+    [404, { error: "No such Product" }, { kind: "not-found" }],
+    [
+      409,
+      { error: 'Another Product in this Team is already called "Chat assistant"' },
+      {
+        kind: "conflict",
+        error: 'Another Product in this Team is already called "Chat assistant"',
+      },
+    ],
+    [409, {}, { kind: "conflict", error: null }],
+    [401, { error: "Not signed in" }, { kind: "session-ended" }],
+  ])("reads a %i into its kind", async (status, body, result) => {
+    answers(json(status, body));
+    expect(await saveProduct(getToken, "prod_1", input)).toEqual(result);
+  });
+
+  it("reads a 429 into too many attempts, with Retry-After's seconds", async () => {
+    answers(json(429, { error: "Too many Product saves" }, { "Retry-After": "30" }));
+    expect(await saveProduct(getToken, null, input)).toEqual({
+      kind: "too-many-attempts",
+      retryAfter: 30,
+    });
+  });
+
+  it("reads a 2xx whose body isn't a Product as maybe saved", async () => {
+    answers(json(201, { ...product, usage: "everywhere" }));
+    expect(await saveProduct(getToken, null, input)).toEqual({ kind: "maybe-saved" });
+  });
+
+  it("reads no answer as maybe saved", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    expect(await saveProduct(getToken, null, input)).toEqual({ kind: "maybe-saved" });
+  });
+});
+
+describe("tryAgainIn", () => {
+  it("names what was done too often, when told", () => {
+    expect(tryAgainIn(30, "changes to Products")).toBe(
+      "Too many changes to Products. Try again in 30 seconds.",
+    );
+    expect(tryAgainIn(null, "changes to Products")).toBe(
+      "Too many changes to Products. Try again in a minute.",
+    );
+  });
+
+  it("says sign-in attempts when not told", () => {
+    expect(tryAgainIn(30)).toBe("Too many sign-in attempts. Try again in 30 seconds.");
   });
 });
