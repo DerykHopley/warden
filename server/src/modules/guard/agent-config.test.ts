@@ -547,6 +547,17 @@ describe("guard/permission-skip", () => {
       `exec claude -p x ${FLAG}`,
       `command claude -p x ${FLAG}`,
       `time claude -p x ${FLAG}`,
+      // The reserved word `time` takes one `-p`, then one `--`, before its command word.
+      `time -p claude -p x ${FLAG}`,
+      `! time -p claude -p x ${FLAG}`,
+      `if time -p claude -p x ${FLAG}; then :; fi`,
+      `time -p env claude -p x ${FLAG}`,
+      `time -p -- claude -p x ${FLAG}`,
+      `time -- claude -p x ${FLAG}`,
+      `x=1 time -p claude -p x ${FLAG}`,
+      // The `time` program by path is a wrapper.
+      `/usr/bin/time -p claude -p x ${FLAG}`,
+      `/usr/bin/time -f %e claude -p x ${FLAG}`,
       `echo y | xargs claude -p x ${FLAG}`,
       `sudo -u bob claude -p x ${FLAG}`,
       `pnpm dlx @anthropic-ai/claude-code -p x ${FLAG}`,
@@ -666,6 +677,10 @@ describe("guard/permission-skip", () => {
     ["reads a file named claude", `cat /usr/bin/claude ${FLAG}`],
     ["echoes a reserved word, then claude", `echo then claude -p x ${FLAG}`],
     ["echoes a wrapper, then claude", `echo env claude -p x ${FLAG}`],
+    ["times an echo of claude", `time echo claude -p x ${FLAG}`],
+    ["times an echo of claude with -p", `time -p echo claude -p x ${FLAG}`],
+    // Bash reads the second `-p` as the command word.
+    ["times a command named -p", `time -p -p claude -p x ${FLAG}`],
     [
       "echoes claude with the flag, then runs claude without it",
       `echo claude ${FLAG}; claude -p y`,
