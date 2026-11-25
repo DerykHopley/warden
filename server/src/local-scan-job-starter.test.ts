@@ -30,11 +30,11 @@ function fakeSpawn() {
   return { calls, child, spawn };
 }
 
-function starter(spawn: Spawn) {
+function starter(spawn: Spawn, env: NodeJS.ProcessEnv = SERVER_ENV) {
   const lines: string[] = [];
   const start = localScanJobStarter({
     logger: createLogger((line) => lines.push(line)),
-    env: SERVER_ENV,
+    env,
     spawn,
   });
   return { start, lines };
@@ -70,6 +70,29 @@ describe("localScanJobStarter", () => {
         },
       },
     ]);
+  });
+
+  it("hands on the GitHub App's client id and private key, never its client secret", async () => {
+    const fake = fakeSpawn();
+    const { start } = starter(fake.spawn, {
+      ...SERVER_ENV,
+      GITHUB_APP_CLIENT_ID: "Iv23li-client-id-value",
+      GITHUB_APP_PRIVATE_KEY:
+        "-----BEGIN RSA PRIVATE KEY-----\nthe-key\n-----END RSA PRIVATE KEY-----\n",
+      GITHUB_APP_CLIENT_SECRET: "never-handed-on",
+    });
+
+    const started = start({ scanId: "scan-1", team: "org_a" });
+    fake.child.emit("spawn");
+    await started;
+
+    expect(fake.calls).toHaveLength(1);
+    const env = fake.calls[0]!.env;
+    expect(env).toMatchObject({
+      GITHUB_APP_CLIENT_ID: "Iv23li-client-id-value",
+      GITHUB_APP_PRIVATE_KEY: expect.stringContaining("the-key"),
+    });
+    expect(env).not.toHaveProperty("GITHUB_APP_CLIENT_SECRET");
   });
 
   it("is refused when the process can't be started", async () => {

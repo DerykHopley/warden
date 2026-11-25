@@ -10,7 +10,7 @@ export type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 export type Answer = { status: number; ok: boolean; body: unknown };
 
 /** Whether `error` is the call's signal firing: its timeout, or an abort. */
-const timedOut = (error: unknown) =>
+export const timedOut = (error: unknown) =>
   error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 
 /**

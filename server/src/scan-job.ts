@@ -11,7 +11,11 @@
 // - WARDEN_SCAN_ID and WARDEN_TEAM name the Scan; either missing or blank exits 1 before connecting.
 // - The pool is the PG* variables', as the app role, with the server's role check on connect: a role that can get
 //   around row-level security exits 1, naming the role and why.
-// - It needs no Clerk variable and no admin password. Exit 0 when the Scan is done; 1 otherwise.
+// - GITHUB_APP_CLIENT_ID and GITHUB_APP_PRIVATE_KEY give Guard its RepoReader; one without the other, or a key that
+//   isn't RSA, exits 1 before connecting, naming the variables. Neither set, a Guard Scan fails.
+// - It needs no Clerk variable, no admin password and no GitHub client secret. Exit 0 when the Scan is done; 1
+//   otherwise.
+import { ConfigError, gitHubReaderSettings, type GitHubReaderSettings } from "./config.ts";
 import { createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings, type Findings } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -22,7 +26,7 @@ import {
   type Scanners,
   type Scans,
 } from "./scans.ts";
-import { MOVE_RULES, scanners } from "./wiring.ts";
+import { gitHubRepoReader, MOVE_RULES, scanners } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
 export async function runScanJob({
@@ -147,6 +151,16 @@ async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
     });
     return 1;
   }
+  let github: GitHubReaderSettings | undefined;
+  try {
+    github = gitHubReaderSettings(env);
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    logger.error(`scan job failed before connecting: ${error.message}`, {
+      variables: error.variables,
+    });
+    return 1;
+  }
   const pool = createPool(logger, {
     max: 2,
     onConnect: guardDatabaseRole(({ role, reason }) => {
@@ -163,9 +177,14 @@ async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
       scanId,
       team,
       scans: createScans({ withTeam }),
-      // ADR 0005: the modules come in here, as in index.ts. No RepoReader yet (slice 3b), so a Guard Scan fails.
+      // ADR 0005: the modules come in here, as in index.ts. Without GitHub's settings there's no RepoReader, so a
+      // Guard Scan fails.
       findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
-      scanners: scanners({ withTeam, logger }),
+      scanners: scanners({
+        withTeam,
+        reader: github && gitHubRepoReader(github, logger),
+        logger,
+      }),
       logger,
     });
   } catch (error) {

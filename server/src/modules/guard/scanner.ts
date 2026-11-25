@@ -1,8 +1,9 @@
 // Guard's scanner (Guard spec, stories 3, 4 and 15): reads each of a Scan's repos through the RepoReader and reports
 // what the Default Pack's Rules find in its files. A repo it can't read fails the whole Scan, so nothing is reconciled:
 // a partial Scan would mark the unread repo's Findings Fixed. A file whose path a Finding's Location can't hold (too
-// long, a `\`, a drive letter) is skipped rather than failing the Scan. The log gets counts only, never a path, a
-// file's text or a match.
+// long, a `\`, a drive letter) is skipped rather than failing the Scan. A file the reader couldn't read as text (too
+// large, binary, not UTF-8) is reported unread, so its Findings stay as they are. The log gets counts only, never a
+// path, a file's text or a match.
 import { assetKey, Location } from "@warden/contracts";
 import type { Logger } from "../../log.ts";
 import type { Scanner } from "../../scans.ts";
@@ -41,6 +42,7 @@ export function guardScanner({
         if (repo === undefined) throw new Error(`${asset.ref} isn't one of the Team's repos`);
         let files = 0;
         let skipped = 0;
+        let unread = 0;
         let observations = 0;
         for await (const file of reader.readRepo(repo.installationId, {
           ref: repo.ref,
@@ -49,6 +51,12 @@ export function guardScanner({
           files += 1;
           if (!Location.safeParse({ kind: "file", path: file.path }).success) {
             skipped += 1;
+            continue;
+          }
+          if (!("text" in file)) {
+            // Its text is unknown, so the Findings in it stay as they are rather than being marked Fixed.
+            recorder.unread(asset, file.path);
+            unread += 1;
             continue;
           }
           for (const observation of secretObservations(asset, file)) {
@@ -62,6 +70,7 @@ export function guardScanner({
           repo: asset.ref,
           files,
           skipped,
+          unread,
           observations,
         });
       }

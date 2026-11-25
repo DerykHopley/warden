@@ -4,10 +4,17 @@ import type { GitHubRepo } from "./github.ts";
 /** One of a repo's text files: its path relative to the repo, and its text. */
 export type RepoFile = { path: string; text: string };
 
+/**
+ * One of a repo's files whose text the reader couldn't read (too large, binary, not UTF-8): what it holds now is
+ * unknown, so the Findings in it stay as they are.
+ */
+export type UnreadFile = { path: string; unread: true };
+
 export interface RepoReader {
   /**
-   * The repo's text files, one at a time, read through the installation the Team linked. Throws, before or during the
-   * files, when the repo can't be read: a Scan reads a repo whole or not at all.
+   * The repo's files, one at a time, read through the installation the Team linked: each text file, and each file it
+   * couldn't read as text. Throws, before or during the files, when the repo can't be read: a Scan reads a repo whole
+   * or not at all.
    */
-  readRepo(installationId: number, repo: GitHubRepo): AsyncIterable<RepoFile>;
+  readRepo(installationId: number, repo: GitHubRepo): AsyncIterable<RepoFile | UnreadFile>;
 }
