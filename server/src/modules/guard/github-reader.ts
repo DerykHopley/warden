@@ -3,12 +3,11 @@
 // tarball with it, and yields its text files one at a time through the tar reader. Nothing touches disk. The token is
 // dropped after the repo; it, the App's JWT and the download URL GitHub redirects to (which carries its own token) are
 // never logged, stored or put in an error. It needs the App's client id and private key, never its client secret.
-//
-// It signs its own App JWT, the same RS256 shape as `github.ts`'s, so that file is left as it is here.
-import { createPrivateKey, sign, type KeyObject } from "node:crypto";
+import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
 import { CallFailed, callJson, timedOut, type Answer, type Fetch } from "../../http-call.ts";
 import type { Logger } from "../../log.ts";
+import { signAppJwt } from "./app-jwt.ts";
 import { GitHubInstallationUnreachable, GitHubUnavailable, type GitHubRepo } from "./github.ts";
 import type { RepoReader } from "./repo-reader.ts";
 import { newArchiveCounts, readTarball } from "./tarball.ts";
@@ -32,18 +31,6 @@ const ARCHIVE_TIMEOUT_MS = 5 * 60_000;
 const REPO_URL = /^https:\/\/github\.com\/([A-Za-z0-9_-]{1,100})\/([A-Za-z0-9._-]{1,100})$/;
 
 const InstallationToken = z.object({ token: z.string().min(1) });
-
-const base64url = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-
-/**
- * The App's JWT (GitHub's "Generating a JSON Web Token"): RS256, issued by the client id 60 s in the past against
- * clock drift, expiring 10 minutes after that, so within the 10 minutes GitHub allows.
- */
-function appJwt(clientId: string, key: KeyObject): string {
-  const now = Math.floor(Date.now() / 1000);
-  const input = `${base64url({ alg: "RS256", typ: "JWT" })}.${base64url({ iat: now - 60, exp: now + 540, iss: clientId })}`;
-  return `${input}.${sign("sha256", Buffer.from(input), key).toString("base64url")}`;
-}
 
 const apiHeaders = (token: string) => ({
   Accept: "application/vnd.github+json",
@@ -130,7 +117,7 @@ export function createGitHubReader({
         url: `${API}/app/installations/${installationId}/access_tokens`,
         init: {
           method: "POST",
-          headers: { ...apiHeaders(appJwt(clientId, key)), "Content-Type": "application/json" },
+          headers: { ...apiHeaders(signAppJwt(clientId, key)), "Content-Type": "application/json" },
           body: JSON.stringify({
             repository_ids: [repo.githubId],
             permissions: { contents: "read" },
