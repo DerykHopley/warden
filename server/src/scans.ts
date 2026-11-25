@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { sql, type Selectable, type Transaction } from "kysely";
 import { ScanBody, type Asset, type Module, type RuleId, type ScanState } from "@warden/contracts";
 import type { ScanRecorder } from "./findings/index.ts";
+import type { Logger } from "./log.ts";
 import type { Database } from "./schema.ts";
 import type { WithTeam } from "./with-team.ts";
 
@@ -101,6 +102,62 @@ export interface Scans {
     id: string,
     state: Exclude<ScanState, "queued">,
   ): Promise<ScanBody | undefined>;
+}
+
+/**
+ * What `startScan` did: started the queued Scan's Job; couldn't tell whether it started, so the Scan stays queued;
+ * couldn't start it, so the Scan was moved to failed (the queued Scan when the move answered nothing or threw); or
+ * refused it as `queue` does, queuing and starting nothing.
+ */
+export type StartOutcome =
+  | { kind: "started"; scan: ScanBody }
+  | { kind: "start_unknown"; scan: ScanBody }
+  | { kind: "start_failed"; scan: ScanBody }
+  | Extract<QueueOutcome, { kind: "rate_limited" }>;
+
+/**
+ * Queues one Scan for the Team, then starts its Job with only the Scan's id and Team (ADR 0009). Shared by a Lead's
+ * start and the first Scan after a link. A `queue` that throws throws here, with nothing started.
+ */
+export async function startScan(
+  { scans, startScanJob, logger }: { scans: Scans; startScanJob: ScanJobStarter; logger: Logger },
+  team: string,
+  input: Parameters<Scans["queue"]>[1],
+): Promise<StartOutcome> {
+  const queued = await scans.queue(team, input);
+  if (queued.kind === "rate_limited") return queued;
+  const scanId = queued.scan.id;
+  try {
+    await startScanJob({ scanId, team });
+  } catch (error) {
+    // The Job may have started: the Scan stays queued, and whoever asked follows it rather than start another.
+    if (error instanceof ScanJobStartUnknown) {
+      logger.warn("The Scan Job's start is unknown; the Scan stays queued", {
+        scanId,
+        team,
+        error,
+      });
+      return { kind: "start_unknown", scan: queued.scan };
+    }
+    // Logged before the move, so a failed move can't hide why the start failed.
+    logger.error("The Scan Job couldn't be started; marking the Scan failed", {
+      scanId,
+      team,
+      error,
+    });
+    let moved: ScanBody | undefined;
+    try {
+      moved = await scans.move(team, scanId, "failed");
+    } catch (moveError) {
+      logger.error("The Scan couldn't be marked failed; it stays queued", {
+        scanId,
+        team,
+        error: moveError,
+      });
+    }
+    return { kind: "start_failed", scan: moved ?? queued.scan };
+  }
+  return { kind: "started", scan: queued.scan };
 }
 
 /**

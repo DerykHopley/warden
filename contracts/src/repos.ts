@@ -2,6 +2,7 @@
 // named by GitHub's URL for it. The Team comes from the session, never the request, and isn't answered.
 import { z } from "zod";
 import { Asset, DateTime } from "./finding.ts";
+import { ScanBody } from "./scans.ts";
 
 /** A GitHub installation's id: GitHub's are positive integers. */
 const InstallationId = z.number().int().positive();
@@ -39,9 +40,14 @@ export const GitHubAppBody = z.strictObject({
 });
 export type GitHubAppBody = z.infer<typeof GitHubAppBody>;
 
-/** The link's answer (201): the installation and its Repo Assets, the repos the linking person can read in it. */
+/**
+ * The link's answer (201): the installation and its Repo Assets, the repos the linking person can read in it, and the
+ * first Scan of them the link started (story 2): `null` when it started none, as for a link of no repos or a Team at
+ * its hourly Scan limit.
+ */
 export const LinkedInstallationBody = z.strictObject({
   installation_id: InstallationId,
   repos: z.array(RepoAssetBody),
+  scan: ScanBody.nullable(),
 });
 export type LinkedInstallationBody = z.infer<typeof LinkedInstallationBody>;

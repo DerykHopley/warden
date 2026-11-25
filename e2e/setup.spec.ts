@@ -32,7 +32,7 @@ test("an Admin installs the app, signs in with GitHub and links installation 42 
     linkCalls.push(route.request().postDataJSON());
     return route.fulfill({
       status: 201,
-      json: { installation_id: 42, repos: [repo("web"), repo("api")] },
+      json: { installation_id: 42, repos: [repo("web"), repo("api")], scan: null },
     });
   });
 
