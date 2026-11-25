@@ -6,6 +6,7 @@
 // Every page, opened directly at each width and scheme, scrolls nothing sideways: Products in Cedar (its Products
 // stay out of Acme's Findings counts), the rest as Grace in Acme.
 import type { Locator, Page } from "@playwright/test";
+import { cedarCveFinding, openCveCard } from "./cedar-cve.ts";
 import {
   ACME,
   CEDAR,
@@ -256,6 +257,33 @@ for (const scheme of SCHEMES) {
         await expectNoSidewaysScroll(page);
       });
     }
+  }
+}
+
+// A Cedar CVE Finding's card, its Patch section loaded (the assessment's reason, reasons and links are the card's
+// longest text): floating at each width, and pinned where pinning is offered.
+for (const width of WIDTHS) {
+  for (const state of PANEL_STATES[width].filter((s) => s !== "closed")) {
+    test(
+      `at ${width}px, with the panel ${state} and a CVE Finding's Patch section shown, nothing scrolls sideways`,
+      SIGNS_IN_ITSELF,
+      async ({ page, signIn }) => {
+        const finding = await cedarCveFinding();
+        await signIn(HEDY, CEDAR);
+        await page.addInitScript(
+          (stored) => localStorage.setItem("warden.askWardenPanel", stored),
+          JSON.stringify({ mode: state === "pinned" ? "pinned" : "closed", width: 680 }),
+        );
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto("/findings");
+        await openCveCard(page, finding);
+        await expect(page.locator(".ask-warden")).toHaveAttribute(
+          "data-shown",
+          state === "floating" && width < 640 ? "full-screen" : state,
+        );
+        await expectNoSidewaysScroll(page);
+      },
+    );
   }
 }
 

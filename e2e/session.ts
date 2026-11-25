@@ -87,6 +87,18 @@ export const CHAT_ASSISTANT: ProductInput = {
   ],
 };
 
+/**
+ * Cedar's Product on a LangChain version with CVEs in the loaded snapshot, so it has open CVE Findings for the detail
+ * card's Patch section. Its own name: products.spec.ts deletes and saves "Hedy's LangChain app" again each run.
+ */
+export const LANGCHAIN_SERVICE: ProductInput = {
+  name: "Cedar's LangChain service",
+  repo_urls: [],
+  dependencies: [
+    { framework: "langchain", version: "0.0.200", usage: "library", internet_facing: true },
+  ],
+};
+
 /** A v2 session token for `person` in `team`, as Clerk writes one: `o.rol` without the `org:` prefix. */
 export async function sessionToken(
   key: CryptoKey | Uint8Array,
@@ -165,7 +177,7 @@ export async function removeProducts(team: Team, names: readonly string[]) {
 }
 
 /** The server's origin and the headers that call the API as `team`'s Admin. */
-async function asAdmin(team: Team) {
+export async function asAdmin(team: Team) {
   const origin = process.env.E2E_BASE_URL;
   if (!origin) throw new Error("E2E_BASE_URL is unset: run the browser tests with `pnpm e2e`");
   const token = await sessionToken(await signingKey(), origin, team.admin, team, "admin");
