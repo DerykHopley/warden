@@ -108,7 +108,8 @@ async function migrationsUpTo(last: string) {
  * A migrated database of a test file's own, with a pool and a `withTeam` as each of `roles`: for a file that locks a
  * table other files write (a truncate, a drop), which on the suite's shared database can deadlock them. With
  * `upTo`, it is migrated only up to that shipped migration first, `before` writes data as that schema held it, and
- * then the later migrations run: what an upgrade does to stored data. `end` closes the pools and drops the database.
+ * then the later migrations run: what an upgrade does to stored data. `name` is the database's, for a command run as
+ * its own process. `end` closes the pools and drops the database.
  * Making it waits on a checkpoint: the hook passes a 30 s timeout.
  */
 export async function ownDatabase<R extends DatabaseRole>(
@@ -143,7 +144,7 @@ export async function ownDatabase<R extends DatabaseRole>(
       await older.remove();
     }
   }
-  return { pools, withTeamAs, end };
+  return { name: database.name, pools, withTeamAs, end };
 }
 
 /** A name for a test database or test role: the prefix, when, in seconds, then 12 hex digits. A test role may add a

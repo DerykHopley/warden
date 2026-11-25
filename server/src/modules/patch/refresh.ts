@@ -5,11 +5,19 @@
  * Scan, of a Product the Team doesn't have, turns them Fixed (reconcile fixes an unseen Accepted Finding as it does an
  * Open one). Each Scan reads the Product under the Team's Findings lock, so a Product changed between the lists here
  * and its Scan is scanned as it is then.
+ *
+ * The sweep takes only refs that are UUIDs: `createProducts` gives every Product one, so any other ref was never a
+ * Product and can't be a deleted one. The demo seed's made-up `product` Asset (`shop`, in `@warden/contracts/demo`)
+ * is such a ref; a Scan of it would turn its Findings Fixed, so it is skipped, without a Scan or a log line. A Product
+ * that exists is scanned whatever its id.
  */
 import type { Findings } from "../../findings/index.ts";
 import type { Logger } from "../../log.ts";
 import type { Products } from "./products.ts";
 import type { PatchScan } from "./scan.ts";
+
+/** A UUID's shape, any version, as `randomUUID` writes it or in capitals. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** One Team's counts: Scans that completed, and Scans that threw. */
 export type PatchRefreshCounts = { productsScanned: number; productsFailed: number };
@@ -41,7 +49,7 @@ export function createPatchRefresh({
         kind: "product",
         statuses: ["open", "accepted"],
       });
-      for (const ref of swept) ids.add(ref);
+      for (const ref of swept) if (UUID.test(ref)) ids.add(ref);
       const counts: PatchRefreshCounts = { productsScanned: 0, productsFailed: 0 };
       for (const id of ids) {
         try {
