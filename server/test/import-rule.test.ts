@@ -1,5 +1,5 @@
 // ADR 0005's import rule, through ESLint's Node API on the repo's own config: shared code never imports a module, by
-// a static import or a dynamic import(). The start-up file wires the modules in, so it may.
+// a static import or a dynamic import(). The wiring and the start-up files wire the modules in, so they may.
 import { fileURLToPath } from "node:url";
 import { ESLint } from "eslint";
 import { describe, expect, it } from "vitest";
@@ -56,6 +56,14 @@ describe("ADR 0005's import rule", () => {
     const code =
       'import { guardMoveRule } from "./modules/guard/move-rule.ts";\nvoid guardMoveRule;\n';
     expect(await lint(code, "server/src/shared.ts")).toEqual([expect.stringMatching(ADR_0005)]);
+  });
+
+  it("points a refused import at the wiring, where the modules are wired in", async () => {
+    const code =
+      'import { guardMoveRule } from "./modules/guard/move-rule.ts";\nvoid guardMoveRule;\n';
+    const [message] = await lint(code, "server/src/shared.ts");
+    expect(message).toContain("server/src/wiring.ts");
+    expect(message).not.toContain("in server/src/index.ts");
   });
 
   it.each(Object.entries(dynamicImports))(

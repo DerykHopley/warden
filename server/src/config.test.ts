@@ -87,6 +87,26 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...env, K_SERVICE: "warden" })).toThrow(/CLERK_AUTHORIZED_PARTIES/);
   });
 
+  it("reads the Scan Job's resource name, and leaves it undefined when unset or empty", () => {
+    const name = "projects/p/locations/europe-west1/jobs/warden-scan";
+    expect(loadConfig({ ...env, WARDEN_SCAN_JOB: name }).scanJob).toBe(name);
+    expect(loadConfig(env).scanJob).toBeUndefined();
+    expect(loadConfig({ ...env, WARDEN_SCAN_JOB: "" }).scanJob).toBeUndefined();
+  });
+
+  it.each([
+    ["a bare job name", "warden-scan"],
+    ["a URL", "https://run.googleapis.com/v2/projects/p/locations/europe-west1/jobs/warden-scan"],
+  ])("refuses a Scan Job named by %s, naming only WARDEN_SCAN_JOB", (_name, value) => {
+    try {
+      loadConfig({ ...env, WARDEN_SCAN_JOB: value });
+      expect.unreachable();
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigError);
+      expect((error as ConfigError).variables).toEqual(["WARDEN_SCAN_JOB"]);
+    }
+  });
+
   it.each([
     ["a path", "https://warden.example/app"],
     ["no scheme", "warden.example"],

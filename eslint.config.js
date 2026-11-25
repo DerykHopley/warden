@@ -4,7 +4,7 @@ import reactHooks from "eslint-plugin-react-hooks";
 import globals from "globals";
 
 const MODULE_IMPORT_MESSAGE =
-  "shared code never imports a module (ADR 0005): wire Guard, Patch and Vouch in server/src/index.ts";
+  "shared code never imports a module (ADR 0005): wire Guard, Patch and Vouch in server/src/wiring.ts, which the start-up files (index.ts, seed.ts, scan-job.ts) import";
 const LITERAL_PATH_MESSAGE =
   "shared code imports by a literal path only (ADR 0005): lint can't follow a computed import() or createRequire to tell whether it reaches a module";
 /** The ADR 0005 pattern, `(^|/)modules(/|$)`, as an esquery regex. */

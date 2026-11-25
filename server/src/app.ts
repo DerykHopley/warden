@@ -39,7 +39,13 @@ import {
 import { teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
-import { SCANS_PER_HOUR, type ScanJobStarter, type Scanners, type Scans } from "./scans.ts";
+import {
+  SCANS_PER_HOUR,
+  ScanJobStartUnknown,
+  type ScanJobStarter,
+  type Scanners,
+  type Scans,
+} from "./scans.ts";
 import { securityHeaders } from "./security-headers.ts";
 import { clientAddress, createSignInLimit } from "./sign-in-limit.ts";
 
@@ -415,6 +421,15 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     try {
       await deps.startScanJob({ scanId, team });
     } catch (error) {
+      // The Job may have started: the Scan stays queued, and the Lead follows it rather than start another.
+      if (error instanceof ScanJobStartUnknown) {
+        logger.warn("The Scan Job's start is unknown; the Scan stays queued", {
+          scanId,
+          team,
+          error,
+        });
+        return c.json(queued.scan satisfies ScanBody, 202);
+      }
       // Logged before the move, so a failed move can't hide why the start failed.
       logger.error("The Scan Job couldn't be started; marking the Scan failed", {
         scanId,

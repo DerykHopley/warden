@@ -6,7 +6,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import type { Logger } from "./log.ts";
-import type { ScanJobStarter } from "./scans.ts";
+import { SCAN_ID_VARIABLE, TEAM_VARIABLE, type ScanJobStarter } from "./scans.ts";
 
 /** The part of `child_process.spawn` the starter calls, so a test can hand it a fake. */
 export type Spawn = (
@@ -42,7 +42,7 @@ export function localScanJobStarter({
   return ({ scanId, team }) =>
     new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [SCAN_JOB], {
-        env: { ...jobVariables(env), WARDEN_SCAN_ID: scanId, WARDEN_TEAM: team },
+        env: { ...jobVariables(env), [SCAN_ID_VARIABLE]: scanId, [TEAM_VARIABLE]: team },
         // Its log lines go where the server's go.
         stdio: "inherit",
       });

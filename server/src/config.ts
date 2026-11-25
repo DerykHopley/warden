@@ -11,6 +11,9 @@ function frontendApiHost(publishableKey: string): string | undefined {
   return /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host) ? host : undefined;
 }
 
+/** A Cloud Run Job's resource name: the project (its id or number), the region and the job. */
+const JOB_NAME = /^projects\/[a-z0-9.:-]+\/locations\/[a-z0-9-]+\/jobs\/[a-z0-9-]+$/;
+
 const required = z.string().min(1);
 const optional = z
   .string()
@@ -44,6 +47,10 @@ const Env = z.object({
   }),
   /** Cloud Run sets it in every container it runs (its container contract). */
   K_SERVICE: optional,
+  /** The Scan Job's resource name (ADR 0009), which the Cloud Run starter runs. */
+  WARDEN_SCAN_JOB: optional.refine((value) => value === undefined || JOB_NAME.test(value), {
+    message: "isn't projects/<project>/locations/<region>/jobs/<job>",
+  }),
 });
 
 /** `https://host[:port]` and nothing more: what a token's `azp` holds. */
@@ -62,6 +69,8 @@ export type Config = {
   port: number;
   /** On Cloud Run, the client's address comes from X-Forwarded-For (see `clientAddress`). */
   behindCloudRun: boolean;
+  /** The Scan Job on Cloud Run, `projects/<project>/locations/<region>/jobs/<job>`; unset, Scans start another way. */
+  scanJob: string | undefined;
   clerk: {
     secretKey: string;
     jwtKey: string | undefined;
@@ -97,6 +106,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   return {
     port: data.PORT,
     behindCloudRun,
+    scanJob: data.WARDEN_SCAN_JOB,
     clerk: {
       secretKey: data.CLERK_SECRET_KEY,
       jwtKey: data.CLERK_JWT_KEY,
