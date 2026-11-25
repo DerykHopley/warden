@@ -469,6 +469,16 @@ describe("GET /api/scans/:id: any person in the Team reads a Scan", () => {
     });
   });
 
+  it("answers 404 for an id holding a NUL, as for one the Team doesn't have (#129)", async () => {
+    const team = await newTeam();
+    const { app } = scanApp();
+
+    expect(await read(app, team, "%00")).toMatchObject({
+      status: 404,
+      body: { error: "No such Scan" },
+    });
+  });
+
   it("answers 404 to another Team asking for this Team's Scan (story 15)", async () => {
     const teamA = await newTeam();
     const teamB = await newTeam();
