@@ -1,12 +1,16 @@
 // docs/design.md, Accessibility floor, on the Findings page and its Ask Warden panel: the keyboard reaches each card,
 // filter tab and row (the button in its title cell), then the panel's controls, in order, and leaves them; focus shows a
-// visible ring; and touch targets are at least 44 by 44px at phone width.
+// visible ring; and touch targets are at least 44 by 44px at phone width. On the Products page (in Cedar), the same for
+// its Repo URL links.
 import type { Page } from "@playwright/test";
 import { expectRings, expectTargets } from "./a11y.ts";
-import { expect, GRACE, test } from "./session.ts";
+import { CEDAR, CHAT_ASSISTANT, ensureProduct, expect, GRACE, KATHERINE, test } from "./session.ts";
 
-test.beforeEach(async ({ signIn }) => {
-  await signIn(GRACE);
+/** Tags a test that signs in to Cedar itself (the Products page), so the sign-in below leaves it alone. */
+const IN_CEDAR = { tag: "@cedar" };
+
+test.beforeEach(async ({ signIn }, testInfo) => {
+  if (!testInfo.tags.includes(IN_CEDAR.tag)) await signIn(GRACE);
 });
 
 async function open(page: Page, width: number) {
@@ -156,12 +160,34 @@ test("at 390px, every card, filter tab, row, page link and the Level line's link
       return { what: el.textContent?.slice(0, 30), width: box.width, height: box.height };
     }),
   );
-  expect(sizes.length).toBe(5 + 14 + 7 + 3 + 1 + 1);
+  expect(sizes.length).toBe(5 + 14 + 7 + 4 + 1 + 1);
   for (const size of sizes) {
     expect(size.width, size.what).toBeGreaterThanOrEqual(44);
     expect(size.height, size.what).toBeGreaterThanOrEqual(44);
   }
 });
+
+test(
+  "on Products at 390px, the Products page link and each Repo URL link are at least 44 by 44px, and a Repo URL link shows a ring",
+  IN_CEDAR,
+  async ({ page, signIn }) => {
+    await ensureProduct(CEDAR, CHAT_ASSISTANT);
+    await signIn(KATHERINE, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const repoLinks = page
+      .locator(".product", { hasText: "Chat assistant" })
+      .getByRole("list", { name: "Repo URLs" })
+      .getByRole("link");
+    await expect(repoLinks).toHaveCount(2);
+
+    await expectTargets([
+      page.getByRole("navigation", { name: "Pages" }).getByRole("link", { name: "Products" }),
+      ...(await repoLinks.all()),
+    ]);
+    await expectRings(page, [repoLinks.first()]);
+  },
+);
 
 test("at 390px, the panel's button, ✕, card's ✕, a Member's Propose buttons, input and Send are each at least 44 by 44px", async ({
   page,

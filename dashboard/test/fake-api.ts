@@ -15,6 +15,9 @@ export type Routes = {
   findings?: () => Answer;
   proposals?: () => Answer;
   overview?: () => Answer;
+  products?: () => Answer;
+  /** GET /api/patch/frameworks. */
+  frameworks?: () => Answer;
   /** PUT /api/team/members/:userId/role, with the user id and the parsed body. */
   changeRole?: (userId: string, body: unknown) => Answer;
   /**
@@ -41,6 +44,10 @@ export function serve(routes: Routes) {
     if (url === "/api/findings" && method === "GET" && routes.findings) return routes.findings();
     if (url === "/api/proposals" && method === "GET" && routes.proposals) return routes.proposals();
     if (url === "/api/overview" && method === "GET" && routes.overview) return routes.overview();
+    if (url === "/api/products" && method === "GET" && routes.products) return routes.products();
+    if (url === "/api/patch/frameworks" && method === "GET" && routes.frameworks) {
+      return routes.frameworks();
+    }
     const change = /^\/api\/team\/members\/([^/]+)\/role$/.exec(url);
     if (change && method === "PUT" && routes.changeRole) {
       return routes.changeRole(decodeURIComponent(change[1] ?? ""), JSON.parse(String(init?.body)));

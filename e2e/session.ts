@@ -2,6 +2,7 @@
 // setup made (the server trusts its public half through CLERK_JWT_KEY), handed to the dashboard's Clerk stand-in
 // before the page loads.
 import { test as base, type Page } from "@playwright/test";
+import type { ProductInput } from "@warden/contracts";
 import { importJWK, SignJWT, type JWK } from "jose";
 
 /** The Clerk Frontend API host the test publishable key names. Nothing is ever fetched from it. */
@@ -35,9 +36,25 @@ export const MARGARET: Person = {
   email: "margaret@bluebird.test",
 };
 
+export const HEDY: Person = {
+  userId: "user_e2e_hedy",
+  firstName: "Hedy",
+  lastName: "Lamarr",
+  email: "hedy@cedar.test",
+};
+
+export const KATHERINE: Person = {
+  userId: "user_e2e_katherine",
+  firstName: "Katherine",
+  lastName: "Johnson",
+  email: "katherine@cedar.test",
+};
+
 /**
  * Two Teams, each opened by its Admin and seeded with the demo Findings. Acme also has Grace, a Member; Bluebird has
- * Margaret, a Member (only e2e/decisions.spec.ts reads Bluebird, so its decisions can't touch Acme's tests).
+ * Margaret, a Member (only e2e/decisions.spec.ts reads Bluebird, so its decisions can't touch Acme's tests). A third,
+ * Cedar, has no demo Findings: the Products tests create their Products there, as a Product's Scan opens Findings that
+ * would change the counts Acme's and Bluebird's tests read.
  */
 export const ACME = { id: "org_e2e_acme", name: "Acme", admin: ADA, people: [ADA, GRACE] };
 export const BLUEBIRD = {
@@ -47,7 +64,27 @@ export const BLUEBIRD = {
   people: [LINUS, MARGARET],
 };
 
+export const CEDAR = {
+  id: "org_e2e_cedar",
+  name: "Cedar",
+  admin: HEDY,
+  people: [HEDY, KATHERINE],
+};
+
 export type Team = typeof ACME;
+
+/**
+ * Cedar's Product, with two Repo URLs and two dependencies: one with a version and internet-facing, one without either.
+ * Each spec that needs it creates it (`ensureProduct`), so none depends on another's running first.
+ */
+export const CHAT_ASSISTANT: ProductInput = {
+  name: "Chat assistant",
+  repo_urls: ["https://github.com/cedar/chat-assistant", "https://github.com/cedar/chat-infra"],
+  dependencies: [
+    { framework: "langflow", version: "1.4.0", usage: "self_hosted", internet_facing: true },
+    { framework: "litellm", version: null, usage: "transitive", internet_facing: false },
+  ],
+};
 
 /** A v2 session token for `person` in `team`, as Clerk writes one: `o.rol` without the `org:` prefix. */
 export async function sessionToken(
@@ -83,7 +120,28 @@ export async function signingKey() {
   return importJWK(JSON.parse(jwk) as JWK, "RS256");
 }
 
-/** The browser tests' `test`: `baseURL` is the server the global setup started, and `signIn` signs a person in. */
+/**
+ * Creates `product` in `team` through the API, as the Team's Admin. A name the Team already has is left as it is, so a
+ * spec's `beforeAll` can run again in a restarted worker.
+ */
+export async function ensureProduct(team: Team, product: ProductInput) {
+  const origin = process.env.E2E_BASE_URL;
+  if (!origin) throw new Error("E2E_BASE_URL is unset: run the browser tests with `pnpm e2e`");
+  const token = await sessionToken(await signingKey(), origin, team.admin, team, "admin");
+  const res = await fetch(`${origin}/api/products`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(product),
+  });
+  if (res.status === 201) return;
+  // A 409 is also the answer for a Team not opened yet: only the name taken counts as already there.
+  const body = await res.text();
+  if (res.status !== 409 || !body.includes("already called")) {
+    throw new Error(`creating ${product.name} in ${team.name}: ${res.status} ${body}`);
+  }
+}
+
+/** The browser tests' `test`:`baseURL` is the server the global setup started, and `signIn` signs a person in. */
 export const test = base.extend<{
   signIn: (person: Person, team?: Team) => Promise<void>;
 }>({

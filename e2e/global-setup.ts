@@ -1,7 +1,7 @@
 // Before the browser tests: a throwaway Postgres database with every migration, a key pair standing in for Clerk's,
-// the dashboard built in Vite's `e2e` mode, and the real server process on a free port serving that build. Acme and
-// Bluebird are opened through the API as their Admins would (Acme's Member joins too), then filled by the demo seed
-// (`server/src/seed.ts`). Returns the teardown: the server stopped, the database dropped, the build removed.
+// the dashboard built in Vite's `e2e` mode, and the real server process on a free port serving that build. Acme,
+// Bluebird and Cedar are opened through the API as their Admins would (each Team's Member joins too); Acme and Bluebird
+// are then filled by the demo seed (`server/src/seed.ts`). Returns the teardown: the server stopped, the database dropped, the build removed.
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
@@ -13,8 +13,10 @@ import { createMigratedTestDatabase } from "../server/test/databases.ts";
 import {
   ACME,
   BLUEBIRD,
+  CEDAR,
   FRONTEND_API_HOST,
   GRACE,
+  KATHERINE,
   MARGARET,
   sessionToken,
   type Person,
@@ -153,6 +155,9 @@ export default async function globalSetup() {
     await open(GRACE, ACME, "member");
     await open(BLUEBIRD.admin, BLUEBIRD, "admin");
     await open(MARGARET, BLUEBIRD, "member");
+    // Cedar gets no demo seed: the Products tests create its Products.
+    await open(CEDAR.admin, CEDAR, "admin");
+    await open(KATHERINE, CEDAR, "member");
     for (const team of [ACME, BLUEBIRD]) {
       await run(process.execPath, ["server/src/seed.ts", team.id], {
         ...db,
