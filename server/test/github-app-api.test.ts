@@ -1,7 +1,7 @@
 // Story 1 at the API: an Admin's Setup page asks `GET /api/github/app` for what GitHub's links are built from, the
 // App's slug and client id. Through the real app with Guard's routes and the real GitHub client, GitHub faked at
-// `fetch` (spec decision 11), on the suite's shared database. The slug is read from GitHub once per instance; a failed
-// read isn't kept.
+// `fetch` (spec decision 11), on the suite's shared database. The slug is read from GitHub at most once an hour; a
+// failed read isn't kept.
 import { GitHubAppBody } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
@@ -71,11 +71,16 @@ function fakeGitHub(...answers: AppAnswer[]) {
   return { github, calls };
 }
 
-/** The app with Guard's routes, reading through `github` (none: GitHub isn't set up), and every log line it writes. */
-function githubApp(github?: ReturnType<typeof fakeGitHub>["github"]) {
+/**
+ * The app with Guard's routes, reading through `github` (none: GitHub isn't set up) on `now`'s clock, and every log line
+ * it writes.
+ */
+function githubApp(github?: ReturnType<typeof fakeGitHub>["github"], now?: () => number) {
   const guardLines: string[] = [];
   const logger = createLogger((line) => guardLines.push(line));
-  const routes = github ? guardRoutes({ repoAssets, github, logger }) : guardRoutes({ repoAssets });
+  const routes = github
+    ? guardRoutes({ repoAssets, github, logger, now })
+    : guardRoutes({ repoAssets });
   const { app, lines } = testApp({ publicPem, withTeam, moduleRoutes: [routes] });
   return { app, logLines: () => [...lines, ...guardLines] };
 }
@@ -103,6 +108,25 @@ describe("GET /api/github/app: what an Admin's Setup builds GitHub's links from 
     expect(GitHubAppBody.parse(first.body)).toEqual({ slug: SLUG, client_id: CLIENT_ID });
     expect(second).toEqual(first);
     expect(calls).toEqual(["GET https://api.github.com/app"]);
+  });
+
+  it("keeps the slug for an hour, then asks GitHub again", async () => {
+    const team = await newTeam(withTeam);
+    const { github, calls } = fakeGitHub(app200, () =>
+      json({ id: 1, slug: "warden-reader-renamed", name: "Warden reader" }),
+    );
+    let now = Date.parse("2026-11-25T09:00:00Z");
+    const { app } = githubApp(github, () => now);
+
+    await askApp(app, team);
+    now += 3_600_000 - 1;
+    const withinTheHour = await askApp(app, team);
+    now += 1;
+    const afterIt = await askApp(app, team);
+
+    expect(withinTheHour.body).toEqual({ slug: SLUG, client_id: CLIENT_ID });
+    expect(afterIt.body).toEqual({ slug: "warden-reader-renamed", client_id: CLIENT_ID });
+    expect(calls).toHaveLength(2);
   });
 
   it.each([

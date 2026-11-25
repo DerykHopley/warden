@@ -7,7 +7,7 @@ import {
   ReposBody,
   type RepoAssetBody,
 } from "@warden/contracts";
-import { callWarden, parsed, type GetToken, type Refused } from "./api.ts";
+import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
 
 /** 403 and 409 on a Team's call, read as every page reads them. */
 type TeamRefusal = { kind: "no-team" } | { kind: "team-not-opened" };
@@ -53,13 +53,6 @@ export type LinkResult =
 /** The refusals whose words the server gives for a person to read. */
 const SAID = new Set([400, 403, 409, 502, 503]);
 
-/** A refusal's `{ error }`, if it gave one. */
-function errorWords(body: unknown): string | undefined {
-  const error =
-    typeof body === "object" && body !== null && "error" in body ? body.error : undefined;
-  return typeof error === "string" && error !== "" ? error : undefined;
-}
-
 /** `POST /api/github/installations`: links the installation with GitHub's `code` and the attempt's verifier. */
 export async function linkInstallation(
   getToken: GetToken,
@@ -68,8 +61,7 @@ export async function linkInstallation(
   const res = await callWarden(getToken, "/api/github/installations", { method: "POST", body });
   if (!(res instanceof Response)) return res;
   if (SAID.has(res.status)) {
-    const words = errorWords(await res.json().catch(() => null));
-    return { kind: "refused", words: words ?? "Nothing was linked." };
+    return { kind: "refused", words: (await serverError(res)) ?? "Nothing was linked." };
   }
   const linked = await parsed(res, LinkedInstallationBody);
   return linked === undefined
@@ -156,6 +148,18 @@ export function takeAttempt(): SignInAttempt | undefined {
     // Not JSON: no attempt.
   }
   return undefined;
+}
+
+/**
+ * Keeps a taken attempt again, for an attempt whose code never reached Warden (the session had ended), so the callback
+ * can link with it once the person signs in again. Storage that refuses it leaves Connect again from Setup.
+ */
+export function putBackAttempt(attempt: SignInAttempt): void {
+  try {
+    sessionStorage.setItem(ATTEMPT_KEY, JSON.stringify(attempt));
+  } catch {
+    // Nothing kept: the callback says the sign-in didn't start here.
+  }
 }
 
 /** "Too many tries: try again in 2 min", from the 429's Retry-After in seconds; "try again later" without one. */

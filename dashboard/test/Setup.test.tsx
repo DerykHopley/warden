@@ -3,6 +3,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Role } from "@warden/contracts";
+import { useCallback, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ATTEMPT_KEY } from "../src/github-setup.ts";
 import { goTo } from "../src/navigate.ts";
@@ -31,6 +32,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   sessionStorage.clear();
 });
@@ -115,6 +117,29 @@ describe("SetupPage", () => {
     expect(screen.queryByRole("link", { name: "Install the GitHub app" })).toBeNull();
   });
 
+  it("when the App call answers 403, tells the Admin an Admin connects GitHub, and asks the shell for /api/me again once, after rendering", async () => {
+    const errors = vi.spyOn(console, "error");
+    serve({
+      githubApp: () => json(403, { error: "Only an Admin can do this" }),
+      repos: () => json(200, { repos: [] }),
+    });
+    const refreshMe = vi.fn();
+    // The shell's refreshMe changes the shell's state, as AppShell's does.
+    function Shell() {
+      const [, setAsked] = useState(0);
+      const refresh = useCallback(() => {
+        refreshMe();
+        setAsked((n) => n + 1);
+      }, []);
+      return <SetupPage {...props("admin")} refreshMe={refresh} />;
+    }
+    render(<Shell />);
+
+    expect(await github().findByText("An Admin connects GitHub.")).toBeInTheDocument();
+    expect(refreshMe).toHaveBeenCalledOnce();
+    expect(errors).not.toHaveBeenCalled();
+  });
+
   it("shows the not-answering line with Retry when the App call answers 502, and the link after Retry", async () => {
     let answer = () => json(502, { error: "GitHub didn't answer" });
     renderSetup("admin", { githubApp: () => answer() });
@@ -136,21 +161,36 @@ function renderGitHubSetup(search: string, role: Role = "admin", routes: Routes 
 }
 
 describe("GitHubSetupPage", () => {
-  it("asks an Admin to link GitHub's installation to the Team, and signs in with GitHub with a fresh attempt", async () => {
+  // What GitHub's sign-in URL holds is `signInUrl`'s, tested in github-setup.test.ts.
+  it("asks an Admin to link GitHub's installation to the Team, and leaves for GitHub's sign-in with an attempt for it", async () => {
     renderGitHubSetup("?installation_id=42&setup_action=install");
 
     expect(screen.getByText("Link installation 42 to Acme")).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
 
     await vi.waitFor(() => expect(goTo).toHaveBeenCalledOnce());
-    const url = new URL(vi.mocked(goTo).mock.calls[0]![0]);
+    expect(vi.mocked(goTo).mock.calls[0]![0]).toMatch(
+      /^https:\/\/github\.com\/login\/oauth\/authorize\?/,
+    );
     const kept = JSON.parse(sessionStorage.getItem(ATTEMPT_KEY)!) as Record<string, unknown>;
-    expect(`${url.origin}${url.pathname}`).toBe("https://github.com/login/oauth/authorize");
-    expect(url.searchParams.get("client_id")).toBe("Iv23li-client");
-    expect(url.searchParams.get("state")).toBe(kept.state);
-    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(url.searchParams.has("redirect_uri")).toBe(false);
     expect(kept.installationId).toBe(42);
+  });
+
+  it("when this browser can't keep the attempt, says so in an alert and gives the button back", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("The storage is blocked", "SecurityError");
+    });
+    renderGitHubSetup("?installation_id=42&setup_action=install");
+
+    const button = await screen.findByRole("button", { name: "Sign in with GitHub" });
+    await userEvent.click(button);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This browser couldn't start the GitHub sign-in. Allow this site to store data for this tab, and open Warden over https.",
+    );
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-busy", "true");
+    expect(goTo).not.toHaveBeenCalled();
   });
 
   it.each([

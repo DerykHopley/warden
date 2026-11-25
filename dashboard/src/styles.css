@@ -369,7 +369,8 @@ button[aria-busy="true"],
 
 .start-here h2,
 .all-findings h2,
-.audit h2 {
+.audit h2,
+.setup-section h2 {
   margin: 32px 0 12px;
   font-family: var(--font-head);
   font-weight: 600;
@@ -647,13 +648,16 @@ button[aria-busy="true"],
   }
 }
 
-/* The Level line above the Findings summary: one quiet line, its link a 44px-high target. */
+/* The Level line above the Findings summary: one quiet line, its link a 44px-high target. Setup's links (install, back
+   to Setup, the Findings line to Setup) are dressed the same way. */
 .level-line {
   margin: 0;
   color: var(--muted);
 }
 
-.level-line a {
+.level-line a,
+.setup-line a,
+.setup-link a {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
@@ -667,26 +671,10 @@ button[aria-busy="true"],
   color: var(--muted);
 }
 
-/* Setup (story 1): the GitHub section, then the Team's repos. Its links (install, back to Setup) are accent text with
-   a 44px-high target, as the Level line's. */
-.setup-section h2 {
-  margin: 32px 0 12px;
-  font-family: var(--font-head);
-  font-weight: 600;
-  font-size: 1.25rem;
-}
-
+/* Setup (story 1): the GitHub section, then the Team's repos. Its section headings are the Findings page's h2; its
+   links are dressed as the Level line's. */
 .setup-link {
   margin: 0;
-}
-
-.setup-line a,
-.setup-link a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 44px;
-  color: var(--accent);
-  border-radius: var(--radius);
 }
 
 /* One repo per row, by ref; a long ref wraps rather than pushing the page sideways. */

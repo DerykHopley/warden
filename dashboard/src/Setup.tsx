@@ -2,7 +2,7 @@
 // Assets. GitHub sends the Admin back from installing the app to `/setup/github`, its Setup URL, which asks them to
 // sign in with GitHub so Warden can link that installation to the Team.
 import { useOrganization } from "@clerk/react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { PageProps } from "./App.tsx";
 import {
   fetchGitHubApp,
@@ -18,6 +18,8 @@ import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 const ADMIN_CONNECTS = "An Admin connects GitHub.";
 const NOT_SET_UP = "GitHub isn't set up on this Warden.";
+const CANT_START =
+  "This browser couldn't start the GitHub sign-in. Allow this site to store data for this tab, and open Warden over https.";
 
 export function SetupPage(props: PageProps) {
   return (
@@ -43,18 +45,16 @@ export function SetupPage(props: PageProps) {
 function useGitHubApp({ getToken, onSessionEnded, refreshMe }: PageProps) {
   const ask = useCallback(() => fetchGitHubApp(getToken), [getToken]);
   const app = useWardenCall<GitHubAppResult>(ask, onSessionEnded);
-  // A 403: the person's Role changed since /api/me answered, so the shell asks again.
+  // A 403: the person's Role changed since /api/me answered, so the shell asks again, once the page has rendered.
   const notAdmin = app.result !== "loading" && app.result.kind === "not-admin";
-  const [toldShell, setToldShell] = useState(false);
-  if (notAdmin && !toldShell) {
-    setToldShell(true);
-    refreshMe();
-  }
+  useEffect(() => {
+    if (notAdmin) refreshMe();
+  }, [notAdmin, refreshMe]);
   return app;
 }
 
-/** What the App's answer shows besides the install link or the sign-in button: waiting, and each refusal. */
-function AppRefused({ app }: { app: ReturnType<typeof useGitHubApp> }) {
+/** What the App's answer shows in place of the install link or the sign-in button: waiting, and each refusal. */
+function AppNotReady({ app }: { app: ReturnType<typeof useGitHubApp> }) {
   if (app.result === "loading")
     return <p className="muted">Asking Warden's server about GitHub…</p>;
   if (app.result.kind === "not-set-up") return <p className="muted">{NOT_SET_UP}</p>;
@@ -76,7 +76,7 @@ function InstallLink(props: PageProps) {
       </p>
     );
   }
-  return <AppRefused app={app} />;
+  return <AppNotReady app={app} />;
 }
 
 function RepoList({ getToken, onSessionEnded }: PageProps) {
@@ -123,12 +123,24 @@ function LinkInstallation(props: PageProps) {
     installationIdFrom(new URLSearchParams(location.search).get("installation_id")),
   );
   const [leaving, setLeaving] = useState(false);
+  const [cantStart, setCantStart] = useState(false);
   const teamName = organization?.id === props.me.team ? organization.name : "your Team";
   const ready = app.result !== "loading" && app.result.kind === "app" ? app.result.app : null;
 
+  // Keeping the attempt needs this tab's `sessionStorage`, and its challenge needs `crypto.subtle`, which a browser
+  // gives only over https (or on localhost): without either, the button comes back with a line saying why.
   async function signIn(clientId: string, id: number) {
     setLeaving(true);
-    goTo(await startSignIn(clientId, id));
+    setCantStart(false);
+    let url: string;
+    try {
+      url = await startSignIn(clientId, id);
+    } catch {
+      setLeaving(false);
+      setCantStart(true);
+      return;
+    }
+    goTo(url);
   }
 
   if (installationId === undefined) {
@@ -142,7 +154,7 @@ function LinkInstallation(props: PageProps) {
             <a href={installUrl(ready.slug)}>Install the GitHub app</a>
           </p>
         ) : (
-          <AppRefused app={app} />
+          <AppNotReady app={app} />
         )}
       </>
     );
@@ -152,6 +164,11 @@ function LinkInstallation(props: PageProps) {
       <p>
         Link installation {installationId} to {teamName}
       </p>
+      {cantStart && (
+        <p className="notice" role="alert">
+          {CANT_START}
+        </p>
+      )}
       {ready !== null ? (
         <button
           type="button"
@@ -163,7 +180,7 @@ function LinkInstallation(props: PageProps) {
           Sign in with GitHub
         </button>
       ) : (
-        <AppRefused app={app} />
+        <AppNotReady app={app} />
       )}
     </>
   );

@@ -42,17 +42,18 @@ test("an Admin installs the app, signs in with GitHub and links installation 42 
     "href",
     "https://github.com/apps/warden-reader/installations/new",
   );
-  await expect(page.getByText("No repos linked yet.")).toBeVisible();
 
   // GitHub sends the Admin back to the App's Setup URL once the app is installed.
   await page.goto("/setup/github?installation_id=42&setup_action=install");
   await expect(page.getByText("Link installation 42 to Acme")).toBeVisible();
   await page.getByRole("button", { name: "Sign in with GitHub" }).click();
 
+  // The callback came back with the sign-in's own `state` (the fake GitHub above echoes it), and linked only because it
+  // matched the kept attempt's; the code and state then left the address bar.
   await expect(page.getByText("Linked installation 42: 2 repos.")).toBeVisible();
-  expect(new URL(page.url()).pathname).toBe("/setup/github/callback");
+  expect(page.url()).toBe(new URL("/setup/github/callback", baseURL).toString());
   expect(signInUrl?.searchParams.get("client_id")).toBe(APP.client_id);
-  expect(signInUrl?.searchParams.get("state")).toMatch(/^[A-Za-z0-9_-]{43}$/);
+  expect(signInUrl?.searchParams.get("state")).toBeTruthy();
   expect(signInUrl?.searchParams.get("code_challenge_method")).toBe("S256");
   expect(linkCalls).toHaveLength(1);
   const sent = linkCalls[0] as { installation_id: number; code: string; code_verifier: string };

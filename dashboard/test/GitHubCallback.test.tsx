@@ -37,8 +37,9 @@ afterEach(() => {
 const keep = (attempt: SignInAttempt = ATTEMPT) =>
   sessionStorage.setItem(ATTEMPT_KEY, JSON.stringify(attempt));
 
-function renderCallback(search: string, routes: Routes = {}, { strict = false } = {}) {
-  window.history.replaceState(null, "", `/setup/github/callback${search}`);
+/** Opens the callback at `search` (null: the address as it is), and renders the page over the fake API. */
+function renderCallback(search: string | null, routes: Routes = {}, { strict = false } = {}) {
+  if (search !== null) window.history.replaceState(null, "", `/setup/github/callback${search}`);
   serve({ linkInstallation: linked(2), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
@@ -48,9 +49,11 @@ function renderCallback(search: string, routes: Routes = {}, { strict = false } 
     panel: { setContext: vi.fn(), open: vi.fn() },
   };
   const page = <GitHubCallbackPage {...props} />;
-  render(strict ? <StrictMode>{page}</StrictMode> : page);
-  return props;
+  const { unmount } = render(strict ? <StrictMode>{page}</StrictMode> : page);
+  return { ...props, unmount };
 }
+
+const address = () => location.pathname + location.search;
 
 const links = () => callsTo("/api/github/installations");
 const backToSetup = () => screen.getByRole("link", { name: "Back to Setup" });
@@ -122,6 +125,71 @@ describe("GitHubCallbackPage", () => {
     expect(backToSetup()).toHaveAttribute("href", "/setup");
     expect(sessionStorage.getItem(ATTEMPT_KEY)).toBeNull();
     expect(links()).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a GitHub error code",
+      "?error=redirect_uri_mismatch&error_description=The+redirect_uri+MUST+match&state=the-state",
+      "GitHub refused the sign-in (redirect_uri_mismatch); nothing was linked.",
+    ],
+    [
+      "an error that isn't one of GitHub's codes",
+      "?error=Call+0800+to+fix+your+account&state=the-state",
+      "GitHub refused the sign-in; nothing was linked.",
+    ],
+  ])(
+    "with %s other than access_denied, names it in an alert and sends nothing",
+    async (_name, search, words) => {
+      keep();
+      renderCallback(search);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(words);
+      expect(backToSetup()).toHaveAttribute("href", "/setup");
+      expect(links()).toEqual([]);
+    },
+  );
+
+  it("takes GitHub's code and state out of the address bar, leaving no history entry with them", async () => {
+    keep();
+    const before = history.length;
+    renderCallback("?code=the-code&state=the-state");
+
+    expect(address()).toBe("/setup/github/callback");
+    await screen.findByText("Linked installation 42: 2 repos.");
+    expect(history.length).toBe(before);
+  });
+
+  it("when the session has ended, keeps the attempt and GitHub's answer, so the page links once the person signs in again", async () => {
+    keep();
+    const first = renderCallback("?code=the-code&state=the-state", {
+      linkInstallation: () => json(401, { error: "Session ended" }),
+    });
+    await vi.waitFor(() => expect(first.onSessionEnded).toHaveBeenCalledOnce());
+    expect(JSON.parse(sessionStorage.getItem(ATTEMPT_KEY)!)).toEqual(ATTEMPT);
+    expect(address()).toBe("/setup/github/callback?code=the-code&state=the-state");
+    first.unmount();
+
+    renderCallback(null);
+
+    expect(await screen.findByText("Linked installation 42: 2 repos.")).toBeInTheDocument();
+    expect(links()).toHaveLength(2);
+  });
+
+  it("a page mounted again while the link call runs waits on that call, and sends no second one", async () => {
+    keep();
+    const answer = deferred<Response>();
+    const first = renderCallback("?code=the-code&state=the-state", {
+      linkInstallation: () => answer.promise,
+    });
+    await vi.waitFor(() => expect(links()).toHaveLength(1));
+    first.unmount();
+
+    renderCallback(null, { linkInstallation: () => answer.promise });
+    answer.resolve(linked(2)());
+
+    expect(await screen.findByText("Linked installation 42: 2 repos.")).toBeInTheDocument();
+    expect(links()).toHaveLength(1);
   });
 
   it.each([400, 403, 409, 502, 503])(

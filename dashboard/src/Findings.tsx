@@ -9,6 +9,7 @@ import {
   Severity,
   type Finding,
   type Level,
+  type Role,
 } from "@warden/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { askAboutTeam } from "./api.ts";
@@ -30,6 +31,7 @@ import {
   topFive,
   type FindingsResult,
 } from "./findings.ts";
+import { fetchRepos, type ReposResult } from "./github-setup.ts";
 import { findingsViewWords } from "./panel.ts";
 import { SeverityPill } from "./SeverityPill.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
@@ -180,9 +182,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
           {me.level !== null && <LevelLine level={me.level} />}
           <h1 className="summary-line">{summaryLine(findings)}</h1>
           {findings.length === 0 && (
-            <p className="setup-line">
-              Connect GitHub on <a href="/setup">Setup</a> to run the first Scan.
-            </p>
+            <SetupLine getToken={getToken} role={me.role} onSessionEnded={onSessionEnded} />
           )}
           <TopFive findings={topFive(findings)} focused={focused} onSelect={select} />
           {findings.length > 0 && (
@@ -227,6 +227,27 @@ function LevelLine({ level }: { level: Level }) {
   return (
     <p className="level-line">
       Level: {LEVEL_WORDS[level]} · <a href="/overview">see the journey</a>
+    </p>
+  );
+}
+
+/**
+ * With no Findings, the line under the summary that points to Setup, only while the Team has no linked repos: an Admin
+ * gets the link, a Lead or Member is told who connects GitHub. Nothing while the repos are asked for, or when they
+ * can't be read: the line is a pointer, and the summary already says there are no Findings.
+ */
+function SetupLine(props: Pick<PageProps, "getToken" | "onSessionEnded"> & { role: Role | null }) {
+  const { getToken } = props;
+  const ask = useCallback(() => fetchRepos(getToken), [getToken]);
+  const repos = useWardenCall<ReposResult>(ask, props.onSessionEnded);
+  if (repos.result === "loading" || repos.result.kind !== "repos") return null;
+  if (repos.result.repos.length > 0) return null;
+  if (props.role !== "admin") {
+    return <p className="setup-line">An Admin connects GitHub on Setup to run the first Scan.</p>;
+  }
+  return (
+    <p className="setup-line">
+      Connect GitHub on <a href="/setup">Setup</a> to run the first Scan.
     </p>
   );
 }

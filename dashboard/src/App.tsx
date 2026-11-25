@@ -127,10 +127,10 @@ type Page = { path: string; label: string; Page: ComponentType<PageProps> };
 
 /**
  * Warden's pages, in the header's order. The main area shows the one whose path is the address bar's; `/` shows the
- * person's landing page (`landingPage`). A page's `more` are pages at other paths that keep its header link current
+ * person's landing page (`landingPage`). A page's `alsoAt` are pages at other paths that keep its header link current
  * (Setup's GitHub pages, where GitHub sends the person back). Each later slice adds its page here.
  */
-const PAGES: (Page & { more?: Record<string, ComponentType<PageProps>> })[] = [
+const PAGES: (Page & { alsoAt?: Record<string, ComponentType<PageProps>> })[] = [
   { path: "/findings", label: "Findings", Page: FindingsPage },
   { path: "/overview", label: "Overview", Page: OverviewPage },
   { path: "/people", label: "People", Page: PeoplePage },
@@ -138,7 +138,7 @@ const PAGES: (Page & { more?: Record<string, ComponentType<PageProps>> })[] = [
     path: "/setup",
     label: "Setup",
     Page: SetupPage,
-    more: { "/setup/github": GitHubSetupPage, "/setup/github/callback": GitHubCallbackPage },
+    alsoAt: { "/setup/github": GitHubSetupPage, "/setup/github/callback": GitHubCallbackPage },
   },
 ];
 
@@ -149,8 +149,8 @@ const currentPath = () => location.pathname.replace(/\/+$/, "") || "/";
 function pageAt(path: string): Page | undefined {
   for (const page of PAGES) {
     if (page.path === path) return page;
-    const more = page.more?.[path];
-    if (more !== undefined) return { path: page.path, label: page.label, Page: more };
+    const other = page.alsoAt?.[path];
+    if (other !== undefined) return { path: page.path, label: page.label, Page: other };
   }
   return undefined;
 }
