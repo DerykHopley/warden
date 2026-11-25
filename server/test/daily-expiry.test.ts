@@ -6,6 +6,7 @@ import { fingerprint, type Finding } from "@warden/contracts";
 import { afterEach, describe, expect, inject, it } from "vitest";
 import { checkAdminRole, runDailyExpiry } from "../src/daily-expiry.ts";
 import { createPool, DATABASE_ROLE_NAMES } from "../src/database.ts";
+import { applyExpiry } from "../src/findings/expiry.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { createLogger } from "../src/log.ts";
@@ -125,6 +126,33 @@ describe("expireAcceptances", () => {
     expect(await historyRows(db, "org_twice")).toEqual(before);
     expect(before).toHaveLength(1);
   }, 30_000);
+});
+
+// The dashboard sends a picked "Reopens on" day as its start in the person's time zone (#88). The Job runs at 04:00
+// UTC, which falls on the picked day in every zone from UTC-12 to UTC+14 once that day has started: that run reopens
+// it, and the one before, still on the day before there, does not.
+describe("applyExpiry on a Reopens on day sent as its start", () => {
+  it.each([
+    // zone, the picked day's start as the dashboard sends it, the 04:00 UTC run on the day before there, on the day
+    ["UTC-10", "2027-01-15T00:00:00.000-10:00", "2027-01-15T04:00:00Z", "2027-01-16T04:00:00Z"],
+    ["UTC", "2027-01-15T00:00:00.000+00:00", "2027-01-14T04:00:00Z", "2027-01-15T04:00:00Z"],
+    ["UTC+14", "2027-01-15T00:00:00.000+14:00", "2027-01-14T04:00:00Z", "2027-01-15T04:00:00Z"],
+  ])(
+    "in %s, the run on the day before keeps it Accepted, and the run on the picked day reopens it",
+    async (zone, until, dayBefore, onTheDay) => {
+      const db = await freshDatabase();
+      const team = `org_reopens_${zone.replace(/\W/g, "_").toLowerCase()}`;
+      const [picked] = await newTeam(db, team, [until]);
+      const run = (now: string) => db.withTeam(team, (tx) => applyExpiry(tx, team, new Date(now)));
+
+      expect(await run(dayBefore)).toEqual([]);
+      expect(await statuses(db, team)).toEqual(["accepted"]);
+
+      expect(await run(onTheDay)).toEqual([picked!.id]);
+      expect(await statuses(db, team)).toEqual(["open"]);
+    },
+    30_000,
+  );
 });
 
 describe("runDailyExpiry", () => {

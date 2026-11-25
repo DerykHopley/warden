@@ -26,12 +26,12 @@ import {
   decide,
   decisionsFor,
   earliestUntil,
-  endOfDay,
   FINDING_GONE,
   mergeableCandidates,
   proposalsFor,
   propose,
   rejectProposal,
+  startOfDay,
   type ActionResult,
   type DecisionRequest,
 } from "./decisions.ts";
@@ -85,7 +85,7 @@ const PROPOSE_LABELS: Record<ProposalDecision, string> = {
 function doneWords(call: DecisionRequest): string {
   switch (call.decision) {
     case "accept":
-      return `Accepted until ${dayWords(call.body.until)}.`;
+      return `Accepted. Reopens on ${dayWords(call.body.until)}.`;
     case "mark_false_positive":
       return "Marked a False positive.";
     case "confirm_fix":
@@ -334,7 +334,7 @@ export function DetailCard(props: {
               getToken,
               finding.id,
               form.decision === "accept"
-                ? { decision: "accept", reason, until: endOfDay(draft.until) }
+                ? { decision: "accept", reason, until: startOfDay(draft.until) }
                 : { decision: "mark_false_positive", reason },
             ),
           () => {
@@ -359,7 +359,7 @@ export function DetailCard(props: {
   function decisionCall(decision: Decision, reason: string): DecisionRequest {
     switch (decision) {
       case "accept":
-        return { decision, body: { reason, until: endOfDay(draft.until) } };
+        return { decision, body: { reason, until: startOfDay(draft.until) } };
       case "mark_moved":
         return { decision, body: { reason, candidate: draft.candidate ?? "" } };
       default:

@@ -322,6 +322,35 @@ describe("the detail card's pending Proposals", () => {
   });
 });
 
+describe("a Reopens on day sent as its start, as the server answers it", () => {
+  const zone = process.env.TZ;
+  afterEach(() => {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  });
+
+  /** The start of Jan 15, 2027 in the person's time zone, in UTC as the server answers a date-time. */
+  const stored = () => new Date(2027, 0, 15).toISOString();
+
+  it.each(["Pacific/Honolulu", "UTC", "Pacific/Kiritimati"])(
+    "in %s, the detail card's Reopens on and an accept Proposal's reopens on show the picked day",
+    (tz) => {
+      process.env.TZ = tz;
+      const { card } = show(
+        finding(ID, {
+          status: "accepted",
+          accepted_reason: "Fixed next sprint",
+          accepted_until: stored(),
+        }),
+        listed([proposal({ decision: "accept", until: stored() })]),
+      );
+
+      expect(fields(card)["Reopens on"]).toBe("Jan 15, 2027");
+      expect(proposalItems(card)[0]).toHaveTextContent("Accept, reopens on Jan 15, 2027");
+    },
+  );
+});
+
 const SECOND = "b2b2b2b2-0000-4000-8000-000000000003";
 const OPEN = finding(ID);
 const ACCEPTED = finding(ID, {
@@ -401,6 +430,13 @@ const localDay = (iso: string) => {
   const two = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 };
+
+/** The first instant of `day` (a date input's value) in the person's own time zone, as epoch milliseconds. */
+const dayStart = (day: string) => new Date(`${day}T00:00`).getTime();
+
+/** `day` as the card says a date: "Jan 15, 2027" (in an English locale). */
+const dayShown = (day: string) =>
+  new Date(`${day}T12:00`).toLocaleDateString(undefined, { dateStyle: "medium" });
 
 describe("each form's words", () => {
   /** The opened form's element, for what the queries can't name: its date input. */
@@ -583,7 +619,7 @@ describe("a Member's Proposal", () => {
       reason: "Fixed next sprint",
       until: expect.any(String),
     });
-    expect(localDay((proposed as { until: string }).until)).toBe(DAY);
+    expect(Date.parse((proposed as { until: string }).until)).toBe(dayStart(DAY));
   });
 
   it("Propose False positive sends the reason as a ProposeBody mark_false_positive, with no until, and needs a reason", async () => {
@@ -681,21 +717,27 @@ describe("a Member's Proposal", () => {
 });
 
 describe("a Lead's decision", () => {
-  it("Accept sends the reason and an until on the chosen day in the person's time zone; Reopens on's earliest day is tomorrow", async () => {
-    serve({ findingAction: () => json(200, ACCEPTED) });
-    const { card } = show(OPEN, listed([]), { role: "lead" });
-    const form = await openForm(card, "Accept");
-    expect(form.getByLabelText(REOPENS_ON)).toHaveAttribute("min", earliestUntil());
+  it.each<[string, Finding]>([
+    ["Accept", OPEN],
+    ["Renew acceptance", ACCEPTED],
+  ])(
+    "%s sends the reason and an until at the start of the chosen day in the person's time zone; Reopens on's earliest day is tomorrow",
+    async (button, focused) => {
+      serve({ findingAction: () => json(200, ACCEPTED) });
+      const { card } = show(focused, listed([]), { role: "lead" });
+      const form = await openForm(card, button);
+      expect(form.getByLabelText(REOPENS_ON)).toHaveAttribute("min", earliestUntil());
 
-    await fill(form, "Fixed next sprint");
-    await userEvent.click(form.getByRole("button", { name: "Accept" }));
+      await fill(form, "Fixed next sprint");
+      await userEvent.click(form.getByRole("button", { name: button }));
 
-    await card.findByRole("status");
-    const [body] = sent(`/api/findings/${ID}/accept`);
-    const accepted = AcceptBody.parse(body);
-    expect(accepted.reason).toBe("Fixed next sprint");
-    expect(localDay(accepted.until)).toBe(DAY);
-  });
+      await card.findByRole("status");
+      const [body] = sent(`/api/findings/${ID}/accept`);
+      const accepted = AcceptBody.parse(body);
+      expect(accepted.reason).toBe("Fixed next sprint");
+      expect(Date.parse(accepted.until)).toBe(dayStart(DAY));
+    },
+  );
 
   it.each<[string, Finding, string]>([
     ["Mark False positive", OPEN, "false-positive"],
@@ -850,16 +892,8 @@ describe("a Lead's decision", () => {
   });
 
   it.each<[string, Finding, string]>([
-    [
-      "Accept",
-      OPEN,
-      `Accepted until ${new Date(`${DAY}T12:00`).toLocaleDateString(undefined, { dateStyle: "medium" })}.`,
-    ],
-    [
-      "Renew acceptance",
-      ACCEPTED,
-      `Accepted until ${new Date(`${DAY}T12:00`).toLocaleDateString(undefined, { dateStyle: "medium" })}.`,
-    ],
+    ["Accept", OPEN, `Accepted. Reopens on ${dayShown(DAY)}.`],
+    ["Renew acceptance", ACCEPTED, `Accepted. Reopens on ${dayShown(DAY)}.`],
     ["Mark False positive", OPEN, "Marked a False positive."],
     ["Confirm fix", UNCONFIRMED, "Fix confirmed."],
     ["Mark moved", UNCONFIRMED, "Marked moved: a1c4e7f0 merged into this Finding."],
