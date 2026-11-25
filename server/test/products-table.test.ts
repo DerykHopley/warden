@@ -4,42 +4,36 @@
 // Usage's values, and deleting a Product deletes its dependencies. As warden_app, on the suite's migrated database,
 // with Teams of this file's own.
 import { randomUUID } from "node:crypto";
+import type { ProductDependency } from "@warden/contracts";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
+import { seedProduct } from "./helpers.ts";
 
 const A = `org_products_a_${randomUUID()}`;
 const B = `org_products_b_${randomUUID()}`;
 let pool: pg.Pool;
 let withTeam: WithTeam;
 
-const dependency = (team: string, productId: string, framework = "langchain") => ({
-  team_id: team,
-  product_id: productId,
+/** How every Product here uses `framework`. */
+const uses = (framework: string): ProductDependency => ({
   framework,
   version: "0.3.27",
-  usage: "library" as const,
+  usage: "library",
   internet_facing: true,
 });
 
+/** A product_dependencies row, as an insert writes it. */
+const dependency = (team: string, productId: string, framework = "langchain") => ({
+  team_id: team,
+  product_id: productId,
+  ...uses(framework),
+});
+
 /** A Product of `team`'s, with one dependency per framework named. */
-async function product(team: string, name: string, frameworks: string[] = ["langchain"]) {
-  const id = randomUUID();
-  await withTeam(team, async (tx) => {
-    await tx
-      .insertInto("products")
-      .values({ team_id: team, id, name, repo_urls: [`https://github.com/example/${id}`] })
-      .execute();
-    for (const framework of frameworks) {
-      await tx
-        .insertInto("product_dependencies")
-        .values(dependency(team, id, framework))
-        .execute();
-    }
-  });
-  return id;
-}
+const product = (team: string, name: string, frameworks: string[] = ["langchain"]) =>
+  seedProduct(withTeam, team, { name, dependencies: frameworks.map(uses) });
 
 let aProduct: string;
 let bProducts: string[];
@@ -93,10 +87,11 @@ describe("a Team's Products are kept apart", () => {
 });
 
 describe("the Products tables refuse", () => {
-  it("a second Product whose name differs only in case", async () => {
+  it("a second Product whose name differs only in case, or in the spaces around it", async () => {
     await product(A, "Checkout");
 
     await expect(product(A, "CHECKOUT")).rejects.toThrow(/products_team_name_key/);
+    await expect(product(A, " checkout  ")).rejects.toThrow(/products_team_name_key/);
     // Another Team may use the name.
     await expect(product(B, "checkout")).resolves.toBeTypeOf("string");
   });

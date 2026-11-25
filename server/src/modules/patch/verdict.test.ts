@@ -1,9 +1,9 @@
 // Port of Patch's backend/tests/test_verdict.py, through the spike (architecture/spikes/stack-ts/patch-p3 in the
 // capstone archive): the same 55 cases, names and expected values. Check ids: A15.n, A16b.2, B67.
 import { readFileSync } from "node:fs";
+import type { Coverage } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import {
-  type Coverage,
   type Ecosystem,
   noFix,
   type OsvEntry,

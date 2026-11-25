@@ -4,7 +4,8 @@
 -- them, through `withTeam`.
 
 -- A Product's id is the Asset ref its Findings carry, so a rename keeps them. A name is unique in its Team whatever its
--- case. A Repo URL is text only: nothing links it to a Guard Repo Asset yet.
+-- case and the spaces around it (the server trims a name before it writes one). A Repo URL is text only: nothing links
+-- it to a Guard Repo Asset yet.
 create table products (
   team_id text not null references teams (id),
   id text not null check (id ~ '\S'),
@@ -14,7 +15,7 @@ create table products (
   primary key (team_id, id)
 );
 
-create unique index products_team_name_key on products (team_id, lower(name));
+create unique index products_team_name_key on products (team_id, lower(btrim(name)));
 
 -- One row per framework per Product: two versions of one framework would share a Fingerprint, as a dependency's purl
 -- carries no version. `framework` is an id from the Patch module's PATCH_FRAMEWORKS, which the server checks; `usage`

@@ -15,28 +15,40 @@ export function createProducts({ withTeam }: { withTeam: WithTeam }): Products {
   return {
     list: (team) =>
       withTeam(team, async (tx) => {
-        const products = await tx
-          .selectFrom("products")
-          .select(["id", "name", "repo_urls"])
-          // Unique in the Team, so the order is total, and the same whatever the database's collation.
-          .orderBy(sql`lower(name)`)
+        // One statement, so the Products and their dependencies come from one snapshot: a change committed between
+        // two reads can't split a Product from its rows. A Product with no dependencies comes as one row of nulls.
+        const rows = await tx
+          .selectFrom("products as p")
+          .leftJoin("product_dependencies as d", (join) =>
+            join.onRef("d.team_id", "=", "p.team_id").onRef("d.product_id", "=", "p.id"),
+          )
+          .select([
+            "p.id",
+            "p.name",
+            "p.repo_urls",
+            "d.framework",
+            "d.version",
+            "d.usage",
+            "d.internet_facing",
+          ])
+          // lower(name) is unique in the Team, so the order is total; how two names compare (accents, punctuation)
+          // follows the database's collation, as the framework ids do.
+          .orderBy(sql`lower(p.name)`)
+          .orderBy("d.framework")
           .execute();
-        const dependencies = await tx
-          .selectFrom("product_dependencies")
-          .select(["product_id", "framework", "version", "usage", "internet_facing"])
-          .orderBy("framework")
-          .execute();
-        return products.map((product) => ({
-          ...product,
-          dependencies: dependencies
-            .filter((dependency) => dependency.product_id === product.id)
-            .map(({ framework, version, usage, internet_facing }) => ({
-              framework,
-              version,
-              usage,
-              internet_facing,
-            })),
-        }));
+        const products = new Map<string, Product>();
+        for (const { id, name, repo_urls, framework, version, usage, internet_facing } of rows) {
+          let product = products.get(id);
+          if (product === undefined) {
+            product = { id, name, repo_urls, dependencies: [] };
+            products.set(id, product);
+          }
+          // The join's nulls: a dependency row's own columns are never null but its version.
+          if (framework !== null && usage !== null && internet_facing !== null) {
+            product.dependencies.push({ framework, version, usage, internet_facing });
+          }
+        }
+        return [...products.values()];
       }),
   };
 }

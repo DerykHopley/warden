@@ -13,9 +13,6 @@ import semver from "semver";
 import type { SemVer } from "semver";
 import { VersionRefused } from "./errors.ts";
 
-/** A framework's OSV coverage, as the contracts define it: package version ranges, code commits only, or nothing. */
-export type { Coverage };
-
 export const USAGE_LABELS: Record<Usage, string> = {
   self_hosted: "self-hosted app",
   library: "library",

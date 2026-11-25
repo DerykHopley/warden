@@ -1,9 +1,10 @@
 // Test seams: a key pair standing in for a Clerk instance, and an app wired as production wires it.
+import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
-import type { HealthBody, Role } from "@warden/contracts";
+import type { HealthBody, ProductInput, Role } from "@warden/contracts";
 import { createApp, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
@@ -79,6 +80,28 @@ export async function seedTeam(
       await tx.insertInto("team_members").values({ team_id: team, user_id, role }).execute();
     }
   });
+}
+
+/**
+ * A Product of `team`'s put straight into the Products tables through `withTeam`, as the store reads them, with no
+ * Repo URLs and no dependencies unless given. Returns its id.
+ */
+export async function seedProduct(
+  withTeam: WithTeam,
+  team: string,
+  { name, repo_urls = [], dependencies = [] }: Partial<ProductInput> & { name: string },
+): Promise<string> {
+  const id = randomUUID();
+  await withTeam(team, async (tx) => {
+    await tx.insertInto("products").values({ team_id: team, id, name, repo_urls }).execute();
+    for (const dependency of dependencies) {
+      await tx
+        .insertInto("product_dependencies")
+        .values({ team_id: team, product_id: id, ...dependency })
+        .execute();
+    }
+  });
+  return id;
 }
 
 /** Members and Findings for a test that never reaches the database: any call fails it. */

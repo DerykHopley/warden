@@ -23,11 +23,35 @@ export type ProductDependency = z.infer<typeof ProductDependency>;
 /** A Repo URL: https only. Stored as text; nothing links it to a Guard Repo Asset yet. */
 const RepoUrl = z.url({ protocol: /^https$/ }).max(2000);
 
+/** A Product's name: 1 to 200 characters once the spaces around it are trimmed, which the stored name then is. */
+const ProductName = z.string().trim().pipe(Text(200));
+
+/**
+ * A Product's dependencies: each framework at most once, as two versions of one would share a Fingerprint, so at most
+ * 12, the number of frameworks Patch knows.
+ */
+const Dependencies = z
+  .array(ProductDependency)
+  .max(12)
+  .superRefine((dependencies, ctx) => {
+    const seen = new Map<string, number>();
+    dependencies.forEach(({ framework }, i) => {
+      const earlier = seen.get(framework);
+      if (earlier === undefined) seen.set(framework, i);
+      else
+        ctx.addIssue({
+          code: "custom",
+          path: [i, "framework"],
+          message: `the same framework as dependencies[${earlier}]: each framework is listed once`,
+        });
+    });
+  });
+
 /** What a Lead sends to create or change a Product: at most 20 Repo URLs, and one row per framework it uses. */
 export const ProductInput = z.strictObject({
-  name: Text(200),
+  name: ProductName,
   repo_urls: z.array(RepoUrl).max(20),
-  dependencies: z.array(ProductDependency),
+  dependencies: Dependencies,
 });
 export type ProductInput = z.infer<typeof ProductInput>;
 

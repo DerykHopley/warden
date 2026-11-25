@@ -2,7 +2,7 @@
 // Team reads another's. Through the real app with Patch's routes mounted as the start-up file mounts them, as the
 // person each session names, on the suite's shared database with Teams of this file's own.
 import { randomUUID } from "node:crypto";
-import { FrameworksBody, ProductsBody, type ProductDependency } from "@warden/contracts";
+import { FrameworksBody, ProductsBody } from "@warden/contracts";
 import type { Hono } from "hono";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
@@ -12,7 +12,14 @@ import { createProducts } from "../src/modules/patch/products.ts";
 import { patchRoutes } from "../src/modules/patch/routes.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
+import {
+  activeOrganization,
+  seedProduct,
+  seedTeam,
+  sessionToken,
+  testApp,
+  testKey,
+} from "./helpers.ts";
 
 const MEMBER = "user_member";
 const LEAD = "user_lead";
@@ -45,29 +52,6 @@ async function team() {
   return id;
 }
 
-/** A Product put straight into the tables, as the store reads them. */
-async function putProduct(
-  teamId: string,
-  name: string,
-  repoUrls: string[],
-  dependencies: ProductDependency[],
-) {
-  const id = randomUUID();
-  await withTeam(teamId, async (tx) => {
-    await tx
-      .insertInto("products")
-      .values({ team_id: teamId, id, name, repo_urls: repoUrls })
-      .execute();
-    for (const dependency of dependencies) {
-      await tx
-        .insertInto("product_dependencies")
-        .values({ team_id: teamId, product_id: id, ...dependency })
-        .execute();
-    }
-  });
-  return id;
-}
-
 async function get(path: string, as: string, teamId: string) {
   const token = await sessionToken(key, as, 60, activeOrganization(teamId));
   const res = await app.request(path, { headers: { Authorization: `Bearer ${token}` } });
@@ -77,21 +61,23 @@ async function get(path: string, as: string, teamId: string) {
 describe("GET /api/products", () => {
   it("answers a Member and a Lead every Product of the Team, in name order, with its Repo URLs and dependencies", async () => {
     const teamId = await team();
-    const zebra = await putProduct(
-      teamId,
-      "Zebra",
-      [],
-      [{ framework: "ollama", version: null, usage: "self_hosted", internet_facing: false }],
-    );
-    const support = await putProduct(
-      teamId,
-      "support bot",
-      ["https://github.com/example/support-bot", "https://github.com/example/support-infra"],
-      [
+    const zebra = await seedProduct(withTeam, teamId, {
+      name: "Zebra",
+      dependencies: [
+        { framework: "ollama", version: null, usage: "self_hosted", internet_facing: false },
+      ],
+    });
+    const support = await seedProduct(withTeam, teamId, {
+      name: "support bot",
+      repo_urls: [
+        "https://github.com/example/support-bot",
+        "https://github.com/example/support-infra",
+      ],
+      dependencies: [
         { framework: "vllm", version: "0.6.1", usage: "hosted", internet_facing: true },
         { framework: "langchain", version: "0.3.27", usage: "library", internet_facing: true },
       ],
-    );
+    });
 
     for (const as of [MEMBER, LEAD]) {
       const { status, body } = await get("/api/products", as, teamId);
@@ -141,13 +127,13 @@ describe("GET /api/products", () => {
 
   it("never lists another Team's Products", async () => {
     const [a, b] = [await team(), await team()];
-    await putProduct(
-      a,
-      "Team A's app",
-      [],
-      [{ framework: "gradio", version: "4.0.0", usage: "library", internet_facing: false }],
-    );
-    const bProduct = await putProduct(b, "Team B's app", [], []);
+    await seedProduct(withTeam, a, {
+      name: "Team A's app",
+      dependencies: [
+        { framework: "gradio", version: "4.0.0", usage: "library", internet_facing: false },
+      ],
+    });
+    const bProduct = await seedProduct(withTeam, b, { name: "Team B's app" });
 
     const { body } = await get("/api/products", LEAD, b);
 
