@@ -1,6 +1,6 @@
 // The Team's Products (GET /api/products), the frameworks Patch knows (GET /api/patch/frameworks) and a Product's save
-// (POST or PUT, once /api/me confirms the session's Team), for the Products page, and the words it shows for a
-// dependency's usage.
+// (POST or PUT) and delete (DELETE), each once /api/me confirms the session's Team, for the Products page, and the
+// words it shows for a dependency's usage.
 import {
   FrameworksBody,
   Product,
@@ -132,6 +132,55 @@ export async function saveProductInTeam(
   const inTeam = await confirmTeam(getToken, team);
   if (inTeam.kind !== "confirmed") return inTeam;
   return saveProduct(inTeam.getToken, id, input);
+}
+
+/** A delete's answer: the Product is gone, or why the server refused it. */
+export type DeleteResult =
+  | { kind: "deleted" }
+  /** 403: the person's Role is too low (or was lowered), or they have no Team. */
+  | { kind: "forbidden" }
+  /** 404: the Team has no Product with that id (another delete may have got there first). */
+  | { kind: "not-found" }
+  /** 409: the Team isn't opened; `error` is the server's words, null when its body has none. */
+  | { kind: "conflict"; error: string | null }
+  | Refused;
+
+/**
+ * Deletes the Product `id` (DELETE /api/products/:id). The server checks the Role and runs the Product's Patch Scan
+ * with no dependencies before it answers, so its CVE Findings turn Fixed. Any answer but those `DeleteResult` names, a
+ * 5xx included, is not answering: a delete is safe to try again, as a repeat of one that landed gets the 404.
+ */
+export async function deleteProduct(getToken: GetToken, id: string): Promise<DeleteResult> {
+  const res = await callWarden(getToken, `/api/products/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+  if (!(res instanceof Response)) return res;
+  switch (res.status) {
+    case 204:
+      return { kind: "deleted" };
+    case 403:
+      return { kind: "forbidden" };
+    case 404:
+      return { kind: "not-found" };
+    case 409:
+      return { kind: "conflict", error: await serverError(res) };
+  }
+  return { kind: "not-answering" };
+}
+
+/**
+ * Deletes as `deleteProduct` does, but only once /api/me says the session is in `team`, the Team the confirm was
+ * opened in, and with the token that answer was asked with (`confirmTeam`); while it names another Team, or gives no
+ * answer, nothing is sent.
+ */
+export async function deleteProductInTeam(
+  getToken: GetToken,
+  team: string | null,
+  id: string,
+): Promise<DeleteResult | Exclude<MeResult, { kind: "signed-in" }>> {
+  const inTeam = await confirmTeam(getToken, team);
+  if (inTeam.kind !== "confirmed") return inTeam;
+  return deleteProduct(inTeam.getToken, id);
 }
 
 /** How a Product uses a framework, in words. */

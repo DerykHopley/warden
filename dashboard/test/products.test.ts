@@ -1,10 +1,17 @@
-// The Products page's calls: GET /api/products, GET /api/patch/frameworks, and a Product's save (POST or PUT), each
-// answer read into what the page shows; and the save limit's words.
+// The Products page's calls: GET /api/products, GET /api/patch/frameworks, a Product's save (POST or PUT) and its
+// delete, each answer read into what the page shows; and the save limit's words.
 import type { ProductInput } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tryAgainIn } from "../src/api.ts";
-import { fetchFrameworks, fetchProducts, saveProduct, saveProductInTeam } from "../src/products.ts";
-import { callsTo, fetchMock, json, serve } from "./fake-api.ts";
+import {
+  deleteProduct,
+  deleteProductInTeam,
+  fetchFrameworks,
+  fetchProducts,
+  saveProduct,
+  saveProductInTeam,
+} from "../src/products.ts";
+import { callsTo, fetchMock, json, noContent, serve } from "./fake-api.ts";
 
 const getToken = async () => "session-token" as string | null;
 
@@ -209,6 +216,73 @@ describe("saveProductInTeam", () => {
     });
     expect(callsTo("/api/me")).toHaveLength(2);
     expect(saveToken()).toBe("Bearer token-2");
+    expect(getTokens).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("deleteProduct", () => {
+  it("DELETEs /api/products/:id, its id encoded, and reads its 204 as deleted", async () => {
+    answers(noContent());
+
+    expect(await deleteProduct(getToken, "prod/1")).toEqual({ kind: "deleted" });
+    const [init] = callsTo("/api/products/prod%2F1").map(([, init]) => init);
+    expect(init?.method).toBe("DELETE");
+    expect(init?.body).toBeUndefined();
+  });
+
+  it.each([
+    [403, { error: "Your Role can't do this" }, { kind: "forbidden" }],
+    [404, { error: "No such Product" }, { kind: "not-found" }],
+    [
+      409,
+      { error: "Your Team's Admin must open Warden first" },
+      { kind: "conflict", error: "Your Team's Admin must open Warden first" },
+    ],
+    [409, {}, { kind: "conflict", error: null }],
+    [401, { error: "Not signed in" }, { kind: "session-ended" }],
+    [500, { error: "Something went wrong" }, { kind: "not-answering" }],
+  ])("reads a %i into its kind", async (status, body, result) => {
+    answers(json(status, body));
+    expect(await deleteProduct(getToken, "prod_1")).toEqual(result);
+  });
+
+  it("reads a 429 into too many attempts, with Retry-After's seconds", async () => {
+    answers(json(429, { error: "Too many Product saves" }, { "Retry-After": "30" }));
+    expect(await deleteProduct(getToken, "prod_1")).toEqual({
+      kind: "too-many-attempts",
+      retryAfter: 30,
+    });
+  });
+
+  it("reads no answer as not answering", async () => {
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    expect(await deleteProduct(getToken, "prod_1")).toEqual({ kind: "not-answering" });
+  });
+});
+
+describe("deleteProductInTeam", () => {
+  it("deletes with the token whose /api/me answer named the Team, never a later one", async () => {
+    let calls = 0;
+    const getTokens = vi.fn(async () => `token-${++calls}` as string | null);
+    const meToken = () => {
+      const [, init] = callsTo("/api/me").at(-1) ?? [];
+      return new Headers(init?.headers).get("Authorization");
+    };
+    serve({
+      me: () =>
+        json(200, {
+          userId: "user_1",
+          team: meToken() === "Bearer token-2" ? "org_a" : "org_b",
+          role: "lead",
+          level: "quick",
+        }),
+      deleteProduct: () => noContent(),
+    });
+
+    expect(await deleteProductInTeam(getTokens, "org_a", "prod_1")).toEqual({ kind: "deleted" });
+    expect(callsTo("/api/me")).toHaveLength(2);
+    const [[, init] = []] = callsTo("/api/products/prod_1");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer token-2");
     expect(getTokens).toHaveBeenCalledTimes(2);
   });
 });
