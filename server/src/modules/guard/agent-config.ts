@@ -437,10 +437,10 @@ function readWord(at: Position, word: string): [runs: boolean, next: Position] {
   if (!at.command) return at.wrapped && isAgent(word) ? [true, AFTER_COMMAND] : [false, at];
   const option = at.timeOptions.indexOf(word);
   if (option >= 0) return [false, { ...at, timeOptions: at.timeOptions.slice(option + 1) }];
-  const here = { ...at, timeOptions: word === TIME ? TIME_OPTIONS : [] };
-  if (ASSIGNMENT.test(word) || RESERVED.has(word)) return [false, here];
-  if (word === NAMES_NEXT) return [false, { ...here, target: true }];
-  if (REDIRECT.test(word)) return [false, { ...here, target: REDIRECT_ALONE.test(word) }];
+  const afterWord = { ...at, timeOptions: word === TIME ? TIME_OPTIONS : [] };
+  if (ASSIGNMENT.test(word) || RESERVED.has(word)) return [false, afterWord];
+  if (word === NAMES_NEXT) return [false, { ...afterWord, target: true }];
+  if (REDIRECT.test(word)) return [false, { ...afterWord, target: REDIRECT_ALONE.test(word) }];
   if (isAgent(word)) return [true, AFTER_COMMAND];
   return [false, { ...AFTER_COMMAND, wrapped: WRAPPERS.has(commandName(word)) }];
 }
@@ -452,11 +452,11 @@ function readWord(at: Position, word: string): [runs: boolean, next: Position] {
  * either side. A word runs the agent when it is the command word (the first of a command, past `NAME=value`, a
  * redirect and reserved words such as `then` or `!`, and `time`'s `-p` and `--`) or any later word after a wrapper
  * (`env`, `sudo`, `npx`, `/usr/bin/time`, …). An unescaped `#` at a word's start hides the rest of its line. Each `(`
- * and backquote starts a command, and its close
- * restores where the word before it stood; inside backquotes, an escaped backquote opens or closes a nested one. A
- * backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the word: it goes on after the close. After a `)` that
- * closes nothing (a `case` pattern's) or one whose `(` came after a command's word (a `case` pattern's `(a)`, a
- * function's `()`), a command starts; so it does after `function` and the name that follows it.
+ * and backquote starts a command, and its close restores where the word before it stood; inside backquotes, an escaped
+ * backquote opens or closes a nested one. A backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the
+ * word: it goes on after the close. After a `)` that closes nothing (a `case` pattern's) or one whose `(` came after a
+ * command's word (a `case` pattern's `(a)`, a function's `()`), a command starts; so it does after `function` and the
+ * name that follows it.
  */
 function agentRunStarts(masked: string): number[] {
   const starts: number[] = [];
