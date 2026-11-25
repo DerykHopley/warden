@@ -70,11 +70,12 @@ The data lives in `@warden/contracts/demo`, which the dashboard's tests read too
 Organization id (`org_…`, the Organization switcher's Manage screen shows it), and the Team's Admin must have opened
 Warden in it first. It runs as `warden_app` and writes only through the Findings module and the Products store
 (Scans, a Spot run, two decisions made as the Team's oldest Admin or Lead, the Product and its Scan). Run again, it
-says the Team is already seeded. It exits 1, writing nothing, for a Team with Findings of its own, for a Team with
-Products of its own, when the CVE snapshot isn't loaded (naming `load-cves`), and for a Team whose demo Findings or
-demo Product aren't as it leaves them (a seed cut short, or the Product changed or deleted since); one seed runs per
-Team at a time. `--no-product` after the Team id seeds the demo Findings only, with no Product and no snapshot needed:
-the browser tests seed Acme and Bluebird that way.
+says the Team is already seeded; on a Team seeded without the demo Product (with `--no-product`, or before the seed
+made one), it adds the Product and runs its Scan. It exits 1, writing nothing, for a Team with Findings of its own, for
+a Team with Products of its own, when the CVE snapshot isn't loaded (naming `load-cves`), and for a Team whose demo
+Findings or demo Product aren't as it leaves them (a seed cut short, the Product changed since, or the Findings a
+deleted demo Product left); one seed runs per Team at a time. `--no-product` after the Team id seeds the demo Findings
+only, with no Product and no snapshot needed: the browser tests seed Acme and Bluebird that way.
 
 It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database (a `PGHOST` other than `127.0.0.1`,
 `localhost` or `::1`, or any `PGPASSWORD`), `WARDEN_SEED_DEMO` must be the database's name, and the live database,

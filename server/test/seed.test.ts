@@ -3,14 +3,14 @@
 // Scan. Each case uses a Team of its own in the suite's shared database, which holds the CVE snapshot; the cases with
 // no snapshot use a database of their own. Some run the script as its own process.
 import { randomUUID } from "node:crypto";
-import type { Finding } from "@warden/contracts";
+import type { Finding, Product } from "@warden/contracts";
 import { DEMO_OBSERVATIONS, DEMO_PRODUCT, demoRuns } from "@warden/contracts/demo";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { runDailyExpiry } from "../src/daily-expiry.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createProducts, type Products } from "../src/modules/patch/products.ts";
-import { seedDemoFindings, seedRefusal } from "../src/seed.ts";
+import { onProduct, seedDemo, seedRefusal } from "../src/seed.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
@@ -45,14 +45,9 @@ const DEMO_COUNT = Object.keys(DEMO_OBSERVATIONS).length;
 
 /** The made-up Product Asset the demo's Patch Findings are on: no Product row holds it. */
 const SHOP = DEMO_OBSERVATIONS.lodash.asset;
-
-/** The demo Findings in `list`: all but the ones on a real Product's Asset, such as the demo Product's CVE Findings. */
-const demoFindings = (list: readonly Finding[]) =>
-  list.filter((f) => f.asset.kind !== "product" || f.asset.ref === SHOP.ref);
-
-/** The Findings in `list` on Product `id`'s Asset. */
-const onProduct = (list: readonly Finding[], id: string) =>
-  list.filter((f) => f.asset.kind === "product" && f.asset.ref === id);
+const SHOP_COUNT = Object.values(DEMO_OBSERVATIONS).filter(
+  (o) => o.asset.kind === SHOP.kind && o.asset.ref === SHOP.ref,
+).length;
 
 /** Everything the seed writes in `team`: its Products, Findings and Scans, to compare before and after. */
 async function stateOf(team: string) {
@@ -63,12 +58,18 @@ async function stateOf(team: string) {
   };
 }
 
-/** The Team's one Product, which must be the demo Product: its id. */
-async function demoProductId(team: string): Promise<string> {
+/** Expects the Team's Products to be the demo Product alone, and returns it. */
+async function expectOneDemoProduct(team: string): Promise<Product> {
   const [product, ...more] = await products.list(team);
   expect(more).toEqual([]);
   expect(product).toEqual({ id: expect.any(String), ...DEMO_PRODUCT });
-  return product!.id;
+  return product!;
+}
+
+/** The demo Findings in `team`, as the seed counts them: every Finding but the ones on its demo Product's Asset. */
+async function demoFindingsOf(team: string) {
+  const { id } = await expectOneDemoProduct(team);
+  return (await findings.list(team)).filter((f) => !onProduct(f, id));
 }
 
 const count = (list: readonly Finding[], key: (f: Finding) => string) =>
@@ -128,18 +129,17 @@ describe("seedRefusal", () => {
   });
 });
 
-describe("seedDemoFindings", () => {
+describe("seedDemo", () => {
   it("fills a Team with the demo Findings across modules, Asset kinds, Severities and every Status", async () => {
     const team = await teamWith([
       ["user_admin", "admin"],
       ["user_member", "member"],
     ]);
 
-    const result = await seedDemoFindings({ pool, team, now: NOW });
+    const result = await seedDemo({ pool, team, now: NOW });
 
-    const all = await findings.list(team);
-    expect(result).toEqual({ kind: "seeded", findings: all.length });
-    const list = demoFindings(all);
+    expect(result).toEqual({ kind: "seeded", findings: (await findings.list(team)).length });
+    const list = await demoFindingsOf(team);
     expect(list).toHaveLength(DEMO_COUNT);
     expect(count(list, (f) => f.status)).toEqual({
       accepted: 1,
@@ -162,13 +162,11 @@ describe("seedDemoFindings", () => {
   it("then creates the demo Product and runs its Patch Scan, opening CVE Findings on it from the snapshot", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
 
-    expect((await seedDemoFindings({ pool, team, now: NOW })).kind).toBe("seeded");
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("seeded");
 
-    const id = await demoProductId(team);
-    const all = await findings.list(team);
-    expect(demoFindings(all)).toHaveLength(DEMO_COUNT);
-    const cves = onProduct(all, id);
-    expect(cves.length).toBe(all.length - DEMO_COUNT);
+    const { id } = await expectOneDemoProduct(team);
+    expect(await demoFindingsOf(team)).toHaveLength(DEMO_COUNT);
+    const cves = (await findings.list(team)).filter((f) => onProduct(f, id));
     const open = cves.filter(
       (f) => f.status === "open" && f.rule_id === "patch/known-vulnerability",
     );
@@ -189,7 +187,7 @@ describe("seedDemoFindings", () => {
       ["user_lead", "lead"],
     ]);
 
-    await seedDemoFindings({ pool, team, now: NOW });
+    await seedDemo({ pool, team, now: NOW });
 
     const decided = (await findings.list(team)).filter((f) =>
       ["accepted", "false_positive"].includes(f.status),
@@ -206,11 +204,11 @@ describe("seedDemoFindings", () => {
 
   it("run again, says the Team is already seeded and changes no Product, Finding or Scan", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
-    await seedDemoFindings({ pool, team, now: NOW });
+    await seedDemo({ pool, team, now: NOW });
     const before = await stateOf(team);
     expect(before.products).toHaveLength(1);
 
-    expect(await seedDemoFindings({ pool, team, now: new Date() })).toEqual({
+    expect(await seedDemo({ pool, team, now: new Date() })).toEqual({
       kind: "already_seeded",
       findings: before.findings.length,
     });
@@ -221,13 +219,12 @@ describe("seedDemoFindings", () => {
     const team = await teamWith([["user_admin", "admin"]]);
 
     const results = await Promise.all([
-      seedDemoFindings({ pool, team, now: NOW }),
-      seedDemoFindings({ pool, team, now: new Date(NOW.getTime() + 1000) }),
+      seedDemo({ pool, team, now: NOW }),
+      seedDemo({ pool, team, now: new Date(NOW.getTime() + 1000) }),
     ]);
 
     expect(results.map((r) => r.kind).sort()).toEqual(["already_seeded", "seeded"]);
-    expect(demoFindings(await findings.list(team))).toHaveLength(DEMO_COUNT);
-    await demoProductId(team);
+    expect(await demoFindingsOf(team)).toHaveLength(DEMO_COUNT);
   });
 
   it("refuses a Team with a Product of its own, not yet seeded, writing nothing", async () => {
@@ -236,37 +233,82 @@ describe("seedDemoFindings", () => {
     await products.create(team, { ...DEMO_PRODUCT, repo_urls: [] });
     const before = await stateOf(team);
 
-    expect(await seedDemoFindings({ pool, team, now: NOW })).toEqual({
+    expect(await seedDemo({ pool, team, now: NOW })).toEqual({
       kind: "other_products",
       products: 1,
     });
     expect(await stateOf(team)).toEqual(before);
   });
 
-  it("on a rerun, a deleted demo Product doesn't match, naming the demo Product", async () => {
+  it("on a rerun, finishes a Team seeded without the demo Product: creates it and runs its Scan", async () => {
+    // As after --no-product, a seed from before the demo Product, or a Product step cut short after the Findings.
     const team = await teamWith([["user_admin", "admin"]]);
-    await seedDemoFindings({ pool, team, now: NOW });
-    await products.remove(team, await demoProductId(team));
+    await seedDemo({ pool, team, now: NOW, withProduct: false });
 
-    const result = await seedDemoFindings({ pool, team, now: NOW });
+    const result = await seedDemo({ pool, team, now: NOW });
 
-    expect(result.kind).toBe("mismatch");
-    expect(result.kind === "mismatch" && result.problems).toContainEqual(
-      expect.stringMatching(/^demo Product: /),
-    );
+    expect(result).toEqual({ kind: "seeded", findings: (await findings.list(team)).length });
+    const { id } = await expectOneDemoProduct(team);
+    expect(await demoFindingsOf(team)).toHaveLength(DEMO_COUNT);
+    const cves = (await findings.list(team)).filter((f) => onProduct(f, id));
+    expect(cves.filter((f) => f.status === "open").length).toBeGreaterThan(0);
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("already_seeded");
+  });
+
+  it("on a rerun, finds the Team seeded when a Lead has decided every CVE Finding on the demo Product", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW });
+    const { id } = await expectOneDemoProduct(team);
+    const actor = { kind: "person", id: "user_admin" } as const;
+    const cves = (await findings.list(team)).filter((f) => onProduct(f, id));
+    for (const [i, finding] of cves.entries()) {
+      if (i % 2 === 0) {
+        await findings.accept(team, finding.id, {
+          actor,
+          reason: "Not reachable here",
+          until: "2027-01-01T00:00:00Z",
+        });
+      } else {
+        await findings.markFalsePositive(team, finding.id, { actor, reason: "Not ours" });
+      }
+    }
+    const before = await stateOf(team);
+
+    expect(await seedDemo({ pool, team, now: NOW })).toEqual({
+      kind: "already_seeded",
+      findings: before.findings.length,
+    });
+    expect(await stateOf(team)).toEqual(before);
+  });
+
+  it("on a rerun, a deleted demo Product's leftover CVE Findings don't match, writing nothing", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW });
+    const { id } = await expectOneDemoProduct(team);
+    const left = (await findings.list(team)).filter((f) => onProduct(f, id)).length;
+    await products.remove(team, id);
+    const before = await stateOf(team);
+
+    const result = await seedDemo({ pool, team, now: NOW });
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      problems: [`${left} Finding(s) the seed didn't write`],
+    });
+    expect(await stateOf(team)).toEqual(before);
   });
 
   it("on a rerun, a demo Product whose LangChain version changed doesn't match, naming the demo Product", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
-    await seedDemoFindings({ pool, team, now: NOW });
+    await seedDemo({ pool, team, now: NOW });
     const [langchain] = DEMO_PRODUCT.dependencies;
-    await products.update(team, await demoProductId(team), {
+    await products.update(team, (await expectOneDemoProduct(team)).id, {
       ...DEMO_PRODUCT,
       dependencies: [{ ...langchain!, version: "0.1.0" }],
     });
     const before = await stateOf(team);
 
-    const result = await seedDemoFindings({ pool, team, now: NOW });
+    const result = await seedDemo({ pool, team, now: NOW });
 
     expect(result.kind).toBe("mismatch");
     expect(result.kind === "mismatch" && result.problems).toContainEqual(
@@ -277,11 +319,13 @@ describe("seedDemoFindings", () => {
 
   it("after the daily Job, the made-up Patch Findings keep their Status and a second seed finds the Team seeded", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
-    await seedDemoFindings({ pool, team, now: NOW });
+    await seedDemo({ pool, team, now: NOW });
     const shop = async () =>
-      onProduct(await findings.list(team), SHOP.ref).map(({ id, status }) => ({ id, status }));
+      (await findings.list(team))
+        .filter((f) => onProduct(f, SHOP.ref))
+        .map(({ id, status }) => ({ id, status }));
     const before = await shop();
-    expect(before).toHaveLength(5);
+    expect(before).toHaveLength(SHOP_COUNT);
 
     // The daily Job's entry point for this one Team: warden_app lists only the Team row-level security shows it, and
     // Patch's step is wired as the daily Job wires it.
@@ -294,7 +338,7 @@ describe("seedDemoFindings", () => {
 
     expect(code).toBe(0);
     expect(await shop()).toEqual(before);
-    expect((await seedDemoFindings({ pool, team, now: NOW })).kind).toBe("already_seeded");
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("already_seeded");
   });
 
   it("refuses a Team that has Findings of its own, writing nothing", async () => {
@@ -303,7 +347,7 @@ describe("seedDemoFindings", () => {
     await findings.reconcile({ ...scans[0]!, id: "a-real-scan" });
     const before = await findings.list(team);
 
-    expect(await seedDemoFindings({ pool, team, now: NOW })).toEqual({
+    expect(await seedDemo({ pool, team, now: NOW })).toEqual({
       kind: "other_findings",
       findings: before.length,
     });
@@ -312,7 +356,7 @@ describe("seedDemoFindings", () => {
 
   it("on a rerun, a Finding of the Team's own doesn't match, writing nothing", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
-    await seedDemoFindings({ pool, team, now: NOW });
+    await seedDemo({ pool, team, now: NOW });
     const { spotRun } = demoRuns(team, NOW);
     await findings.report({
       ...spotRun,
@@ -323,7 +367,7 @@ describe("seedDemoFindings", () => {
     });
     const before = await stateOf(team);
 
-    const result = await seedDemoFindings({ pool, team, now: NOW });
+    const result = await seedDemo({ pool, team, now: NOW });
 
     expect(result).toEqual({ kind: "mismatch", problems: ["1 Finding(s) the seed didn't write"] });
     expect(await stateOf(team)).toEqual(before);
@@ -334,7 +378,7 @@ describe("seedDemoFindings", () => {
     const { scans } = demoRuns(team, NOW);
     await findings.reconcile(scans[0]!);
 
-    const result = await seedDemoFindings({ pool, team, now: NOW });
+    const result = await seedDemo({ pool, team, now: NOW });
 
     expect(result.kind).toBe("mismatch");
     expect(result.kind === "mismatch" && result.problems).toContain("lodash: missing (want open)");
@@ -342,11 +386,11 @@ describe("seedDemoFindings", () => {
 
   it("refuses a Team Warden doesn't have, and one with no Admin or Lead, writing nothing", async () => {
     const missing = newTeam();
-    expect(await seedDemoFindings({ pool, team: missing, now: NOW })).toEqual({ kind: "no_team" });
+    expect(await seedDemo({ pool, team: missing, now: NOW })).toEqual({ kind: "no_team" });
     expect(await findings.list(missing)).toEqual([]);
 
     const membersOnly = await teamWith([["user_member", "member"]]);
-    expect(await seedDemoFindings({ pool, team: membersOnly, now: NOW })).toEqual({
+    expect(await seedDemo({ pool, team: membersOnly, now: NOW })).toEqual({
       kind: "no_lead",
     });
     expect(await findings.list(membersOnly)).toEqual([]);
@@ -367,8 +411,7 @@ describe("pnpm seed", () => {
 
     expect(output).toContain(`"message":"demo Findings and demo Product seeded"`);
     expect(code).toBe(0);
-    expect(demoFindings(await findings.list(team))).toHaveLength(DEMO_COUNT);
-    await demoProductId(team);
+    expect(await demoFindingsOf(team)).toHaveLength(DEMO_COUNT);
   });
 
   it("exits 1 for a Team with Products of its own, saying so", async () => {
@@ -392,6 +435,19 @@ describe("pnpm seed", () => {
 
     expect(code).toBe(1);
     expect(output).toContain("--no-prodcut");
+    expect(await findings.list(team)).toEqual([]);
+  });
+
+  it("exits 1 when a flag comes before the Team id, rather than taking it for the Team, writing nothing", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+
+    const { code, output } = await runInServer(
+      ["node", "src/seed.ts", "--no-product", team],
+      env(),
+    );
+
+    expect(code).toBe(1);
+    expect(output).toContain("Name the Team to seed first");
     expect(await findings.list(team)).toEqual([]);
   });
 
@@ -461,7 +517,7 @@ describe("the demo seed with the CVE snapshot not loaded", () => {
   it("answers no_cve_snapshot and writes no Product or Finding", async () => {
     const team = await ownTeam();
 
-    expect(await seedDemoFindings({ pool: own.pools.warden_app, team, now: NOW })).toEqual({
+    expect(await seedDemo({ pool: own.pools.warden_app, team, now: NOW })).toEqual({
       kind: "no_cve_snapshot",
     });
     expect(await ownProducts.list(team)).toEqual([]);
@@ -493,6 +549,19 @@ describe("the demo seed with the CVE snapshot not loaded", () => {
 
     expect(again.output).toContain("already seeded");
     expect(again.code).toBe(0);
+    expect(await ownFindings.list(team)).toEqual(before);
+  });
+
+  it("run again without --no-product on a Team seeded with it, exits 1 naming load-cves, writing nothing", async () => {
+    const team = await ownTeam();
+    await runInServer(["node", "src/seed.ts", team, "--no-product"], ownEnv());
+    const before = await ownFindings.list(team);
+
+    const { code, output } = await runInServer(["node", "src/seed.ts", team], ownEnv());
+
+    expect(code).toBe(1);
+    expect(output).toContain("load-cves");
+    expect(await ownProducts.list(team)).toEqual([]);
     expect(await ownFindings.list(team)).toEqual(before);
   });
 });
