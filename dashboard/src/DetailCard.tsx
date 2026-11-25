@@ -69,11 +69,13 @@ const DECISION_LABELS: Record<Decision, string> = {
   reopen: "Reopen",
 };
 
-/** A decision's button and submit: accepting an Accepted Finding again renews its acceptance. */
+/** Accepting an Accepted Finding again renews its acceptance. */
+const renews = (decision: Decision, finding: Finding) =>
+  decision === "accept" && finding.status === "accepted";
+
+/** A decision's button and submit: "Renew acceptance" when the decision renews. */
 const decisionLabel = (decision: Decision, finding: Finding) =>
-  decision === "accept" && finding.status === "accepted"
-    ? "Renew acceptance"
-    : DECISION_LABELS[decision];
+  renews(decision, finding) ? "Renew acceptance" : DECISION_LABELS[decision];
 
 /** A Member's buttons: "Propose", the glossary's word (never "Suggest"). */
 const PROPOSE_LABELS: Record<ProposalDecision, string> = {
@@ -228,9 +230,9 @@ export function DetailCard(props: {
    * empty: picking the next day is what renewing is for. Set once, here: a refusal keeps what the person typed.
    */
   function draftFor(action: Action): Draft {
-    const renews =
-      action.kind === "decide" && action.decision === "accept" && finding.status === "accepted";
-    return renews ? { ...EMPTY_DRAFT, reason: finding.accepted_reason ?? "" } : EMPTY_DRAFT;
+    return action.kind === "decide" && renews(action.decision, finding)
+      ? { ...EMPTY_DRAFT, reason: finding.accepted_reason ?? "" }
+      : EMPTY_DRAFT;
   }
 
   function open(action: Action) {
