@@ -186,6 +186,26 @@ describe("story 4: a Member proposes, a Lead approves", () => {
   });
 });
 
+describe("a second Proposal while one is pending", () => {
+  it("a Member proposing twice on one Finding gets 409 in plain words, and no row is written", async () => {
+    const { team, finding } = await pendingProposal();
+    const before = await stored(team);
+    expect(before.proposals).toHaveLength(1);
+
+    const answer = await propose(team, finding.id, {
+      decision: "accept",
+      reason: "Fixed next sprint",
+      until: nextWeek(),
+    });
+
+    expect(answer).toEqual({
+      status: 409,
+      body: { error: "This Finding already has a Proposal waiting for a Lead or Admin to decide." },
+    });
+    expect(await stored(team)).toEqual(before);
+  });
+});
+
 describe("a Lead's reject", () => {
   it("leaves the Finding unchanged, rejects the Proposal with the reason, writes no history; again answers 409", async () => {
     const { team, proposal } = await pendingProposal();
@@ -365,9 +385,10 @@ describe("GET /api/proposals", () => {
     ["Lead", LEAD],
     ["Admin", ADMIN],
   ])(
-    "answers a %s the Team's id and its pending Proposals, oldest first, each marked stale or not",
+    "answers a %s the Team's id and its pending Proposals, each marked stale or not",
     async (_role, as) => {
-      // Which Proposals are listed, and the stale rule itself, are Findings.pendingProposals' (proposals.test.ts).
+      // Which Proposals are listed and in what order, and the stale rule itself, are Findings.pendingProposals'
+      // (proposals.test.ts).
       const { team, finding } = await teamWithFinding();
       const first = Proposal.parse(
         (await propose(team, finding.id, { decision: "mark_false_positive", reason: "First" }))
@@ -379,6 +400,18 @@ describe("GET /api/proposals", () => {
         team,
         body: { reason: "Fixed next sprint", until: nextWeek() },
       });
+
+      const staleAnswer = await listProposals(as, team);
+      expect(staleAnswer.status).toBe(200);
+      expect(ProposalsBody.parse(staleAnswer.body)).toEqual({
+        team,
+        proposals: [{ ...first, stale: true }],
+      });
+
+      // Rejected, the Finding takes a new one, asked after the accept: not stale.
+      expect((await reject(team, first.id, { reason: "Asked before the accept" })).status).toBe(
+        200,
+      );
       const second = Proposal.parse(
         (
           await propose(team, finding.id, {
@@ -394,10 +427,7 @@ describe("GET /api/proposals", () => {
       expect(answer.status).toBe(200);
       expect(ProposalsBody.parse(answer.body)).toEqual({
         team,
-        proposals: [
-          { ...first, stale: true },
-          { ...second, stale: false },
-        ],
+        proposals: [{ ...second, stale: false }],
       });
     },
   );

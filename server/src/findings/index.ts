@@ -46,7 +46,7 @@ export {
 } from "./decisions.ts";
 export { DAILY_EXPIRY, type ExpiryLimits } from "./expiry.ts";
 export { OVERVIEW_PERIOD_DAYS, type FindingsOverview } from "./overview.ts";
-export { ProposalDecided, ProposalNotFound } from "./proposals.ts";
+export { ProposalDecided, ProposalNotFound, ProposalPending } from "./proposals.ts";
 export type { MoveRule, ReconcileOutcome } from "./reconcile.ts";
 export { sameAsset } from "./rows.ts";
 
@@ -137,8 +137,9 @@ export interface Findings {
 
   /**
    * Stores a pending Proposal and changes no Finding. Throws a zod error for bad input (an `until` exactly on an
-   * accept, later than now), and FindingNotFound or DecisionRefused when the decision would be refused on the Finding
-   * now; nothing is written then. No Lead check: anyone in the Team, or an agent, may propose.
+   * accept, later than now), FindingNotFound or DecisionRefused when the decision would be refused on the Finding
+   * now, and ProposalPending when a Proposal on the Finding is still pending (one at a time); nothing is written then.
+   * No Lead check: anyone in the Team, or an agent, may propose.
    */
   propose(team: string, findingId: string, input: ProposeInput): Promise<Proposal>;
   /**

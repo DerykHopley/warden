@@ -3,6 +3,7 @@
 // a Team of its own. Story 4's Proposal part is proved at the API (proposals-api.test.ts).
 import { randomUUID } from "node:crypto";
 import { fingerprint, HistoryEntryBody, type Actor, type Finding } from "@warden/contracts";
+import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { ZodError } from "zod";
@@ -72,6 +73,22 @@ async function teamWithFinding(overrides: Partial<Finding> = {}) {
   await withTeam(team, (tx) => tx.insertInto("findings").values(toRow(finding)).execute());
   return { team, finding };
 }
+
+/** Another Open Finding in `base`'s Team, at a Location of its own: a Finding takes one pending Proposal at a time. */
+async function anotherFinding(base: Finding): Promise<Finding> {
+  const location = { kind: "file", path: `other-${randomUUID()}.json` } as const;
+  const other: Finding = {
+    ...base,
+    id: `f-${randomUUID()}`,
+    location,
+    fingerprint: fingerprint(ENV, location),
+  };
+  await withTeam(base.team, (tx) => tx.insertInto("findings").values(toRow(other)).execute());
+  return other;
+}
+
+/** The refusal of a second pending Proposal on one Finding, as the API answers it. */
+const WAITING = "This Finding already has a Proposal waiting for a Lead or Admin to decide.";
 
 /** Everything the Team has stored for its Findings and Proposals. */
 function stored(team: string) {
@@ -356,6 +373,143 @@ describe("proposing", () => {
   });
 });
 
+describe("one pending Proposal per Finding", () => {
+  it("an agent's propose on a Finding with a Member's pending Proposal throws ProposalPending and stores nothing", async () => {
+    const { team, finding } = await teamWithFinding();
+    await findings.propose(team, finding.id, {
+      requester: member,
+      decision: "mark_false_positive",
+      reason: "The file is a test fixture",
+    });
+    const before = await stored(team);
+
+    expect(
+      await refusal(
+        findings.propose(team, finding.id, {
+          requester: agent,
+          decision: "accept",
+          reason: "Next sprint",
+          until: nextWeek(),
+        }),
+      ),
+    ).toEqual({ name: "ProposalPending", message: WAITING });
+
+    expect(await stored(team)).toEqual(before);
+  });
+
+  it("stores a new Proposal once the pending one is rejected", async () => {
+    const { team, finding } = await teamWithFinding();
+    const first = await findings.propose(team, finding.id, {
+      requester: member,
+      decision: "mark_false_positive",
+      reason: "First",
+    });
+    await findings.rejectProposal(team, first.id, { actor: lead, reason: "Fix it now" });
+
+    const again = await findings.propose(team, finding.id, {
+      requester: member,
+      decision: "mark_false_positive",
+      reason: "Asked again",
+    });
+
+    const { proposals } = await stored(team);
+    expect(proposals).toHaveLength(2);
+    expect(proposals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: first.id, state: "rejected" }),
+        expect.objectContaining({ id: again.id, state: "pending", reason: "Asked again" }),
+      ]),
+    );
+  });
+
+  it("stores a new Proposal once the pending one is approved, when the new Status still takes one", async () => {
+    const { team, finding } = await teamWithFinding();
+    const first = await findings.propose(team, finding.id, {
+      requester: member,
+      decision: "accept",
+      reason: "Next sprint",
+      until: nextWeek(),
+    });
+    await findings.approveProposal(team, first.id, { actor: lead });
+
+    const again = await findings.propose(team, finding.id, {
+      requester: member,
+      decision: "mark_false_positive",
+      reason: "A fixture after all",
+    });
+
+    expect(again).toMatchObject({ finding_id: finding.id, state: "pending" });
+    expect((await stored(team)).findings).toMatchObject([{ status: "accepted" }]);
+  });
+
+  it("a propose whose insert waits on another transaction's pending Proposal for the Finding throws ProposalPending", async () => {
+    const { team, finding } = await teamWithFinding();
+    let commit!: () => void;
+    const committing = new Promise<void>((resolve) => (commit = resolve));
+    let inserted!: (xid: string) => void;
+    const insertedBy = new Promise<string>((resolve) => (inserted = resolve));
+    // Written past `propose` and its lock: the row is there, uncommitted, when the propose looks for one.
+    const holding = withTeam(team, async (tx) => {
+      await tx
+        .insertInto("proposals")
+        .values({
+          team_id: team,
+          id: `p-${randomUUID()}`,
+          finding_id: finding.id,
+          decision: "mark_false_positive",
+          reason: "Asked in the held transaction",
+          accepted_until: null,
+          requested_by_kind: "agent",
+          requested_by_id: agent.id,
+        })
+        .execute();
+      // pg_locks holds a 32-bit xid: the epoch-free form of pg_current_xact_id's xid8.
+      const { rows } = await sql<{
+        xid: string;
+      }>`select pg_current_xact_id()::xid::text as xid`.execute(tx);
+      inserted(rows[0]!.xid);
+      await committing;
+    });
+    const xid = await insertedBy;
+
+    const proposing = refusal(
+      findings.propose(team, finding.id, {
+        requester: member,
+        decision: "mark_false_positive",
+        reason: "Asked at the same time",
+      }),
+    );
+    // Its own pool: the held transaction and the waiting propose take both of `pool`'s connections.
+    const watcher = poolAs("warden_app", inject("testDatabase"));
+    try {
+      await waitingOn(watcher, xid);
+    } finally {
+      commit();
+      await holding;
+      await watcher.end();
+    }
+
+    expect(await proposing).toEqual({ name: "ProposalPending", message: WAITING });
+    expect((await stored(team)).proposals).toMatchObject([
+      { reason: "Asked in the held transaction" },
+    ]);
+  });
+});
+
+/** Resolves once another transaction waits for transaction `xid` to end: the propose's insert, on the unique index. */
+async function waitingOn(watcher: pg.Pool, xid: string) {
+  for (let tries = 0; tries < 100; tries++) {
+    const { rows } = await watcher.query<{ waiting: number }>(
+      `select count(*)::int as waiting from pg_locks
+        where locktype = 'transactionid' and not granted and transactionid::text = $1`,
+      [xid],
+    );
+    if (rows[0]!.waiting > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`nothing waited on transaction ${xid}: the propose's insert never blocked`);
+}
+
 describe("a Proposal no longer pending, or not the Team's", () => {
   it.each([
     ["rejected", "This Proposal was rejected already."],
@@ -406,16 +560,17 @@ describe("a Proposal no longer pending, or not the Team's", () => {
 describe("the Team's pending Proposals", () => {
   it("lists only pending ones, oldest first, each with the Proposal's fields", async () => {
     const { team, finding } = await teamWithFinding();
-    const ask = (reason: string) =>
-      findings.propose(team, finding.id, {
+    const other = await anotherFinding(finding);
+    const ask = (on: Finding, reason: string) =>
+      findings.propose(team, on.id, {
         requester: member,
         decision: "mark_false_positive",
         reason,
       });
-    const first = await ask("first");
-    const rejected = await ask("rejected");
-    const third = await ask("third");
+    const first = await ask(finding, "first");
+    const rejected = await ask(other, "rejected");
     await findings.rejectProposal(team, rejected.id, { actor: lead, reason: "No" });
+    const third = await ask(other, "third");
 
     expect(await findings.pendingProposals(team)).toEqual([
       { ...first, stale: false },
@@ -431,21 +586,22 @@ describe("the Team's pending Proposals", () => {
       reason: "Asked before the accept",
     });
     await findings.accept(team, finding.id, { actor: lead, reason: "Later", until: nextWeek() });
+    const listed = async () =>
+      (await findings.pendingProposals(team)).map((p) => [p.reason, p.stale] as const);
+
+    expect(await listed()).toEqual([["Asked before the accept", true]]);
+    expect(await refusal(findings.approveProposal(team, old.id, { actor: lead }))).toMatchObject({
+      name: "DecisionRefused",
+    });
+
+    // The same Finding, asked again once the stale one is rejected: asked after the accept, so not stale.
+    await findings.rejectProposal(team, old.id, { actor: lead, reason: "Asked before the accept" });
     const fresh = await findings.propose(team, finding.id, {
       requester: agent,
       decision: "mark_false_positive",
       reason: "Asked after the accept",
     });
-
-    expect(
-      (await findings.pendingProposals(team)).map((p) => [p.reason, p.stale] as const),
-    ).toEqual([
-      ["Asked before the accept", true],
-      ["Asked after the accept", false],
-    ]);
-    expect(await refusal(findings.approveProposal(team, old.id, { actor: lead }))).toMatchObject({
-      name: "DecisionRefused",
-    });
+    expect(await listed()).toEqual([["Asked after the accept", false]]);
     await expect(findings.approveProposal(team, fresh.id, { actor: lead })).resolves.toMatchObject({
       state: "approved",
     });

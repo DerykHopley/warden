@@ -76,9 +76,11 @@ test("Tab reaches the open panel's controls after the page's, in order, and then
   await page.locator(".finding-card").first().click();
   const panel = page.getByRole("complementary", { name: "Ask Warden" });
   await expect(panel).toHaveAttribute("data-shown", "floating");
+  // Grace is a Member: an Open Finding's card offers her its Propose buttons (#59), once its Proposals have loaded
+  // and none waits on it (#87).
+  await expect(panel.getByRole("button", { name: "Propose accepting" })).toBeVisible();
 
   await lastRow.focus();
-  // Grace is a Member: an Open Finding's card offers her its Propose buttons (#59).
   expect(await tabThrough(page, 8)).toEqual([
     "button:Pin",
     "button:Close Ask Warden",

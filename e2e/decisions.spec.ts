@@ -19,6 +19,9 @@ import {
 const panel = (page: Page) => page.getByRole("complementary", { name: "Ask Warden" });
 const card = (page: Page) => panel(page).locator(".detail-card");
 
+/** A Member's line in place of the Propose buttons while the Finding has a pending Proposal. */
+const WAITING = "Waiting for a Lead or Admin to decide.";
+
 /** A far Reopens on day, so every run's accept is in the future whatever the day. */
 const UNTIL = "2099-01-15";
 
@@ -102,6 +105,9 @@ test("story 4: Linus accepts and reopens a Finding; Margaret proposes a False po
     await expect(card(page).getByRole("status")).toHaveText(
       "Proposal sent. A Lead or an Admin decides.",
     );
+    // One pending Proposal per Finding: hers waits, so the line stands in the Propose buttons' place.
+    await expect(card(page).getByText(WAITING)).toBeVisible();
+    await expect(card(page).getByRole("button", { name: /^Propose/ })).toHaveCount(0);
 
     await signIn(LINUS, BLUEBIRD);
     await focus(page, lodash);
@@ -148,6 +154,14 @@ test("story 4: Linus accepts and reopens a Finding; Margaret proposes a False po
     await expect(card(page).getByRole("status")).toHaveText("Proposal approved.");
     await expect(hers).toHaveCount(0);
     await expect(card(page).locator(".detail-status")).toContainText("False positive");
+
+    // Nothing waits on the Finding now: reopened, Margaret's card has her Propose buttons again and no line.
+    // (A False positive card shows neither, so it is reopened first to make the check mean something.)
+    await linus.restore(disk.id);
+    await signIn(MARGARET, BLUEBIRD);
+    await focus(page, disk);
+    await expect(card(page).getByRole("button", { name: "Propose False positive" })).toBeVisible();
+    await expect(card(page).getByText(WAITING)).toHaveCount(0);
   } finally {
     await linus.restore(lodash.id);
     await linus.restore(disk.id);

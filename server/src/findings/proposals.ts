@@ -11,6 +11,7 @@ import {
   type ProposeBody,
 } from "@warden/contracts";
 import type { Selectable, Transaction } from "kysely";
+import { isPgError } from "../database.ts";
 import type { Database } from "../schema.ts";
 import {
   applyLockedDecision,
@@ -50,6 +51,23 @@ export class ProposalDecided extends Error {
   }
 }
 
+/**
+ * The Finding already has a pending Proposal: it takes one at a time, until a Lead or Admin decides it. Nothing was
+ * written. Its message is the API's 409 and the detail card's line, so it is for people: no id.
+ */
+export class ProposalPending extends Error {
+  readonly findingId: string;
+
+  constructor(findingId: string) {
+    super("This Finding already has a Proposal waiting for a Lead or Admin to decide.");
+    this.name = "ProposalPending";
+    this.findingId = findingId;
+  }
+}
+
+/** The partial unique index that holds a Finding to one pending Proposal (0007_one_pending_proposal). */
+const ONE_PENDING = "proposals_one_pending";
+
 /** The named call each Proposal decision is made with. */
 const CALL: Record<ProposalDecision, DecisionCall> = {
   accept: "accept",
@@ -75,7 +93,11 @@ function proposalFromRow(row: ProposalRow): Proposal {
   });
 }
 
-/** Stores a pending Proposal on the Team's Finding `findingId`, when its decision may be made on the Finding now. */
+/**
+ * Stores a pending Proposal on the Team's Finding `findingId`, when its decision may be made on the Finding now and
+ * no other Proposal on it is pending (ProposalPending otherwise). The unique index refuses one written past this
+ * check (a writer without the Team's lock); that refusal is ProposalPending too.
+ */
 export async function applyPropose(
   tx: Transaction<Database>,
   team: string,
@@ -85,22 +107,36 @@ export async function applyPropose(
 ): Promise<Proposal> {
   await lockTeamFindings(tx, team);
   await findingFor(tx, team, findingId, CALL[body.decision]);
-  const row = await tx
-    .insertInto("proposals")
-    .values({
-      team_id: team,
-      id: randomUUID(),
-      finding_id: findingId,
-      decision: body.decision,
-      reason: body.reason,
-      accepted_until: body.decision === "accept" ? body.until : null,
-      requested_by_kind: requester.kind,
-      requested_by_id: requester.id,
-      requested_at: writtenAt,
-    })
-    .returningAll()
-    .executeTakeFirstOrThrow();
-  return proposalFromRow(row);
+  const waiting = await tx
+    .selectFrom("proposals")
+    .select("id")
+    .where("team_id", "=", team)
+    .where("finding_id", "=", findingId)
+    .where("state", "=", "pending")
+    .executeTakeFirst();
+  if (waiting) throw new ProposalPending(findingId);
+  try {
+    const row = await tx
+      .insertInto("proposals")
+      .values({
+        team_id: team,
+        id: randomUUID(),
+        finding_id: findingId,
+        decision: body.decision,
+        reason: body.reason,
+        accepted_until: body.decision === "accept" ? body.until : null,
+        requested_by_kind: requester.kind,
+        requested_by_id: requester.id,
+        requested_at: writtenAt,
+      })
+      .returningAll()
+      .executeTakeFirstOrThrow();
+    return proposalFromRow(row);
+  } catch (error) {
+    if (isPgError(error, "23505") && error.constraint === ONE_PENDING)
+      throw new ProposalPending(findingId);
+    throw error;
+  }
 }
 
 /** The Team's pending Proposals, oldest first, each marked stale when its Finding has changed since it was asked. */

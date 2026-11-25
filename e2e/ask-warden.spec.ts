@@ -209,16 +209,29 @@ test("story 3: after Grace proposes on a seeded Finding, she sees the Proposal i
     body: JSON.stringify({ decision: "mark_false_positive", reason }),
   });
   expect(proposed.status).toBe(201);
+  const { id } = (await proposed.json()) as { id: string };
 
-  await page.setViewportSize({ width: 1700, height: 900 });
-  await page.goto(`/findings?finding=${target.id}`);
+  try {
+    await page.setViewportSize({ width: 1700, height: 900 });
+    await page.goto(`/findings?finding=${target.id}`);
 
-  const card = panel(page).locator(".detail-card");
-  await expect(card.getByRole("heading", { level: 3 })).toHaveText(target.title);
-  const mine = card.getByRole("listitem").filter({ hasText: reason });
-  await expect(mine).toContainText("Mark False positive");
-  // Her own Proposal: "Asked by you" (#59).
-  await expect(mine).toContainText("Asked by you");
+    const card = panel(page).locator(".detail-card");
+    await expect(card.getByRole("heading", { level: 3 })).toHaveText(target.title);
+    const mine = card.getByRole("listitem").filter({ hasText: reason });
+    await expect(mine).toContainText("Mark False positive");
+    // Her own Proposal: "Asked by you" (#59).
+    await expect(mine).toContainText("Asked by you");
+  } finally {
+    // A Finding takes one pending Proposal at a time (#87): Ada rejects Grace's, so a later run or project on this
+    // database can propose on minimist again, and Grace's Propose buttons show on it in the other tests.
+    const admin = await sessionToken(await signingKey(), origin, ACME.admin, ACME, "admin");
+    const rejected = await fetch(`${origin}/api/proposals/${id}/reject`, {
+      method: "POST",
+      headers: { ...headers, Authorization: `Bearer ${admin}` },
+      body: JSON.stringify({ reason: "Put back after a test" }),
+    });
+    expect(rejected.status).toBe(200);
+  }
 });
 
 test.describe("motion", () => {

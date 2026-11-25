@@ -28,6 +28,7 @@ import {
   DATABASE_ROLE_NAMES,
   DATABASE_ROLE_SETS,
   databaseRoleNames,
+  isPgError,
   type DatabaseRoleNames,
 } from "./database.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -231,10 +232,6 @@ async function ensureRole(pool: RolesConnection, name: string, wanted: Attribute
 
 function keywords(attributes: [string, boolean | undefined][]): string {
   return attributes.map(([key, value]) => ATTRIBUTES[key as Attribute][value ? 0 : 1]).join(" ");
-}
-
-function isPgError(error: unknown, ...codes: string[]): boolean {
-  return error instanceof pg.DatabaseError && codes.includes(error.code ?? "");
 }
 
 /** Postgres's own iteration count for a SCRAM-SHA-256 verifier (`scram_iterations`' default). */
