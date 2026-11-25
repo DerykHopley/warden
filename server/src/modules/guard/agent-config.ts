@@ -368,11 +368,37 @@ const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
  */
 const RUNS_CLAUDE = /(?:^|[\s;&|(/])claude(?:-code)? /g;
 
+/** The characters that end a command, unless a redirect, a group or backquotes holds them. */
+const ENDS_COMMAND = new Set([";", "&", "|", "\n", ")"]);
+
 /**
- * A run's arguments, in a command with its quotes masked: up to the first `;`, `&`, `|`, newline or `)`. A backslash
- * and the character it escapes, a line continuation among them, don't end them.
+ * Where a run's arguments end, from `start` in a command with its quotes masked: the index of the `;`, `&`, `|`,
+ * newline or `)` that ends the command, or the command's length. A backslash and the character it escapes (a line
+ * continuation among them) don't end it. Nor does a redirect's `&` (`>&`, `<&`, `&>`, `&>>`) or `|` (`>|`), though
+ * `&&`, `|&` and a lone `&` or `|` do. A `(` the run opens (`$(`, `<(`, `$((`) and a backquote hold everything up to
+ * their close, the close included; one that never closes runs to the end. A `)` the run didn't open still ends it.
  */
-const RUN_ARGUMENTS = /(?:\\(?:\r?\n|[\s\S])|[^;&|\n)\\])*/y;
+function runArgumentsEnd(masked: string, start: number): number {
+  let depth = 0;
+  let inBackquotes = false;
+  for (let index = start; index < masked.length; index++) {
+    const char = masked[index]!;
+    if (char === "\\") index += masked.startsWith("\r\n", index + 1) ? 2 : 1;
+    else if (char === "`") inBackquotes = !inBackquotes;
+    else if (inBackquotes) continue;
+    else if (char === "(") depth++;
+    else if (char === ")" && depth > 0) depth--;
+    else if (depth === 0 && ENDS_COMMAND.has(char) && !isRedirect(masked, index)) return index;
+  }
+  return masked.length;
+}
+
+/** Whether the `&` or `|` at `index` belongs to a redirect: `>&`, `<&`, `&>` (`&>>` too) or `>|`. */
+function isRedirect(masked: string, index: number): boolean {
+  const before = masked[index - 1];
+  if (masked[index] === "&") return before === ">" || before === "<" || masked[index + 1] === ">";
+  return masked[index] === "|" && before === ">";
+}
 
 /**
  * A backslash and the character it escapes, or a single- or double-quoted argument (to the end of the text when it
@@ -399,16 +425,14 @@ const isOneWord = (quoted: string) => !/\s/.test(quoted);
  */
 function agentRuns(command: string): string[] {
   const masked = withQuotesMasked(command);
-  // Copies, so no position is kept between calls in the shared regexes' `lastIndex`.
+  // A copy, so no position is kept between calls in the shared regex's `lastIndex`.
   const runsClaude = new RegExp(RUNS_CLAUDE);
-  const runArguments = new RegExp(RUN_ARGUMENTS);
   const runs: string[] = [];
   while (runsClaude.exec(masked) !== null) {
     const start = runsClaude.lastIndex;
-    runArguments.lastIndex = start;
-    runArguments.exec(masked);
-    runs.push(withQuotesMasked(command.slice(start, runArguments.lastIndex), isOneWord));
-    runsClaude.lastIndex = runArguments.lastIndex;
+    const end = runArgumentsEnd(masked, start);
+    runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
+    runsClaude.lastIndex = end;
   }
   return runs;
 }

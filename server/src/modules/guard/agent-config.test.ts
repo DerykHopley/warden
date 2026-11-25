@@ -474,6 +474,30 @@ describe("guard/permission-skip", () => {
     [".claude/settings.json", "PreToolUse", `claude -p x && claude ${FLAG} -p y`, FLAG],
     [".claude/settings.json", "PreToolUse", `claude "${FLAG}" -p x`, FLAG],
     [".claude/settings.json", "PreToolUse", `claude ${MODE} "${BYPASS}"`, `${MODE} ${BYPASS}`],
+    // A redirect's `&` or `|`, or a separator inside a group or backquotes the run opened, doesn't end its arguments.
+    ...[
+      `claude -p x 2>&1 ${FLAG}`,
+      `claude -p x >&2 ${FLAG}`,
+      `claude -p x &>out ${FLAG}`,
+      `claude -p x &>>out ${FLAG}`,
+      `claude -p x <&0 ${FLAG}`,
+      `claude -p x >|out ${FLAG}`,
+      `claude -p $(echo hi) ${FLAG}`,
+      `claude -p <(echo hi) ${FLAG}`,
+      `claude -p $((1+2)) ${FLAG}`,
+      `claude -p $(echo $(echo hi)) ${FLAG}`,
+      `claude -p $(cat a; cat b) ${FLAG}`,
+      `claude -p $(cat a | head) ${FLAG}`,
+      `claude -p $(cat a && cat b) ${FLAG}`,
+      `claude -p \`cat a; cat b\` ${FLAG}`,
+      `$(claude ${FLAG} -p x) && echo done`,
+      `claude -p $(echo hi ${FLAG}`,
+    ].map((command): [string, string, string, string] => [
+      ".claude/settings.json",
+      "PreToolUse",
+      command,
+      FLAG,
+    ]),
   ])(
     "reports a hook in %s whose %s command runs the agent with its checks off, on the command's line",
     (path, event, command, kind) => {
@@ -519,6 +543,18 @@ describe("guard/permission-skip", () => {
     [
       "runs claude without the flag, then has it in a later command after |",
       `claude -p x | echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag in a group, then has it in a later command after the group's )",
+      `(claude -p x) && echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag, then has it in a later command after a redirect and ;",
+      `claude -p x 2>&1; echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag in the background, then has it in a later command after &",
+      `claude -p x & echo ${FLAG}`,
     ],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
