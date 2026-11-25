@@ -81,6 +81,13 @@ export const file = (path: string, body: string | Uint8Array): TarEntry => ({
   body,
 });
 
+/** A link under the top folder: "2" a symlink (the default) or "1" a hard link, pointing at `target`. */
+export const link = (path: string, target: string, type: "1" | "2" = "2"): TarEntry => ({
+  path: `${TOP}/${path}`,
+  type,
+  linkname: target,
+});
+
 /** A file whose path runs past ustar's 100 bytes, named by a pax `path` record before it. */
 export const paxFile = (path: string, body: string): TarEntry[] => [
   { path: "PaxHeaders/long-path", type: "x", body: paxRecords({ path: `${TOP}/${path}` }) },
@@ -104,9 +111,16 @@ export function gitHubTarball(entries: TarEntry[]): Buffer {
   );
 }
 
-/** A repo's files, each `{ path, text }`, as GitHub's tarball of it. */
-export const tarballOf = (files: { path: string; text: string }[]) =>
-  gitHubTarball(files.map(({ path, text }) => file(path, text)));
+/** A symlink in a repo: its path, and the path it points at. */
+export type RepoLink = { path: string; link: string };
+
+/** A repo's entries, each a file `{ path, text }` or a symlink `{ path, link }`, as GitHub's tarball of it. */
+export const tarballOf = (entries: ({ path: string; text: string } | RepoLink)[]) =>
+  gitHubTarball(
+    entries.map((entry) =>
+      "link" in entry ? link(entry.path, entry.link) : file(entry.path, entry.text),
+    ),
+  );
 
 /** `bytes` served in chunks of `size`, as a response body streams them. */
 export async function* chunks(bytes: Uint8Array, size = 4096): AsyncGenerator<Uint8Array> {

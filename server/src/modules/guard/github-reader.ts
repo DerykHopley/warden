@@ -26,9 +26,10 @@ const ARCHIVE_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * A repo's `html_url`: `https://github.com/<owner>/<repo>` and nothing more. GitHub's owner names are letters, digits
- * and hyphens; repo names add `.` and `_`.
+ * and hyphens, and an Enterprise Managed User's add an `_` before the enterprise's shortcode; repo names add `.`. The
+ * lengths are looser than GitHub's: the check only keeps the tarball call's path to one repo.
  */
-const REPO_URL = /^https:\/\/github\.com\/([A-Za-z0-9-]{1,39})\/([A-Za-z0-9._-]{1,100})$/;
+const REPO_URL = /^https:\/\/github\.com\/([A-Za-z0-9_-]{1,100})\/([A-Za-z0-9._-]{1,100})$/;
 
 const InstallationToken = z.object({ token: z.string().min(1) });
 

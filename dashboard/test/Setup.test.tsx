@@ -136,7 +136,8 @@ describe("SetupPage", () => {
     render(<Shell />);
 
     expect(await github().findByText("An Admin connects GitHub.")).toBeInTheDocument();
-    expect(refreshMe).toHaveBeenCalledOnce();
+    // refreshMe runs in an effect after the render that shows the text, so a busy runner can see the text first.
+    await vi.waitFor(() => expect(refreshMe).toHaveBeenCalledOnce());
     expect(errors).not.toHaveBeenCalled();
   });
 

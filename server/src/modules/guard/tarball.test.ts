@@ -9,6 +9,7 @@ import {
   file,
   gitHubTarball,
   gnuLongFile,
+  link,
   paxFile,
   tar,
   TOP,
@@ -85,8 +86,8 @@ describe("readTarball", () => {
   it("skips and counts a symlink, a directory, a binary file, a non-UTF-8 file, one over 1 MiB and a bad path, naming the files it couldn't read", async () => {
     const { files, unread, counts } = await readAll([
       file("kept.txt", "kept\n"),
-      { path: `${TOP}/link`, type: "2", linkname: "/etc/passwd" },
-      { path: `${TOP}/hard`, type: "1", linkname: `${TOP}/kept.txt` },
+      link("link", "/etc/passwd"),
+      link("hard", `${TOP}/kept.txt`, "1"),
       { path: `${TOP}/src/`, type: "5" },
       file("image.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d])),
       file("latin1.txt", Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])),
@@ -102,8 +103,8 @@ describe("readTarball", () => {
     ]);
 
     expect(files.map((f) => f.path)).toEqual(["kept.txt", "exactly-1MiB.txt", "src/kept.ts"]);
-    // A regular file at a repo path whose text the Scan can't read: the Findings in it stay as they are.
-    expect(unread).toEqual(["image.png", "latin1.txt", "big.txt"]);
+    // A link, or a regular file whose text the Scan can't read, at a repo path: the Findings in it stay as they are.
+    expect(unread).toEqual(["link", "hard", "image.png", "latin1.txt", "big.txt"]);
     expect(counts.files).toBe(3);
     // The top folder itself is a directory too.
     expect(counts.skipped).toEqual({
@@ -113,6 +114,20 @@ describe("readTarball", () => {
       notUtf8: 1,
       badPath: 6,
     });
+  });
+
+  it("yields nothing for a link at a path that could escape the repo", async () => {
+    const { files, unread, counts } = await readAll([
+      file("settings.md", "# Settings\n"),
+      link("../link", "/etc/passwd"),
+      link("a/../../hard", `${TOP}/settings.md`, "1"),
+      { path: "/etc/link", type: "2", linkname: "/etc/passwd" },
+    ]);
+
+    expect(files).toEqual([{ path: "settings.md", text: "# Settings\n" }]);
+    expect(unread).toEqual([]);
+    // The top folder and the three links.
+    expect(counts.skipped).toMatchObject({ notAFile: 4, badPath: 0 });
   });
 
   it("counts the compressed and uncompressed bytes it read", async () => {
