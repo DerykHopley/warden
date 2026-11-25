@@ -157,6 +157,12 @@ describe("seedDemo", () => {
       "repo",
     ]);
     expect(list.filter((f) => f.unconfirmed_fix !== null)).toHaveLength(1);
+    // The committed secret names the Default Pack's Rule, which both seeded Guard Scans cover, so it stays Open.
+    expect(open.filter((f) => f.rule_id === "guard/secret-in-repo")).toHaveLength(1);
+    const atSecret = list.filter(
+      (f) => f.location.kind === "file" && f.location.path === "config/payments.ts",
+    );
+    expect(atSecret.map((f) => f.rule_id)).toEqual(["guard/secret-in-repo"]);
   });
 
   it("then creates the demo Product and runs its Patch Scan, opening CVE Findings on it from the snapshot", async () => {

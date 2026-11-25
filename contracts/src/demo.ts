@@ -50,7 +50,7 @@ export const DEMO_EVENTS_HASH =
 export const DEMO_OBSERVATIONS = {
   secret: {
     asset: REPO,
-    rule_id: "guard/committed-secret",
+    rule_id: "guard/secret-in-repo",
     location: { kind: "file", path: "config/payments.ts", line: 12 },
     severity: "critical",
     title: "A live Stripe secret key is committed",
@@ -153,7 +153,7 @@ const GUARD_COVERAGE = {
   module: "guard",
   assets: [REPO, DEVICE],
   rules: [
-    "guard/committed-secret",
+    "guard/secret-in-repo",
     "guard/agent-can-read-env",
     "guard/agent-can-push-main",
     "guard/disk-not-encrypted",

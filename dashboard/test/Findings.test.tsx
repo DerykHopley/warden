@@ -190,7 +190,7 @@ describe("the table", () => {
     expect(rows()).toHaveLength(7);
     expect(rows()[0]).toEqual([
       "Critical",
-      "A live Stripe secret key is committedguard/committed-secret · 3f2a1b9c",
+      "A live Stripe secret key is committedguard/secret-in-repo · 3f2a1b9c",
       "https://github.com/acme/shop-webRepo",
       "Open",
     ]);
