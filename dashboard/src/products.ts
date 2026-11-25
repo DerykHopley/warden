@@ -71,6 +71,14 @@ export type SaveResult =
   | Exclude<Refused, { kind: "not-answering" }>;
 
 /**
+ * Whether a save's answer may mean a Product was stored, so the list should be read again. The Products page's
+ * `switch` on a save's answer follows the same rule: its "saved" and "maybe-saved" cases both read the list again.
+ */
+export function mayHaveStored(result: SaveResult | TeamCheckRefused): boolean {
+  return result.kind === "saved" || result.kind === "maybe-saved";
+}
+
+/**
  * Creates a Product (`id` null: POST /api/products) or replaces the Product `id` whole (PUT /api/products/:id). The
  * server checks the Role and runs the Product's Patch Scan before it answers.
  */

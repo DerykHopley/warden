@@ -25,6 +25,7 @@ import {
   askProducts,
   deleteProductInTeam,
   fetchFrameworks,
+  mayHaveStored,
   saveProductInTeam,
   USAGE_WORDS,
   type DeleteResult,
@@ -389,8 +390,7 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     // A Team or Role change since forgot this save: its answer is about a form no longer shown. Back on the save's
     // Team, an answer that may have stored a Product still reads the list again, so the list shows what's stored.
     if (saveCall.current !== call) {
-      const mayHaveStored = result.kind === "saved" || result.kind === "maybe-saved";
-      if (mayHaveStored && teamNow.current === savedIn) list.refresh();
+      if (mayHaveStored(result) && teamNow.current === savedIn) list.refresh();
       return;
     }
     saveCall.current = null;

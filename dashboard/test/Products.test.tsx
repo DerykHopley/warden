@@ -25,6 +25,7 @@ const SEARCH = {
     { framework: "ollama", version: "0.6.0", usage: "hosted", internet_facing: true },
   ],
 };
+const DOCS_BOT = { ...SEARCH, id: "prod_new", name: "Docs bot" };
 
 const FRAMEWORKS = [
   { id: "langflow", name: "Langflow", purls: ["pkg:pypi/langflow"], coverage: "package" },
@@ -426,7 +427,7 @@ describe("ProductsPage's Product form", () => {
     await openAdd({
       saveProduct: (id, body) => {
         sent.push({ id, body });
-        return json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" });
+        return json(201, DOCS_BOT);
       },
     });
     const save = form().getByRole("button", { name: "Save" });
@@ -616,7 +617,7 @@ describe("ProductsPage's Product form", () => {
       },
       saveProduct: () => {
         order.push("save");
-        return json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" });
+        return json(201, DOCS_BOT);
       },
     });
     await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
@@ -651,7 +652,7 @@ describe("ProductsPage's Product form", () => {
     await screen.findByRole("heading", { level: 2, name: "Bluebird" });
     const reads = listReads().length;
     await act(async () => {
-      answer.resolve(json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" }));
+      answer.resolve(json(201, DOCS_BOT));
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
 
@@ -693,7 +694,7 @@ describe("ProductsPage's Product form", () => {
     await vi.waitFor(() => expect(saveProduct).toHaveBeenCalledTimes(2));
 
     await act(async () => {
-      first.resolve(json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" }));
+      first.resolve(json(201, DOCS_BOT));
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(save).toBeDisabled();
@@ -744,7 +745,6 @@ describe("ProductsPage's Product form", () => {
     expect(form().getByRole("textbox", { name: "Name" })).toHaveFocus();
   });
 
-  const DOCS_BOT = { ...SEARCH, id: "prod_new", name: "Docs bot" };
   it.each([
     ["a Team switch", "a 201", { team: "org_b" }, { team: "org_a" }, DOCS_BOT],
     [
@@ -975,11 +975,10 @@ describe("ProductsPage's Product form", () => {
   });
 
   it("after a save, reads the list again, closes the form and puts focus on the saved Product's name", async () => {
-    const saved = { ...SEARCH, id: "prod_new", name: "Docs bot" };
     const lists = [productsAnswer([CHAT, SEARCH])];
     await openAdd({
-      products: () => lists.shift() ?? productsAnswer([CHAT, saved, SEARCH]),
-      saveProduct: () => json(201, saved),
+      products: () => lists.shift() ?? productsAnswer([CHAT, DOCS_BOT, SEARCH]),
+      saveProduct: () => json(201, DOCS_BOT),
     });
     await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
     await userEvent.click(form().getByRole("button", { name: "Save" }));
