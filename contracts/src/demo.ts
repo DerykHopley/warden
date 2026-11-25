@@ -2,6 +2,7 @@
 // module, and what it leaves. The dashboard's tests build their Findings from the same data, so the two can't drift.
 // A subpath (`@warden/contracts/demo`): the dashboard's production bundle never holds it.
 import type { Asset, MaskedAgentEvent, Observation, Scan, SpotRun, Status } from "./finding.ts";
+import type { ProductInput } from "./products.ts";
 
 const REPO: Asset = { kind: "repo", ref: "https://github.com/acme/shop-web" };
 const DEVICE: Asset = { kind: "device", ref: "ada-laptop" };
@@ -129,6 +130,20 @@ export const DEMO_OUTCOME: Record<
   },
   cognito: { status: "open" },
   ws: { status: "fixed" },
+};
+
+/**
+ * The demo Product the seed creates after the demo Findings, then scans as a save does, so its CVE Findings come from
+ * the loaded CVE snapshot. Its one Repo URL is the demo Repo Asset's ref: the Repo's Guard Findings and the Product's
+ * CVE Findings name the same code. LangChain 0.0.200 is affected by many CVEs in the 2026-10-13 snapshot. The made-up
+ * `shop` Patch Findings above are another Asset, which no Product row holds.
+ */
+export const DEMO_PRODUCT: ProductInput = {
+  name: "Shop web",
+  repo_urls: [REPO.ref],
+  dependencies: [
+    { framework: "langchain", version: "0.0.200", usage: "library", internet_facing: true },
+  ],
 };
 
 /** How long the demo acceptance lasts from the seed's `now`. */

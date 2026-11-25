@@ -174,11 +174,16 @@ button:focus-visible,
 .role-picker:focus-visible,
 .page-links a:focus-visible,
 .level-line a:focus-visible,
+.repo-urls a:focus-visible,
+.patch-links a:focus-visible,
 .panel-divider:focus-visible,
 .chat-input:focus-visible,
 .field textarea:focus-visible,
 .field input:focus-visible,
+.field select:focus-visible,
 .candidate input:focus-visible,
+.product-name:focus-visible,
+h1[data-focus]:focus-visible,
 .card-line:focus-visible {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
@@ -258,8 +263,11 @@ button[aria-busy="true"],
   margin-left: auto;
 }
 
+/* The links wrap onto a second line when they don't fit (four of them at 390px in a wide fallback font), so the
+   header never scrolls sideways; each link keeps its 44px target. */
 .page-links {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
@@ -336,6 +344,267 @@ button[aria-busy="true"],
   .people .joined {
     display: none;
   }
+}
+
+/* Products: one entry per Product, its Repo URLs beside its dependencies from a 640px column, stacked below it. Each
+   dependency row is the framework, version, usage and "internet-facing"; it wraps rather than scrolling sideways. */
+.products {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.product {
+  min-width: 0;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow-wrap: anywhere;
+}
+
+.product-name {
+  margin: 0 0 8px;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 1.25rem;
+}
+
+.product-parts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px 24px;
+}
+
+@container app-column (min-width: 640px) {
+  .product-parts {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  }
+}
+
+.product-part {
+  min-width: 0;
+}
+
+.product-part h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.product-part > p {
+  margin: 4px 0 0;
+}
+
+.repo-urls,
+.dependencies {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* A Repo URL is a 44px-high target that wraps a long URL instead of pushing the page sideways. */
+.repo-urls a {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  max-width: 100%;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+.dependency {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.dependency:last-child {
+  border-bottom: 0;
+}
+
+.dependency-name {
+  font-weight: 600;
+}
+
+.dependency-version {
+  font-size: 0.875rem;
+}
+
+/* "internet-facing" is said in words, in the Role's quiet pill: never a colour alone. */
+.dependency-flag {
+  padding: 2px 10px;
+  background: var(--chip);
+  border-radius: 999px;
+  font-size: 0.875rem;
+}
+
+@container app-column (max-width: 639px) {
+  .dependency {
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .dependency-flag {
+    align-self: flex-start;
+  }
+}
+
+/* A Lead's or an Admin's controls: Add above the list (with the frameworks' Retry when they failed), Edit and Delete
+   beside each Product's name. */
+.products-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 12px;
+}
+
+.product-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.product-head .product-name {
+  margin: 0;
+  min-width: 0;
+}
+
+.product-adding {
+  margin: 0 0 12px;
+}
+
+.product-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Delete's confirm, in its Product's entry under the name: the question, its refusal line, then Delete and Cancel,
+   which stack under 640px. */
+.delete-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0 0 12px;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.delete-question {
+  margin: 0;
+  font-weight: 600;
+}
+
+.delete-confirm .card-line {
+  margin: 0;
+}
+
+@container app-column (max-width: 639px) {
+  .delete-confirm .form-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* The Product form: Add's above the list, Edit's in its Product's place. Each framework row lays its five controls
+   side by side from a 640px column and stacks them below it; nothing scrolls sideways. */
+/* The form's controls sit in one fieldset, disabled while a save runs; it draws nothing of its own. */
+.product-form-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.product-form fieldset.field {
+  gap: 8px;
+}
+
+.form-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.form-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.add-row {
+  align-self: flex-start;
+}
+
+.product-form .card-line {
+  margin: 0;
+}
+
+.dependency-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  padding: 0 0 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dependency-fields > button {
+  justify-self: start;
+}
+
+@container app-column (min-width: 640px) {
+  .dependency-fields {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr) minmax(0, 3fr) auto auto;
+    align-items: end;
+  }
+}
+
+/* Internet-facing: the whole 44px-high label row is its checkbox's target, as with a Mark moved candidate. */
+.check {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 8px;
+  font-size: 0.875rem;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+@container app-column (min-width: 640px) {
+  .check {
+    align-self: end;
+  }
+}
+
+.check:hover {
+  background: var(--chip);
+}
+
+.check input {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 /* The Role picker: a select dressed as a secondary Button; its states are the Button's, above. */
@@ -1027,7 +1296,62 @@ button[aria-busy="true"],
   color: var(--muted);
 }
 
-/* "Couldn't load Proposals", with Retry beside it. */
+/* A Patch Finding's assessment, between the card's fields and its decisions: the same rows as the fields. */
+.patch-section {
+  margin-right: 8px;
+}
+
+.patch-section h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.patch-section > p {
+  font-size: 0.875rem;
+}
+
+/* Waiting and a 404's words sit right under the heading; the failed line keeps the Proposals' margins (below). */
+.patch-section > p:not(.patch-failed) {
+  margin: 0;
+}
+
+.patch-section .detail-fields {
+  margin-right: 0;
+}
+
+/* The verdict's reason, and the due line, each on a line of their own under the word they explain. */
+.patch-reason,
+.patch-due {
+  display: block;
+  margin: 0;
+}
+
+.patch-list {
+  margin: 0;
+  padding-left: 20px;
+}
+
+/* NVD and OSV links side by side, each a 44px target with the focus ring, wrapping on a narrow card. */
+.patch-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.patch-links a {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--accent);
+}
+
+/* "Couldn't load Proposals" (.proposals-failed) and "Couldn't load the CVE assessment." (.patch-failed), each with
+   Retry beside it. */
+.patch-failed,
 .proposals-failed {
   display: flex;
   flex-wrap: wrap;
@@ -1090,7 +1414,9 @@ button[aria-busy="true"],
 }
 
 .field textarea,
-.field input[type="date"] {
+.field input[type="date"],
+.field input[type="text"],
+.field select {
   width: 100%;
   min-height: 44px;
   padding: 8px 12px;

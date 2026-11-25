@@ -12,6 +12,7 @@ import {
   Scan,
   SpotRun,
   type Asset,
+  type AssetKind,
   type Finding,
   type HistoryCauseKind,
   type Module,
@@ -21,6 +22,8 @@ import {
   type Severity,
   type Status,
 } from "@warden/contracts";
+import type { Transaction } from "kysely";
+import type { Database } from "../schema.ts";
 import type { WithTeam } from "../with-team.ts";
 import {
   applyDecision,
@@ -34,7 +37,14 @@ import {
 import { applyExpiry, type ExpiryLimits } from "./expiry.ts";
 import { readOverview, type FindingsOverview } from "./overview.ts";
 import { applyApprove, applyPropose, applyReject, listPending } from "./proposals.ts";
-import { applyRun, type MoveRule, type ReconcileOutcome } from "./reconcile.ts";
+import {
+  applyRun,
+  lockTeamFindings,
+  setTransactionLimits,
+  type MoveRule,
+  type ReconcileOutcome,
+  type TransactionLimits,
+} from "./reconcile.ts";
 import { fromRow, isoDateTime, loadFinding } from "./rows.ts";
 
 export {
@@ -47,7 +57,12 @@ export {
 export { DAILY_EXPIRY, type ExpiryLimits } from "./expiry.ts";
 export { OVERVIEW_PERIOD_DAYS, type FindingsOverview } from "./overview.ts";
 export { ProposalDecided, ProposalNotFound, ProposalPending } from "./proposals.ts";
-export type { MoveRule, ReconcileOutcome } from "./reconcile.ts";
+export {
+  DAILY_JOB_LIMITS,
+  type MoveRule,
+  type ReconcileOutcome,
+  type TransactionLimits,
+} from "./reconcile.ts";
 export { sameAsset } from "./rows.ts";
 
 /** One change in a Finding's history, oldest first. Never edited. */
@@ -103,8 +118,28 @@ export interface Findings {
     coverage: ScanCoverage,
     work: (scan: ScanRecorder) => Promise<void>,
   ): Promise<ReconcileOutcome>;
+  /**
+   * `scan`, for work that reads what it scans from the database: the callback runs in the Team's transaction that
+   * reconciles, once it holds the Team's Findings lock, and is handed that transaction. So two Scans of the same Assets
+   * reconcile in the order they read, and the later one never undoes a change the earlier one saw. The lock is held
+   * while the callback runs: keep it to database reads, never a network call. With `limits` (the daily Job's), the
+   * transaction fails, writing nothing, after waiting that long for the lock or on one statement; without, it waits.
+   */
+  scanLocked(
+    coverage: ScanCoverage,
+    work: (scan: ScanRecorder, tx: Transaction<Database>) => Promise<void>,
+    limits?: TransactionLimits,
+  ): Promise<ReconcileOutcome>;
   /** The Team's Findings, each parsed with Finding v1, so they come back read-only. */
   list(team: string): Promise<Finding[]>;
+  /**
+   * The refs of the Assets of kind `kind` that the Team's Findings from `module` in any of `statuses` are on, each
+   * once, in order: read without loading the Findings.
+   */
+  assetRefs(
+    team: string,
+    filter: { module: Module; kind: AssetKind; statuses: Status[] },
+  ): Promise<string[]>;
   /** One Finding's history, oldest first. Throws FindingNotFound for an id the Team doesn't have. */
   history(team: string, findingId: string): Promise<HistoryEntry[]>;
   /**
@@ -169,6 +204,53 @@ export interface Findings {
   expireAcceptances(team: string, now: Date, limits?: ExpiryLimits): Promise<string[]>;
 }
 
+/**
+ * The Scan `work` describes: a new id, started now, holding each Observation the callback `saw`. Not parsed yet: the
+ * caller parses it before it writes.
+ */
+async function recordScan(
+  { team, module, assets, rules }: ScanCoverage,
+  work: (scan: ScanRecorder) => Promise<void>,
+): Promise<Scan> {
+  const id = randomUUID();
+  const started_at = new Date().toISOString();
+  const covered = new Set(assets.map(assetKey));
+  const coveredRules = new Set<string>(rules);
+  const observations: Observation[] = [];
+  const reported = new Map<string, number>();
+  let open = true;
+
+  const recorder: ScanRecorder = {
+    saw(value) {
+      if (!open) throw new Error("saw: this Scan has ended");
+      const observation = Observation.parse(value);
+      const { asset, rule_id } = observation;
+      if (!covered.has(assetKey(asset))) {
+        throw new Error(`saw: the Asset ${assetKey(asset)} isn't one this Scan covers`);
+      }
+      if (!coveredRules.has(rule_id)) {
+        throw new Error(`saw: the Rule ${rule_id} isn't one this Scan covers`);
+      }
+      const key = problemKey(observation);
+      const earlier = reported.get(key);
+      if (earlier !== undefined) {
+        throw new Error(
+          `saw: the same problem (Asset and Fingerprint) as Observation ${earlier}: report each problem once`,
+        );
+      }
+      reported.set(key, observations.length);
+      observations.push(observation);
+    },
+  };
+  try {
+    await work(recorder);
+  } finally {
+    // Returned or thrown, the Scan has ended: a recorder kept past it refuses what it's handed.
+    open = false;
+  }
+  return { id, team, module, started_at, assets, rules, observations };
+}
+
 export function createFindings({
   withTeam,
   moveRules,
@@ -177,15 +259,17 @@ export function createFindings({
   /** Each module's "may have moved" rule. A module without one never gets an Unconfirmed fix. */
   moveRules: Partial<Record<Module, MoveRule>>;
 }): Findings {
+  /** One parsed Scan, in the caller's Team transaction. */
+  const applyScan = (tx: Transaction<Database>, scan: Scan) =>
+    applyRun(
+      tx,
+      { ...scan, kind: "scan", covered: { assets: scan.assets, rules: scan.rules } },
+      moveRules[scan.module],
+    );
+
   const reconcile = async (value: Scan) => {
     const scan = Scan.parse(value);
-    return withTeam(scan.team, (tx) =>
-      applyRun(
-        tx,
-        { ...scan, kind: "scan", covered: { assets: scan.assets, rules: scan.rules } },
-        moveRules[scan.module],
-      ),
-    );
+    return withTeam(scan.team, (tx) => applyScan(tx, scan));
   };
 
   /**
@@ -241,49 +325,40 @@ export function createFindings({
       );
     },
 
-    async scan({ team, module, assets, rules }, work) {
-      const id = randomUUID();
-      const started_at = new Date().toISOString();
-      const covered = new Set(assets.map(assetKey));
-      const coveredRules = new Set<string>(rules);
-      const observations: Observation[] = [];
-      const reported = new Map<string, number>();
-      let open = true;
+    async scan(coverage, work) {
+      const scan = await recordScan(coverage, work);
+      return reconcile(scan);
+    },
 
-      const recorder: ScanRecorder = {
-        saw(value) {
-          if (!open) throw new Error("saw: this Scan has ended");
-          const observation = Observation.parse(value);
-          const { asset, rule_id } = observation;
-          if (!covered.has(assetKey(asset))) {
-            throw new Error(`saw: the Asset ${assetKey(asset)} isn't one this Scan covers`);
-          }
-          if (!coveredRules.has(rule_id)) {
-            throw new Error(`saw: the Rule ${rule_id} isn't one this Scan covers`);
-          }
-          const key = problemKey(observation);
-          const earlier = reported.get(key);
-          if (earlier !== undefined) {
-            throw new Error(
-              `saw: the same problem (Asset and Fingerprint) as Observation ${earlier}: report each problem once`,
-            );
-          }
-          reported.set(key, observations.length);
-          observations.push(observation);
-        },
-      };
-      try {
-        await work(recorder);
-      } finally {
-        // Returned or thrown, the Scan has ended: a recorder kept past it refuses what it's handed.
-        open = false;
-      }
-      return reconcile({ id, team, module, started_at, assets, rules, observations });
+    async scanLocked(coverage, work, limits) {
+      return withTeam(coverage.team, async (tx) => {
+        if (limits !== undefined) await setTransactionLimits(tx, limits);
+        await lockTeamFindings(tx, coverage.team);
+        const scan = Scan.parse(await recordScan(coverage, (recorder) => work(recorder, tx)));
+        return applyScan(tx, scan);
+      });
     },
 
     list(team) {
       return withTeam(team, async (tx) =>
         (await tx.selectFrom("findings").selectAll().orderBy("id").execute()).map(fromRow),
+      );
+    },
+
+    assetRefs(team, { module, kind, statuses }) {
+      if (statuses.length === 0) return Promise.resolve([]);
+      return withTeam(team, async (tx) =>
+        (
+          await tx
+            .selectFrom("findings")
+            .select("asset_ref")
+            .distinct()
+            .where("module", "=", module)
+            .where("asset_kind", "=", kind)
+            .where("status", "in", statuses)
+            .orderBy("asset_ref")
+            .execute()
+        ).map((row) => row.asset_ref),
       );
     },
 

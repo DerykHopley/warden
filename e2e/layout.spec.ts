@@ -2,15 +2,177 @@
 // closed, floating and pinned (where pinning is offered). Nothing scrolls sideways;
 // under 640px one column and a table of Severity, Finding and Status; from 640 to 1100px the cards wrap two or three to
 // a row; from 1100px five sit in a row; content stays within about 1480px, centred.
-import type { Page } from "@playwright/test";
-import { expect, GRACE, test } from "./session.ts";
+//
+// Every page, opened directly at each width and scheme, scrolls nothing sideways: Products in Cedar (its Products
+// stay out of Acme's Findings counts), the rest as Grace in Acme.
+import type { Locator, Page } from "@playwright/test";
+import { cedarCveFinding, openCveCard } from "./cedar-cve.ts";
+import {
+  ACME,
+  CEDAR,
+  CHAT_ASSISTANT,
+  ensureProduct,
+  expect,
+  GRACE,
+  HEDY,
+  KATHERINE,
+  signInEachTest,
+  SIGNS_IN_ITSELF,
+  test,
+  type Person,
+  type Team,
+} from "./session.ts";
 
 const WIDTHS = [390, 1024, 1600] as const;
 const SCHEMES = ["light", "dark"] as const;
 
-test.beforeEach(async ({ signIn }) => {
-  await signIn(GRACE);
+signInEachTest(GRACE);
+
+/** Fails unless the page is no wider than the window, so nothing scrolls sideways; returns the window's width. */
+async function expectNoSidewaysScroll(page: Page) {
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  return clientWidth;
+}
+
+test.beforeAll(async () => {
+  await ensureProduct(CEDAR, CHAT_ASSISTANT);
 });
+
+/**
+ * Who opens each page, and what it shows once it has loaded, so the check runs against its content, not its waiting
+ * line. /findings and /overview are opened directly at each width and scheme by their own tests below.
+ */
+const PAGES: { path: string; person: Person; team: Team; loaded: (page: Page) => Locator }[] = [
+  // A Member's landing page is Findings.
+  {
+    path: "/",
+    person: GRACE,
+    team: ACME,
+    loaded: (page) => page.locator(".findings-table tbody tr").first(),
+  },
+  {
+    path: "/products",
+    person: KATHERINE,
+    team: CEDAR,
+    loaded: (page) => page.locator(".product").first(),
+  },
+  {
+    path: "/people",
+    person: GRACE,
+    team: ACME,
+    loaded: (page) => page.locator(".people tbody tr").first(),
+  },
+];
+
+for (const { path, person, team, loaded } of PAGES) {
+  for (const scheme of SCHEMES) {
+    for (const width of WIDTHS) {
+      test(
+        `${path} opened directly at ${width}px in ${scheme}: nothing scrolls sideways`,
+        SIGNS_IN_ITSELF,
+        async ({ page, signIn }) => {
+          await signIn(person, team);
+          await page.setViewportSize({ width, height: 900 });
+          await page.emulateMedia({ colorScheme: scheme });
+          await page.goto(path);
+          await expect(loaded(page)).toBeVisible();
+          await expectNoSidewaysScroll(page);
+        },
+      );
+    }
+  }
+}
+
+test(
+  "Products under 640px: each Product's parts and dependency rows stack in one column",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await signIn(KATHERINE, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const entry = page.locator(".product", { hasText: "Chat assistant" });
+    await expect(entry).toBeVisible();
+    const lefts = (selector: string) =>
+      entry
+        .locator(selector)
+        .evaluateAll((all) => all.map((el) => Math.round(el.getBoundingClientRect().left)));
+    expect(new Set(await lefts(".product-part")).size).toBe(1);
+    expect(new Set(await lefts(".dependency:first-child > *")).size).toBe(1);
+
+    await page.setViewportSize({ width: 1024, height: 900 });
+    expect(new Set(await lefts(".product-part")).size).toBe(2);
+  },
+);
+
+/** Opens Edit's form on Chat assistant (two Repo URLs, two framework rows) as Cedar's Admin. */
+async function openProductForm(page: Page) {
+  await page.goto("/products");
+  await page.getByRole("button", { name: "Edit Chat assistant" }).click();
+  const form = page.getByRole("form", { name: "Edit Chat assistant" });
+  await expect(form.locator(".dependency-fields")).toHaveCount(2);
+  await expect(form.getByRole("textbox", { name: /^Repo URL/ })).toHaveCount(2);
+  return form;
+}
+
+for (const scheme of SCHEMES) {
+  for (const width of WIDTHS) {
+    test(
+      `Products at ${width}px in ${scheme}, with the Product form open: nothing scrolls sideways`,
+      SIGNS_IN_ITSELF,
+      async ({ page, signIn }) => {
+        await signIn(HEDY, CEDAR);
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme: scheme });
+        await openProductForm(page);
+        await expectNoSidewaysScroll(page);
+      },
+    );
+  }
+}
+
+for (const scheme of SCHEMES) {
+  for (const width of WIDTHS) {
+    test(
+      `Products at ${width}px in ${scheme}, with the delete confirm open: nothing scrolls sideways`,
+      SIGNS_IN_ITSELF,
+      async ({ page, signIn }) => {
+        await signIn(HEDY, CEDAR);
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme: scheme });
+        await page.goto("/products");
+        await page.getByRole("button", { name: "Delete Chat assistant" }).click();
+        await expect(
+          page.getByRole("group", { name: "Delete Chat assistant? Its CVE Findings turn Fixed." }),
+        ).toBeVisible();
+        await expectNoSidewaysScroll(page);
+      },
+    );
+  }
+}
+
+test(
+  "the Product form under 640px: a framework row's controls stack in one column; from 640px they sit side by side",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    const form = await openProductForm(page);
+    const lefts = () =>
+      form
+        .locator(".dependency-fields")
+        .first()
+        .locator(":scope > *")
+        .evaluateAll((all) => all.map((el) => Math.round(el.getBoundingClientRect().left)));
+    expect(new Set(await lefts()).size).toBe(1);
+
+    await page.setViewportSize({ width: 1024, height: 900 });
+    expect(new Set(await lefts()).size).toBe(5);
+  },
+);
 
 async function openAt(page: Page, width: number, colorScheme: "light" | "dark") {
   await page.setViewportSize({ width, height: 900 });
@@ -44,11 +206,7 @@ for (const scheme of SCHEMES) {
       await expect(
         page.locator(".findings-table", { hasText: "@aws-sdk/client-cognito-identity-provider" }),
       ).toBeVisible();
-      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-      }));
-      expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+      await expectNoSidewaysScroll(page);
       // The page follows the colour scheme: the body wears that scheme's --bg.
       const colours = await page.evaluate(() => {
         const probe = document.createElement("div");
@@ -96,13 +254,36 @@ for (const scheme of SCHEMES) {
             state === "floating" && width < 640 ? "full-screen" : state,
           );
         }
-        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-        }));
-        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        await expectNoSidewaysScroll(page);
       });
     }
+  }
+}
+
+// A Cedar CVE Finding's card, its Patch section loaded (the assessment's reason, reasons and links are the card's
+// longest text): floating at each width, and pinned where pinning is offered.
+for (const width of WIDTHS) {
+  for (const state of PANEL_STATES[width].filter((s) => s !== "closed")) {
+    test(
+      `at ${width}px, with the panel ${state} and a CVE Finding's Patch section shown, nothing scrolls sideways`,
+      SIGNS_IN_ITSELF,
+      async ({ page, signIn }) => {
+        const finding = await cedarCveFinding();
+        await signIn(HEDY, CEDAR);
+        await page.addInitScript(
+          (stored) => localStorage.setItem("warden.askWardenPanel", stored),
+          JSON.stringify({ mode: state === "pinned" ? "pinned" : "closed", width: 680 }),
+        );
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto("/findings");
+        await openCveCard(page, finding);
+        await expect(page.locator(".ask-warden")).toHaveAttribute(
+          "data-shown",
+          state === "floating" && width < 640 ? "full-screen" : state,
+        );
+        await expectNoSidewaysScroll(page);
+      },
+    );
   }
 }
 
@@ -142,11 +323,7 @@ for (const scheme of SCHEMES) {
           await expect(page.locator(".ask-warden")).toHaveAttribute("data-shown", "pinned");
         }
 
-        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-        }));
-        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        await expectNoSidewaysScroll(page);
         const main = await page.locator("main.page").boundingBox();
         expect(main!.width).toBeLessThanOrEqual(1480);
 
@@ -172,11 +349,7 @@ test("at 1100px with the panel pinned 680px wide, nothing scrolls sideways and t
   );
   await openAt(page, 1100, "light");
   await expect(page.locator(".ask-warden")).toHaveAttribute("data-shown", "pinned");
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  await expectNoSidewaysScroll(page);
   // A 420px column is a phone's: the cards stack, and the table drops its Asset column.
   const boxes = await cardBoxes(page);
   expect(new Set(boxes.map((b) => b.top)).size).toBe(5);
@@ -192,11 +365,25 @@ test("at 390px, a title holding a 60-character word with no break in it still do
     .locator(".findings-table .finding-title")
     .first()
     .evaluate((title) => (title.textContent = `${"Unbroken".repeat(7)}Name`));
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  await expectNoSidewaysScroll(page);
+});
+
+// The header's width depends on the fonts the machine has: the four page links fitted with this machine's Noto Sans and
+// scrolled 9px sideways with the CI runner's DejaVu Sans (#141). Wider letters stand in for a wider font, so this test
+// fails on any machine while the header can't wrap.
+test("at 390px with the header's text a tenth of an em wider per letter, the header wraps instead of scrolling sideways, and each page link stays 44 by 44px", async ({
+  page,
+}) => {
+  await openAt(page, 390, "light");
+  await page.addStyleTag({ content: ".app-header { letter-spacing: 0.1em; }" });
+  const clientWidth = await expectNoSidewaysScroll(page);
+  const links = page.getByRole("navigation", { name: "Pages" }).getByRole("link");
+  await expect(links).toHaveCount(4);
+  for (const box of await links.evaluateAll((all) => all.map((a) => a.getBoundingClientRect()))) {
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.right).toBeLessThanOrEqual(clientWidth);
+  }
 });
 
 test("under 640px: the cards stack in one column, and the table shows Severity, Finding and Status", async ({

@@ -10,7 +10,7 @@ import { createLogger } from "../src/log.ts";
 import { createTestDatabase, testName } from "./databases.ts";
 import { testPublishableKey } from "./helpers.ts";
 import { closedPort, gatedProxy } from "./ports.ts";
-import { logEntries, startServer, waitForListening } from "./server-process.ts";
+import { logEntries, pgConnection, startServer, waitForListening } from "./server-process.ts";
 
 const database = inject("testDatabase");
 const silent = createLogger(() => {});
@@ -198,16 +198,14 @@ describe("guardDatabaseRole", () => {
   });
 });
 
-async function serverAs(role: string, databasePort = process.env.PGPORT ?? "") {
+async function serverAs(role: string, databasePort?: string) {
   const port = await closedPort();
   const server = startServer({
     CLERK_SECRET_KEY: "clerk-secret-value",
     VITE_CLERK_PUBLISHABLE_KEY: testPublishableKey,
-    PGHOST: process.env.PGHOST ?? "",
-    PGPORT: databasePort,
+    ...pgConnection(databasePort),
     PGUSER: role,
     PGDATABASE: database,
-    ...(process.env.PGPASSWORD ? { PGPASSWORD: process.env.PGPASSWORD } : {}),
     PORT: String(port),
   });
   const health = () => fetch(`http://127.0.0.1:${port}/api/health`);

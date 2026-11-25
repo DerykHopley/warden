@@ -62,3 +62,5 @@ export type RoleChangeBody = z.infer<typeof RoleChangeBody>;
 
 export * from "./decisions.ts";
 export * from "./findings-view.ts";
+export * from "./products.ts";
+export * from "./patch.ts";

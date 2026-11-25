@@ -1,5 +1,6 @@
-// The Kysely table types for what the migrations in server/migrations make. Every table here is Team-owned and kept
-// apart by row-level security (ADR 0006); `findUnprotectedTables` checks that on the real schema. The enum columns
+// The Kysely table types for what the migrations in server/migrations make. Every table here but the CVE snapshot's
+// (last, and named in `NOT_TEAM_DATA`) is Team-owned and kept apart by row-level security (ADR 0006);
+// `findUnprotectedTables` checks that on the real schema. The enum columns
 // carry the contracts' types, which the migrations' check constraints match.
 import type { ColumnType, Generated, JSONColumnType } from "kysely";
 import type {
@@ -15,6 +16,7 @@ import type {
   Role,
   Severity,
   Status,
+  Usage,
 } from "@warden/contracts";
 
 /** A jsonb column written as a JSON string and read back parsed. */
@@ -139,5 +141,91 @@ export interface Database {
      * Proposal at a time (0007_one_pending_proposal). Only that migration sets it; never in an answer.
      */
     duplicate_of: ColumnType<string | null, never, never>;
+  };
+
+  /** What a Team ships (0008_products): written and read only by the Patch module. A name is unique in a Team, any case. */
+  products: {
+    team_id: string;
+    id: string;
+    name: string;
+    repo_urls: string[];
+    created_at: Generated<Date>;
+  };
+
+  /** One row per framework a Product uses (0008_products); deleting the Product deletes them. */
+  product_dependencies: {
+    team_id: string;
+    product_id: string;
+    framework: string;
+    version: string | null;
+    usage: Usage;
+    internet_facing: boolean;
+  };
+
+  // Patch's CVE snapshot (0009_cve_reference): public reference data, the same for every Team, so not Team-owned and
+  // under no row-level security. The app only reads them; the loader (cve-snapshot.ts) writes them as warden_migrate.
+
+  /** The snapshot loaded now: one row. */
+  cve_snapshot: {
+    only_row: boolean;
+    as_of: Date;
+    digest: string;
+    loaded_at: Date;
+  };
+
+  /** Each source's manifest entry: its licence and attribution. */
+  cve_sources: {
+    id: string;
+    name: string;
+    licence: string;
+    attribution: string;
+    notice: string | null;
+    url: string;
+    retrieved: Date;
+    as_of: Date | null;
+    count: number;
+  };
+
+  /** NVD's CVEs for Patch's frameworks; `product` is a framework id. NVD's severity as given, NONE and null included. */
+  cves: {
+    id: string;
+    product: string;
+    product_source: "text" | "cpe";
+    published: Date;
+    severity: string | null;
+    cvss: number | null;
+    cwes: string[];
+    description: string;
+    url: string;
+  };
+
+  /** CISA's Known Exploited Vulnerabilities entries for those CVEs. */
+  cve_kev: {
+    cve_id: string;
+    name: string;
+    date_added: Date;
+    due_date: Date;
+    ransomware_use: string;
+    required_action: string;
+  };
+
+  /** FIRST's EPSS score and percentile for each CVE. */
+  cve_epss: {
+    cve_id: string;
+    score: number;
+    percentile: number;
+    date: Date;
+  };
+
+  /** OSV's entries, one row each; `position` keeps OSV's order, and `ranges` is OSV's list as stored. */
+  cve_osv: {
+    position: number;
+    cve_id: string;
+    product: string;
+    ecosystem: string;
+    package: string;
+    advisory: string;
+    ranges: { introduced: string | null; fixed: string | null; last_affected: string | null }[];
+    fixed: string[];
   };
 }

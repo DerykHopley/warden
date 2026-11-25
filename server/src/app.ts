@@ -71,7 +71,10 @@ export type AppEnv = {
 /** Refuses a request unless the signed-in person's Role in their Team is at least `role`. */
 export type RequireRole = (role: Role) => MiddlewareHandler<AppEnv>;
 
-/** Adds routes behind the app's middleware, before the API's 404: tests mount throwaway routes here. */
+/**
+ * Adds routes behind the app's middleware, before the API's 404: the start-up file mounts each module's routes through
+ * it, and tests mount throwaway routes too.
+ */
 export type MountRoutes = (app: Hono<AppEnv>, requireRole: RequireRole) => void;
 
 const TEAM_NOT_CREATED = "Your Team's Admin must open Warden first";

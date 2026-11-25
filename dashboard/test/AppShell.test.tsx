@@ -40,7 +40,7 @@ const headerLinks = () =>
     .map((link) => [link.textContent, link.getAttribute("href")]);
 
 describe("the landing page by Role", () => {
-  it("at /, takes a Member to Findings without a new history entry, with the header's links Findings, Overview, People", async () => {
+  it("at /, takes a Member to Findings without a new history entry, with the header's links Findings, Overview, Products, People", async () => {
     clerk.auth.orgId = "org_a";
     serve({
       me: () => me("org_a", "member"),
@@ -57,6 +57,7 @@ describe("the landing page by Role", () => {
     expect(headerLinks()).toEqual([
       ["Findings", "/findings"],
       ["Overview", "/overview"],
+      ["Products", "/products"],
       ["People", "/people"],
     ]);
     expect(header().getByRole("link", { name: "Findings" })).toHaveAttribute(
@@ -64,6 +65,7 @@ describe("the landing page by Role", () => {
       "page",
     );
     expect(header().getByRole("link", { name: "Overview" })).not.toHaveAttribute("aria-current");
+    expect(header().getByRole("link", { name: "Products" })).not.toHaveAttribute("aria-current");
     expect(header().getByRole("link", { name: "People" })).not.toHaveAttribute("aria-current");
   });
 
@@ -84,6 +86,7 @@ describe("the landing page by Role", () => {
       expect(headerLinks()).toEqual([
         ["Findings", "/findings"],
         ["Overview", "/overview"],
+        ["Products", "/products"],
         ["People", "/people"],
       ]);
       expect(header().getByRole("link", { name: "Overview" })).toHaveAttribute(
@@ -135,6 +138,30 @@ describe("the landing page by Role", () => {
     ).toBeInTheDocument();
     expect(location.pathname).toBe("/people");
     expect(header().getByRole("link", { name: "People" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it("at /products, shows the Products page, its header link current, and the panel talks about it", async () => {
+    window.history.replaceState(null, "", "/products");
+    clerk.auth.orgId = "org_a";
+    serve({
+      me: () => me("org_a", "member"),
+      products: () => json(200, { team: "org_a", products: [] }),
+      frameworks: () => json(200, { frameworks: [] }),
+    });
+    render(<App />);
+
+    expect(await screen.findByText("No Products yet.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1, name: "Products" })).toBeInTheDocument();
+    expect(location.pathname).toBe("/products");
+    expect(header().getByRole("link", { name: "Products" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(header().getByRole("link", { name: "People" })).not.toHaveAttribute("aria-current");
+
+    await userEvent.click(screen.getByRole("button", { name: "Ask Warden" }));
+    const panel = within(screen.getByRole("complementary", { name: "Ask Warden" }));
+    expect(panel.getByText(/^Talking about:/)).toHaveTextContent(/^Talking about: view: Products$/);
   });
 });
 

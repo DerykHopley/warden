@@ -1,13 +1,24 @@
 // docs/design.md, Accessibility floor, on the Findings page and its Ask Warden panel: the keyboard reaches each card,
 // filter tab and row (the button in its title cell), then the panel's controls, in order, and leaves them; focus shows a
-// visible ring; and touch targets are at least 44 by 44px at phone width.
-import type { Page } from "@playwright/test";
+// visible ring; and touch targets are at least 44 by 44px at phone width. On the Products page (in Cedar), the same for
+// its Repo URL links, and for an Admin's Add, Edit and Product form.
+import type { Locator, Page } from "@playwright/test";
 import { expectRings, expectTargets } from "./a11y.ts";
-import { expect, GRACE, test } from "./session.ts";
+import { cedarCveFinding, openCveCard } from "./cedar-cve.ts";
+import {
+  CEDAR,
+  CHAT_ASSISTANT,
+  ensureProduct,
+  expect,
+  GRACE,
+  HEDY,
+  KATHERINE,
+  signInEachTest,
+  SIGNS_IN_ITSELF,
+  test,
+} from "./session.ts";
 
-test.beforeEach(async ({ signIn }) => {
-  await signIn(GRACE);
-});
+signInEachTest(GRACE);
 
 async function open(page: Page, width: number) {
   await page.setViewportSize({ width, height: 900 });
@@ -156,12 +167,52 @@ test("at 390px, every card, filter tab, row, page link and the Level line's link
       return { what: el.textContent?.slice(0, 30), width: box.width, height: box.height };
     }),
   );
-  expect(sizes.length).toBe(5 + 14 + 7 + 3 + 1 + 1);
+  expect(sizes.length).toBe(5 + 14 + 7 + 4 + 1 + 1);
   for (const size of sizes) {
     expect(size.width, size.what).toBeGreaterThanOrEqual(44);
     expect(size.height, size.what).toBeGreaterThanOrEqual(44);
   }
 });
+
+test(
+  "on Products at 390px, the Products page link and each Repo URL link are at least 44 by 44px, and a Repo URL link shows a ring",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await ensureProduct(CEDAR, CHAT_ASSISTANT);
+    await signIn(KATHERINE, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const repoLinks = page
+      .locator(".product", { hasText: "Chat assistant" })
+      .getByRole("list", { name: "Repo URLs" })
+      .getByRole("link");
+    await expect(repoLinks).toHaveCount(2);
+
+    await expectTargets([
+      page.getByRole("navigation", { name: "Pages" }).getByRole("link", { name: "Products" }),
+      ...(await repoLinks.all()),
+    ]);
+    await expectRings(page, [repoLinks.first()]);
+  },
+);
+
+test(
+  "at 390px, a CVE Finding's NVD and OSV links are each at least 44 by 44px and show a ring",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    const finding = await cedarCveFinding((assessment) => assessment.links.osv.length > 0);
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/findings");
+    const links = (await openCveCard(page, finding)).locator(".patch-links").getByRole("link");
+    await expect(links.first()).toHaveText("NVD");
+    await expect(links.nth(1)).toHaveText(/^OSV/);
+
+    const all = await links.all();
+    await expectTargets(all);
+    await expectRings(page, all);
+  },
+);
 
 test("at 390px, the panel's button, ✕, card's ✕, a Member's Propose buttons, input and Send are each at least 44 by 44px", async ({
   page,
@@ -184,3 +235,154 @@ test("at 390px, the panel's button, ✕, card's ✕, a Member's Propose buttons,
     panel.getByRole("button", { name: "Send" }),
   ]);
 });
+
+/**
+ * Edit's form on Chat assistant (two Repo URLs, Langflow and LiteLLM), as Cedar's Admin: each of its controls in Tab
+ * order. The Internet-facing checkbox's touch target is its whole label row, so `targets` holds the row for it.
+ */
+function productFormControls(page: Page) {
+  const form = page.getByRole("form", { name: "Edit Chat assistant" });
+  /** A control, and its touch target when that's another element. */
+  type Control = { control: Locator; target?: Locator };
+  const one = (control: Locator): Control => ({ control });
+  const row = (framework: string): Control[] => {
+    const checkbox = { name: `Internet-facing, ${framework}` };
+    return [
+      one(form.getByRole("combobox", { name: `Framework, ${framework}` })),
+      one(form.getByRole("textbox", { name: `Version, ${framework}` })),
+      one(form.getByRole("combobox", { name: `Usage, ${framework}` })),
+      {
+        control: form.getByRole("checkbox", checkbox),
+        // `has` reads its locator from inside each label, so it starts at the page.
+        target: form.locator("label.check").filter({ has: page.getByRole("checkbox", checkbox) }),
+      },
+      one(form.getByRole("button", { name: `Remove ${framework}` })),
+    ];
+  };
+  const controls: Control[] = [
+    one(form.getByRole("textbox", { name: "Name" })),
+    one(form.getByRole("textbox", { name: "Repo URL 1" })),
+    one(form.getByRole("button", { name: "Remove Repo URL 1" })),
+    one(form.getByRole("textbox", { name: "Repo URL 2" })),
+    one(form.getByRole("button", { name: "Remove Repo URL 2" })),
+    one(form.getByRole("button", { name: "Add a Repo URL" })),
+    ...row("Langflow"),
+    ...row("LiteLLM"),
+    one(form.getByRole("button", { name: "Add a framework" })),
+    one(form.getByRole("button", { name: "Save" })),
+    one(form.getByRole("button", { name: "Cancel" })),
+  ];
+  return {
+    form,
+    inOrder: controls.map(({ control }) => control),
+    targets: controls.map(({ control, target }) => target ?? control),
+  };
+}
+
+test(
+  "on Products at 390px, an Admin's Add and Edit, and every button, field, select and checkbox of the Product form, are at least 44 by 44px",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await ensureProduct(CEDAR, CHAT_ASSISTANT);
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const edit = page.getByRole("button", { name: "Edit Chat assistant" });
+    await expectTargets([page.getByRole("button", { name: "Add a Product" }), edit]);
+
+    await edit.click();
+    const { form, targets } = productFormControls(page);
+    await expect(form.locator(".dependency-fields")).toHaveCount(2);
+    // Every control the form holds is in the list.
+    const controls = form.locator("button, input, select");
+    expect(await controls.count()).toBe(targets.length);
+    await expectTargets(targets);
+  },
+);
+
+test(
+  "the keyboard alone opens Edit's Product form, reaches each control in order with a visible ring, and leaves it, Esc putting focus back on Edit",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await ensureProduct(CEDAR, CHAT_ASSISTANT);
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await page.goto("/products");
+    const edit = page.getByRole("button", { name: "Edit Chat assistant" });
+    await expectRings(page, [page.getByRole("button", { name: "Add a Product" }), edit]);
+
+    await expect(edit).toBeFocused();
+    await page.keyboard.press("Enter");
+    const { form, inOrder } = productFormControls(page);
+    await expect(inOrder[0]!).toBeFocused();
+    for (const control of inOrder.slice(1)) {
+      await page.keyboard.press("Tab");
+      await expect(control).toBeFocused();
+    }
+    await expectRings(page, inOrder);
+
+    // Past Cancel, focus leaves the form: the other Products' Edit buttons wait while it's open.
+    await page.keyboard.press("Tab");
+    expect(await form.evaluate((el) => el.contains(document.activeElement))).toBe(false);
+    await page.keyboard.press("Shift+Tab");
+    await expect(form.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(form).toHaveCount(0);
+    await expect(edit).toBeFocused();
+  },
+);
+
+/** The delete confirm on Chat assistant, and its two buttons. */
+function deleteConfirm(page: Page) {
+  const confirm = page.getByRole("group", {
+    name: "Delete Chat assistant? Its CVE Findings turn Fixed.",
+  });
+  return {
+    confirm,
+    remove: confirm.getByRole("button", { name: "Delete", exact: true }),
+    cancel: confirm.getByRole("button", { name: "Cancel" }),
+  };
+}
+
+test(
+  "on Products at 390px, an Admin's Delete and the delete confirm's Delete and Cancel are at least 44 by 44px",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await ensureProduct(CEDAR, CHAT_ASSISTANT);
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const open = page.getByRole("button", { name: "Delete Chat assistant" });
+    await expectTargets([open]);
+
+    await open.click();
+    const { remove, cancel } = deleteConfirm(page);
+    await expectTargets([remove, cancel]);
+  },
+);
+
+test(
+  "the keyboard alone opens the delete confirm, reaches its Delete and Cancel with a visible ring, and leaves it",
+  SIGNS_IN_ITSELF,
+  async ({ page, signIn }) => {
+    await ensureProduct(CEDAR, CHAT_ASSISTANT);
+    await signIn(HEDY, CEDAR);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/products");
+    const open = page.getByRole("button", { name: "Delete Chat assistant" });
+    await expectRings(page, [open]);
+
+    await expect(open).toBeFocused();
+    await page.keyboard.press("Enter");
+    const { confirm, remove, cancel } = deleteConfirm(page);
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(remove).toBeFocused();
+    await expectRings(page, [remove, cancel]);
+
+    // Past Cancel, focus leaves the confirm, which stays open: it doesn't trap focus.
+    await page.keyboard.press("Tab");
+    expect(await confirm.evaluate((el) => el.contains(document.activeElement))).toBe(false);
+    await expect(confirm).toBeVisible();
+  },
+);
