@@ -9,6 +9,7 @@ import {
   ProposeBody,
   ReasonBody,
   RoleChangeBody,
+  StartScanBody,
   type Actor,
   type Finding,
   type FindingsBody,
@@ -19,6 +20,7 @@ import {
   type OverviewBody,
   type Proposal,
   type ProposalsBody,
+  type ScanBody,
   type TeamMember,
   type Role,
 } from "@warden/contracts";
@@ -37,6 +39,7 @@ import {
 import { teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
+import { SCANS_PER_HOUR, type ScanJobStarter, type Scanners, type Scans } from "./scans.ts";
 import { securityHeaders } from "./security-headers.ts";
 import { clientAddress, createSignInLimit } from "./sign-in-limit.ts";
 
@@ -47,6 +50,12 @@ export type AppDeps = {
   members: Members;
   /** The Findings module, with each module's move rule, through withTeam on the server's pool. */
   findings: Findings;
+  /** Queued Scans, through withTeam on the server's pool. */
+  scans: Scans;
+  /** Each module's scanner, as the start-up file wires them: a start names its Rules, and a module without one is 400. */
+  scanners: Scanners;
+  /** Starts the Scan Job for a queued Scan; without one (none wired here), a start answers 503. */
+  startScanJob?: ScanJobStarter;
   /** Config's `behindCloudRun`: there the client's address is the last X-Forwarded-For entry; elsewhere the socket's. */
   behindCloudRun: boolean;
   checkHealth: () => Promise<HealthBody>;
@@ -372,6 +381,65 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     } catch (error) {
       return findingRefusal(c, error);
     }
+  });
+
+  // A Lead starts a Scan (story 2, ADR 0009): queued under the session's Team, as the session's person, with the
+  // module's scanner's Rules, then the Scan Job is started with only the Scan's id and Team. A Team's 11th start in an
+  // hour writes nothing and starts nothing.
+  app.post("/api/scans", requireRole("lead"), async (c) => {
+    // A body that isn't JSON parses as undefined, which the schema refuses.
+    const parsed = StartScanBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
+    const { module, assets } = parsed.data;
+    const scanner = deps.scanners[module];
+    if (scanner === undefined) {
+      return c.json(
+        { error: `module: ${module} has no scanner here, so it can't be scanned` },
+        400,
+      );
+    }
+    if (deps.startScanJob === undefined) return c.json({ error: "Scans aren't set up here" }, 503);
+
+    const team = c.get("team");
+    const queued = await deps.scans.queue(team, {
+      module,
+      assets,
+      rules: [...scanner.rules],
+      requestedBy: c.get("session").userId,
+    });
+    if (queued.kind === "rate_limited") {
+      c.header("Retry-After", String(queued.retryAfterSeconds));
+      return c.json({ error: `A Team starts at most ${SCANS_PER_HOUR} Scans an hour` }, 429);
+    }
+    const scanId = queued.scan.id;
+    try {
+      await deps.startScanJob({ scanId, team });
+    } catch (error) {
+      // Logged before the move, so a failed move can't hide why the start failed.
+      logger.error("The Scan Job couldn't be started; marking the Scan failed", {
+        scanId,
+        team,
+        error,
+      });
+      try {
+        await deps.scans.move(team, scanId, "failed");
+      } catch (moveError) {
+        logger.error("The Scan couldn't be marked failed; it stays queued", {
+          scanId,
+          team,
+          error: moveError,
+        });
+      }
+      return c.json({ error: "The Scan couldn't be started" }, 502);
+    }
+    return c.json(queued.scan satisfies ScanBody, 202);
+  });
+
+  // Any person in the Team reads one of its Scans, to follow its state.
+  app.get("/api/scans/:id", requireRole("member"), async (c) => {
+    const scan = await deps.scans.get(c.get("team"), c.req.param("id"));
+    if (scan === undefined) return c.json({ error: "No such Scan" }, 404);
+    return c.json(scan satisfies ScanBody);
   });
 
   mount?.(app, requireRole);

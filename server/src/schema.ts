@@ -4,6 +4,7 @@
 import type { ColumnType, Generated, JSONColumnType } from "kysely";
 import type {
   Actor,
+  Asset,
   AssetKind,
   Control,
   Evidence,
@@ -13,6 +14,7 @@ import type {
   ProposalDecision,
   ProposalState,
   Role,
+  ScanState,
   Severity,
   Status,
 } from "@warden/contracts";
@@ -139,5 +141,22 @@ export interface Database {
      * Proposal at a time (0007_one_pending_proposal). Only that migration sets it; never in an answer.
      */
     duplicate_of: ColumnType<string | null, never, never>;
+  };
+
+  /**
+   * A queued Scan (0008_scan_requests): what a Lead asked to scan and where its Scan Job is. Written only by the Scans
+   * module. Each time is set by the database; a failed Scan stores no message.
+   */
+  scan_requests: {
+    team_id: string;
+    id: string;
+    module: Module;
+    assets: Json<Asset[]>;
+    rules: string[];
+    state: ColumnType<ScanState, ScanState | undefined, ScanState>;
+    requested_by: string;
+    queued_at: ColumnType<Date, Date | undefined, never>;
+    started_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
+    ended_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
   };
 }

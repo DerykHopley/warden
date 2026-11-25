@@ -290,7 +290,7 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 | Secure default | Met by | Built or designed |
 |---|---|---|
 | Security headers on every response | A2 | Built: slice 1a, #4 |
-| Rate limits on sign-in and on every paid or slow path | A5 (sign-in), H6 (hook), J5 (Judge) | Built: sign-in, per server instance (slice 5a, #27). Designed: Guard spec (hook, Judge) |
+| Rate limits on sign-in and on every paid or slow path | A5 (sign-in), H6 (hook), J5 (Judge) | Built: sign-in, per server instance (slice 5a, #27); "Scan now", 10 starts per Team in a rolling hour, counted from the `scan_requests` table under a per-Team lock, so it holds across instances (Guard spec slice 1a, #108). Designed: Guard spec (hook, Judge) |
 | Cloud Run's own least-privilege service account | R3, D7 | Built: the accounts `warden-run`, `warden-migrate` and `warden-deploy`, their preview twins `warden-preview-run`, `warden-preview-migrate` and `warden-preview-deploy`, and IAM per secret (slice 1b-ii, the setup script, #16, #32). Built for previews (slice 1b-ii, the owner preview, #65): checked live, the preview revision runs as `warden-preview-run` and the migration job as `warden-preview-migrate`, each reading only its own secrets from Secret Manager. The live service runs as `warden-run` from #24's first release |
 | A spending cap set at OpenRouter | J5 | Designed: Guard spec (the cap is set on the key) |
 | Per-Team limits that count every spending path, with a test for each | J5 | Designed: Guard spec |
