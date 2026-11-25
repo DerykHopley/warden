@@ -492,6 +492,18 @@ describe("guard/permission-skip", () => {
       `claude -p \`cat a; cat b\` ${FLAG}`,
       `$(claude ${FLAG} -p x) && echo done`,
       `claude -p $(echo hi ${FLAG}`,
+      // A run that starts inside backquotes ends at the backquote that closes them, so the flag inside counts.
+      `echo \`cd x; claude -p x ${FLAG}\``,
+      `echo $(echo \`cd x; claude ${FLAG} -p x\`) && echo done`,
+      // Backquotes closed before the run starts don't count; the ones it opens hold their text.
+      `echo \`x\` && claude -p \`cat a\` ${FLAG}`,
+      // Backquotes the run started in that never close run to the end.
+      `echo \`cd x; claude -p x ${FLAG}`,
+      // A quoted backquote opens nothing.
+      `echo "\`"; claude -p x \`cat a\` ${FLAG}`,
+      // A backquote starts a command word, as `$(` does.
+      `x=\`claude ${FLAG} -p x\``,
+      `echo \`claude -p x ${FLAG}\``,
     ].map((command): [string, string, string, string] => [
       ".claude/settings.json",
       "PreToolUse",
@@ -555,6 +567,30 @@ describe("guard/permission-skip", () => {
     [
       "runs claude without the flag in the background, then has it in a later command after &",
       `claude -p x & echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag inside backquotes, then has it in a later command after the closing backquote and &&",
+      `echo \`cd x; claude -p x\` && echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag inside backquotes, then has it in a later command after the closing backquote and ;",
+      `echo \`cd x; claude -p x\`; echo ${FLAG}`,
+    ],
+    [
+      "assigns a backquoted run of claude without the flag, then has it in a later command after ;",
+      `x=\`cd x; claude -p x\` ; echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag in backquotes inside $(…), then has it in a later command",
+      `echo $(echo \`cd x; claude -p x\`) && echo ${FLAG}`,
+    ],
+    [
+      "runs claude without the flag in $(…) inside backquotes, then has it in a later command",
+      `echo \`echo $(claude -p x)\` && echo ${FLAG}`,
+    ],
+    [
+      "has an escaped backquote before a run of claude without the flag, then has it in a later command",
+      `echo \\\`; claude -p x && echo ${FLAG}`,
     ],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
