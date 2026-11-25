@@ -71,11 +71,15 @@ Organization id (`org_…`, the Organization switcher's Manage screen shows it),
 Warden in it first. It runs as `warden_app` and writes only through the Findings module and the Products store
 (Scans, a Spot run, two decisions made as the Team's oldest Admin or Lead, the Product and its Scan). Run again, it
 says the Team is already seeded; on a Team seeded without the demo Product (with `--no-product`, or before the seed
-made one), it adds the Product and runs its Scan. It exits 1, writing nothing, for a Team with Findings of its own, for
-a Team with Products of its own, when the CVE snapshot isn't loaded (naming `load-cves`), and for a Team whose demo
-Findings or demo Product aren't as it leaves them (a seed cut short, the Product changed since, or the Findings a
-deleted demo Product left); one seed runs per Team at a time. `--no-product` after the Team id seeds the demo Findings
-only, with no Product and no snapshot needed: the browser tests seed Acme and Bluebird that way.
+made one), it adds the Product and runs its Scan. A rerun takes the seeded Team's demo Findings as they are: decisions
+made on them since (a Lead's, or the daily Job reopening an expired acceptance) and demo Findings stored under an older
+demo Rule id are no mismatch, and it changes none of them. It exits 1, writing nothing, for a Team with Findings of its
+own, for a Team with Products of its own, and when the CVE snapshot isn't loaded (naming `load-cves`). On a Team it
+has seeded before, it also exits 1, writing nothing, for a seed cut short (not every demo run applied, or the seed's
+two decisions missing), a demo Product changed since or a Product of the Lead's under its name, and any Finding the
+seed didn't write (one from a real Scan, or the CVE Findings a deleted demo Product left). One seed runs per Team at a
+time. `--no-product` after the Team id seeds the demo Findings only, with no Product and no snapshot needed: the
+browser tests seed Acme and Bluebird that way.
 
 It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database (a `PGHOST` other than `127.0.0.1`,
 `localhost` or `::1`, or any `PGPASSWORD`), `WARDEN_SEED_DEMO` must be the database's name, and the live database,
