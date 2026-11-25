@@ -119,7 +119,13 @@ test("story 4: Linus accepts and reopens a Finding; Margaret proposes a False po
       .fill("Only a dev dependency");
     await accept.getByLabel("Reopens on").fill(UNTIL);
     await accept.getByRole("button", { name: "Accept" }).click();
-    await expect(card(page).getByRole("status")).toHaveText(/^Accepted until /);
+    // The day as the browser says it, in its own locale: "Jan 15, 2099" in English.
+    const untilDay = await page.evaluate(
+      (day) => new Date(`${day}T12:00`).toLocaleDateString(undefined, { dateStyle: "medium" }),
+      UNTIL,
+    );
+    await expect(card(page).getByRole("status")).toHaveText(`Accepted. Reopens on ${untilDay}.`);
+    await expect(card(page).locator("time", { hasText: untilDay })).toBeVisible();
     await expect(card(page).locator(".detail-status")).toContainText("Accepted");
     await expect(statusCell).toHaveText("Accepted");
 

@@ -1,6 +1,6 @@
 // What the detail card sends (story 4, ADR 0005): a Lead's named decisions on a Finding, a Member's Proposal, and a
 // Lead's approval or rejection of one. Which of them a Finding's Status offers, each call and its answers, and the
-// Until a person picks, sent as the end of that day in their own time zone. The server checks the Role on every call
+// Until a person picks, sent as the start of that day in their own time zone. The server checks the Role on every call
 // (ADR 0008): the card only hides what a Role can't do.
 import {
   Decision,
@@ -148,15 +148,16 @@ export function earliestUntil(now = new Date()): string {
 }
 
 /**
- * The end of `day` (a date input's value) in the person's own time zone, as an ISO date-time with that day's offset:
- * "2026-12-01T23:59:59.999-05:00".
+ * The start of `day` (a date input's value) in the person's own time zone, as an ISO date-time with that day's offset:
+ * "2026-12-01T00:00:00.000-05:00". The daily expiry reopens an acceptance once its until has passed, so the first run
+ * on the picked day reopens it: the day "Reopens on" names. A day whose clocks skip midnight starts at the hour after.
  */
-export function endOfDay(day: string): string {
+export function startOfDay(day: string): string {
   const [year, month, date] = day.split("-").map(Number) as [number, number, number];
-  const end = new Date(year, month - 1, date, 23, 59, 59, 999);
+  const start = new Date(year, month - 1, date);
   // getTimezoneOffset is minutes behind UTC: New York's -05:00 is +300.
-  const ahead = -end.getTimezoneOffset();
+  const ahead = -start.getTimezoneOffset();
   const sign = ahead < 0 ? "-" : "+";
   const offset = `${sign}${twoDigits(Math.floor(Math.abs(ahead) / 60))}:${twoDigits(Math.abs(ahead) % 60)}`;
-  return `${day}T23:59:59.999${offset}`;
+  return `${day}T${twoDigits(start.getHours())}:${twoDigits(start.getMinutes())}:00.000${offset}`;
 }

@@ -410,7 +410,7 @@ describe("a Lead's decision in the detail card", () => {
     const answers = [
       demoFindings,
       demoFindings.map((f) =>
-        f.id === ID.lodash ? { ...accepted, accepted_until: "2027-01-15T23:59:59.999Z" } : f,
+        f.id === ID.lodash ? { ...accepted, accepted_until: "2027-01-15T00:00:00.000Z" } : f,
       ),
     ];
     open("/findings?status=all", {
@@ -437,7 +437,7 @@ describe("a Lead's decision in the detail card", () => {
     fireEvent.change(form.getByLabelText("Reopens on"), { target: { value: "2099-01-15" } });
     await userEvent.click(form.getByRole("button", { name: "Accept" }));
 
-    expect(await within(card()).findByRole("status")).toHaveTextContent(/^Accepted until/);
+    expect(await within(card()).findByRole("status")).toHaveTextContent(/^Accepted\. Reopens on /);
     await vi.waitFor(() => expect(callsTo("/api/findings")).toHaveLength(2));
     await vi.waitFor(() =>
       expect(
