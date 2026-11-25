@@ -8,12 +8,11 @@
  * mismatches are kept: padSemver, the one trailing "\n" checkVersion accepts, and max()'s tie-breaking.
  */
 import * as pep440 from "@renovatebot/pep440";
+import type { Coverage, Usage } from "@warden/contracts";
 import semver from "semver";
 import type { SemVer } from "semver";
 import { VersionRefused } from "./errors.ts";
 
-export const USAGES = ["self_hosted", "library", "transitive", "hosted"] as const;
-export type Usage = (typeof USAGES)[number];
 export const USAGE_LABELS: Record<Usage, string> = {
   self_hosted: "self-hosted app",
   library: "library",
@@ -28,8 +27,6 @@ export const WHO_ACTS: Record<Usage, WhoActs> = {
   hosted: "vendor",
 };
 export type VerdictKind = "affected" | "not_affected" | "unknown";
-/** A product's OSV coverage: package version ranges, code commits only, or nothing. */
-export type Coverage = "package" | "commits" | "none";
 
 const NO_PRODUCT_DATA = "no version data for this product";
 const COMMITS_ONLY = "only code commits";

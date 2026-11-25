@@ -15,6 +15,7 @@ import type {
   Role,
   Severity,
   Status,
+  Usage,
 } from "@warden/contracts";
 
 /** A jsonb column written as a JSON string and read back parsed. */
@@ -139,5 +140,24 @@ export interface Database {
      * Proposal at a time (0007_one_pending_proposal). Only that migration sets it; never in an answer.
      */
     duplicate_of: ColumnType<string | null, never, never>;
+  };
+
+  /** What a Team ships (0008_products): written and read only by the Patch module. A name is unique in a Team, any case. */
+  products: {
+    team_id: string;
+    id: string;
+    name: string;
+    repo_urls: string[];
+    created_at: Generated<Date>;
+  };
+
+  /** One row per framework a Product uses (0008_products); deleting the Product deletes them. */
+  product_dependencies: {
+    team_id: string;
+    product_id: string;
+    framework: string;
+    version: string | null;
+    usage: Usage;
+    internet_facing: boolean;
   };
 }
