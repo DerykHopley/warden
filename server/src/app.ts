@@ -41,7 +41,7 @@ import type { Logger } from "./log.ts";
 import type { Members, TeamMemberRow } from "./members.ts";
 import {
   SCANS_PER_HOUR,
-  ScanJobStartUnknown,
+  startScan,
   type AssetChecks,
   type ScanJobStarter,
   type Scanners,
@@ -419,47 +419,22 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     const refused = await deps.assetChecks[module]?.(team, assets);
     if (refused !== undefined) return c.json({ error: refused }, 400);
 
-    const queued = await deps.scans.queue(team, {
-      module,
-      assets,
-      rules: [...scanner.rules],
-      requestedBy: c.get("session").userId,
-    });
-    if (queued.kind === "rate_limited") {
-      c.header("Retry-After", String(queued.retryAfterSeconds));
-      return c.json({ error: `A Team starts at most ${SCANS_PER_HOUR} Scans an hour` }, 429);
+    const outcome = await startScan(
+      { scans: deps.scans, startScanJob: deps.startScanJob, logger },
+      team,
+      { module, assets, rules: [...scanner.rules], requestedBy: c.get("session").userId },
+    );
+    switch (outcome.kind) {
+      case "rate_limited":
+        c.header("Retry-After", String(outcome.retryAfterSeconds));
+        return c.json({ error: `A Team starts at most ${SCANS_PER_HOUR} Scans an hour` }, 429);
+      case "start_failed":
+        return c.json({ error: "The Scan couldn't be started" }, 502);
+      case "started":
+      case "start_unknown":
+        // An unknown start leaves the Scan queued: the Lead follows it rather than start another.
+        return c.json(outcome.scan satisfies ScanBody, 202);
     }
-    const scanId = queued.scan.id;
-    try {
-      await deps.startScanJob({ scanId, team });
-    } catch (error) {
-      // The Job may have started: the Scan stays queued, and the Lead follows it rather than start another.
-      if (error instanceof ScanJobStartUnknown) {
-        logger.warn("The Scan Job's start is unknown; the Scan stays queued", {
-          scanId,
-          team,
-          error,
-        });
-        return c.json(queued.scan satisfies ScanBody, 202);
-      }
-      // Logged before the move, so a failed move can't hide why the start failed.
-      logger.error("The Scan Job couldn't be started; marking the Scan failed", {
-        scanId,
-        team,
-        error,
-      });
-      try {
-        await deps.scans.move(team, scanId, "failed");
-      } catch (moveError) {
-        logger.error("The Scan couldn't be marked failed; it stays queued", {
-          scanId,
-          team,
-          error: moveError,
-        });
-      }
-      return c.json({ error: "The Scan couldn't be started" }, 502);
-    }
-    return c.json(queued.scan satisfies ScanBody, 202);
   });
 
   // Any person in the Team reads one of its Scans, to follow its state.

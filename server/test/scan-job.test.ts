@@ -28,13 +28,13 @@ import { AWS_KEY } from "./secret-fixtures.ts";
 import {
   activeOrganization,
   linkRepos,
+  logEntries,
   minutesAgo,
   seedTeam,
   sessionToken,
   testApp,
   testKey,
 } from "./helpers.ts";
-import { logEntries } from "./server-process.ts";
 
 let pool: pg.Pool;
 let withTeam: WithTeam;

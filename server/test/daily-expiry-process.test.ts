@@ -10,7 +10,7 @@ import { toRow } from "../src/findings/rows.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createMigratedTestDatabase, poolAs, runInServer } from "./databases.ts";
 import { closedPort } from "./ports.ts";
-import { logEntries } from "./server-process.ts";
+import { logEntries } from "./helpers.ts";
 
 const TEAMS = ["org_job_a", "org_job_b"];
 const ends: (() => Promise<unknown>)[] = [];

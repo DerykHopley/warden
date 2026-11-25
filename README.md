@@ -348,10 +348,12 @@ before anything is migrated or deployed.
 4. **Deploy:** a `warden` revision named `warden-rel-<sha7>-<run>-<attempt>`, as `warden-run`, tagged `candidate`, with **no
    traffic**. Every release sets the revision's env vars and secrets afresh; its `CLERK_AUTHORIZED_PARTIES` is each
    URL Cloud Run gives the service, and its `WARDEN_SCAN_JOB` names the Scan Job
-   (`projects/<project-id>/locations/europe-west1/jobs/warden-scan`), which "Scan now" starts. It also gets the
-   GitHub app's settings: `GITHUB_APP_CLIENT_ID` from the repository variable, and the secrets
-   `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned. A preview's revision has none of these, so its
-   "Scan now" answers 503.
+   (`projects/<project-id>/locations/europe-west1/jobs/warden-scan`), which "Scan now" starts. Linking a GitHub
+   installation starts it too, for the first Scan of the linked repos, and uses one of the Team's hourly Scans; the
+   link answers once the Job has started, which can take up to about 20 seconds. It also gets the GitHub app's
+   settings: `GITHUB_APP_CLIENT_ID` from the repository variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and
+   `GITHUB_APP_PRIVATE_KEY`, pinned. A preview's revision has none of these, so its "Scan now" answers 503, and a
+   revision with no Scan Job starts no Scan when an installation is linked.
 5. **Health gate:** call `/api/health` on the tag's URL (`https://candidate---warden-<project-number>.europe-west1.run.app`)
    for up to about 90 seconds until it answers 200. If it never does, the release fails and the revision gets no
    traffic.

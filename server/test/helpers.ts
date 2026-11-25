@@ -246,6 +246,15 @@ export function testApp(options: {
   return { app, lines };
 }
 
+/** The log lines in `output` (a process's output, or a logger's lines joined), parsed. */
+export function logEntries(output: string): Record<string, unknown>[] {
+  return output
+    .trim()
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line));
+}
+
 /** The error `promise` rejects with; a promise that resolves fails the test. */
 export async function rejection(promise: Promise<unknown>): Promise<Error> {
   try {

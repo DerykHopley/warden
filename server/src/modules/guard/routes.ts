@@ -2,16 +2,20 @@
 // always the session's, never the request's.
 import {
   LinkInstallationBody,
+  MAX_SCAN_ASSETS,
+  type Asset,
   type GitHubAppBody,
   type LinkedInstallationBody,
   type RepoAssetBody,
   type ReposBody,
+  type ScanBody,
 } from "@warden/contracts";
 import type { z } from "zod";
 import type { MountRoutes } from "../../app.ts";
 import { createAttemptLimit } from "../../attempt-limit.ts";
 import type { Logger } from "../../log.ts";
-import { SCANS_PER_HOUR } from "../../scans.ts";
+import { SCANS_PER_HOUR, startScan, type ScanJobStarter, type Scans } from "../../scans.ts";
+import { DEFAULT_PACK_RULE_IDS } from "./default-pack.ts";
 import {
   GitHubInstallationUnreachable,
   GitHubRefusedCode,
@@ -52,12 +56,15 @@ const SLUG_KEPT_MS = 3_600_000;
 
 /**
  * Guard's routes; linking needs `github`, which comes with the logger its failures are written to. `now` is the clock
- * the kept slug ages by.
+ * the kept slug ages by. With `scans` and `startScanJob`, a link starts the first Scan of its repos.
  */
 export function guardRoutes(
-  deps: { repoAssets: RepoAssets; now?: () => number } & (
-    { github: GitHub; logger: Logger } | { github?: undefined; logger?: Logger }
-  ),
+  deps: {
+    repoAssets: RepoAssets;
+    now?: () => number;
+    scans?: Scans;
+    startScanJob?: ScanJobStarter;
+  } & ({ github: GitHub; logger: Logger } | { github?: undefined; logger?: Logger }),
 ): MountRoutes {
   const { repoAssets, now = Date.now } = deps;
   // Kept in this instance's memory, keyed by Team id as it is: each Cloud Run instance counts on its own (threat A5).
@@ -65,6 +72,41 @@ export function guardRoutes(
   // The App's slug, read from GitHub and kept for an hour from when the read began. A read that fails isn't kept, so
   // the next call asks again; calls while a read runs share it.
   let slug: { read: Promise<string>; at: number } | undefined;
+
+  /**
+   * The first Scan of a link's repos (story 2): a Guard Scan of the first MAX_SCAN_ASSETS by ref, with the Default
+   * Pack's Rules, as the linking Admin. Null when it starts none: no repos, no Scans or starter here, or the Team at
+   * its hourly Scan limit. The link is already written, so a Scan that can't be queued is logged, never refused.
+   */
+  async function firstScan(
+    team: string,
+    linked: readonly RepoAsset[],
+    requestedBy: string,
+    logger: Logger,
+  ): Promise<ScanBody | null> {
+    const { scans, startScanJob } = deps;
+    if (linked.length === 0 || scans === undefined || startScanJob === undefined) return null;
+    const assets = linked
+      .map((repo) => repo.ref)
+      .sort()
+      .slice(0, MAX_SCAN_ASSETS)
+      .map((ref): Asset => ({ kind: "repo", ref }));
+    try {
+      const outcome = await startScan({ scans, startScanJob, logger }, team, {
+        module: "guard",
+        assets,
+        rules: [...DEFAULT_PACK_RULE_IDS],
+        requestedBy,
+      });
+      return outcome.kind === "rate_limited" ? null : outcome.scan;
+    } catch (error) {
+      logger.error("The first Scan after a link couldn't be queued; the link stands", {
+        team,
+        error,
+      });
+      return null;
+    }
+  }
 
   return (app, requireRole) => {
     // What an Admin's Setup page builds GitHub's install and sign-in links from (story 1).
@@ -165,6 +207,9 @@ export function guardRoutes(
         {
           installation_id: installationId,
           repos: linked.map(repoAssetBody),
+          // The 201 waits for the Scan Job to start: on Cloud Run, a token call and a run call of up to 10 s each, so
+          // a slow start holds the link's answer for up to about 20 s. The link is written either way.
+          scan: await firstScan(team, linked, c.get("session").userId, logger),
         } satisfies LinkedInstallationBody,
         201,
       );

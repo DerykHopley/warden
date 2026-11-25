@@ -22,6 +22,7 @@ const linked = (count: number) => () =>
   json(201, {
     installation_id: 42,
     repos: ["web", "api"].slice(0, count).map(repo),
+    scan: null,
   });
 
 beforeEach(() => {

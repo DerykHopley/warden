@@ -20,10 +20,10 @@ import {
 } from "../src/scans.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { logEntries } from "./server-process.ts";
 import {
   activeOrganization,
   linkRepos,
+  logEntries,
   minutesAgo,
   seedTeam,
   sessionToken,
