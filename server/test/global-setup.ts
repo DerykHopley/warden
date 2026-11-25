@@ -1,12 +1,13 @@
 // One throwaway database for the server's tests: the roles, every migration as warden_migrate, Patch's CVE snapshot
 // loaded as the release loads it, then the tests; dropped at the end. Tests reach it with `inject("testDatabase")`.
-// First, it clears out what killed runs left behind.
+// First, it waits for Postgres to take connections, then clears out what killed runs left behind.
 import type { TestProject } from "vitest/node";
 import {
   createMigratedTestDatabase,
   dropStaleTestDatabases,
   dropStaleTestRoles,
   loadTestCveSnapshot,
+  waitForPostgres,
 } from "./databases.ts";
 
 declare module "vitest" {
@@ -24,6 +25,7 @@ export default async function setup(project: TestProject) {
     user: env.PGUSER,
     database: env.PGDATABASE,
   };
+  await waitForPostgres(connection); // a container started just before the run (#99)
   await dropStaleTestDatabases(connection);
   await dropStaleTestRoles(connection);
   const database = await createMigratedTestDatabase(connection);
