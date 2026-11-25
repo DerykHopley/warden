@@ -399,15 +399,16 @@ const isOneWord = (quoted: string) => !/\s/.test(quoted);
  */
 function agentRuns(command: string): string[] {
   const masked = withQuotesMasked(command);
+  // Copies, so no position is kept between calls in the shared regexes' `lastIndex`.
+  const runsClaude = new RegExp(RUNS_CLAUDE);
+  const runArguments = new RegExp(RUN_ARGUMENTS);
   const runs: string[] = [];
-  RUNS_CLAUDE.lastIndex = 0;
-  for (let run = RUNS_CLAUDE.exec(masked); run !== null; run = RUNS_CLAUDE.exec(masked)) {
-    RUN_ARGUMENTS.lastIndex = RUNS_CLAUDE.lastIndex;
-    RUN_ARGUMENTS.exec(masked);
-    runs.push(
-      withQuotesMasked(command.slice(RUNS_CLAUDE.lastIndex, RUN_ARGUMENTS.lastIndex), isOneWord),
-    );
-    RUNS_CLAUDE.lastIndex = RUN_ARGUMENTS.lastIndex;
+  while (runsClaude.exec(masked) !== null) {
+    const start = runsClaude.lastIndex;
+    runArguments.lastIndex = start;
+    runArguments.exec(masked);
+    runs.push(withQuotesMasked(command.slice(start, runArguments.lastIndex), isOneWord));
+    runsClaude.lastIndex = runArguments.lastIndex;
   }
   return runs;
 }
