@@ -331,6 +331,34 @@ describe("Team B and Team A's Proposal and Finding", () => {
   });
 });
 
+describe("a path id holding a NUL (#129)", () => {
+  it("a Member proposing on it gets 404 No such Finding, and no Proposal is stored", async () => {
+    const { team } = await teamWithFinding();
+    const before = await stored(team);
+
+    expect(await propose(team, "a%00b", { decision: "mark_false_positive", reason: "r" })).toEqual({
+      status: 404,
+      body: { error: "No such Finding" },
+    });
+    expect(await stored(team)).toEqual(before);
+  });
+
+  it("a Lead approving or rejecting it gets 404 No such Proposal, and nothing changes", async () => {
+    const { team } = await pendingProposal();
+    const before = await stored(team);
+
+    expect(await approve(team, "a%00b")).toEqual({
+      status: 404,
+      body: { error: "No such Proposal" },
+    });
+    expect(await reject(team, "a%00b", { reason: "r" })).toEqual({
+      status: 404,
+      body: { error: "No such Proposal" },
+    });
+    expect(await stored(team)).toEqual(before);
+  });
+});
+
 describe("a Proposal its decision would refuse now", () => {
   it("answers 409 for an accept on a Fixed Finding, and stores nothing", async () => {
     const { team, finding } = await teamWithFinding();

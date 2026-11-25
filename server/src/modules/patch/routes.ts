@@ -13,6 +13,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import type { z } from "zod";
 import type { AppEnv, MountRoutes } from "../../app.ts";
 import type { Logger } from "../../log.ts";
+import { pathId } from "../../path-id.ts";
 import type { PatchAssessments } from "./assessment.ts";
 import {
   CveNotInSnapshot,
@@ -131,19 +132,21 @@ async function refusing(c: Context<AppEnv>, work: () => Promise<Response>): Prom
 }
 
 /**
- * The path's Product id. One holding a NUL is no Product's id (Postgres can't store a NUL in text, and would refuse
- * the read as a 500), so it's ProductNotFound before the store sees it: the same 404 as an id the Team doesn't have.
+ * The path's Product id. One that can be no stored id (`pathId`) is ProductNotFound before the store sees it: the same
+ * 404 as an id the Team doesn't have.
  */
 function productId(c: Context<AppEnv>): string {
-  const id = c.req.param("id") ?? "";
-  if (id.includes("\0")) throw new ProductNotFound(id);
+  const raw = c.req.param("id") ?? "";
+  const id = pathId(raw);
+  if (id === undefined) throw new ProductNotFound(raw);
   return id;
 }
 
-/** The path's Finding id: one holding a NUL is no Finding's id, so it's PatchFindingNotFound, as `productId` does. */
+/** The path's Finding id: one that can be no stored id is PatchFindingNotFound, as `productId` does. */
 function findingId(c: Context<AppEnv>): string {
-  const id = c.req.param("id") ?? "";
-  if (id.includes("\0")) throw new PatchFindingNotFound(id);
+  const raw = c.req.param("id") ?? "";
+  const id = pathId(raw);
+  if (id === undefined) throw new PatchFindingNotFound(raw);
   return id;
 }
 
