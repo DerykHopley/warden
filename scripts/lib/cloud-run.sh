@@ -104,15 +104,17 @@ wait_for_health() {
   return 1
 }
 
-# [KEY=VALUE...]: a Job's plain values, as a dict: the warden database as warden_app, then any given.
-job_env() { dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" PGUSER=warden_app PGDATABASE=warden "$@"; }
-
-# <job> <image> <account> <script> <env> <secrets> [flag...]: the Job runs <image> as <account>, `node <script>`,
-# with one retry, the plain values <env> (a dict, from job_env), the secrets <secrets> (a dict) and any flag given.
-# Its whole configuration is set afresh from here: the same on a release and a rollback. Returns gcloud's status.
+# <job> <image> <account> <script> <secrets> [KEY=VALUE...] [--flag...]: the Job runs <image> as <account>,
+# `node <script>` on the warden database as warden_app, with one retry, the secrets <secrets> (a dict), any further
+# plain value given and any flag given (each starts with --). Its whole configuration is set afresh from here: the same
+# on a release and a rollback. Returns gcloud's status.
 update_job() {
-  local job=$1 image=$2 account=$3 script=$4 env=$5 secrets=$6
-  shift 6
+  local job=$1 image=$2 account=$3 script=$4 secrets=$5 env=()
+  shift 5
+  while (($#)) && [[ $1 != --* ]]; do
+    env+=("$1")
+    shift
+  done
   gcloud run jobs update "$job" \
     --image="$image" \
     --region="$REGION" \
@@ -122,7 +124,7 @@ update_job() {
     --args="$script" \
     --max-retries=1 \
     "$@" \
-    --set-env-vars="$env" \
+    --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" PGUSER=warden_app PGDATABASE=warden "${env[@]}")" \
     --set-secrets="$secrets" \
     --project="$GCP_PROJECT_ID"
 }
@@ -133,7 +135,7 @@ update_daily_job() {
   local app_password admin_password
   app_password=$(pinned warden-db-app-password) || exit 1
   admin_password=$(pinned warden-db-admin-password) || exit 1
-  update_job "$DAILY_JOB" "$1" "$DAILY_ACCOUNT" server/src/daily-expiry.ts "$(job_env)" \
+  update_job "$DAILY_JOB" "$1" "$DAILY_ACCOUNT" server/src/daily-expiry.ts \
     "$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")"
 }
 
@@ -150,7 +152,7 @@ update_scan_job() {
   local client_id=$WARDEN_GITHUB_APP_CLIENT_ID app_password github_key
   app_password=$(pinned warden-db-app-password) || exit 1
   github_key=$(pinned warden-github-app-private-key) || exit 1
-  update_job "$SCAN_JOB" "$1" "$SCAN_ACCOUNT" server/src/scan-job.ts "$(job_env "GITHUB_APP_CLIENT_ID=$client_id")" \
-    "$(dict "PGPASSWORD=$app_password" "GITHUB_APP_PRIVATE_KEY=$github_key")" \
+  update_job "$SCAN_JOB" "$1" "$SCAN_ACCOUNT" server/src/scan-job.ts \
+    "$(dict "PGPASSWORD=$app_password" "GITHUB_APP_PRIVATE_KEY=$github_key")" "GITHUB_APP_CLIENT_ID=$client_id" \
     --task-timeout=3600s
 }

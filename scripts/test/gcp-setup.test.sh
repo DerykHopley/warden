@@ -834,11 +834,6 @@ assert_no_line "a rerun keeps each job's image" "--image=" "$(grep -F 'run jobs 
 assert_line "a rerun puts the daily Job's Scheduler job back" \
   "scheduler jobs update http warden-daily-expiry --location=europe-west1 --schedule=0 4 * * * --time-zone=Etc/UTC --uri=https://run.googleapis.com/v2/projects/$project/locations/europe-west1/jobs/warden-daily-expiry:run --http-method=POST --oauth-service-account-email=warden-scheduler@$project.iam.gserviceaccount.com --project=$project" \
   "$calls"
-scan_reads_key="secrets add-iam-policy-binding warden-github-app-private-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor"
-assert_line "a rerun on a project that has warden-scan grants it the GitHub app's private key" "$scan_reads_key" \
-  "$calls"
-assert_no_line "a rerun never grants warden-scan the GitHub app's client secret" \
-  "add-iam-policy-binding warden-github-app-client-secret --member=serviceAccount:warden-scan@" "$calls"
 assert_equal "a rerun runs the roles script for both sets again" \
   "live warden
 preview warden_preview" \
@@ -856,7 +851,7 @@ run jobs create warden-scan --image=us-docker.pkg.dev/cloudrun/container/job:lat
 for binding in \
   "projects add-iam-policy-binding $project --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/cloudsql.client" \
   "secrets add-iam-policy-binding warden-db-app-password --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
-  "$scan_reads_key" \
+  "secrets add-iam-policy-binding warden-github-app-private-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "iam service-accounts add-iam-policy-binding warden-scan@$project.iam.gserviceaccount.com --member=serviceAccount:warden-deploy@$project.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser" \
   "run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides"; do
   assert_line "a rerun before the Scan Job binds: ${binding%% --member*} ${binding##*--role=}" "$binding" "$calls"

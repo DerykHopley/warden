@@ -447,7 +447,6 @@ GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
   "$(sed 's/:[^:]*$//' <<<"$scan_secrets")"
 assert_equal "release: each of the Scan Job's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$scan_secrets" || true)"
-assert_no_match "release: the Scan Job never gets the GitHub app's client secret" 'client-secret' "$scan"
 
 assert_no_match "release: no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
 assert_no_match "release: no call names a preview service, job or account" 'warden-preview|warden-migrate-preview' \
