@@ -259,8 +259,11 @@ button[aria-busy="true"],
   margin-left: auto;
 }
 
+/* The links wrap onto a second line when they don't fit (four of them at 390px in a wide fallback font), so the
+   header never scrolls sideways; each link keeps its 44px target. */
 .page-links {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 

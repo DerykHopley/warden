@@ -287,6 +287,28 @@ test("at 390px, a title holding a 60-character word with no break in it still do
   expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
 });
 
+// The header's width depends on the fonts the machine has: the four page links fitted with this machine's Noto Sans and
+// scrolled 9px sideways with the CI runner's DejaVu Sans (#141). Wider letters stand in for a wider font, so this test
+// fails on any machine while the header can't wrap.
+test("at 390px with the header's text a tenth of an em wider per letter, the header wraps instead of scrolling sideways, and each page link stays 44 by 44px", async ({
+  page,
+}) => {
+  await openAt(page, 390, "light");
+  await page.addStyleTag({ content: ".app-header { letter-spacing: 0.1em; }" });
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  const links = page.getByRole("navigation", { name: "Pages" }).getByRole("link");
+  await expect(links).toHaveCount(4);
+  for (const box of await links.evaluateAll((all) => all.map((a) => a.getBoundingClientRect()))) {
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.right).toBeLessThanOrEqual(clientWidth);
+  }
+});
+
 test("under 640px: the cards stack in one column, and the table shows Severity, Finding and Status", async ({
   page,
 }) => {

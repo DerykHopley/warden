@@ -87,7 +87,7 @@ Warden runs both in a small desktop-app window and on a wide browser screen, so 
 | Component | States |
 |---|---|
 | Button | default, hover, focus, disabled, busy |
-| App header | Team name and Role (a word in a pill) shown; waiting ("…" for both, until the server answers for the active Team); no Team (Warden and Sign out only, the switcher moves into the page) |
+| App header | Team name and Role (a word in a pill) shown; waiting ("…" for both, until the server answers for the active Team); no Team (Warden and Sign out only, the switcher moves into the page). On a phone it wraps: the page links wrap onto a second line when they don't fit (at 390px the fourth does), each still a 44px target, so nothing scrolls sideways whatever the fallback font |
 | Page links | default, hover, focus, current (accent, bold, underlined) |
 | People table row | default; under 640px name and Role only; a message under the Role after a refused change (words, `role="alert"`) |
 | Role picker | default, hover, focus, disabled, busy; an Admin's only: everyone else sees the Role as a word |
