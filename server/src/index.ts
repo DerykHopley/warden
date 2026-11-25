@@ -101,7 +101,7 @@ const app = createApp(
   appDeps,
   patchRoutes({
     products: createProducts({ withTeam }),
-    scan: createPatchScan({ findings, withTeam }),
+    scan: createPatchScan({ findings, logger }),
     logger,
   }),
 );

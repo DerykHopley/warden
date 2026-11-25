@@ -4,7 +4,7 @@
  * transaction. The Role checks are the routes'.
  */
 import { randomUUID } from "node:crypto";
-import type { Product, ProductInput } from "@warden/contracts";
+import type { Product, ProductDependency, ProductInput } from "@warden/contracts";
 import { sql, type Transaction } from "kysely";
 import { isPgError } from "../../database.ts";
 import type { Database } from "../../schema.ts";
@@ -78,6 +78,18 @@ async function readAll(tx: Transaction<Database>): Promise<Product[]> {
     .orderBy("d.framework")
     .execute();
   return grouped(rows);
+}
+
+/**
+ * Product `id`'s dependencies as stored, by framework id, read in the caller's Team transaction: none for an id the
+ * Team doesn't have, such as a Product just deleted. The Patch Scan reads them so.
+ */
+export async function readDependencies(
+  tx: Transaction<Database>,
+  id: string,
+): Promise<ProductDependency[]> {
+  const rows = await productRows(tx).where("p.id", "=", id).orderBy("d.framework").execute();
+  return grouped(rows)[0]?.dependencies ?? [];
 }
 
 /** The one Product `id` as stored, read in the transaction that wrote it. */

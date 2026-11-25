@@ -10,12 +10,14 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { AppEnv } from "../src/app.ts";
 import { createLogger } from "../src/log.ts";
+import { createProducts } from "../src/modules/patch/products.ts";
 import type { PatchScan } from "../src/modules/patch/scan.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
   activeOrganization,
   patchMount,
+  patchScan,
   seedTeam,
   sessionToken,
   testApp,
@@ -140,23 +142,76 @@ describe("saving a Product (story 3)", () => {
       expect(f).toMatchObject({ status: "open", location: { version: "unknown" } });
     }
   });
+});
 
-  it("opens a Dify CVE on pkg:generic/dify as may be affected", async () => {
+describe("the Scan reads the Product as stored when it reconciles", () => {
+  // Two close changes to one Product each run a Scan; the one that reconciles last must not undo the newer change.
+  // So the Scan reads the Product's dependencies itself, whatever Product object it's handed.
+  const chatbot = (version: string): ProductInput => ({
+    name: "Chatbot",
+    repo_urls: [],
+    dependencies: [langchain(version)],
+  });
+
+  it("scans a Product changed since the object it's handed was read as it is now", async () => {
     const teamId = await team();
-    const id = await create(teamId, {
-      name: "Assistant",
-      repo_urls: [],
-      dependencies: [
-        { framework: "dify", version: "1.0.0", usage: "self_hosted", internet_facing: true },
-      ],
-    });
+    const products = createProducts({ withTeam });
+    const stale = await products.create(teamId, chatbot("0.0.200"));
+    await products.update(teamId, stale.id, chatbot("0.0.247"));
 
-    const opened = (await findings(teamId)).filter((f) => f.asset.ref === id);
-    expect(opened.length).toBeGreaterThan(0);
-    for (const f of opened) {
-      expect(f.location).toMatchObject({ package: "pkg:generic/dify", version: "1.0.0" });
-      expect(f.evidence.summary).toContain("may be affected");
-    }
+    await patchScan(withTeam).scanProduct(teamId, stale);
+
+    expect(await findingsFor(teamId, stale.id, "CVE-2023-36188")).toEqual([]);
+  });
+
+  it("scans a Product deleted since the object it's handed was read as having no dependencies", async () => {
+    const teamId = await team();
+    const products = createProducts({ withTeam });
+    const scan = patchScan(withTeam);
+    const stale = await products.create(teamId, chatbot("0.0.200"));
+    await scan.scanProduct(teamId, stale);
+    expect((await findings(teamId)).length).toBeGreaterThan(1);
+    await products.remove(teamId, stale.id);
+
+    await scan.scanProduct(teamId, stale);
+
+    expect(new Set((await findings(teamId)).map((f) => f.status))).toEqual(new Set(["fixed"]));
+  });
+
+  it("skips and logs a dependency on a framework Patch no longer knows, and scans the rest", async () => {
+    const teamId = await team();
+    const lines: string[] = [];
+    const { id } = await createProducts({ withTeam }).create(teamId, chatbot("0.0.200"));
+    // Stored before the framework left PATCH_FRAMEWORKS: the routes would refuse it now.
+    await withTeam(teamId, (tx) =>
+      tx
+        .insertInto("product_dependencies")
+        .values({
+          team_id: teamId,
+          product_id: id,
+          framework: "retired-framework",
+          version: "1.0.0",
+          usage: "library",
+          internet_facing: false,
+        })
+        .execute(),
+    );
+
+    await patchScan(
+      withTeam,
+      createLogger((line) => lines.push(line)),
+    ).scanProduct(teamId, { id });
+
+    expect(await findingsFor(teamId, id, "CVE-2023-36188")).toHaveLength(1);
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        severity: "ERROR",
+        team: teamId,
+        productId: id,
+        framework: "retired-framework",
+      }),
+    );
   });
 });
 

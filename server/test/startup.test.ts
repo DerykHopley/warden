@@ -13,7 +13,7 @@ import {
   testPublishableKey,
 } from "./helpers.ts";
 import { closedPort } from "./ports.ts";
-import { startServer as start, waitForListening } from "./server-process.ts";
+import { pgConnection, startServer as start, waitForListening } from "./server-process.ts";
 
 /** A server whose database refuses connections, listening on a spare port. */
 async function startWithoutDatabase() {
@@ -80,11 +80,9 @@ describe("the start-up file's wiring", () => {
       CLERK_SECRET_KEY: "clerk-secret-value",
       CLERK_JWT_KEY: publicPem,
       VITE_CLERK_PUBLISHABLE_KEY: testPublishableKey,
-      PGHOST: process.env.PGHOST ?? "",
-      PGPORT: process.env.PGPORT ?? "",
+      ...pgConnection(),
       PGUSER: "warden_app",
       PGDATABASE: database,
-      ...(process.env.PGPASSWORD ? { PGPASSWORD: process.env.PGPASSWORD } : {}),
       PORT: String(port),
     });
     await waitForListening(server.output);

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
+import type pg from "pg";
 import type { HealthBody, ProductInput, Role } from "@warden/contracts";
 import { createApp, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
@@ -20,22 +21,48 @@ import type { WithTeam } from "../src/with-team.ts";
 /** Each module's move rule, as the start-up file wires them. */
 const MOVE_RULES = { guard: guardMoveRule, patch: patchMoveRule };
 
+/** A logger that keeps nothing, for a test that doesn't read the log. */
+const silent = () => createLogger(() => {});
+
 /**
- * Patch's routes as the start-up file mounts them: the Products store, and the Patch Scan reporting to a Findings
- * module with the start-up file's move rules, all on `withTeam`. `scan` stands in for the Patch Scan; `logger` takes
- * the routes' log lines (none are kept unless given).
+ * The Patch Scan as the start-up file wires it: reporting to a Findings module with the start-up file's move rules,
+ * on `withTeam`. `logger` takes its log lines (none are kept unless given).
+ */
+export function patchScan(withTeam: WithTeam, logger: Logger = silent()): PatchScan {
+  return createPatchScan({ findings: createFindings({ withTeam, moveRules: MOVE_RULES }), logger });
+}
+
+/**
+ * Patch's routes as the start-up file mounts them: the Products store and the Patch Scan, on `withTeam`. `scan`
+ * stands in for the Patch Scan; `logger` takes the routes' log lines (none are kept unless given).
  */
 export function patchMount(
   withTeam: WithTeam,
-  { scan, logger = createLogger(() => {}) }: { scan?: PatchScan; logger?: Logger } = {},
+  { scan, logger = silent() }: { scan?: PatchScan; logger?: Logger } = {},
 ): MountRoutes {
   return patchRoutes({
     products: createProducts({ withTeam }),
-    scan:
-      scan ??
-      createPatchScan({ findings: createFindings({ withTeam, moveRules: MOVE_RULES }), withTeam }),
+    scan: scan ?? patchScan(withTeam, logger),
     logger,
   });
+}
+
+/**
+ * Resolves once a transaction is waiting for `team`'s Findings lock (the one reconcile and decisions take), read
+ * through `probe`'s view of `pg_locks`.
+ */
+export async function queuedBehindFindingsLock(probe: pg.Pool, team: string): Promise<void> {
+  for (let tries = 0; tries < 100; tries++) {
+    const { rows } = await probe.query<{ waiting: number }>(
+      `select count(*)::int as waiting from pg_locks
+        where locktype = 'advisory' and not granted and objsubid = 1
+          and ((classid::bigint << 32) | objid::bigint) = hashtextextended($1, 0)`,
+      [team],
+    );
+    if (rows[0]!.waiting > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("nothing queued behind the Team's Findings lock");
 }
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
@@ -135,6 +162,7 @@ const noFindings: Findings = {
   reconcile: noDatabase,
   report: noDatabase,
   scan: noDatabase,
+  scanLocked: noDatabase,
   list: noDatabase,
   history: noDatabase,
   overview: noDatabase,

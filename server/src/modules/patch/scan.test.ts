@@ -62,6 +62,12 @@ describe("cvePackage", () => {
     expect(cvePackage(framework("dify"), [])).toBe("pkg:generic/dify");
     expect(cvePackage(framework("llama.cpp"), [])).toBe("pkg:generic/llama.cpp");
   });
+
+  it("falls back as if there were no OSV entry when the first entry's ecosystem has no purl rule", () => {
+    const crate = [entry("langchain-rs", "1.0.0", "crates.io")];
+    expect(cvePackage(framework("langchain"), crate)).toBe("pkg:pypi/langchain");
+    expect(cvePackage(framework("dify"), crate)).toBe("pkg:generic/dify");
+  });
 });
 
 describe("cveObservation", () => {
@@ -82,9 +88,15 @@ describe("cveObservation", () => {
       in_kev: true,
     };
     const entries = [entry("langflow", "1.3.0")];
-    const v = verdict("package", entries, "library", "1.2.0");
+    const outcome = verdict("package", entries, "library", "1.2.0");
 
-    const observation = cveObservation("product-1", library("1.2.0"), cve, "pkg:pypi/langflow", v);
+    const observation = cveObservation(
+      "product-1",
+      library("1.2.0"),
+      cve,
+      "pkg:pypi/langflow",
+      outcome,
+    );
 
     expect(Observation.parse(observation)).toEqual(observation);
     expect(observation).toEqual({
@@ -114,14 +126,14 @@ describe("cveObservation", () => {
       description: "Dify lets a guest read files",
       in_kev: false,
     };
-    const v = verdict("none", [], "self_hosted", null);
+    const outcome = verdict("none", [], "self_hosted", null);
 
     const observation = cveObservation(
       "product-2",
       { framework: "dify", version: null, usage: "self_hosted", internet_facing: false },
       cve,
       "pkg:generic/dify",
-      v,
+      outcome,
     );
 
     expect(Observation.parse(observation)).toEqual(observation);
@@ -146,9 +158,9 @@ describe("cveObservation", () => {
       description: "x.",
       in_kev: false,
     };
-    const v = verdict("package", [entry("langflow", null)], "library", "1.0.0");
+    const outcome = verdict("package", [entry("langflow", null)], "library", "1.0.0");
 
-    const observation = cveObservation("p", library("1.0.0"), cve, "pkg:pypi/langflow", v);
+    const observation = cveObservation("p", library("1.0.0"), cve, "pkg:pypi/langflow", outcome);
 
     expect(observation.severity).toBe("high");
     expect(observation.evidence.summary).toMatch(/^No CVSS score, NVD rates it HIGH\. /);
@@ -163,9 +175,9 @@ describe("cveObservation", () => {
       description: `${sentence} A second sentence.`,
       in_kev: false,
     };
-    const v = verdict("package", [entry("langflow", "2.0.0")], "library", "1.0.0");
+    const outcome = verdict("package", [entry("langflow", "2.0.0")], "library", "1.0.0");
 
-    const { title } = cveObservation("p", library("1.0.0"), cve, "pkg:pypi/langflow", v);
+    const { title } = cveObservation("p", library("1.0.0"), cve, "pkg:pypi/langflow", outcome);
 
     expect(title).toHaveLength(200);
     expect(title.startsWith(`CVE-2026-0003: ${sentence.slice(0, 50)}`)).toBe(true);
@@ -180,13 +192,56 @@ describe("cveObservation", () => {
       description: "In langflow v.1.0, the\nupload route trusts a path. It is fixed in 2.0.",
       in_kev: false,
     };
-    const v = verdict("package", [entry("langflow", "2.0.0")], "library", "1.0.0");
+    const outcome = verdict("package", [entry("langflow", "2.0.0")], "library", "1.0.0");
 
-    const observation = cveObservation("p", library("1.0.0"), cve, "pkg:pypi/langflow", v);
+    const observation = cveObservation("p", library("1.0.0"), cve, "pkg:pypi/langflow", outcome);
 
     expect(observation.title).toBe(
       "CVE-2026-0004: In langflow v.1.0, the upload route trusts a path.",
     );
     expect(observation.severity).toBe("low");
+  });
+
+  it("doesn't end the first sentence at e.g. or i.e., or at a full stop before a lower-case word", () => {
+    const facts: CveFacts = {
+      id: "CVE-2026-0005",
+      cvss: 3.1,
+      severity: "LOW",
+      description: "",
+      in_kev: false,
+    };
+    const outcome = verdict("package", [entry("langflow", "2.0.0")], "library", "1.0.0");
+    const titleOf = (description: string) =>
+      cveObservation("p", library("1.0.0"), { ...facts, description }, "pkg:pypi/langflow", outcome)
+        .title;
+
+    expect(titleOf("A flow, e.g. Basic Prompting, runs code. More here.")).toBe(
+      "CVE-2026-0005: A flow, e.g. Basic Prompting, runs code.",
+    );
+    expect(titleOf("The model, i.e. GPT-4, leaks keys. More here.")).toBe(
+      "CVE-2026-0005: The model, i.e. GPT-4, leaks keys.",
+    );
+    expect(titleOf("Version 1. x of the tool leaks keys. More here.")).toBe(
+      "CVE-2026-0005: Version 1. x of the tool leaks keys.",
+    );
+  });
+
+  it("never cuts a Title through a character made of two UTF-16 units", () => {
+    // "CVE-2026-0006: " is 15 units, so unit 198, the last a 200-character cut keeps before its …, is the first
+    // half of the first emoji.
+    const description = `${"a".repeat(183)}${"😀".repeat(10)}.`;
+    const outcome = verdict("package", [entry("langflow", "2.0.0")], "library", "1.0.0");
+    const facts: CveFacts = {
+      id: "CVE-2026-0006",
+      cvss: 3.1,
+      severity: "LOW",
+      description,
+      in_kev: false,
+    };
+
+    const { title } = cveObservation("p", library("1.0.0"), facts, "pkg:pypi/langflow", outcome);
+
+    expect(title.isWellFormed()).toBe(true);
+    expect(title).toBe(`CVE-2026-0006: ${"a".repeat(183)}…`);
   });
 });

@@ -24,9 +24,10 @@ const NUL_MESSAGE = "holds a NUL character, which Warden can't store";
 
 /**
  * A Product as a Lead sends it, with what the contracts can't check: each framework one Patch knows, each Repo URL
- * once, each version one word, and no NUL in anything stored. Each version is trimmed here and only here, so a line
- * break never reaches the reasons or the UI; one of only whitespace is already refused by the contract's Text. Repo
- * URLs come trimmed from the contract's URL check, so `" https://…/a\n"` repeats `"https://…/a"`.
+ * once, each version one word, and no NUL in anything stored. Each version is trimmed here before it's checked, so
+ * `" 2.0\n"` is one word; the store trims it again, for callers that don't come through these routes (the daily step,
+ * the seed). One of only whitespace is already refused by the contract's Text. Repo URLs come trimmed from the
+ * contract's URL check, so `" https://…/a\n"` repeats `"https://…/a"`.
  */
 const ProductChange = ProductInput.transform(({ dependencies, ...product }): ProductInput => ({
   ...product,
@@ -99,8 +100,11 @@ async function withProduct(
 
 /**
  * Patch's routes. After a Product's change commits, `scan` runs its Patch Scan before the answer, so its CVE Findings
- * open and turn Fixed with the change (stories 3 and 4). A Scan that throws leaves the change standing and answering
- * as usual: `logger` records it, and the daily refresh catches the Product up.
+ * open and turn Fixed with the change (stories 3 and 4). The Scan reads the Product as stored, so two close changes
+ * end with the newer one's Findings. A Scan that throws leaves the change standing and answering as usual: `logger`
+ * records it, and slice 5's daily refresh catches the Product up. After a DELETE there's no Product row left to
+ * refresh: that refresh will also scan each Product Asset with Open Findings and no Product row (slice 5's work, not
+ * this one's).
  */
 export function patchRoutes({
   products,
@@ -111,7 +115,7 @@ export function patchRoutes({
   scan: PatchScan;
   logger: Logger;
 }): MountRoutes {
-  async function scanAfterChange(team: string, product: Pick<Product, "id" | "dependencies">) {
+  async function scanAfterChange(team: string, product: Pick<Product, "id">) {
     try {
       await scan.scanProduct(team, product);
     } catch (error) {
@@ -149,12 +153,13 @@ export function patchRoutes({
       }),
     );
 
-    // A deleted Product is scanned with no dependencies, so every Finding on it turns Fixed.
+    // A deleted Product's Scan reads no dependencies, so every Finding on it turns Fixed. If that Scan fails, the
+    // daily refresh's sweep of Product Assets with no Product row (slice 5) turns them Fixed.
     app.delete("/api/products/:id", requireRole("lead"), (c) =>
       refusing(c, async () => {
         const id = c.req.param("id");
         await products.remove(c.get("team"), id);
-        await scanAfterChange(c.get("team"), { id, dependencies: [] });
+        await scanAfterChange(c.get("team"), { id });
         return c.body(null, 204);
       }),
     );

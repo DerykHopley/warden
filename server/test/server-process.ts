@@ -22,6 +22,19 @@ export function startServer(env: Record<string, string>) {
   return { child, exited, output: () => output };
 }
 
+/**
+ * Where the test's Postgres is, for the server's environment: PGHOST, PGPORT (`port` when given) and PGPASSWORD, each
+ * only when set, so an unset one stays unset (pg's default) rather than an empty string.
+ */
+export function pgConnection(port = process.env.PGPORT): Record<string, string> {
+  const { PGHOST, PGPASSWORD } = process.env;
+  return {
+    ...(PGHOST ? { PGHOST } : {}),
+    ...(port ? { PGPORT: port } : {}),
+    ...(PGPASSWORD ? { PGPASSWORD } : {}),
+  };
+}
+
 /** The server's log lines, parsed. */
 export function logEntries(output: string): Record<string, unknown>[] {
   return output
