@@ -14,6 +14,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   fingerprint,
   problemKeyOf,
+  type Asset,
   type Finding,
   type Location,
   type Observation,
@@ -95,8 +96,8 @@ const keyOf = (observation: Observation) =>
     fingerprint(observation.rule_id, observation.location as Location),
   );
 
-/** Each demo Finding in `list`, by its demo name. */
-function demoFindingsIn(list: readonly Finding[]): Partial<Record<DemoKey, Finding>> {
+/** Each demo Finding in `list`, by its demo name, found by today's demo data. */
+export function demoFindingsIn(list: readonly Finding[]): Partial<Record<DemoKey, Finding>> {
   const byProblem = new Map(list.map((f) => [problemKeyOf(f.asset, f.fingerprint), f]));
   return Object.fromEntries(
     (Object.entries(DEMO_OBSERVATIONS) as [DemoKey, Observation][]).flatMap(([name, o]) => {
@@ -113,16 +114,35 @@ function demoFindingsIn(list: readonly Finding[]): Partial<Record<DemoKey, Findi
 const isDemoFinding = (finding: Finding) =>
   (DEMO_RUN_IDS as readonly string[]).includes(finding.first_seen_scan);
 
-/** The seed's named decisions (each with a `Demo seed:` reason): one line for each that no entry in `histories` holds. */
-function missingDecisions(histories: readonly HistoryEntry[]): string[] {
+/**
+ * Where a problem sits, its Rule id left out: its Asset and its Fingerprint's place. A demo Finding stored under an
+ * older demo Rule id is still at its demo Observation's place.
+ */
+const placeOf = (asset: Asset, location: Location) =>
+  problemKeyOf(asset, fingerprint("", location));
+
+/**
+ * The seed's named decisions (each with a `Demo seed:` reason): one line for each that no demo Finding at its demo
+ * Observation's place holds in its history. Found by place, not by today's fingerprint, so a decision still counts
+ * after its Finding's demo Rule id is renamed.
+ */
+function missingDecisions(
+  demo: readonly { finding: Finding; history: readonly HistoryEntry[] }[],
+): string[] {
   return (Object.entries(DEMO_OUTCOME) as [DemoKey, (typeof DEMO_OUTCOME)[DemoKey]][]).flatMap(
     ([name, want]) => {
       if (want.decidedReason === undefined) return [];
-      const made = histories.some(
-        (entry) =>
-          entry.cause.kind === "person" &&
-          entry.status_after === want.status &&
-          entry.reason === want.decidedReason,
+      const o = DEMO_OBSERVATIONS[name];
+      const place = placeOf(o.asset, o.location as Location);
+      const made = demo.some(
+        ({ finding, history }) =>
+          placeOf(finding.asset, finding.location) === place &&
+          history.some(
+            (entry) =>
+              entry.cause.kind === "person" &&
+              entry.status_after === want.status &&
+              entry.reason === want.decidedReason,
+          ),
       );
       return made ? [] : [`${name}: the seed's decision (${want.status}) is missing`];
     },
@@ -161,14 +181,14 @@ function productProblems(product: Product, list: readonly Finding[]): string[] {
 /**
  * Seeds `team` with the demo Findings, then (`withProduct`, the default) the demo Product and its Patch Scan, as of
  * `now`, through connections from `pool` (warden_app). One seed runs per Team at a time: a second waits for the first,
- * then finds the Team seeded. A Team is seeded when every demo run id is applied, the seed's two decisions are in its
- * demo Findings' history, every other Finding is on the demo Product's Asset, and (`withProduct`) its demo Product is
- * as `DEMO_PRODUCT` with a CVE Finding. The demo Findings (the ones a demo run first saw) are taken as they are: their
- * Statuses, decisions and Rule ids since the seed aren't compared with today's demo data, and a rerun never changes
- * them. A Team seeded without the demo Product (`withProduct` false, or a Product step
- * cut short) gets it on a rerun with it. One with Findings of its own, or (`withProduct`, not yet seeded) Products of
- * its own, is left as it is; so is every Team when the CVE snapshot the Product's Scan needs isn't loaded. `logger`
- * takes the Scan's log lines.
+ * then finds the Team seeded. A Team is seeded when every demo run id is applied, the seed's two decisions are in the
+ * history of the demo Findings they name, every other Finding is on the demo Product's Asset, and (`withProduct`) its
+ * demo Product is as `DEMO_PRODUCT` with a CVE Finding. The demo Findings (the ones a demo run first saw) are taken as
+ * they are: their Statuses, decisions and Rule ids since the seed aren't compared with today's demo data, and a rerun
+ * never changes them. A Team seeded without the demo Product (`withProduct` false, or a Product step cut short) gets
+ * it on a rerun with it. One with Findings of its own, or (`withProduct`, not yet seeded) Products of its own, is left
+ * as it is; so is every Team when the CVE snapshot the Product's Scan needs isn't loaded. `logger` takes the Scan's
+ * log lines.
  */
 export async function seedDemo({
   pool,
@@ -192,9 +212,10 @@ export async function seedDemo({
    * The Team's Findings, its demo Product if it has one, and how the Team differs from what the seed leaves, given
    * `runsApplied` of the demo runs applied. The demo Findings are taken as they are now: a Lead's decisions, the daily
    * Job's and a rename of a demo Rule id since the seed are no problem. The problems: demo runs not all applied; with
-   * them all, the seed's two decisions missing from the demo Findings' history (a seed cut short before them); any
-   * Finding neither a demo one nor on the demo Product's Asset; and (`withProduct`) a demo Product not as the seed
-   * leaves it. A missing demo Product isn't one: the caller decides whether the seed still has to create it.
+   * them all, the seed's two decisions missing from the history of the demo Findings they name (a seed cut short
+   * before them); any Finding neither a demo one nor on the demo Product's Asset; and (`withProduct`) a demo Product
+   * not as the seed leaves it. A missing demo Product isn't one: the caller decides whether the seed still has to
+   * create it.
    */
   async function check(runsApplied: number) {
     const list = await findings.list(team);
@@ -203,11 +224,11 @@ export async function seedDemo({
     if (runsApplied < DEMO_RUN_IDS.length) {
       problems.push(`only ${runsApplied} of the ${DEMO_RUN_IDS.length} demo runs applied`);
     } else {
-      const histories: HistoryEntry[] = [];
+      const demoFindings: { finding: Finding; history: HistoryEntry[] }[] = [];
       for (const finding of list.filter(isDemoFinding)) {
-        histories.push(...(await findings.history(team, finding.id)));
+        demoFindings.push({ finding, history: await findings.history(team, finding.id) });
       }
-      problems.push(...missingDecisions(histories));
+      problems.push(...missingDecisions(demoFindings));
     }
     const extra = list.filter((f) => !isDemoFinding(f) && !onProduct(f, demo?.id)).length;
     if (extra > 0) problems.push(`${extra} Finding(s) the seed didn't write`);

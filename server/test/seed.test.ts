@@ -3,14 +3,20 @@
 // Scan. Each case uses a Team of its own in the suite's shared database, which holds the CVE snapshot; the cases with
 // no snapshot use a database of their own. Some run the script as its own process.
 import { randomUUID } from "node:crypto";
-import { fingerprint, type Finding, type Location, type Product } from "@warden/contracts";
-import { DEMO_OBSERVATIONS, DEMO_PRODUCT, demoRuns, type DemoKey } from "@warden/contracts/demo";
+import type { Finding, Product } from "@warden/contracts";
+import {
+  DEMO_OBSERVATIONS,
+  DEMO_OUTCOME,
+  DEMO_PRODUCT,
+  demoRuns,
+  type DemoKey,
+} from "@warden/contracts/demo";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { runDailyExpiry } from "../src/daily-expiry.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createProducts, type Products } from "../src/modules/patch/products.ts";
-import { onProduct, seedDemo, seedRefusal } from "../src/seed.ts";
+import { demoFindingsIn, onProduct, seedDemo, seedRefusal } from "../src/seed.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
@@ -58,13 +64,9 @@ async function stateOf(team: string) {
   };
 }
 
-/** The Team's demo Finding `name`, found by today's demo data. */
+/** The Team's demo Finding `name`, found by today's demo data, as the seed finds it. */
 async function demoFinding(team: string, name: DemoKey): Promise<Finding> {
-  const o = DEMO_OBSERVATIONS[name];
-  const want = fingerprint(o.rule_id, o.location as Location);
-  const finding = (await findings.list(team)).find(
-    (f) => f.fingerprint === want && f.asset.kind === o.asset.kind && f.asset.ref === o.asset.ref,
-  );
+  const finding = demoFindingsIn(await findings.list(team))[name];
   if (finding === undefined) throw new Error(`no ${name} demo Finding`);
   return finding;
 }
@@ -298,17 +300,16 @@ describe("seedDemo", () => {
     const team = await teamWith([["user_admin", "admin"]]);
     await seedDemo({ pool, team, now: NOW });
     const { id } = await expectOneDemoProduct(team);
-    const actor = { kind: "person", id: "user_admin" } as const;
     const cves = (await findings.list(team)).filter((f) => onProduct(f, id));
     for (const [i, finding] of cves.entries()) {
       if (i % 2 === 0) {
         await findings.accept(team, finding.id, {
-          actor,
+          actor: lead,
           reason: "Not reachable here",
           until: "2027-01-01T00:00:00Z",
         });
       } else {
-        await findings.markFalsePositive(team, finding.id, { actor, reason: "Not ours" });
+        await findings.markFalsePositive(team, finding.id, { actor: lead, reason: "Not ours" });
       }
     }
     const before = await stateOf(team);
@@ -502,6 +503,34 @@ describe("seedDemo", () => {
     const { scans, spotRun } = demoRuns(team, NOW);
     for (const scan of scans) await findings.reconcile(scan);
     await findings.report(spotRun);
+    const before = await stateOf(team);
+
+    const result = await seedDemo({ pool, team, now: NOW });
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      problems: [
+        "push: the seed's decision (false_positive) is missing",
+        "axios: the seed's decision (accepted) is missing",
+      ],
+    });
+    expect(await stateOf(team)).toEqual(before);
+  });
+
+  it("on a rerun, the seed's two decisions made on other demo Findings don't match, writing nothing", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    const { scans, spotRun } = demoRuns(team, NOW);
+    for (const scan of scans) await findings.reconcile(scan);
+    await findings.report(spotRun);
+    await findings.markFalsePositive(team, (await demoFinding(team, "disk")).id, {
+      actor: lead,
+      reason: DEMO_OUTCOME.push.decidedReason!,
+    });
+    await findings.accept(team, (await demoFinding(team, "minimist")).id, {
+      actor: lead,
+      reason: DEMO_OUTCOME.axios.decidedReason!,
+      until: "2027-01-01T00:00:00Z",
+    });
     const before = await stateOf(team);
 
     const result = await seedDemo({ pool, team, now: NOW });
