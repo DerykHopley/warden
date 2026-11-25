@@ -80,6 +80,13 @@ export interface GitHub {
    * An id that isn't a positive integer is refused with a RangeError before any call.
    */
   installationPermissions(installationId: number): Promise<Record<string, string>>;
+  /**
+   * The App's slug, which names its install page, from GitHub's "get the authenticated app" (`GET /app`, with the
+   * App's JWT). Throws GitHubUnavailable when GitHub answers non-2xx or without a slug.
+   */
+  appSlug(): Promise<string>;
+  /** The App's client id: its JWT's issuer, and what starts a person's GitHub sign-in. Not a secret. */
+  readonly clientId: string;
 }
 
 /** GitHub's token answer refusing: it names an `error`, whatever the status (GitHub's troubleshooting page). */
@@ -97,6 +104,8 @@ const InstallationToken = z.object({
   token: z.string().min(1),
   permissions: z.record(z.string(), z.string()).optional(),
 });
+/** GitHub documents `slug` as optional on `GET /app`; an answer without one can't build the install link. */
+const AuthenticatedApp = z.object({ slug: z.string().min(1) });
 const Repositories = z
   .object({
     total_count: z.number().int(),
@@ -292,5 +301,13 @@ export function createGitHub({
       // None named is `{}`, which the link refuses as not read-only (threat G1).
       return read(InstallationToken, step, answer).permissions ?? {};
     },
+
+    async appSlug() {
+      const step = "GitHub's authenticated app";
+      const answer = await call(step, `${API}/app`, { headers: apiHeaders(appJwt(clientId, key)) });
+      return read(AuthenticatedApp, step, answer).slug;
+    },
+
+    clientId,
   };
 }

@@ -30,12 +30,15 @@ const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const INSTALLATIONS_URL = "https://api.github.com/user/installations";
 const ACCESS_TOKENS_URL = `https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`;
 const USER_REPOS_URL = `https://api.github.com/user/installations/${INSTALLATION_ID}/repositories`;
+const APP_URL = "https://api.github.com/app";
+const SLUG = "warden-reader";
 
 const STEPS = {
   token: "GitHub's user token exchange",
   installations: "GitHub's list of the user's installations",
   userRepos: `GitHub's list of the user's repositories in installation ${INSTALLATION_ID}`,
   accessToken: `GitHub's installation token for installation ${INSTALLATION_ID}`,
+  app: "GitHub's authenticated app",
 };
 
 const json = (body: unknown, status = 200) =>
@@ -82,11 +85,13 @@ function fakeGitHub(
         },
         201,
       ),
+    app = () => json({ id: 1, slug: SLUG, name: "Warden reader", client_id: CLIENT_ID }),
   }: {
     token?: Answer;
     installations?: Answer;
     userRepos?: Answer;
     accessToken?: Answer;
+    app?: Answer;
   } = {},
   timeoutMs?: number,
 ) {
@@ -96,6 +101,7 @@ function fakeGitHub(
     [`GET ${INSTALLATIONS_URL}`]: installations,
     [`GET ${USER_REPOS_URL}`]: userRepos,
     [`POST ${ACCESS_TOKENS_URL}`]: accessToken,
+    [`GET ${APP_URL}`]: app,
   };
   const fetch: Fetch = async (url, init) => {
     const call = { url: new URL(url), init };
@@ -347,17 +353,55 @@ describe("createGitHub", () => {
     );
   });
 
+  const appSlug = (github: ReturnType<typeof createGitHub>) => github.appSlug();
+
+  describe("appSlug", () => {
+    it("sends the App's JWT to GET /app and answers the App's slug", async () => {
+      const { github, calls } = fakeGitHub();
+
+      expect(await appSlug(github)).toBe(SLUG);
+
+      expect(calls.map(({ url }) => `${url.origin}${url.pathname}`)).toEqual([APP_URL]);
+      const [call] = calls;
+      expect(call!.init.method ?? "GET").toBe("GET");
+      const jwt = /^Bearer (.+)$/.exec(header(call!, "Authorization") ?? "")?.[1];
+      await jwtVerify(jwt!, createPublicKey(PRIVATE_KEY), {
+        algorithms: ["RS256"],
+        issuer: CLIENT_ID,
+      });
+    });
+
+    it.each([
+      ["no slug", { id: 1, name: "Warden reader" }],
+      ["an empty slug", { id: 1, slug: "" }],
+    ])("throws GitHubUnavailable when GET /app answers %s", async (_name, body) => {
+      const { github } = fakeGitHub({ app: () => json(body) });
+
+      const error = await rejection(appSlug(github));
+
+      expect(error).toBeInstanceOf(GitHubUnavailable);
+      expect((error as GitHubUnavailable).step).toBe(STEPS.app);
+      expect((error as GitHubUnavailable).status).toBe(200);
+    });
+  });
+
+  it("names the App's client id", () => {
+    expect(fakeGitHub().github.clientId).toBe(CLIENT_ID);
+  });
+
   it("sends GitHub's JSON media type and API version on every API call", async () => {
     const { github, calls } = fakeGitHub();
 
     await github.userInstallationRepos(CODE, VERIFIER, INSTALLATION_ID);
     await installationPermissions(github);
+    await appSlug(github);
 
     const apiCalls = calls.filter(({ url }) => url.origin === "https://api.github.com");
     expect(apiCalls.map(({ url }) => url.pathname)).toEqual([
       "/user/installations",
       `/user/installations/${INSTALLATION_ID}/repositories`,
       `/app/installations/${INSTALLATION_ID}/access_tokens`,
+      "/app",
     ]);
     for (const call of apiCalls) {
       expect(header(call, "Accept")).toBe("application/vnd.github+json");
@@ -372,6 +416,7 @@ describe("createGitHub", () => {
       ["installations", { installations: answer }, userInstallationRepos],
       ["userRepos", { userRepos: answer }, userInstallationRepos],
       ["accessToken", { accessToken: answer }, installationPermissions],
+      ["app", { app: answer }, appSlug],
     ] as [
       keyof typeof STEPS,
       Parameters<typeof fakeGitHub>[0],

@@ -2,8 +2,9 @@
 // closed, floating and pinned (where pinning is offered). Nothing scrolls sideways;
 // under 640px one column and a table of Severity, Finding and Status; from 640 to 1100px the cards wrap two or three to
 // a row; from 1100px five sit in a row; content stays within about 1480px, centred.
-import type { Page } from "@playwright/test";
-import { expect, GRACE, test } from "./session.ts";
+import type { Locator, Page } from "@playwright/test";
+import { expectRings, expectTargets } from "./a11y.ts";
+import { ADA, expect, GRACE, test } from "./session.ts";
 
 const WIDTHS = [390, 1024, 1600] as const;
 const SCHEMES = ["light", "dark"] as const;
@@ -231,3 +232,62 @@ test("at 1600px: five cards sit in one row, and the content stays within 1480px,
   const right = 1600 - (main!.x + main!.width);
   expect(Math.abs(main!.x - right)).toBeLessThanOrEqual(1);
 });
+
+// Setup and its two GitHub pages, as an Admin sees them: the App's settings and the Team's repos are faked in the
+// browser (one ref long enough to wrap), and the callback page, opened with no sign-in kept, shows its refusal.
+const SETUP_PAGES: { path: string; ready: (page: Page) => Locator }[] = [
+  { path: "/setup", ready: (page) => page.getByRole("link", { name: "Install the GitHub app" }) },
+  {
+    path: "/setup/github?installation_id=42&setup_action=install",
+    ready: (page) => page.getByRole("button", { name: "Sign in with GitHub" }),
+  },
+  {
+    path: "/setup/github/callback?code=the-code&state=the-state",
+    ready: (page) => page.getByRole("link", { name: "Back to Setup" }),
+  },
+];
+
+for (const { path, ready } of SETUP_PAGES) {
+  for (const width of WIDTHS) {
+    test(`${path} at ${width}px: nothing scrolls sideways, and its links and buttons are 44px targets with a focus ring`, async ({
+      page,
+      signIn,
+    }) => {
+      // A later sign-in replaces the beforeEach's: init scripts run in the order they were added.
+      await signIn(ADA);
+      await page.route("**/api/github/app", (route) =>
+        route.fulfill({ json: { slug: "warden-reader", client_id: "Iv23li-e2e-client" } }),
+      );
+      await page.route("**/api/repos", (route) =>
+        route.fulfill({
+          json: {
+            repos: [
+              {
+                asset: {
+                  kind: "repo",
+                  ref: `https://github.com/acme/${"long-repo-name".repeat(6)}`,
+                },
+                installation_id: 42,
+                listed_at: "2026-11-25T09:00:00.000Z",
+              },
+            ],
+          },
+        }),
+      );
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto(path);
+      await expect(ready(page)).toBeVisible();
+      if (path === "/setup") await expect(page.locator(".repo-list li")).toHaveCount(1);
+
+      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        clientWidth: document.documentElement.clientWidth,
+      }));
+      expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+      const targets = await page.locator("main.page").locator("a, button").all();
+      expect(targets.length).toBeGreaterThan(0);
+      await expectTargets(targets);
+      await expectRings(page, targets);
+    });
+  }
+}

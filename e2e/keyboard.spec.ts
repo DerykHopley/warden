@@ -156,7 +156,7 @@ test("at 390px, every card, filter tab, row, page link and the Level line's link
       return { what: el.textContent?.slice(0, 30), width: box.width, height: box.height };
     }),
   );
-  expect(sizes.length).toBe(5 + 14 + 7 + 3 + 1 + 1);
+  expect(sizes.length).toBe(5 + 14 + 7 + 4 + 1 + 1);
   for (const size of sizes) {
     expect(size.width, size.what).toBeGreaterThanOrEqual(44);
     expect(size.height, size.what).toBeGreaterThanOrEqual(44);

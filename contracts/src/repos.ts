@@ -29,6 +29,16 @@ export const LinkInstallationBody = z.strictObject({
 });
 export type LinkInstallationBody = z.infer<typeof LinkInstallationBody>;
 
+/**
+ * `GET /api/github/app` (Admin only): what the dashboard builds GitHub's links from. The `slug` names the App's install
+ * page (`https://github.com/apps/<slug>/installations/new`); the `client_id` starts its sign-in.
+ */
+export const GitHubAppBody = z.strictObject({
+  slug: z.string().min(1),
+  client_id: z.string().min(1),
+});
+export type GitHubAppBody = z.infer<typeof GitHubAppBody>;
+
 /** The link's answer (201): the installation and its Repo Assets, the repos the linking person can read in it. */
 export const LinkedInstallationBody = z.strictObject({
   installation_id: InstallationId,

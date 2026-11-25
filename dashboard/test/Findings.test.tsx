@@ -3,7 +3,7 @@
 // counts and orders themselves are tested below the page, in findings.test.ts.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { Finding } from "@warden/contracts";
+import type { Finding, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FindingsPage } from "../src/Findings.tsx";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
@@ -17,13 +17,21 @@ afterEach(() => vi.unstubAllGlobals());
 
 const answer = (findings: Finding[] = demoFindings, team = TEAM) => json(200, { team, findings });
 
-/** Opens `url`, then renders FindingsPage with GET /api/findings answering `list` unless `routes` says otherwise. */
-function open(url = "/findings", list: Finding[] = demoFindings, routes: Routes = {}) {
+/**
+ * Opens `url`, then renders FindingsPage for a person of `role` with GET /api/findings answering `list` unless `routes`
+ * says otherwise.
+ */
+function open(
+  url = "/findings",
+  list: Finding[] = demoFindings,
+  routes: Routes = {},
+  role: Role = "member",
+) {
   window.history.replaceState(null, "", url);
   serve({ findings: () => answer(list), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
-    me: { userId: "user_1", team: TEAM, role: "member" as const, level: "quick" as const },
+    me: { userId: "user_1", team: TEAM, role, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
     panel: { setContext: vi.fn(), open: vi.fn() },
@@ -91,13 +99,64 @@ describe("the summary line and the top 5", () => {
     expect(cards().map((card) => card.textContent)).toEqual(before);
   });
 
-  it("with no Findings at all, shows the summary line only", async () => {
-    open("/findings", []);
-    expect(
-      await screen.findByText("No Findings yet: they appear after the first Scan."),
-    ).toBeInTheDocument();
+  const noRepos = { repos: () => json(200, { repos: [] }) };
+
+  it("with no Findings and no linked repos, shows an Admin the summary line and the line to Setup only", async () => {
+    open("/findings", [], noRepos, "admin");
+    const summary = await screen.findByText("No Findings yet: they appear after the first Scan.");
+    const setup = await screen.findByText(/^Connect GitHub on/);
+
+    expect(setup).toHaveTextContent(/^Connect GitHub on Setup to run the first Scan\.$/);
+    expect(within(setup).getByRole("link", { name: "Setup" })).toHaveAttribute("href", "/setup");
+    expect(summary.compareDocumentPosition(setup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Start here" })).not.toBeInTheDocument();
+  });
+
+  it.each(["lead", "member"] as const)(
+    "with no Findings and no linked repos, tells a %s an Admin connects GitHub, with no link",
+    async (role) => {
+      open("/findings", [], noRepos, role);
+
+      expect(
+        await screen.findByText("An Admin connects GitHub on Setup to run the first Scan."),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("link", { name: "Setup" })).not.toBeInTheDocument();
+    },
+  );
+
+  it.each(["admin", "member"] as const)(
+    "with no Findings but linked repos, has no line to Setup (%s)",
+    async (role) => {
+      open(
+        "/findings",
+        [],
+        {
+          repos: () =>
+            json(200, {
+              repos: [
+                {
+                  asset: { kind: "repo", ref: "https://github.com/acme/web" },
+                  installation_id: 42,
+                  listed_at: "2026-11-25T09:00:00.000Z",
+                },
+              ],
+            }),
+        },
+        role,
+      );
+      await screen.findByText("No Findings yet: they appear after the first Scan.");
+
+      await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(1));
+      expect(screen.queryByText(/connects? GitHub on/)).not.toBeInTheDocument();
+    },
+  );
+
+  it("with Findings, has no line to Setup and doesn't ask for the repos", async () => {
+    open("/findings", demoFindings, noRepos);
+    await screen.findByRole("table");
+    expect(screen.queryByText(/connects? GitHub on/)).not.toBeInTheDocument();
+    expect(callsTo("/api/repos")).toEqual([]);
   });
 });
 
