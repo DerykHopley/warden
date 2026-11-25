@@ -375,8 +375,8 @@ const ENDS_COMMAND = new Set([";", "&", "|", "\n", ")"]);
  * Where a run's arguments end, from `start` in a command with its quotes masked: the index of the `;`, `&`, `|`,
  * newline or `)` that ends the command, or the command's length. A backslash and the character it escapes (a line
  * continuation among them) don't end it. Nor does a redirect's `&` (`>&`, `<&`, `&>`, `&>>`) or `|` (`>|`), though
- * `&&`, `|&` and a lone `&` or `|` do. A `(` the run opens (`$(`, `<(`, `$((`) and a backquote hold everything up to
- * their close, the close included; one that never closes runs to the end. A `)` the run didn't open still ends it.
+ * `&&`, `|&` and a lone `&` or `|` do. Any `(` the run opens (`$(`, `<(`, `$((` or a bare one) and a backquote hold
+ * everything up to their close, the close included; one that never closes runs to the end. A `)` the run didn't open still ends it.
  */
 function runArgumentsEnd(masked: string, start: number): number {
   let depth = 0;
