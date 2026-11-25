@@ -471,6 +471,17 @@ function DependencyRow({
  * screen reader reads them apart. Save is disabled while the name is blank, and busy while its call (and the Patch
  * Scan it runs) is under way.
  */
+/**
+ * The `data-row-focus` value of each control in `ProductForm` that a vanished button hands focus to. Both the
+ * attribute and the focus target come from here, so they can't drift apart.
+ */
+const rowFocus = {
+  repoUrl: (key: number) => `repo-url:${key}`,
+  addRepoUrl: "add-repo-url",
+  framework: (key: number) => `framework:${key}`,
+  addFramework: "add-framework",
+} as const;
+
 function ProductForm(props: {
   label: string;
   frameworks: ReadonlyMap<string, string>;
@@ -508,15 +519,15 @@ function ProductForm(props: {
       .find((element) => element.dataset.rowFocus === target)
       ?.focus();
   });
-  /** After removing the row at `i` of `rows`: its neighbour's control (`prefix:<key>`), else `add`. */
+  /** After removing the row at `i` of `rows`: its neighbour's control (`control(key)`), else `add`. */
   const afterRemoving = (
     rows: readonly { key: number }[],
     i: number,
-    prefix: string,
+    control: (key: number) => string,
     add: string,
   ) => {
     const neighbour = rows[i + 1] ?? rows[i - 1];
-    return neighbour === undefined ? add : `${prefix}:${neighbour.key}`;
+    return neighbour === undefined ? add : control(neighbour.key);
   };
 
   // Esc anywhere in the form cancels it (focus back on its opener), as a decision's form does; not while it saves.
@@ -558,7 +569,7 @@ function ProductForm(props: {
                 inputMode="url"
                 autoComplete="off"
                 aria-label={`Repo URL ${i + 1}`}
-                data-row-focus={`repo-url:${row.key}`}
+                data-row-focus={rowFocus.repoUrl(row.key)}
                 value={row.url}
                 onChange={(event) => setUrl(row.key, event.target.value)}
               />
@@ -567,7 +578,12 @@ function ProductForm(props: {
                 className="secondary"
                 aria-label={`Remove Repo URL ${i + 1}`}
                 onClick={() => {
-                  focusNext.current = afterRemoving(draft.repoUrls, i, "repo-url", "add-repo-url");
+                  focusNext.current = afterRemoving(
+                    draft.repoUrls,
+                    i,
+                    rowFocus.repoUrl,
+                    rowFocus.addRepoUrl,
+                  );
                   set({ repoUrls: draft.repoUrls.filter(({ key }) => key !== row.key) });
                 }}
               >
@@ -579,11 +595,11 @@ function ProductForm(props: {
             <button
               type="button"
               className="secondary add-row"
-              data-row-focus="add-repo-url"
+              data-row-focus={rowFocus.addRepoUrl}
               onClick={() => {
                 const key = rowKey();
                 if (draft.repoUrls.length + 1 === PRODUCT_REPO_URLS_MAX) {
-                  focusNext.current = `repo-url:${key}`;
+                  focusNext.current = rowFocus.repoUrl(key);
                 }
                 set({ repoUrls: [...draft.repoUrls, { key, url: "" }] });
               }}
@@ -608,7 +624,7 @@ function ProductForm(props: {
                   <span className="field-label">Framework</span>
                   <select
                     aria-label={`Framework, ${name}`}
-                    data-row-focus={`framework:${row.key}`}
+                    data-row-focus={rowFocus.framework(row.key)}
                     value={row.framework}
                     onChange={(event) => setDependency(row.key, { framework: event.target.value })}
                   >
@@ -664,8 +680,8 @@ function ProductForm(props: {
                     focusNext.current = afterRemoving(
                       draft.dependencies,
                       i,
-                      "framework",
-                      "add-framework",
+                      rowFocus.framework,
+                      rowFocus.addFramework,
                     );
                     set({ dependencies: draft.dependencies.filter(({ key }) => key !== row.key) });
                   }}
@@ -679,10 +695,10 @@ function ProductForm(props: {
             <button
               type="button"
               className="secondary add-row"
-              data-row-focus="add-framework"
+              data-row-focus={rowFocus.addFramework}
               onClick={() => {
                 const key = rowKey();
-                if (unpicked.length === 1) focusNext.current = `framework:${key}`;
+                if (unpicked.length === 1) focusNext.current = rowFocus.framework(key);
                 set({
                   dependencies: [
                     ...draft.dependencies,
