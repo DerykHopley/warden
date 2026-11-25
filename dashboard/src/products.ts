@@ -92,10 +92,36 @@ export async function saveProduct(
 }
 
 /**
- * Saves as `saveProduct` does, but only once /api/me says the session is in `team`, the Team the form was opened in:
- * Clerk can still hand out a token for the Team just left, and the server takes the Team from the token, so a save
- * sent then would land in the other Team. /api/me is asked as reads ask (`askAboutTeam`); while it names another Team,
- * or gives no answer, nothing is sent.
+ * Asks /api/me as reads ask (`askAboutTeam`) until it says the session is in `team`, and hands back the token that
+ * answer was asked with, as a `GetToken` for the change: Clerk can still hand out a token for the Team just left, and
+ * the server takes the Team from the token, so a change sent with a token taken after the check could land in another
+ * Team. Each try takes a fresh token; only the one from the try that named `team` is kept. While /api/me names another
+ * Team, or gives no answer, its answer comes back instead.
+ */
+export async function confirmTeam(
+  getToken: GetToken,
+  team: string | null,
+): Promise<{ kind: "confirmed"; getToken: GetToken } | Exclude<MeResult, { kind: "signed-in" }>> {
+  let token: string | null = null;
+  const session = await askAboutTeam(
+    () =>
+      fetchMe(async () => {
+        token = await getToken();
+        return token;
+      }),
+    (result) => (result.kind === "signed-in" ? result.team : undefined),
+    team,
+    new AbortController().signal,
+  );
+  if (session.kind !== "signed-in") return session;
+  const confirmed = token;
+  return { kind: "confirmed", getToken: () => Promise.resolve(confirmed) };
+}
+
+/**
+ * Saves as `saveProduct` does, but only once /api/me says the session is in `team`, the Team the form was opened in,
+ * and with the token that answer was asked with (`confirmTeam`); while it names another Team, or gives no answer,
+ * nothing is sent.
  */
 export async function saveProductInTeam(
   getToken: GetToken,
@@ -103,14 +129,9 @@ export async function saveProductInTeam(
   id: string | null,
   input: ProductInput,
 ): Promise<SaveResult | Exclude<MeResult, { kind: "signed-in" }>> {
-  const session = await askAboutTeam(
-    () => fetchMe(getToken),
-    (result) => (result.kind === "signed-in" ? result.team : undefined),
-    team,
-    new AbortController().signal,
-  );
-  if (session.kind !== "signed-in") return session;
-  return saveProduct(getToken, id, input);
+  const inTeam = await confirmTeam(getToken, team);
+  if (inTeam.kind !== "confirmed") return inTeam;
+  return saveProduct(inTeam.getToken, id, input);
 }
 
 /** How a Product uses a framework, in words. */

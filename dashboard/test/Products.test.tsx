@@ -720,6 +720,94 @@ describe("ProductsPage's Product form", () => {
     expect(product("Search").getByRole("button", { name: /^Edit/ })).toHaveFocus();
   });
 
+  describe("when a button disappears while it has focus", () => {
+    /** Focuses `button` and presses Enter on it, as from the keyboard. */
+    async function enterOn(button: HTMLElement) {
+      act(() => button.focus());
+      await userEvent.keyboard("{Enter}");
+    }
+
+    /** Esc closes the form and puts focus back on its opener: Edit on Chat assistant, or Add a Product. */
+    async function escClosesTo(opener: "edit" | "add") {
+      await userEvent.keyboard("{Escape}");
+      expect(screen.queryByRole("form")).not.toBeInTheDocument();
+      expect(
+        opener === "edit"
+          ? product("Chat assistant").getByRole("button", { name: /^Edit/ })
+          : screen.getByRole("button", { name: "Add a Product" }),
+      ).toHaveFocus();
+    }
+
+    /** Opens Edit's form on Chat assistant again, on the page already rendered. */
+    const editAgain = () =>
+      userEvent.click(product("Chat assistant").getByRole("button", { name: /^Edit/ }));
+    const button = (name: string) => form().getByRole("button", { name });
+    const repoUrl = (n: number) => form().getByRole("textbox", { name: `Repo URL ${n}` });
+
+    it("Remove on a Repo URL row puts focus on the next row's field, else the one before, else Add a Repo URL", async () => {
+      await openEdit();
+      await enterOn(button("Remove Repo URL 2"));
+      expect(repoUrl(1)).toHaveValue("https://github.com/acme/chat");
+      expect(repoUrl(1)).toHaveFocus();
+      await escClosesTo("edit");
+
+      await editAgain();
+      await enterOn(button("Remove Repo URL 1"));
+      expect(repoUrl(1)).toHaveValue("https://github.com/acme/chat-infra");
+      expect(repoUrl(1)).toHaveFocus();
+      await escClosesTo("edit");
+
+      await editAgain();
+      await userEvent.click(button("Remove Repo URL 2"));
+      await enterOn(button("Remove Repo URL 1"));
+      expect(form().queryByRole("textbox", { name: /^Repo URL/ })).not.toBeInTheDocument();
+      expect(button("Add a Repo URL")).toHaveFocus();
+      await escClosesTo("edit");
+    });
+
+    it("Remove on a framework row puts focus on the next row's framework, else the one before, else Add a framework", async () => {
+      const framework = (name: string) =>
+        form().getByRole("combobox", { name: `Framework, ${name}` });
+
+      await openEdit();
+      await enterOn(button("Remove Langflow"));
+      expect(framework("LiteLLM")).toHaveFocus();
+      await escClosesTo("edit");
+
+      await editAgain();
+      await enterOn(button("Remove LiteLLM"));
+      expect(framework("Langflow")).toHaveFocus();
+      await escClosesTo("edit");
+
+      await editAgain();
+      await userEvent.click(button("Remove LiteLLM"));
+      await enterOn(button("Remove Langflow"));
+      expect(form().queryByRole("combobox", { name: /^Framework/ })).not.toBeInTheDocument();
+      expect(button("Add a framework")).toHaveFocus();
+      await escClosesTo("edit");
+    });
+
+    it("Add a framework adding the last framework puts focus on the new row's framework", async () => {
+      await openAdd();
+      for (let i = 0; i < 3; i++) await userEvent.click(button("Add a framework"));
+      await enterOn(button("Add a framework"));
+      expect(form().queryByRole("button", { name: "Add a framework" })).not.toBeInTheDocument();
+      expect(form().getByRole("combobox", { name: "Framework, Ollama" })).toHaveFocus();
+      await escClosesTo("add");
+    });
+
+    it("Add a Repo URL adding the 20th puts focus on Repo URL 20; below the limit, it keeps focus", async () => {
+      await openAdd();
+      await enterOn(button("Add a Repo URL"));
+      expect(button("Add a Repo URL")).toHaveFocus();
+      for (let i = 0; i < 18; i++) await userEvent.click(button("Add a Repo URL"));
+      await enterOn(button("Add a Repo URL"));
+      expect(form().queryByRole("button", { name: "Add a Repo URL" })).not.toBeInTheDocument();
+      expect(repoUrl(20)).toHaveFocus();
+      await escClosesTo("add");
+    });
+  });
+
   it("opens one form at a time, its name field focused", async () => {
     await openAdd();
     expect(form().getByRole("textbox", { name: "Name" })).toHaveFocus();
