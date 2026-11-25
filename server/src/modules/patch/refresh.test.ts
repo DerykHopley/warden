@@ -9,6 +9,9 @@ import type { PatchScan } from "./scan.ts";
 
 const TEAM = "org_refresh";
 
+/** A deleted Product's id: a UUID, as `createProducts` gives every Product. */
+const GONE = "5b0c2a4e-8f3d-4c1a-9e7b-2d6f0a1c3e5b";
+
 const product = (id: string): Product => ({ id, name: id, repo_urls: [], dependencies: [] });
 
 /** A Scan that records each Team and id it's called with, and throws for the ids in `failing`. */
@@ -49,13 +52,13 @@ describe("Patch's daily step", () => {
     const { scan, calls, ids } = countingScan();
     const { step, asked } = refresh(
       [product("p-kept"), product("p-other")],
-      ["p-gone", "p-kept"],
+      [GONE, "p-kept"],
       scan,
     );
 
     const result = await step.run(TEAM);
 
-    expect(ids()).toEqual(["p-kept", "p-other", "p-gone"]);
+    expect(ids()).toEqual(["p-kept", "p-other", GONE]);
     expect(calls.map((call) => call.team)).toEqual([TEAM, TEAM, TEAM]);
     expect(asked).toEqual([
       { team: TEAM, filter: { module: "patch", kind: "product", statuses: ["open", "accepted"] } },
@@ -63,19 +66,32 @@ describe("Patch's daily step", () => {
     expect(result).toEqual({ failed: false, counts: { productsScanned: 3, productsFailed: 0 } });
   });
 
+  it("skips a swept ref that isn't a UUID, with no Scan and no log line, and still scans a Product whatever its id", async () => {
+    const { scan, ids } = countingScan();
+    const lines: string[] = [];
+    // `shop` is the demo seed's made-up Product Asset: never a Product's id, so never a deleted Product.
+    const { step } = refresh([product("p-kept")], ["shop", GONE, "p-kept"], scan, lines);
+
+    const result = await step.run(TEAM);
+
+    expect(ids()).toEqual(["p-kept", GONE]);
+    expect(result).toEqual({ failed: false, counts: { productsScanned: 2, productsFailed: 0 } });
+    expect(lines).toEqual([]);
+  });
+
   it("logs a Scan that throws with the Team and Product id, scans the rest, and reports the Team as failed", async () => {
     const { scan, ids } = countingScan(["p-b"]);
     const lines: string[] = [];
     const { step } = refresh(
       [product("p-a"), product("p-b"), product("p-c")],
-      ["p-gone"],
+      [GONE],
       scan,
       lines,
     );
 
     const result = await step.run(TEAM);
 
-    expect(ids()).toEqual(["p-a", "p-b", "p-c", "p-gone"]);
+    expect(ids()).toEqual(["p-a", "p-b", "p-c", GONE]);
     expect(result).toEqual({ failed: true, counts: { productsScanned: 3, productsFailed: 1 } });
     const errors = lines
       .map((line) => JSON.parse(line) as Record<string, unknown>)
