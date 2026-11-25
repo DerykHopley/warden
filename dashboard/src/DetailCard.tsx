@@ -532,7 +532,7 @@ export function DetailCard(props: {
           {cardLine.text}
         </p>
       )}
-      {waiting && <p className="muted">Waiting for a Lead or Admin to decide.</p>}
+      {waiting && <p className="card-line">Waiting for a Lead or Admin to decide.</p>}
       {rowForm ??
         ((decisions.length > 0 || proposes.length > 0) && (
           <div className="card-actions" role="group" aria-label="Decisions">
