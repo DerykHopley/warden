@@ -530,6 +530,8 @@ describe("guard/permission-skip", () => {
       `false || claude -p x ${FLAG}`,
       `cd x\nclaude -p x ${FLAG}`,
       `FOO=1 claude -p x ${FLAG}`,
+      `x=$(foo)bar claude -p x ${FLAG}`,
+      `x=\`foo\`bar claude -p x ${FLAG}`,
       `if true; then claude -p x ${FLAG}; fi`,
       `for i in 1; do claude -p x ${FLAG}; done`,
       `if false; then :; else claude -p x ${FLAG}; fi`,
@@ -551,6 +553,8 @@ describe("guard/permission-skip", () => {
       // A `case` pattern's `)` and a function's `()` are followed by a command, as the pattern read them before.
       `case x in a) claude -p x ${FLAG};; esac`,
       `f() { claude -p x ${FLAG}; }; f`,
+      `case x in (a) claude -p x ${FLAG};; esac`,
+      `function f { claude -p x ${FLAG}; }; f`,
     ].map((command): [string, string, string, string] => [
       ".claude/settings.json",
       "PreToolUse",
