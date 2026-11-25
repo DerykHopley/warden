@@ -1133,8 +1133,8 @@ button[aria-busy="true"],
   font-size: 0.875rem;
 }
 
-/* The card's one line: what was done (it takes focus), or why a call was refused, in words. A refusal is set apart by
-   weight, not colour. */
+/* The card's one line: what was done (it takes focus), why a call was refused, or a Member's wait on a pending
+   Proposal (no role, no focus), in words. A refusal is set apart by weight, not colour. */
 .card-line {
   margin: 12px 8px 0 0;
   padding: 8px 12px;

@@ -532,14 +532,17 @@ describe("a Member's Propose buttons", () => {
 });
 
 describe("a Member's Propose buttons while a Proposal waits", () => {
-  it("give way to the waiting line, plain text, while the focused Finding has a pending Proposal", () => {
+  it("give way to the waiting line, in the Done line's box but not bold, while the focused Finding has a pending Proposal", () => {
     const { card } = show(OPEN, listed([proposal()]), { role: "member" });
 
     expect(rowButtons(card)).toEqual([]);
     expect(card.queryByRole("button", { name: /^Propose/ })).not.toBeInTheDocument();
     const line = card.getByText(WAITING);
     expect(line.tagName).toBe("P");
+    expect(line).toHaveClass("card-line");
+    expect(line).not.toHaveClass("refused");
     expect(line).not.toHaveAttribute("role");
+    expect(line).not.toHaveAttribute("tabindex");
     expect(card.queryByRole("status")).not.toBeInTheDocument();
     expect(card.queryByRole("alert")).not.toBeInTheDocument();
   });
