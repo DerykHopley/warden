@@ -83,5 +83,17 @@ export async function askAboutTeam<T extends { kind: string }>(
 export const TEAM_NOT_OPENED =
   "Your Team's Admin must open Warden first. Try again once they have.";
 
-export const tryAgainIn = (retryAfter: number | null) =>
-  `Too many sign-in attempts. Try again in ${retryAfter === null ? "a minute" : `${retryAfter} seconds`}.`;
+/**
+ * A 429's words: what was done too often (sign-in attempts unless told, as `callWarden` reads every 429 alike), and
+ * how long to wait.
+ */
+export const tryAgainIn = (retryAfter: number | null, tooOften = "sign-in attempts") =>
+  `Too many ${tooOften}. Try again in ${retryAfter === null ? "a minute" : `${retryAfter} seconds`}.`;
+
+/** A refusal's `error`: the server's words for it, or null when its body has none. */
+export async function serverError(res: Response): Promise<string | null> {
+  const body: unknown = await res.json().catch(() => null);
+  const error =
+    typeof body === "object" && body !== null ? (body as { error?: unknown }).error : null;
+  return typeof error === "string" && error.trim() !== "" ? error : null;
+}

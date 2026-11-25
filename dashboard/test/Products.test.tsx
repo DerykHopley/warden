@@ -84,7 +84,7 @@ const failsWith = (status: number, error: string) => () => json(status, { error 
 
 describe("ProductsPage", () => {
   it.each<Role>(["member", "admin"])(
-    "shows a %s each Product with its Repo URLs and dependencies, and nothing to change them",
+    "shows a %s each Product with its Repo URLs and dependencies",
     async (role) => {
       renderProducts(role);
       expect(
@@ -110,12 +110,27 @@ describe("ProductsPage", () => {
         "Ollama 0.6.0 Hosted internet-facing",
       ]);
       expect(product("Search").queryAllByRole("link")).toEqual([]);
-      expect(screen.queryAllByRole("button")).toEqual([]);
-      expect(screen.queryAllByRole("textbox")).toEqual([]);
-      expect(screen.queryAllByRole("combobox")).toEqual([]);
-      expect(screen.queryAllByRole("checkbox")).toEqual([]);
     },
   );
+
+  it("offers a Member nothing that changes a Product", async () => {
+    renderProducts("member");
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+
+    expect(screen.queryAllByRole("button")).toEqual([]);
+    expect(screen.queryAllByRole("textbox")).toEqual([]);
+    expect(screen.queryAllByRole("combobox")).toEqual([]);
+    expect(screen.queryAllByRole("checkbox")).toEqual([]);
+  });
+
+  it.each<Role>(["lead", "admin"])("offers a %s Add, and Edit on each Product", async (role) => {
+    renderProducts(role);
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+
+    expect(screen.getByRole("button", { name: "Add a Product" })).toBeEnabled();
+    expect(product("Chat assistant").getByRole("button", { name: /^Edit/ })).toBeEnabled();
+    expect(product("Search").getByRole("button", { name: /^Edit/ })).toBeEnabled();
+  });
 
   it("shows a name and a Repo URL holding markup as text, and opens each Repo URL in a new tab without an opener", async () => {
     const markup = {
@@ -283,6 +298,7 @@ describe("ProductsPage", () => {
       renderProducts(role, { products: () => productsAnswer([]) });
       expect(await screen.findByText("No Products yet.")).toBeInTheDocument();
       expect(screen.queryByText("A Lead or an Admin adds them.")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add a Product" })).toBeEnabled();
     },
   );
 
@@ -295,5 +311,391 @@ describe("ProductsPage", () => {
     ).toBeInTheDocument();
     expect(callsTo("/api/products")).toHaveLength(2);
     expect(screen.queryByText("Bluebird's secret")).not.toBeInTheDocument();
+  });
+});
+
+// Story 1: a Lead or an Admin adds and changes Products in a form on the page. The server checks the Role and each
+// field; the form shows its refusals in its own line, keeping everything typed.
+describe("ProductsPage's Product form", () => {
+  /** The open form. */
+  const form = () => within(screen.getByRole("form"));
+
+  /** The list's GETs, apart from the saves' POSTs to the same path. */
+  const listReads = () => callsTo("/api/products").filter(([, init]) => init?.method === "GET");
+
+  /** Renders the page as an Admin and opens Add's form once the list shows. */
+  async function openAdd(routes: Routes = {}) {
+    const props = renderProducts("admin", routes);
+    await userEvent.click(await screen.findByRole("button", { name: "Add a Product" }));
+    return props;
+  }
+
+  /** Renders the page as an Admin and opens Edit's form on Chat assistant. */
+  async function openEdit(routes: Routes = {}) {
+    const props = renderProducts("admin", routes);
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+    await userEvent.click(product("Chat assistant").getByRole("button", { name: /^Edit/ }));
+    return props;
+  }
+
+  const optionsOf = (select: HTMLElement) =>
+    within(select)
+      .getAllByRole("option")
+      .map((option) => option.textContent);
+
+  /** A save that answers `status` with `{ error }` (an empty body without one). */
+  const refusesWith =
+    (status: number, error?: string, headers: Record<string, string> = {}) =>
+    () =>
+      json(status, error === undefined ? {} : { error }, headers);
+
+  it("lists the frameworks by name in the API's order, never offering one picked in another row", async () => {
+    await openAdd();
+    const addFramework = () => form().getByRole("button", { name: "Add a framework" });
+
+    await userEvent.click(addFramework());
+    const first = form().getByRole("combobox", { name: "Framework, Langflow" });
+    expect(optionsOf(first)).toEqual(["Langflow", "LiteLLM", "LlamaIndex", "Ollama"]);
+
+    await userEvent.click(addFramework());
+    const second = form().getByRole("combobox", { name: "Framework, LiteLLM" });
+    expect(optionsOf(first)).toEqual(["Langflow", "LlamaIndex", "Ollama"]);
+    expect(optionsOf(second)).toEqual(["LiteLLM", "LlamaIndex", "Ollama"]);
+
+    await userEvent.selectOptions(second, "Ollama");
+    expect(optionsOf(first)).toEqual(["Langflow", "LiteLLM", "LlamaIndex"]);
+    expect(form().getByRole("combobox", { name: "Framework, Ollama" })).toBe(second);
+
+    await userEvent.click(addFramework());
+    expect(form().getByRole("combobox", { name: "Framework, LiteLLM" })).toHaveValue("litellm");
+    await userEvent.click(addFramework());
+    expect(form().getByRole("combobox", { name: "Framework, LlamaIndex" })).toBeInTheDocument();
+    expect(form().queryByRole("button", { name: "Add a framework" })).not.toBeInTheDocument();
+  });
+
+  it("starts a new framework row on Library, not internet-facing, with a blank version", async () => {
+    await openAdd();
+    await userEvent.click(form().getByRole("button", { name: "Add a framework" }));
+
+    expect(form().getByRole("textbox", { name: "Version, Langflow" })).toHaveValue("");
+    const usage = form().getByRole("combobox", { name: "Usage, Langflow" });
+    expect(usage).toHaveValue("library");
+    expect(optionsOf(usage)).toEqual([
+      "Self-hosted",
+      "Library",
+      "Through another package",
+      "Hosted",
+    ]);
+    expect(form().getByRole("checkbox", { name: "Internet-facing, Langflow" })).not.toBeChecked();
+  });
+
+  it("hides Add a Repo URL once there are 20", async () => {
+    await openAdd();
+    const addRepo = () => form().getByRole("button", { name: "Add a Repo URL" });
+    for (let i = 0; i < 19; i++) await userEvent.click(addRepo());
+    expect(form().getAllByRole("textbox", { name: /^Repo URL/ })).toHaveLength(19);
+    await userEvent.click(addRepo());
+    expect(form().getAllByRole("textbox", { name: /^Repo URL/ })).toHaveLength(20);
+    expect(form().queryByRole("button", { name: "Add a Repo URL" })).not.toBeInTheDocument();
+  });
+
+  it("Add POSTs the Product, a blank version as null and a blank Repo URL row left out; a blank name keeps Save disabled", async () => {
+    const sent: unknown[] = [];
+    await openAdd({
+      saveProduct: (id, body) => {
+        sent.push({ id, body });
+        return json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" });
+      },
+    });
+    const save = form().getByRole("button", { name: "Save" });
+    const name = form().getByRole("textbox", { name: "Name" });
+    expect(save).toBeDisabled();
+    await userEvent.type(name, "   ");
+    expect(save).toBeDisabled();
+    await userEvent.clear(name);
+    await userEvent.type(name, "Docs bot");
+    expect(save).toBeEnabled();
+
+    await userEvent.click(form().getByRole("button", { name: "Add a Repo URL" }));
+    await userEvent.click(form().getByRole("button", { name: "Add a Repo URL" }));
+    await userEvent.type(
+      form().getByRole("textbox", { name: "Repo URL 2" }),
+      "https://github.com/acme/docs",
+    );
+    await userEvent.click(form().getByRole("button", { name: "Add a framework" }));
+    await userEvent.click(form().getByRole("button", { name: "Add a framework" }));
+    await userEvent.type(form().getByRole("textbox", { name: "Version, LiteLLM" }), "1.2.3");
+    await userEvent.selectOptions(
+      form().getByRole("combobox", { name: "Usage, LiteLLM" }),
+      "Hosted",
+    );
+    await userEvent.click(form().getByRole("checkbox", { name: "Internet-facing, LiteLLM" }));
+    await userEvent.click(save);
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({
+      id: null,
+      body: {
+        name: "Docs bot",
+        repo_urls: ["https://github.com/acme/docs"],
+        dependencies: [
+          { framework: "langflow", version: null, usage: "library", internet_facing: false },
+          { framework: "litellm", version: "1.2.3", usage: "hosted", internet_facing: true },
+        ],
+      },
+    });
+  });
+
+  it("Edit opens the form filled with the Product, and Save PUTs the whole Product", async () => {
+    const sent: unknown[] = [];
+    await openEdit({
+      saveProduct: (id, body) => {
+        sent.push({ id, body });
+        return json(200, CHAT);
+      },
+    });
+
+    expect(screen.getByRole("form", { name: "Edit Chat assistant" })).toBeInTheDocument();
+    expect(form().getByRole("textbox", { name: "Name" })).toHaveValue("Chat assistant");
+    expect(form().getByRole("textbox", { name: "Repo URL 1" })).toHaveValue(
+      "https://github.com/acme/chat",
+    );
+    expect(form().getByRole("textbox", { name: "Repo URL 2" })).toHaveValue(
+      "https://github.com/acme/chat-infra",
+    );
+    expect(form().getByRole("combobox", { name: "Framework, Langflow" })).toHaveValue("langflow");
+    expect(form().getByRole("textbox", { name: "Version, Langflow" })).toHaveValue("1.4.0");
+    expect(form().getByRole("combobox", { name: "Usage, Langflow" })).toHaveValue("self_hosted");
+    expect(form().getByRole("checkbox", { name: "Internet-facing, Langflow" })).toBeChecked();
+    expect(form().getByRole("textbox", { name: "Version, LiteLLM" })).toHaveValue("");
+    expect(form().getByRole("combobox", { name: "Usage, LiteLLM" })).toHaveValue("transitive");
+    expect(form().getByRole("checkbox", { name: "Internet-facing, LiteLLM" })).not.toBeChecked();
+
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({
+      id: "prod_chat",
+      body: { name: CHAT.name, repo_urls: CHAT.repo_urls, dependencies: CHAT.dependencies },
+    });
+  });
+
+  it("Edit sends what was changed: a rename, a new version, a Repo URL and a framework removed", async () => {
+    const sent: unknown[] = [];
+    await openEdit({
+      saveProduct: (_id, body) => {
+        sent.push(body);
+        return json(200, CHAT);
+      },
+    });
+    const name = form().getByRole("textbox", { name: "Name" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "Chat helper");
+    const version = form().getByRole("textbox", { name: "Version, Langflow" });
+    await userEvent.clear(version);
+    await userEvent.type(version, "1.5.0");
+    await userEvent.click(form().getByRole("button", { name: "Remove Repo URL 1" }));
+    await userEvent.click(form().getByRole("button", { name: "Remove LiteLLM" }));
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toEqual({
+      name: "Chat helper",
+      repo_urls: ["https://github.com/acme/chat-infra"],
+      dependencies: [
+        { framework: "langflow", version: "1.5.0", usage: "self_hosted", internet_facing: true },
+      ],
+    });
+  });
+
+  it.each([
+    [
+      "a 400 shows the server's words",
+      refusesWith(400, "dependencies.0.version: a version has no spaces in it, such as 1.4.0"),
+      "dependencies.0.version: a version has no spaces in it, such as 1.4.0",
+    ],
+    [
+      "a 409 shows the server's words",
+      refusesWith(409, 'Another Product in this Team is already called "Search"'),
+      'Another Product in this Team is already called "Search"',
+    ],
+    ["a 409 with no words says Warden refused it", refusesWith(409), "Warden refused this change."],
+    [
+      "a 429 with Retry-After says how long to wait for a change",
+      refusesWith(429, "Too many Product saves", { "Retry-After": "30" }),
+      "Too many changes to Products. Try again in 30 seconds.",
+    ],
+    [
+      "a 429 without Retry-After says a minute",
+      refusesWith(429, "Too many Product saves"),
+      "Too many changes to Products. Try again in a minute.",
+    ],
+    [
+      "no answer says the server isn't answering",
+      () => Promise.reject(new TypeError("Failed to fetch")),
+      "Warden's server isn't answering. Try again.",
+    ],
+  ])("%s in the form, keeping everything typed", async (_case, answer, words) => {
+    await openEdit({ saveProduct: answer });
+    const name = form().getByRole("textbox", { name: "Name" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "Search");
+    await userEvent.type(form().getByRole("textbox", { name: "Version, LiteLLM" }), "1 2");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    expect(await form().findByRole("alert")).toHaveTextContent(words);
+    expect(form().getByRole("alert")).not.toHaveTextContent(/sign-in/);
+    expect(form().getByRole("textbox", { name: "Name" })).toHaveValue("Search");
+    expect(form().getByRole("textbox", { name: "Version, LiteLLM" })).toHaveValue("1 2");
+    expect(form().getByRole("textbox", { name: "Repo URL 2" })).toHaveValue(
+      "https://github.com/acme/chat-infra",
+    );
+    expect(form().getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("a 403 says only a Lead or an Admin can change Products, and asks /api/me again", async () => {
+    const props = await openEdit({ saveProduct: refusesWith(403, "Your Role can't do this") });
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    expect(await form().findByRole("alert")).toHaveTextContent(
+      "Only a Lead or an Admin can change Products.",
+    );
+    expect(props.refreshMe).toHaveBeenCalled();
+  });
+
+  it("a 404 says the Product is no longer in the Team, reads the list again, and keeps the form open", async () => {
+    await openEdit({ saveProduct: refusesWith(404, "No such Product") });
+    expect(listReads()).toHaveLength(1);
+    await userEvent.type(form().getByRole("textbox", { name: "Name" }), " 2");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    expect(await form().findByRole("alert")).toHaveTextContent(
+      "This Product is no longer in your Team.",
+    );
+    await vi.waitFor(() => expect(listReads()).toHaveLength(2));
+    expect(form().getByRole("textbox", { name: "Name" })).toHaveValue("Chat assistant 2");
+  });
+
+  it("a 404 keeps the form open once the list no longer has the Product", async () => {
+    const lists = [productsAnswer([CHAT, SEARCH])];
+    await openEdit({
+      products: () => lists.shift() ?? productsAnswer([SEARCH]),
+      saveProduct: refusesWith(404, "No such Product"),
+    });
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("heading", { level: 2, name: "Chat assistant" })).toBeNull(),
+    );
+    expect(form().getByRole("alert")).toHaveTextContent("This Product is no longer in your Team.");
+    expect(form().getByRole("textbox", { name: "Name" })).toHaveValue("Chat assistant");
+  });
+
+  it("a 401 ends the session", async () => {
+    const props = await openEdit({ saveProduct: refusesWith(401, "Not signed in") });
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(props.onSessionEnded).toHaveBeenCalled());
+  });
+
+  it("Cancel closes the form and puts focus back on the button that opened it", async () => {
+    await openAdd();
+    await userEvent.click(form().getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus();
+
+    await userEvent.click(product("Search").getByRole("button", { name: /^Edit/ }));
+    expect(screen.getByRole("form", { name: "Edit Search" })).toBeInTheDocument();
+    await userEvent.click(form().getByRole("button", { name: "Cancel" }));
+    expect(product("Search").getByRole("button", { name: /^Edit/ })).toHaveFocus();
+  });
+
+  it("opens one form at a time, its name field focused", async () => {
+    await openAdd();
+    expect(form().getByRole("textbox", { name: "Name" })).toHaveFocus();
+    expect(screen.getAllByRole("form")).toHaveLength(1);
+    expect(product("Chat assistant").getByRole("button", { name: /^Edit/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add a Product" })).toBeDisabled();
+  });
+
+  it("after a save, reads the list again, closes the form and puts focus on the saved Product's name", async () => {
+    const saved = { ...SEARCH, id: "prod_new", name: "Docs bot" };
+    const lists = [productsAnswer([CHAT, SEARCH])];
+    await openAdd({
+      products: () => lists.shift() ?? productsAnswer([CHAT, saved, SEARCH]),
+      saveProduct: () => json(201, saved),
+    });
+    await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole("heading", { level: 2, name: "Docs bot" })).toHaveFocus(),
+    );
+    expect(screen.queryByRole("form")).not.toBeInTheDocument();
+    await vi.waitFor(() =>
+      expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
+        "Chat assistant",
+        "Docs bot",
+        "Search",
+      ]),
+    );
+    expect(listReads()).toHaveLength(2);
+  });
+
+  it("after Edit's save, puts focus on the Product's new name", async () => {
+    // The list read again after the save answers the Product as stored, as the server does.
+    let stored = CHAT;
+    await openEdit({
+      products: () => productsAnswer([stored, SEARCH]),
+      saveProduct: () => {
+        stored = { ...CHAT, name: "Chat helper" };
+        return json(200, stored);
+      },
+    });
+    const name = form().getByRole("textbox", { name: "Name" });
+    await userEvent.clear(name);
+    await userEvent.type(name, "Chat helper");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+
+    await vi.waitFor(() =>
+      expect(screen.getByRole("heading", { level: 2, name: "Chat helper" })).toHaveFocus(),
+    );
+  });
+
+  it("Save is busy and disabled while its call runs, and a second click sends nothing", async () => {
+    const answer = deferred<Response>();
+    const saveProduct = vi.fn(() => answer.promise);
+    await openEdit({ saveProduct });
+    const save = form().getByRole("button", { name: "Save" });
+    await userEvent.click(save);
+
+    expect(save).toBeDisabled();
+    expect(save).toHaveAttribute("aria-busy", "true");
+    await userEvent.click(save);
+    // A submit that gets past the disabled button (Enter in a field, say) still sends nothing.
+    act(() => screen.getByRole<HTMLFormElement>("form").requestSubmit());
+    expect(saveProduct).toHaveBeenCalledTimes(1);
+
+    answer.resolve(json(200, CHAT));
+    await vi.waitFor(() => expect(screen.queryByRole("form")).not.toBeInTheDocument());
+    expect(saveProduct).toHaveBeenCalledTimes(1);
+  });
+
+  it("with the frameworks failing, disables Add and Edit and offers Retry, which enables them once the frameworks answer", async () => {
+    const failing = [json(500, { error: "Something went wrong" })];
+    renderProducts("admin", {
+      frameworks: () => failing.shift() ?? json(200, { frameworks: FRAMEWORKS }),
+    });
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+
+    expect(screen.getByText("Couldn't load the frameworks.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add a Product" })).toBeDisabled();
+    expect(product("Chat assistant").getByRole("button", { name: /^Edit/ })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add a Product" })).toBeEnabled(),
+    );
+    expect(product("Chat assistant").getByRole("button", { name: /^Edit/ })).toBeEnabled();
+    expect(screen.queryByText("Couldn't load the frameworks.")).not.toBeInTheDocument();
+    expect(dependencyRows("Chat assistant")[0]).toBe("Langflow 1.4.0 Self-hosted internet-facing");
   });
 });

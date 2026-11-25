@@ -18,6 +18,8 @@ export type Routes = {
   products?: () => Answer;
   /** GET /api/patch/frameworks. */
   frameworks?: () => Answer;
+  /** POST /api/products (id null) or PUT /api/products/:id, with the Product id and the parsed body. */
+  saveProduct?: (id: string | null, body: unknown) => Answer;
   /** PUT /api/team/members/:userId/role, with the user id and the parsed body. */
   changeRole?: (userId: string, body: unknown) => Answer;
   /**
@@ -47,6 +49,13 @@ export function serve(routes: Routes) {
     if (url === "/api/products" && method === "GET" && routes.products) return routes.products();
     if (url === "/api/patch/frameworks" && method === "GET" && routes.frameworks) {
       return routes.frameworks();
+    }
+    if (url === "/api/products" && method === "POST" && routes.saveProduct) {
+      return routes.saveProduct(null, sentBody(init));
+    }
+    const onProduct = /^\/api\/products\/([^/]+)$/.exec(url);
+    if (onProduct && method === "PUT" && routes.saveProduct) {
+      return routes.saveProduct(decodeURIComponent(onProduct[1] ?? ""), sentBody(init));
     }
     const change = /^\/api\/team\/members\/([^/]+)\/role$/.exec(url);
     if (change && method === "PUT" && routes.changeRole) {
