@@ -1,12 +1,14 @@
-// Guard's per-file agent-config Rules (Guard spec, story 3): `agentConfigCheck(asset).see(file)` reads a Claude Code
-// settings file's allow rules and `defaultMode`, and any other text file for the flag that skips permission checks, and
-// answers at most one Observation per Rule for the file. The flag and the mode are built here by joining their parts,
-// so this file never holds a whole one for a Guard Scan of Warden's own repo to report.
+// Guard's agent-config Rules (Guard spec, story 3): `agentConfigCheck(asset).see(file)` reads a Claude Code settings
+// file's allow rules, `defaultMode` and hook commands, and any other text file for the flag that skips permission
+// checks, and answers at most one Observation per Rule for the file; `end()` answers the whole-repo Rules from the root
+// settings files. The flag and the mode are built here by joining their parts, so this file never holds a whole one
+// for a Guard Scan of Warden's own repo to report.
 import { readdirSync, readFileSync } from "node:fs";
 import { Observation, type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import { agentConfigCheck } from "./agent-config.ts";
 import { packRule } from "./default-pack.ts";
+import type { RepoFile } from "./repo-reader.ts";
 
 const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
 
@@ -26,6 +28,34 @@ const settings = (permissions: Record<string, unknown>, rest: Record<string, unk
 const see = (path: string, text: string) => agentConfigCheck(repo).see({ path, text });
 const ofRule = (path: string, text: string, rule: string) =>
   see(path, text).filter((observation) => observation.rule_id === rule);
+
+const READ_ENV = "guard/agent-can-read-env";
+const NO_GUARD = "guard/no-runtime-guard";
+
+/** A settings file's `hooks` key: one matcher group under `event`, holding one command hook. */
+const hooks = (event: string, command: string) => ({
+  hooks: { [event]: [{ matcher: "*", hooks: [{ type: "command", command }] }] },
+});
+
+/** The line (from 1) of `text` the first `needle` is on. */
+const lineWith = (text: string, needle: string) =>
+  text.split("\n").findIndex((line) => line.includes(needle)) + 1;
+
+/** A repo's whole-repo Observations: each file seen, each path reported unread, then the end pass. */
+function endOf(files: RepoFile[], unread: string[] = []) {
+  const check = agentConfigCheck(repo);
+  for (const file of files) check.see(file);
+  for (const path of unread) check.unread(path);
+  return check.end();
+}
+
+const ruleIds = (observations: Observation[] | undefined) =>
+  observations?.map((observation) => observation.rule_id);
+
+const CLAUDE_MD: RepoFile = {
+  path: "CLAUDE.md",
+  text: "# App\n\nRun the tests before each commit.\n",
+};
 
 describe("guard/blanket-bash-allow", () => {
   it.each(["Bash", "Bash(*)", "Bash(:*)", "Bash(cat:*)", "Bash(grep *)"])(
@@ -417,6 +447,249 @@ describe("guard/permission-skip", () => {
   it("gives nothing for a file with neither the flag nor the mode", () => {
     expect(see("scripts/agent.sh", '#!/bin/sh\nclaude -p "$1"\n')).toEqual([]);
   });
+
+  it("reports a Stop hook in a minified settings file whose command runs claude with the skip flag", () => {
+    const text = `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"claude ${FLAG} -p x"}]}]}}`;
+
+    expect(ofRule(".claude/settings.json", text, SKIP).map((o) => o.location)).toEqual([
+      { kind: "file", path: ".claude/settings.json", line: 1 },
+    ]);
+  });
+
+  it.each([
+    [".claude/settings.json", "Stop", `claude ${FLAG} -p x`, FLAG],
+    [
+      ".claude/settings.json",
+      "PreToolUse",
+      `npx @anthropic-ai/claude-code ${MODE} ${BYPASS}`,
+      `${MODE} ${BYPASS}`,
+    ],
+    [
+      "apps/web/.claude/settings.local.json",
+      "PreToolUse",
+      `npx @anthropic-ai/claude-code ${MODE} ${BYPASS}`,
+      `${MODE} ${BYPASS}`,
+    ],
+  ])(
+    "reports a hook in %s whose %s command runs the agent with its checks off, on the command's line",
+    (path, event, command, kind) => {
+      const text = settings({}, hooks(event, command));
+      const line = lineWith(text, '"command":');
+
+      expect(ofRule(path, text, SKIP)).toEqual([
+        expect.objectContaining({
+          location: { kind: "file", path, line },
+          evidence: {
+            summary: `1 place skips the agent's permission checks (${kind}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
+          },
+        }),
+      ]);
+    },
+  );
+
+  it.each([
+    ["runs claude without the flag", 'claude -p "review the diff"'],
+    ["greps for the flag with claude in quotes", `grep -q 'claude ${FLAG}' && exit 2 || true`],
+    ["runs a command whose name only ends in claude", `myclaude ${FLAG}`],
+  ])("gives nothing for a hook command that %s", (_name, command) => {
+    expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
+  });
+
+  it("counts defaultMode bypass and a hook that runs the flag as 2 places in one Observation, first on the earlier line", () => {
+    const text = settings({ defaultMode: BYPASS }, hooks("Stop", `claude ${FLAG} -p x`));
+
+    expect(ofRule(".claude/settings.json", text, SKIP)).toEqual([
+      expect.objectContaining({
+        location: { kind: "file", path: ".claude/settings.json", line: 4 },
+        evidence: {
+          summary: `2 places skip the agent's permission checks (defaultMode ${BYPASS} (applies before Claude Code v2.1.257), ${FLAG}) in .claude/settings.json, first on line 4. To fix: ${packRule(SKIP).fix}`,
+        },
+      }),
+    ]);
+  });
+});
+
+describe("a settings file that starts with a byte order mark", () => {
+  const BOM = String.fromCharCode(0xfeff);
+
+  it("is read without it, its lines counted as before", () => {
+    const text = `${BOM}{\n  "permissions": {\n    "allow": ["Bash(*)"]\n  }\n}\n`;
+
+    expect(ofRule(".claude/settings.json", text, BLANKET).map((o) => o.location)).toEqual([
+      { kind: "file", path: ".claude/settings.json", line: 3 },
+    ]);
+  });
+
+  it("has its root deny of .env read, stopping guard/agent-can-read-env", () => {
+    const text = `${BOM}${settings({ deny: ["Read(./.env)"] })}`;
+
+    // Its one deny entry also stops guard/no-runtime-guard.
+    expect(endOf([CLAUDE_MD, { path: ".claude/settings.json", text }])).toEqual([]);
+  });
+});
+
+describe("the whole-repo Rules, at the end of a repo", () => {
+  it("gives guard/agent-can-read-env and guard/no-runtime-guard for a repo with CLAUDE.md and no settings file", () => {
+    const observations = endOf([CLAUDE_MD, { path: "src/index.ts", text: "export {};\n" }]);
+
+    expect(observations).toEqual([
+      {
+        asset: repo,
+        rule_id: READ_ENV,
+        location: { kind: "file", path: ".claude/settings.json" },
+        severity: "high",
+        title: "The agent can read .env files",
+        evidence: {
+          summary: `No permissions.deny rule in .claude/settings.json or .claude/settings.local.json stops the agent reading .env. To fix: ${packRule(READ_ENV).fix}`,
+        },
+      },
+      {
+        asset: repo,
+        rule_id: NO_GUARD,
+        location: { kind: "file", path: ".claude/settings.json" },
+        severity: "medium",
+        title: "Nothing checks the agent's tool calls",
+        evidence: {
+          summary: `Nothing checks the agent's tool calls: no permissions.deny rule and no PreToolUse hook in .claude/settings.json or .claude/settings.local.json. To fix: ${packRule(NO_GUARD).fix}`,
+        },
+      },
+    ]);
+    for (const observation of observations ?? []) {
+      expect(Observation.safeParse(observation).success).toBe(true);
+    }
+  });
+
+  it.each([
+    ["a .claude/ path", ".claude/agents/reviewer.md"],
+    ["a .claude/ path in a subfolder", "apps/web/.claude/commands/ship.md"],
+    [".mcp.json in a subfolder", "packages/api/.mcp.json"],
+    ["CLAUDE.md in a subfolder", "docs/CLAUDE.md"],
+  ])("gives both for a repo whose only sign of Claude Code is %s", (_name, path) => {
+    expect(ruleIds(endOf([{ path, text: "{}\n" }]))).toEqual([READ_ENV, NO_GUARD]);
+  });
+
+  it("counts an unread path as a sign of Claude Code", () => {
+    expect(ruleIds(endOf([], ["docs/CLAUDE.md"]))).toEqual([READ_ENV, NO_GUARD]);
+  });
+
+  it("gives neither for a repo with no .claude path, no CLAUDE.md and no .mcp.json", () => {
+    const files = [
+      { path: "README.md", text: "# App\n" },
+      { path: "claude/settings.json", text: "{}\n" },
+      { path: "src/claude.ts", text: "export {};\n" },
+      { path: "docs/CLAUDE.md.bak", text: "old\n" },
+      { path: ".claudeignore", text: ".env\n" },
+    ];
+
+    expect(endOf(files)).toEqual([]);
+  });
+
+  it.each(
+    [
+      "Read",
+      "Read(./.env)",
+      "Read(.env)",
+      "Read(**/.env)",
+      "Read(./.env*)",
+      "Read(/.env)",
+      "Read(//**/.env)",
+    ].flatMap((entry) => [
+      [entry, ".claude/settings.json"],
+      [entry, ".claude/settings.local.json"],
+    ]),
+  )("a root deny of %s in %s stops guard/agent-can-read-env", (entry, path) => {
+    const observations = endOf([CLAUDE_MD, { path, text: settings({ deny: [entry] }) }]);
+
+    expect(ruleIds(observations)).not.toContain(READ_ENV);
+  });
+
+  it.each([
+    ["Read(./.env.*) alone", ".claude/settings.json", ["Read(./.env.*)"]],
+    ["Read(./.env) only in a subfolder's settings", "sub/.claude/settings.json", ["Read(./.env)"]],
+    ["a deny of other files", ".claude/settings.json", ["Read(./secrets/**)", "Read(./.envrc)"]],
+    ["a deny of another tool on .env", ".claude/settings.json", ["Edit(./.env)"]],
+  ])("still gives guard/agent-can-read-env with %s", (_name, path, deny) => {
+    const observations = endOf([CLAUDE_MD, { path, text: settings({ deny }) }]);
+
+    expect(ruleIds(observations)).toContain(READ_ENV);
+  });
+
+  it.each([
+    [".claude/settings.json", settings({ deny: ["Bash(rm *)"] })],
+    [".claude/settings.local.json", settings({ deny: ["WebFetch"] })],
+    [".claude/settings.json", settings({}, hooks("PreToolUse", ".claude/hooks/guard.sh"))],
+    [".claude/settings.local.json", settings({}, hooks("PreToolUse", "node scripts/guard.js"))],
+  ])(
+    "a root deny entry or PreToolUse hook command in %s stops guard/no-runtime-guard",
+    (path, text) => {
+      expect(ruleIds(endOf([CLAUDE_MD, { path, text }]))).not.toContain(NO_GUARD);
+    },
+  );
+
+  it.each([
+    [
+      "a PostToolUse hook alone",
+      ".claude/settings.json",
+      settings({}, hooks("PostToolUse", "pnpm lint")),
+    ],
+    [
+      "a PreToolUse hook only in a subfolder's settings",
+      "apps/web/.claude/settings.json",
+      settings({ deny: ["Bash(rm *)"] }, hooks("PreToolUse", ".claude/hooks/guard.sh")),
+    ],
+    [
+      "a PreToolUse hook that isn't a command",
+      ".claude/settings.json",
+      settings(
+        {},
+        {
+          hooks: {
+            PreToolUse: [{ hooks: [{ type: "http", url: "http://localhost:8080/guard" }] }],
+          },
+        },
+      ),
+    ],
+    [
+      "a deny that isn't a list of strings",
+      ".claude/settings.json",
+      settings({ deny: [42, { rule: "Read" }] }),
+    ],
+  ])("still gives guard/no-runtime-guard with %s", (_name, path, text) => {
+    expect(ruleIds(endOf([CLAUDE_MD, { path, text }]))).toContain(NO_GUARD);
+  });
+
+  it("reads the two root settings files together, as Claude Code merges them", () => {
+    const files = [
+      CLAUDE_MD,
+      { path: ".claude/settings.json", text: settings({}, hooks("PreToolUse", "guard.sh")) },
+      { path: ".claude/settings.local.json", text: settings({ deny: ["Read(./.env)"] }) },
+    ];
+
+    expect(endOf(files)).toEqual([]);
+  });
+
+  it("gives both for a root .claude/settings.json that isn't valid JSON, and throws nothing", () => {
+    const files = [
+      { path: ".claude/settings.json", text: '{\n  "permissions": { "deny": ["Read",] }\n}\n' },
+    ];
+
+    expect(() => endOf(files)).not.toThrow();
+    expect(ruleIds(endOf(files))).toEqual([READ_ENV, NO_GUARD]);
+  });
+
+  it.each([".claude/settings.json", ".claude/settings.local.json"])(
+    "answers undefined once %s is reported unread",
+    (path) => {
+      expect(endOf([CLAUDE_MD], [path])).toBeUndefined();
+    },
+  );
+
+  it.each(["apps/web/.claude/settings.json", "assets/logo.png"])(
+    "still answers once %s, not a root settings file, is reported unread",
+    (path) => {
+      expect(ruleIds(endOf([CLAUDE_MD], [path]))).toEqual([READ_ENV, NO_GUARD]);
+    },
+  );
 });
 
 describe("agentConfigCheck", () => {

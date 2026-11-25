@@ -2,12 +2,13 @@
 // what the Default Pack's Rules find in its files. A repo it can't read fails the whole Scan, so nothing is reconciled:
 // a partial Scan would mark the unread repo's Findings Fixed. A file whose path a Finding's Location can't hold (too
 // long, a `\`, a drive letter) is skipped rather than failing the Scan. A file the reader couldn't read as text (too
-// large, binary, not UTF-8) is reported unread, so its Findings stay as they are. The log gets counts only, never a
-// path, a file's text or a match.
-import { assetKey, Location } from "@warden/contracts";
+// large, binary, not UTF-8) is reported unread, so its Findings stay as they are. The whole-repo Rules answer once a
+// repo's files are all read; with a root settings file unread, their Findings stay as they are too. The log gets counts
+// only, never a path, a file's text or a match.
+import { assetKey, Location, type Observation } from "@warden/contracts";
 import type { Logger } from "../../log.ts";
 import type { Scanner } from "../../scans.ts";
-import { agentConfigCheck } from "./agent-config.ts";
+import { agentConfigCheck, WHOLE_REPO_PATH } from "./agent-config.ts";
 import { DEFAULT_PACK_RULE_IDS } from "./default-pack.ts";
 import type { RepoAssets } from "./repo-assets.ts";
 import type { RepoReader } from "./repo-reader.ts";
@@ -45,6 +46,13 @@ export function guardScanner({
         let skipped = 0;
         let unread = 0;
         let observations = 0;
+        const saw = (found: readonly Observation[]) => {
+          for (const observation of found) {
+            if (!covered.has(observation.rule_id)) continue;
+            recorder.saw(observation);
+            observations += 1;
+          }
+        };
         const agentConfig = agentConfigCheck(asset);
         for await (const file of reader.readRepo(repo.installationId, {
           ref: repo.ref,
@@ -58,18 +66,16 @@ export function guardScanner({
           if (!("text" in file)) {
             // Its text is unknown, so the Findings in it stay as they are rather than being marked Fixed.
             recorder.unread(asset, file.path);
+            agentConfig.unread(file.path);
             unread += 1;
             continue;
           }
-          for (const observation of [
-            ...secretObservations(asset, file),
-            ...agentConfig.see(file),
-          ]) {
-            if (!covered.has(observation.rule_id)) continue;
-            recorder.saw(observation);
-            observations += 1;
-          }
+          saw([...secretObservations(asset, file), ...agentConfig.see(file)]);
         }
+        const wholeRepo = agentConfig.end();
+        // With a root settings file unread, the whole-repo Findings, all at the root settings file, stay as they are.
+        if (wholeRepo === undefined) recorder.unread(asset, WHOLE_REPO_PATH);
+        else saw(wholeRepo);
         logger.info("guard scan: repo read", {
           team,
           repo: asset.ref,

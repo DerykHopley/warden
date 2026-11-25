@@ -15,7 +15,7 @@ import type { Fetch } from "../src/http-call.ts";
 import { createLogger, type Logger } from "../src/log.ts";
 import { packRule } from "../src/modules/guard/default-pack.ts";
 import { createRepoAssets, guardAssetCheck } from "../src/modules/guard/repo-assets.ts";
-import type { RepoFile, RepoReader } from "../src/modules/guard/repo-reader.ts";
+import type { RepoFile, RepoReader, UnreadFile } from "../src/modules/guard/repo-reader.ts";
 import { runScanJob } from "../src/scan-job.ts";
 import { createScans, type ScanJobStarter } from "../src/scans.ts";
 import { gitHubRepoReader, MOVE_RULES, scanners } from "../src/wiring.ts";
@@ -51,6 +51,26 @@ afterAll(async () => {
 const LEAD = "user_lead";
 const repo: Asset = { kind: "repo", ref: "https://github.com/example/guarded" };
 
+/**
+ * The repo's root agent config: it denies reads of .env and runs a guard hook before each tool call, so the repo,
+ * which uses Claude Code, gets neither whole-repo agent-config Finding.
+ */
+const guarded: RepoFile = {
+  path: ".claude/settings.json",
+  text: `${JSON.stringify(
+    {
+      permissions: { deny: ["Read(./.env)", "Read(./.env.*)"] },
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", command: ".claude/hooks/guard.sh" }] },
+        ],
+      },
+    },
+    null,
+    2,
+  )}\n`,
+};
+
 const planted: RepoFile[] = [
   { path: "README.md", text: "# Guarded\n" },
   { path: "src/config.ts", text: `// settings\n\nexport const awsKey = "${AWS_KEY}";\n` },
@@ -58,15 +78,17 @@ const planted: RepoFile[] = [
     path: ".claude/settings.local.json",
     text: `{\n  "env": {\n    "GITHUB_TOKEN": "${GITHUB_TOKEN}"\n  }\n}\n`,
   },
+  guarded,
 ];
 const removed: RepoFile[] = [
   { path: "README.md", text: "# Guarded\n" },
   { path: "src/config.ts", text: "export const awsKey = process.env.AWS_KEY;\n" },
   { path: ".claude/settings.local.json", text: '{\n  "env": {}\n}\n' },
+  guarded,
 ];
 
 /** A RepoReader that yields what `read` does for any repo. */
-const readerOf = (read: () => AsyncIterable<RepoFile>) => (): RepoReader => ({
+const readerOf = (read: () => AsyncIterable<RepoFile | UnreadFile>) => (): RepoReader => ({
   readRepo: () => read(),
 });
 
@@ -134,7 +156,7 @@ async function listFindings({ app }: GuardApp, team: string) {
   return FindingsBody.parse(await res.json()).findings;
 }
 
-const files = (list: RepoFile[]) =>
+const files = (list: (RepoFile | UnreadFile)[]) =>
   async function* () {
     yield* list;
   };
@@ -278,7 +300,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
       expect(stored.filter((row) => row.includes(secret))).toEqual([]);
       expect(guard.logLines().filter((line) => line.includes(secret))).toEqual([]);
     }
-    expect(guard.logLines().join("")).toContain('"files":3');
+    expect(guard.logLines().join("")).toContain('"files":4');
   });
 
   it("reads the repo through GitHub's HTTP boundary: opens both Findings, then marks them Fixed, with the token and the secrets in no log line and no table", async () => {
@@ -309,7 +331,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     expect(github.calls.filter((call) => call.endsWith("/tarball"))).toHaveLength(2);
     const stored = await storedRows(team);
     const logged = guard.logLines();
-    expect(logged.join("")).toContain('"files":3');
+    expect(logged.join("")).toContain('"files":4');
     for (const secret of [INSTALLATION_TOKEN, AWS_KEY, GITHUB_TOKEN]) {
       expect(stored.filter((row) => row.includes(secret))).toEqual([]);
       expect(logged.filter((line) => line.includes(secret))).toEqual([]);
@@ -328,7 +350,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
 
     const config = planted[1]!;
     const grown = { path: config.path, text: `${config.text}// ${"x".repeat(1024 * 1024)}\n` };
-    current = [removed[0]!, grown, removed[2]!];
+    current = [removed[0]!, grown, removed[2]!, guarded];
     expect((await scanRepo(guard, team)).exit).toBe(0);
 
     const after = await listFindings(guard, team);
@@ -341,7 +363,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     expect(after).toHaveLength(2);
   });
 
-  it("opens a Finding for a broad Bash allow and one per file that skips permission checks, each with its fix (story 3)", async () => {
+  it("opens a Finding for a broad Bash allow, one per file that skips permission checks, and the two whole-repo agent-config Rules, each with its fix (story 3)", async () => {
     const team = await newTeam();
     // Joined from parts, so this file never holds the flag or the mode for a Guard Scan of Warden to report.
     const flag = ["--dangerously", "-skip-permissions"].join("");
@@ -359,6 +381,8 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
         path: "scripts/agent.sh",
         text: `#!/bin/sh\nclaude ${flag} -p "$1"\n`,
       },
+      // Last, so the whole-repo Rules see it only if they run after the repo's last file.
+      { path: "CLAUDE.md", text: "# Guarded\n\nRun the tests before each commit.\n" },
     ];
     const guard = guardApp(readerOf(files(agentConfig)));
     await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
@@ -368,8 +392,32 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     const opened = await listFindings(guard, team);
     const blanket = packRule("guard/blanket-bash-allow");
     const skip = packRule("guard/permission-skip");
+    const readEnv = packRule("guard/agent-can-read-env");
+    const noGuard = packRule("guard/no-runtime-guard");
     expect(opened).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({
+          asset: repo,
+          rule_id: readEnv.ruleId,
+          status: "open",
+          severity: "high",
+          title: readEnv.title,
+          location: { kind: "file", path: ".claude/settings.json" },
+          evidence: {
+            summary: `No permissions.deny rule in .claude/settings.json or .claude/settings.local.json stops the agent reading .env. To fix: ${readEnv.fix}`,
+          },
+        }),
+        expect.objectContaining({
+          asset: repo,
+          rule_id: noGuard.ruleId,
+          status: "open",
+          severity: "medium",
+          title: noGuard.title,
+          location: { kind: "file", path: ".claude/settings.json" },
+          evidence: {
+            summary: `Nothing checks the agent's tool calls: no permissions.deny rule and no PreToolUse hook in .claude/settings.json or .claude/settings.local.json. To fix: ${noGuard.fix}`,
+          },
+        }),
         expect.objectContaining({
           asset: repo,
           rule_id: blanket.ruleId,
@@ -405,8 +453,31 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
         }),
       ]),
     );
-    expect(opened).toHaveLength(3);
-    expect(guard.logLines().join("")).toContain('"observations":3');
+    expect(opened).toHaveLength(5);
+    expect(guard.logLines().join("")).toContain('"observations":5');
+  });
+
+  it("keeps the whole-repo Findings Open when a root settings file is unread, rather than marking them Fixed on a guess", async () => {
+    const team = await newTeam();
+    const claudeMd: RepoFile = { path: "CLAUDE.md", text: "# Guarded\n" };
+    let current: (RepoFile | UnreadFile)[] = [claudeMd];
+    const guard = guardApp(readerOf(() => files(current)()));
+    await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+    const opened = await listFindings(guard, team);
+    expect(opened.map(({ rule_id, status }) => ({ rule_id, status }))).toEqual(
+      expect.arrayContaining([
+        { rule_id: "guard/agent-can-read-env", status: "open" },
+        { rule_id: "guard/no-runtime-guard", status: "open" },
+      ]),
+    );
+    expect(opened).toHaveLength(2);
+
+    // The root settings.json now guards the agent, but settings.local.json, which Claude Code merges with it, is unread.
+    current = [claudeMd, guarded, { path: ".claude/settings.local.json", unread: true }];
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+
+    expect(await listFindings(guard, team)).toEqual(opened);
   });
 
   it("fails a Scan whose repo the reader can't read, reconciling nothing and logging why", async () => {
