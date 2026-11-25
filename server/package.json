@@ -15,15 +15,18 @@
   "dependencies": {
     "@clerk/backend": "^3.32.0",
     "@hono/node-server": "^2.1.11",
+    "@renovatebot/pep440": "^6.0.0",
     "@warden/contracts": "workspace:*",
     "hono": "^4.13.21",
     "kysely": "^0.29.9",
     "pg": "^8.23.1",
+    "semver": "^7.8.6",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@types/node": "^24",
     "@types/pg": "^8.23.1",
+    "@types/semver": "^7.7.1",
     "jose": "^6.2.18",
     "typescript": "~6.0.3",
     "vitest": "^5.1.1"
