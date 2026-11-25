@@ -11,7 +11,9 @@ export function scanJobStarterFor(
   config: Pick<Config, "scanJob" | "behindCloudRun">,
   { logger, fetch, spawn }: { logger: Logger; fetch?: Fetch; spawn?: Spawn },
 ): ScanJobStarter | undefined {
-  if (config.scanJob !== undefined) return cloudRunScanJobStarter({ job: config.scanJob, fetch });
+  if (config.scanJob !== undefined) {
+    return cloudRunScanJobStarter({ job: config.scanJob, logger, fetch });
+  }
   if (config.behindCloudRun) return undefined;
   return localScanJobStarter({ logger, spawn });
 }

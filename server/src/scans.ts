@@ -33,6 +33,18 @@ export type Scanners = Partial<Record<Module, Scanner>>;
  */
 export type ScanJobStarter = (input: { scanId: string; team: string }) => Promise<void>;
 
+/** The variables the Scan Job takes its Scan from (ADR 0009): an execution's only override, a child's only own two. */
+export const SCAN_ID_VARIABLE = "WARDEN_SCAN_ID";
+export const TEAM_VARIABLE = "WARDEN_TEAM";
+
+/**
+ * What a starter throws when it can't tell whether the Job started: its request may have reached the Job's host before
+ * the answer was lost. The Scan stays queued, as a failed start would make the Lead start another.
+ */
+export class ScanJobStartUnknown extends Error {
+  override name = "ScanJobStartUnknown";
+}
+
 /** What `queue` did: queued the Scan, or refused it, writing nothing, until the Team's oldest start ages out. */
 export type QueueOutcome =
   { kind: "queued"; scan: ScanBody } | { kind: "rate_limited"; retryAfterSeconds: number };

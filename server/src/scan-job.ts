@@ -15,7 +15,13 @@
 import { createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings, type Findings } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
-import { createScans, type Scanners, type Scans } from "./scans.ts";
+import {
+  createScans,
+  SCAN_ID_VARIABLE,
+  TEAM_VARIABLE,
+  type Scanners,
+  type Scans,
+} from "./scans.ts";
 import { MOVE_RULES, SCANNERS } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
@@ -122,10 +128,10 @@ export async function runScanJob({
 const named = (value: string | undefined) => (value?.trim() ? value : undefined);
 
 async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
-  const scanId = named(env.WARDEN_SCAN_ID);
-  const team = named(env.WARDEN_TEAM);
+  const scanId = named(env[SCAN_ID_VARIABLE]);
+  const team = named(env[TEAM_VARIABLE]);
   if (scanId === undefined || team === undefined) {
-    const missing = [scanId ? [] : ["WARDEN_SCAN_ID"], team ? [] : ["WARDEN_TEAM"]].flat();
+    const missing = [scanId ? [] : [SCAN_ID_VARIABLE], team ? [] : [TEAM_VARIABLE]].flat();
     logger.error(`scan job failed before connecting: set ${missing.join(" and ")}`, {
       variables: missing,
     });

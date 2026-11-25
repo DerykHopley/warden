@@ -9,6 +9,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import {
   createScans,
+  ScanJobStartUnknown,
   type ScanJobStarter,
   type Scanner,
   type Scanners,
@@ -269,6 +270,30 @@ describe("POST /api/scans: a Lead starts a Scan (story 2)", () => {
     expect(row!.ended_at).toBeInstanceOf(Date);
     expect(logEntries(lines.join(""))).toContainEqual(
       expect.objectContaining({ severity: "ERROR", scanId: row!.id, team }),
+    );
+  });
+
+  it("leaves the Scan queued and answers 202 when the starter can't tell whether the Job started, logging why", async () => {
+    const team = await newTeam();
+    const { app, lines } = scanApp({
+      startScanJob: async () => {
+        throw new ScanJobStartUnknown("jobs.run timed out after 10000 ms");
+      },
+    });
+
+    const res = await start(app, team);
+
+    expect(res.status).toBe(202);
+    const scan = ScanBody.parse(res.body);
+    expect(scan).toMatchObject({ state: "queued" });
+    expect(await rows(team)).toMatchObject([{ id: scan.id, state: "queued", ended_at: null }]);
+    expect(logEntries(lines.join(""))).toContainEqual(
+      expect.objectContaining({
+        severity: "WARNING",
+        scanId: scan.id,
+        team,
+        error: expect.objectContaining({ message: "jobs.run timed out after 10000 ms" }),
+      }),
     );
   });
 
