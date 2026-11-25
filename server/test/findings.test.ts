@@ -16,7 +16,7 @@ import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { queuedBehindFindingsLock } from "./helpers.ts";
+import { queuedBehindFindingsLock, seedPatchFinding } from "./helpers.ts";
 
 const pools: pg.Pool[] = [];
 let probe: pg.Pool;
@@ -572,5 +572,42 @@ describe("two Teams", () => {
     }
     expect((await findings.list(b)).map((f) => f.team)).toEqual([b]);
     await expect(findings.history(b, aFinding!.id)).rejects.toBeInstanceOf(FindingNotFound);
+  });
+});
+
+describe("assetRefs: the Assets a module's Findings in some Statuses are on", () => {
+  it("lists each ref once, of the module's Findings on that kind of Asset in those Statuses, and none of another Team's", async () => {
+    const [team, other] = [await newTeam(), await newTeam()];
+    const accepted = {
+      status: "accepted",
+      accepted_reason: "Fixed next sprint",
+      accepted_until: "2027-06-01T00:00:00.000Z",
+    } as const;
+    for (const [ref, fields] of [
+      ["p-open", { cve: "CVE-2023-1" }],
+      ["p-open", { cve: "CVE-2023-2" }],
+      ["p-accepted", { cve: "CVE-2023-3", ...accepted }],
+      ["p-fixed", { cve: "CVE-2023-4", status: "fixed" }],
+      ["p-false-positive", { cve: "CVE-2023-5", status: "false_positive" }],
+    ] as const)
+      await seedPatchFinding(withTeam, team, ref, fields);
+    // Not listed: Patch's on a Repo, another module's on a Product, and another Team's.
+    await seedPatchFinding(withTeam, team, "unused", { cve: "CVE-2023-6", asset: app });
+    const onGuardProduct = { kind: "product", ref: "p-guard" } as const;
+    await findings.reconcile(
+      scanOf(team, {
+        assets: [onGuardProduct],
+        observations: [observation({ asset: onGuardProduct })],
+      }),
+    );
+    await seedPatchFinding(withTeam, other, "p-other-team", { cve: "CVE-2023-7" });
+
+    const refs = await findings.assetRefs(team, {
+      module: "patch",
+      kind: "product",
+      statuses: ["open", "accepted"],
+    });
+
+    expect(refs).toEqual(["p-accepted", "p-open"]);
   });
 });

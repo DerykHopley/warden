@@ -71,6 +71,13 @@ describe("ADR 0005's import rule", () => {
     expect(await lint(code, "server/src/seed.ts")).toEqual([]);
   });
 
+  it("lets the daily Job's start-up file import a module, and another shared file still may not", async () => {
+    const code =
+      'import { createPatchRefresh } from "./modules/patch/refresh.ts";\nvoid createPatchRefresh;\n';
+    expect(await lint(code, "server/src/daily-expiry.ts")).toEqual([]);
+    expect(await lint(code, "server/src/shared.ts")).toEqual([expect.stringMatching(ADR_0005)]);
+  });
+
   it("lets shared code import() anything else", async () => {
     expect(
       await lint('await import("./findings/index.ts");\nexport {};\n', "server/src/x.ts"),
