@@ -284,14 +284,14 @@ check_quota_project() {
       exit 1
     fi
     if [[ $value != "$project" ]]; then
-      echo "gcp-setup: $name is $value, not $project, and the Cloud SQL Auth Proxy bills its calls there first," \
+      echo "gcp-setup: $name is '$value', not '$project', and the Cloud SQL Auth Proxy bills its calls there first," \
         "so they would be refused; unset it, or set it to $project. Nothing was changed." >&2
       exit 1
     fi
     return 0
   done
   if [[ -n $quota && $quota != "$project" ]]; then
-    echo "gcp-setup: the application-default credentials' quota project is $quota, not $project," \
+    echo "gcp-setup: the application-default credentials' quota project is '$quota', not '$project'," \
       "so the Cloud SQL Auth Proxy's calls would be refused; run" \
       "gcloud auth application-default set-quota-project $project first. Nothing was changed." >&2
     exit 1
