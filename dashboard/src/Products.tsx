@@ -200,7 +200,11 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   const changes = me.role === "lead" || me.role === "admin";
   const [open, setOpen] = useState<OpenForm | null>(null);
   const [saving, setSaving] = useState(false);
-  const savingNow = useRef(false);
+  /**
+   * The save under way, by an object of its own: a Team or Role change forgets it, so its answer is dropped and the
+   * next form can save at once.
+   */
+  const saveCall = useRef<object | null>(null);
   const [askingNames, setAskingNames] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState<OpenConfirm | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -212,16 +216,18 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   /** The gone notice: a delete found the Product already gone (404). */
   const [gone, setGone] = useState(false);
   // A Team switch, or a Role that no longer changes Products (a 403, then /api/me's new answer), closes the form and
-  // the confirm, so they don't come back if the Team or Role does, and forgets a delete under way.
+  // the confirm, so they don't come back if the Team or Role does, and forgets a save or a delete under way.
   const [formFor, setFormFor] = useState({ team, changes });
   if (formFor.team !== team || formFor.changes !== changes) {
     setFormFor({ team, changes });
     setOpen(null);
     setConfirmOpen(null);
+    setSaving(false);
     setDeleting(false);
     setGone(false);
   }
   useEffect(() => {
+    saveCall.current = null;
     deleteCall.current = null;
   }, [team, changes]);
   // A confirm whose Product leaves the list goes, refusal and all, so a later read that lists it again doesn't bring
@@ -244,11 +250,6 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
       : null;
   /** One at a time: while a form or a confirm is open, Add, every Edit and every Delete wait. */
   const oneOpen = form !== null || confirming !== null;
-  // The Team the page shows now, for a save whose answer arrives after a switch.
-  const teamNow = useRef(team);
-  useEffect(() => {
-    teamNow.current = team;
-  }, [team]);
 
   /**
    * What takes focus once the next render lands, by its `data-focus`: an opener, the form's name, a Product's name,
@@ -376,15 +377,16 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (form === null || savingNow.current || form.draft.name.trim() === "") return;
+    if (form === null || saveCall.current !== null || form.draft.name.trim() === "") return;
     const { team: savedIn, id, draft } = form;
-    savingNow.current = true;
+    const call = {};
+    saveCall.current = call;
     setSaving(true);
     const result = await saveProductInTeam(getToken, savedIn, id, inputOf(draft));
-    savingNow.current = false;
+    // A Team or Role change since forgot this save: its answer is about a form no longer shown.
+    if (saveCall.current !== call) return;
+    saveCall.current = null;
     setSaving(false);
-    // An answer that arrives after a Team switch is about the Team left: the page now shows another.
-    if (teamNow.current !== savedIn) return;
     switch (result.kind) {
       case "saved":
         list.setResult((old) => withSaved(old, result.product));

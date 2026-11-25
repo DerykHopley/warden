@@ -661,6 +661,76 @@ describe("ProductsPage's Product form", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("a Team switch forgets a save under way: the new Team's form saves at once, and the old answer leaves it busy", async () => {
+    const first = deferred<Response>();
+    const second = deferred<Response>();
+    let team = "org_a";
+    const bluebird = { ...SEARCH, id: "prod_b", name: "Bluebird" };
+    const saveProduct = vi.fn(() => (saveProduct.mock.calls.length === 1 ? first : second).promise);
+    const props = await openAdd({
+      me: () => json(200, { userId: "user_1", team, role: "admin", level: "quick" }),
+      products: () =>
+        team === "org_a" ? productsAnswer([CHAT, SEARCH]) : productsAnswer([bluebird], "org_b"),
+      saveProduct,
+    });
+    await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(saveProduct).toHaveBeenCalledTimes(1));
+
+    team = "org_b";
+    props.rerender({ team });
+    await screen.findByRole("heading", { level: 2, name: "Bluebird" });
+    await userEvent.click(screen.getByRole("button", { name: "Add a Product" }));
+    const name = form().getByRole("textbox", { name: "Name" });
+    expect(name).toBeEnabled();
+    await userEvent.type(name, "Kite");
+    const save = form().getByRole("button", { name: "Save" });
+    expect(save).toBeEnabled();
+    expect(save).not.toHaveAttribute("aria-busy");
+    await userEvent.click(save);
+    await vi.waitFor(() => expect(saveProduct).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      first.resolve(json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect(save).toBeDisabled();
+    expect(save).toHaveAttribute("aria-busy", "true");
+    expect(form().getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(screen.queryByRole("heading", { level: 2, name: "Docs bot" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a Team switch", 201, { team: "org_b" }, { team: "org_a" }],
+    ["a Role lowered to Member", 201, { role: "member" as Role }, { role: "admin" as Role }],
+    ["a Role lowered to Member", 401, { role: "member" as Role }, { role: "admin" as Role }],
+  ])(
+    "drops a save's answer that arrives after %s and back (a %i), the form opened since left as it is",
+    async (_case, status, away, back) => {
+      const answer = deferred<Response>();
+      const saveProduct = vi.fn(() => answer.promise);
+      const props = await openAdd({ saveProduct });
+      await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+      await userEvent.click(form().getByRole("button", { name: "Save" }));
+      await vi.waitFor(() => expect(saveProduct).toHaveBeenCalled());
+
+      props.rerender(away);
+      props.rerender(back);
+      await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+      await userEvent.click(screen.getByRole("button", { name: "Add a Product" }));
+      const reads = listReads().length;
+      await act(async () => {
+        answer.resolve(json(status, status === 201 ? { ...CHAT, id: "prod_new" } : {}));
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+
+      expect(props.onSessionEnded).not.toHaveBeenCalled();
+      expect(listReads()).toHaveLength(reads);
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(form().getByRole("textbox", { name: "Name" })).toHaveFocus();
+    },
+  );
+
   it.each([
     ["a Team switch", { team: "org_b" }, { team: "org_a" }],
     ["a Role lowered to Member", { role: "member" as Role }, { role: "admin" as Role }],
