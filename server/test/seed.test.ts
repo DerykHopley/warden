@@ -317,6 +317,25 @@ describe("seedDemo", () => {
     expect(await stateOf(team)).toEqual(before);
   });
 
+  // The name index (`lower(btrim(name))`) counts these as the demo Product's name, so the seed must too.
+  it.each(["shop web", "  Shop web  "])(
+    "on a rerun, a Lead's Product named %j after a seed without the demo Product doesn't match, writing nothing",
+    async (name) => {
+      const team = await teamWith([["user_admin", "admin"]]);
+      await seedDemo({ pool, team, now: NOW, withProduct: false });
+      await products.create(team, { name, repo_urls: [], dependencies: [] });
+      const before = await stateOf(team);
+
+      const result = await seedDemo({ pool, team, now: NOW });
+
+      expect(result.kind).toBe("mismatch");
+      expect(result.kind === "mismatch" && result.problems).toContainEqual(
+        expect.stringMatching(/^demo Product: /),
+      );
+      expect(await stateOf(team)).toEqual(before);
+    },
+  );
+
   it("after the daily Job, the made-up Patch Findings keep their Status and a second seed finds the Team seeded", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
     await seedDemo({ pool, team, now: NOW });
