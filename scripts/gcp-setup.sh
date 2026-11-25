@@ -12,7 +12,8 @@
 # Env:   WARDEN_GITHUB_REPO (<owner>/<repo>) and WARDEN_GITHUB_REPO_ID (its numeric id:
 #        `gh api repos/<owner>/<repo> --jq .id`), both required: the one GitHub repository that may deploy.
 # Needs: for a real run, gcloud signed in, application-default credentials (gcloud auth application-default login)
-#        whose quota project is <project-id> or unset, node, cloud-sql-proxy, and the server's dependencies
+#        whose quota project is <project-id> or unset (and GOOGLE_CLOUD_QUOTA_PROJECT and CSQL_PROXY_QUOTA_PROJECT
+#        <project-id> or unset), node, cloud-sql-proxy, and the server's dependencies
 #        (pnpm install): the roles step runs server/src/roles.ts from this machine.
 #
 # No secret value is printed, logged or written to a file: each password is generated in a pipe straight into
@@ -105,6 +106,57 @@ run_retrying() {
     [[ $try == 5 ]] && return 1
     echo "  retrying in 10s ($try of 5)" >&2
     sleep 10
+  done
+}
+
+# GCP's 429: RESOURCE_EXHAUSTED, as gcloud prints a quota refusal (or the bare HTTP code).
+readonly QUOTA_EXCEEDED='RESOURCE_EXHAUSTED|HTTPError 429'
+# A 429's wait, when its RetryInfo gives none: the quota on service-account creates is per minute.
+readonly QUOTA_WAIT=60
+# A longer RetryInfo wait than this isn't the per-minute quota (a hard limit says a day): it isn't waited for.
+readonly QUOTA_WAIT_MAX=300
+readonly QUOTA_RETRIES=3
+
+# How long a 429 says to wait, in whole seconds rounded up: its RetryInfo's retryDelay, as gcloud prints an error's
+# details (retryDelay: 42s, or 41.2s), or QUOTA_WAIT when it has none.
+quota_wait() {
+  if [[ $1 =~ retryDelay\"?:[[:space:]]*\"?([0-9]+)(\.[0-9]+)?s ]]; then
+    local seconds=${BASH_REMATCH[1]}
+    if [[ -n ${BASH_REMATCH[2]} ]]; then seconds=$((10#$seconds + 1)); fi
+    printf '%s' "$((10#$seconds))"
+  else
+    printf '%s' "$QUOTA_WAIT"
+  fi
+}
+
+# Runs a create that GCP may refuse with 429 (its per-minute quota on service-account creates): tried again after
+# the wait the error gives, QUOTA_RETRIES times at most. Any other error, a 429 past the last retry, or one that says
+# to wait longer than QUOTA_WAIT_MAX stops the script, printing gcloud's error.
+run_quota_retrying() {
+  if dry_run; then
+    print_command "$@"
+    return
+  fi
+  local try=0 error delay status
+  while true; do
+    status=0
+    # Its error kept to read, its output shown as it goes.
+    { error=$("$@" 2>&1 >&3); } 3>&1 || status=$?
+    if [[ $status == 0 ]]; then
+      if [[ -n $error ]]; then printf '%s\n' "$error" >&2; fi
+      return 0
+    fi
+    if [[ $error =~ $QUOTA_EXCEEDED ]] && ((try < QUOTA_RETRIES)); then
+      delay=$(quota_wait "$error")
+      if ((delay <= QUOTA_WAIT_MAX)); then
+        try=$((try + 1))
+        echo "  GCP's quota refused it (429); retrying in ${delay}s ($try of $QUOTA_RETRIES)" >&2
+        sleep "$delay"
+        continue
+      fi
+    fi
+    printf 'gcp-setup: %s failed:\n%s\n' "$(print_command "$@")" "$error" >&2
+    exit "$status"
   done
 }
 
@@ -211,6 +263,41 @@ adc_quota_project() {
   ' "$file"
 }
 
+# The proxy bills its Cloud SQL Admin API calls to a quota project: another project than <project>, where that API may
+# be off, refuses them, and the roles step fails with a bare ECONNRESET. The proxy takes the first of its
+# --quota-project flag (CSQL_PROXY_QUOTA_PROJECT: it reads each flag from CSQL_PROXY_<FLAG>), then
+# GOOGLE_CLOUD_QUOTA_PROJECT, then the credentials file's quota project (its Google auth library: the override, then
+# the variable, then the file). An empty variable counts as unset there too; a blank one (spaces) is taken as it is.
+# The file is read first whichever wins, as the proxy still signs in with it.
+check_quota_project() {
+  local project=$1 quota name value
+  if ! quota=$(adc_quota_project); then
+    echo "gcp-setup: couldn't read the application-default credentials' quota project; nothing was changed" >&2
+    exit 1
+  fi
+  for name in CSQL_PROXY_QUOTA_PROJECT GOOGLE_CLOUD_QUOTA_PROJECT; do
+    value=${!name-}
+    if [[ -z $value ]]; then continue; fi
+    if [[ -z ${value//[[:space:]]/} ]]; then
+      echo "gcp-setup: $name is set but blank; unset it, or set it to $project. The Cloud SQL Auth Proxy" \
+        "would bill its calls to a project with no name, and they would be refused. Nothing was changed." >&2
+      exit 1
+    fi
+    if [[ $value != "$project" ]]; then
+      echo "gcp-setup: $name is $value, not $project, and the Cloud SQL Auth Proxy bills its calls there first," \
+        "so they would be refused; unset it, or set it to $project. Nothing was changed." >&2
+      exit 1
+    fi
+    return 0
+  done
+  if [[ -n $quota && $quota != "$project" ]]; then
+    echo "gcp-setup: the application-default credentials' quota project is $quota, not $project," \
+      "so the Cloud SQL Auth Proxy's calls would be refused; run" \
+      "gcloud auth application-default set-quota-project $project first. Nothing was changed." >&2
+    exit 1
+  fi
+}
+
 preflight() {
   if dry_run; then
     note "DRY_RUN: printing the commands only, as if nothing existed yet; a real run skips what's already there"
@@ -240,30 +327,13 @@ preflight() {
       "the roles step runs server/src/roles.ts" >&2
     exit 1
   fi
+  local project=$1 instance=$2 missing=() secret
+  # Before gcloud is asked for a token: with a credentials file missing or unreadable, gcloud's own failure would
+  # hide the script's message, which names the file.
+  check_quota_project "$project"
   if ! gcloud auth application-default print-access-token >/dev/null 2>&1; then
     echo "gcp-setup: no application-default credentials for the Cloud SQL Auth Proxy;" \
       "run gcloud auth application-default login first" >&2
-    exit 1
-  fi
-  local project=$1 instance=$2 missing=() secret quota
-  # The proxy bills its Cloud SQL Admin API calls to the credentials' quota project: another project, where that API
-  # may be off, refuses them, and the roles step fails with a bare ECONNRESET.
-  if ! quota=$(adc_quota_project); then
-    echo "gcp-setup: couldn't read the application-default credentials' quota project; nothing was changed" >&2
-    exit 1
-  fi
-  # GOOGLE_CLOUD_QUOTA_PROJECT comes before the file's quota project: the proxy's Google auth library takes it first.
-  if [[ -n ${GOOGLE_CLOUD_QUOTA_PROJECT:-} ]]; then
-    if [[ $GOOGLE_CLOUD_QUOTA_PROJECT != "$project" ]]; then
-      echo "gcp-setup: GOOGLE_CLOUD_QUOTA_PROJECT is $GOOGLE_CLOUD_QUOTA_PROJECT, not $project, and the" \
-        "Cloud SQL Auth Proxy bills its calls there before the credentials' quota project, so they would be" \
-        "refused; unset it, or set it to $project. Nothing was changed." >&2
-      exit 1
-    fi
-  elif [[ -n $quota && $quota != "$project" ]]; then
-    echo "gcp-setup: the application-default credentials' quota project is $quota, not $project," \
-      "so the Cloud SQL Auth Proxy's calls would be refused; run" \
-      "gcloud auth application-default set-quota-project $project first. Nothing was changed." >&2
     exit 1
   fi
   # What the owner makes by hand, checked before any change.
@@ -526,7 +596,8 @@ main() {
     warden-preview-deploy warden-scheduler; do
     if ! exists gcloud iam service-accounts describe "$account@$project.iam.gserviceaccount.com" \
       --project="$project"; then
-      run gcloud iam service-accounts create "$account" --display-name="Warden: $account" --project="$project"
+      run_quota_retrying gcloud iam service-accounts create "$account" --display-name="Warden: $account" \
+        --project="$project"
     fi
   done
   for account in "$run_sa" "$migrate_sa" "$daily_sa" "$preview_run_sa" "$preview_migrate_sa"; do

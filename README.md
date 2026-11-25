@@ -114,7 +114,8 @@ The pre-push hook (`.githooks/pre-push`) runs `pnpm lint`, `pnpm format:check`, 
 
 Warden runs on Cloud Run in `europe-west1`, with Cloud SQL for Postgres 17. `scripts/gcp-setup.sh` sets up the
 project once. It's safe to run again: it creates only what's missing, and puts each setting back to the value it
-sets.
+sets. When Google's per-minute quota refuses a new service account (429), it waits as long as Google says, or a
+minute, and tries again, up to 3 times.
 
 **Before you run it** you need a Google Cloud project with billing, and on your machine:
 
@@ -122,7 +123,8 @@ sets.
   credentials for the Cloud SQL Auth Proxy (`gcloud auth application-default login`). Their quota project must be
   this project, or unset: the proxy's calls are billed there, and another project refuses them. The script checks it
   first; to set it, run `gcloud auth application-default set-quota-project <project-id>`. A
-  `GOOGLE_CLOUD_QUOTA_PROJECT` in your environment comes before it for the proxy, so it must be this project too;
+  `GOOGLE_CLOUD_QUOTA_PROJECT` in your environment comes before it for the proxy, and `CSQL_PROXY_QUOTA_PROJECT`
+  (the proxy's `--quota-project`) before both, so each must be this project too, or unset;
 - the [Cloud SQL Auth Proxy](https://cloud.google.com/sql/docs/postgres/sql-proxy#install), `cloud-sql-proxy`, on
   your `PATH` (`gcloud components install cloud-sql-proxy` installs it);
 - Node 24, and the server's dependencies installed (`pnpm install` in this repository): the script runs

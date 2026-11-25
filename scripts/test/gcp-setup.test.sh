@@ -7,7 +7,7 @@ set -euo pipefail
 
 # Only what each case sets reaches the script, and never this machine's application-default credentials.
 unset DRY_RUN WARDEN_GITHUB_REPO WARDEN_GITHUB_REPO_ID GOOGLE_APPLICATION_CREDENTIALS CLOUDSDK_CONFIG \
-  GOOGLE_CLOUD_QUOTA_PROJECT
+  GOOGLE_CLOUD_QUOTA_PROJECT CSQL_PROXY_QUOTA_PROJECT
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 setup="$root/scripts/gcp-setup.sh"
@@ -326,7 +326,11 @@ done
 #   denied      every secret refuses with PERMISSION_DENIED
 #   no-adc      as fresh, but with no application-default credentials
 # Each describe that finds nothing fails the way that gcloud command does. A secret's value is what was piped into
-# `secrets create`, or fake-<name> for one made by hand.
+# `secrets create`, or fake-<name> for one made by hand. FAKE_SA_CREATE makes a service-account create fail:
+#   429-once    with 429 (RESOURCE_EXHAUSTED, the per-minute quota) the first time, then succeed
+#   429-always  with 429 every time
+#   denied      with PERMISSION_DENIED
+# and FAKE_RETRY_DELAY (42s, say) adds RetryInfo's retryDelay to a 429, as gcloud prints an error's details.
 cat >"$scratch/fake-gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
@@ -343,6 +347,22 @@ case "$*" in
   "projects get-iam-policy"*) echo '{"bindings":[{"role":"roles/owner","members":["user:a@example.com"]}],"etag":"BwX="}' ;;
   "projects set-iam-policy"*) cp "$4" "$dir/policy" ;;
   "secrets create"*) cat >"$dir/secret-$3" ;;
+  "iam service-accounts create"*)
+    case ${FAKE_SA_CREATE-} in
+      denied)
+        echo "ERROR: (gcloud.iam.service-accounts.create) PERMISSION_DENIED: Permission 'iam.serviceAccounts.create' denied on resource." >&2
+        exit 1 ;;
+      429-once | 429-always)
+        if [[ $FAKE_SA_CREATE == 429-always || ! -e $dir/sa-429 ]]; then
+          touch "$dir/sa-429"
+          echo "ERROR: (gcloud.iam.service-accounts.create) RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'Service Account Creation Requests' and limit 'Service Account Creation Requests per minute' of service 'iam.googleapis.com'." >&2
+          if [[ -n ${FAKE_RETRY_DELAY-} ]]; then
+            printf '%s\n' "- '@type': type.googleapis.com/google.rpc.RetryInfo" "  retryDelay: $FAKE_RETRY_DELAY" >&2
+          fi
+          exit 1
+        fi ;;
+    esac
+    echo "Created service account [$4]." >&2 ;;
   "secrets versions access"*)
     for arg in "$@"; do [[ $arg == --secret=* ]] && name=${arg#--secret=}; done
     if [[ -f $dir/secret-$name ]]; then cat "$dir/secret-$name"; else printf 'fake-%s' "$name"; fi ;;
@@ -412,6 +432,18 @@ exec "$real_node" "\$@"
 FAKE
 chmod +x "$scratch/fake-node"
 
+# A sleep that records each wait over 10 seconds (a 429's) and returns at once, so a test never waits a minute;
+# shorter ones (the proxy's wait, and a binding's 10s retry, which no case triggers) are real.
+cat >"$scratch/fake-sleep" <<'FAKE'
+#!/usr/bin/env bash
+if [[ ${1-} =~ ^[0-9]+$ && $1 -gt 10 ]]; then
+  printf '%s\n' "$1" >>"$(dirname "$0")/sleeps"
+  exit 0
+fi
+PATH=/usr/bin:/bin exec sleep "$@"
+FAKE
+chmod +x "$scratch/fake-sleep"
+
 env PATH=/usr/bin:/bin bash -c 'command -v cloud-sql-proxy' >/dev/null &&
   fail "a cloud-sql-proxy in /usr/bin or /bin would stand in for the stub"
 
@@ -427,6 +459,7 @@ real_run() {
   cp "$scratch/fake-gcloud" "$dir/gcloud"
   [[ ${WITHOUT-} == proxy ]] || cp "$scratch/fake-proxy" "$dir/cloud-sql-proxy"
   cp "$scratch/fake-node" "$dir/node"
+  cp "$scratch/fake-sleep" "$dir/sleep"
   touch "$dir/calls"
   adc_file "$dir/application_default_credentials.json" "${ADC_QUOTA-}"
   capture setup_with FAKE_STATE="$state" PATH="$dir:/usr/bin:/bin" CLOUDSDK_CONFIG="$dir" "$@" \
@@ -441,6 +474,8 @@ adc_file() {
 }
 # A call that changes something: anything but signing in and reading.
 changes() { grep -vE '^auth |describe|get-iam-policy|versions access' <<<"$calls" || true; }
+# How many times the run tried to create the warden-run service account.
+run_sa_creates() { grep -c '^iam service-accounts create warden-run ' <<<"$calls" || true; }
 
 real_run unprepared unprepared
 assert_equal "before the instance and the hand-made secrets exist: exit 1" 1 "$code"
@@ -502,11 +537,17 @@ assert_line "an unreadable credentials file: says nothing was changed" "nothing 
 assert_equal "an unreadable credentials file: it changes nothing" "" "$(changes)"
 
 # GOOGLE_APPLICATION_CREDENTIALS naming a file that doesn't exist: it stops, rather than skipping the check (#66).
-real_run adc-env-missing fresh GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-missing.json"
+# With gcloud failing for its token too, the file is checked first, so the script's own message shows rather than
+# the one for gcloud's failure (#64).
+real_run adc-env-missing no-adc GOOGLE_APPLICATION_CREDENTIALS="$scratch/adc-missing.json"
 assert_equal "a missing GOOGLE_APPLICATION_CREDENTIALS file: exit 1" 1 "$code"
 assert_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: says so" \
   "the file GOOGLE_APPLICATION_CREDENTIALS names doesn't exist" "$out"
 assert_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: names it" "$scratch/adc-missing.json" "$out"
+assert_no_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: not the message for gcloud's failure" \
+  "no application-default credentials" "$out"
+assert_no_line "a missing GOOGLE_APPLICATION_CREDENTIALS file: gcloud isn't asked for a token" \
+  "print-access-token" "$calls"
 assert_equal "a missing GOOGLE_APPLICATION_CREDENTIALS file: it changes nothing" "" "$(changes)"
 
 # GOOGLE_CLOUD_QUOTA_PROJECT comes before the file's quota project, as it does for the proxy's Google auth library
@@ -519,6 +560,67 @@ assert_equal "GOOGLE_CLOUD_QUOTA_PROJECT set to another project: it changes noth
 ADC_QUOTA=other-project real_run quota-env-overrides fresh GOOGLE_CLOUD_QUOTA_PROJECT="$project"
 [[ $code == 0 ]] || fail "GOOGLE_CLOUD_QUOTA_PROJECT set to the target over a file with another: the run failed: $out"
 pass "GOOGLE_CLOUD_QUOTA_PROJECT set to the target over a file with another: a run ends"
+
+# A blank GOOGLE_CLOUD_QUOTA_PROJECT: the auth library takes any value but an empty one as it is, so the proxy would
+# bill its calls to a project named " " (#64).
+real_run quota-env-blank fresh GOOGLE_CLOUD_QUOTA_PROJECT=" "
+assert_equal "a blank GOOGLE_CLOUD_QUOTA_PROJECT: exit 1" 1 "$code"
+assert_line "a blank GOOGLE_CLOUD_QUOTA_PROJECT: says it's blank, and the fix" \
+  "GOOGLE_CLOUD_QUOTA_PROJECT is set but blank; unset it, or set it to $project" "$out"
+assert_equal "a blank GOOGLE_CLOUD_QUOTA_PROJECT: it changes nothing" "" "$(changes)"
+# An empty one the library reads as unset, and so does the script.
+real_run quota-env-empty fresh GOOGLE_CLOUD_QUOTA_PROJECT=
+[[ $code == 0 ]] || fail "an empty GOOGLE_CLOUD_QUOTA_PROJECT: the run failed: $out"
+pass "an empty GOOGLE_CLOUD_QUOTA_PROJECT: a run ends"
+
+# CSQL_PROXY_QUOTA_PROJECT is the proxy's --quota-project flag, which comes before the variable and the file (#64).
+real_run csql-quota-other fresh CSQL_PROXY_QUOTA_PROJECT=other-project
+assert_equal "CSQL_PROXY_QUOTA_PROJECT set to another project: exit 1" 1 "$code"
+assert_line "CSQL_PROXY_QUOTA_PROJECT set to another project: names the variable and both projects" \
+  "CSQL_PROXY_QUOTA_PROJECT is other-project, not $project" "$out"
+assert_equal "CSQL_PROXY_QUOTA_PROJECT set to another project: it changes nothing" "" "$(changes)"
+real_run csql-quota-blank fresh CSQL_PROXY_QUOTA_PROJECT=" "
+assert_line "a blank CSQL_PROXY_QUOTA_PROJECT: says it's blank" \
+  "CSQL_PROXY_QUOTA_PROJECT is set but blank" "$out"
+ADC_QUOTA=other-project real_run csql-quota-overrides fresh CSQL_PROXY_QUOTA_PROJECT="$project" \
+  GOOGLE_CLOUD_QUOTA_PROJECT=other-project
+[[ $code == 0 ]] || fail "CSQL_PROXY_QUOTA_PROJECT set to the target over another everywhere else: the run failed: $out"
+pass "CSQL_PROXY_QUOTA_PROJECT set to the target over another everywhere else: a run ends"
+
+# GCP's per-minute quota on service-account creates (429, #64): a refused create is tried again, after as long as
+# RetryInfo says (rounded up to a whole second), or a minute when it says nothing; any other error stops at once.
+real_run sa-429-once fresh FAKE_SA_CREATE=429-once FAKE_RETRY_DELAY=41.2s
+[[ $code == 0 ]] || fail "a create refused once with 429: the run failed: $out"
+pass "a create refused once with 429: the run ends"
+assert_equal "a create refused once with 429: it's tried twice" 2 "$(run_sa_creates)"
+assert_equal "a create refused once with 429: it waits as long as RetryInfo says" 42 \
+  "$(cat "$scratch/sa-429-once/sleeps")"
+assert_line "a create refused once with 429: the next account is made" \
+  "iam service-accounts create warden-scheduler " "$calls"
+
+real_run sa-429-always fresh FAKE_SA_CREATE=429-always
+assert_equal "a create always refused with 429: exit 1" 1 "$code"
+assert_line "a create always refused with 429: it prints gcloud's error" \
+  "RESOURCE_EXHAUSTED: Quota exceeded for quota metric 'Service Account Creation Requests'" "$out"
+assert_equal "a create always refused with 429: it's tried 4 times" 4 "$(run_sa_creates)"
+assert_equal "a create always refused with 429: a minute between tries, without RetryInfo" $'60\n60\n60' \
+  "$(cat "$scratch/sa-429-always/sleeps")"
+assert_no_line "a create always refused with 429: nothing after it runs" "service-accounts create warden-migrate" \
+  "$calls"
+
+# A RetryInfo wait far longer than a minute isn't the per-minute quota (a day, for a hard limit): no wait for it.
+real_run sa-429-long fresh FAKE_SA_CREATE=429-always FAKE_RETRY_DELAY=86401s
+assert_equal "a 429 that says to wait a day: exit 1" 1 "$code"
+assert_equal "a 429 that says to wait a day: it's tried once" 1 "$(run_sa_creates)"
+[[ ! -e $scratch/sa-429-long/sleeps ]] || fail "a 429 that says to wait a day: it waited"
+pass "a 429 that says to wait a day: it doesn't wait"
+
+real_run sa-denied fresh FAKE_SA_CREATE=denied
+assert_equal "a create refused for another reason: exit 1" 1 "$code"
+assert_line "a create refused for another reason: it prints gcloud's error" "PERMISSION_DENIED" "$out"
+assert_equal "a create refused for another reason: it's tried once" 1 "$(run_sa_creates)"
+[[ ! -e $scratch/sa-denied/sleeps ]] || fail "a create refused for another reason: it waited"
+pass "a create refused for another reason: it doesn't wait"
 
 ADC_QUOTA=$project real_run adc-same-quota fresh
 [[ $code == 0 ]] || fail "ADC whose quota project is the target: the run failed: $out"
