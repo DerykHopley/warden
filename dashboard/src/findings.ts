@@ -1,5 +1,12 @@
 // The Team's Findings as the server stores them, and the orders and counts the Findings page shows them in.
-import { FindingsBody, Severity, type Finding, type FindingsView } from "@warden/contracts";
+import {
+  FindingsBody,
+  Severity,
+  type Asset,
+  type Finding,
+  type FindingsView,
+  type Product,
+} from "@warden/contracts";
 import { callWarden, parsed, type GetToken, type Refused } from "./api.ts";
 
 export type FindingsResult =
@@ -63,3 +70,12 @@ export function summaryLine(findings: readonly Finding[]): string {
 
 /** A Finding's id as the page shows it: its first 8 characters (the start of its UUID). */
 export const shortId = (id: string) => id.slice(0, 8);
+
+/**
+ * An Asset's words: a Product Asset's Product name when `products` (null: not loaded, or refused) holds its id;
+ * otherwise its ref as it is.
+ */
+export function assetLabel(asset: Asset, products: readonly Product[] | null): string {
+  if (asset.kind !== "product") return asset.ref;
+  return products?.find((p) => p.id === asset.ref)?.name ?? asset.ref;
+}

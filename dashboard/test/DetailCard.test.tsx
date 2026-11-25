@@ -66,13 +66,13 @@ const clerkUsers = new Map([
 /** The signed-in person's user id. */
 const ME = "user_me";
 
-type Shown = { role?: Role | null; candidates?: Finding[] };
+type Shown = { role?: Role | null; candidates?: Finding[]; assetName?: string | null };
 
 /** Renders the card for `focused`, as a person with `role` (null: not loaded yet). */
 function show(
   focused: Finding,
   proposals: ProposalsResult | "loading" = listed([]),
-  { role = null, candidates = [] }: Shown = {},
+  { role = null, candidates = [], assetName = null }: Shown = {},
 ) {
   const calls = {
     onClear: vi.fn(),
@@ -92,6 +92,7 @@ function show(
       userId={ME}
       getToken={() => Promise.resolve("session-token")}
       candidates={candidates}
+      assetName={assetName}
       onClear={calls.onClear}
       onRetryProposals={calls.onRetry}
       onFindingChanged={calls.onFindingChanged}
@@ -132,6 +133,14 @@ describe("the detail card's Finding", () => {
       Asset: "Repo https://github.com/acme/shop-web",
       Evidence: "permissions.allow lets the agent read .env",
     });
+  });
+
+  it("shows a Product Asset by the name the page gives, and by its ref without one", () => {
+    const onProduct = finding(ID, { asset: { kind: "product", ref: OTHER } });
+    const named = show(onProduct, listed([]), { assetName: "Shop web" });
+    expect(fields(named.card).Asset).toBe("Product Shop web");
+    named.unmount();
+    expect(fields(show(onProduct).card).Asset).toBe(`Product ${OTHER}`);
   });
 
   it.each<[string, Location, string]>([
@@ -320,7 +329,10 @@ describe("the detail card's pending Proposals", () => {
 
   it("offers Retry after Couldn't load Proposals", async () => {
     const { card, onRetry } = show(finding(ID), { kind: "not-answering" });
-    await userEvent.click(card.getByRole("button", { name: "Retry" }));
+    // Named apart from a Patch Finding's assessment Retry, which can show in the same card; it still reads Retry.
+    const retry = card.getByRole("button", { name: "Retry Proposals" });
+    expect(retry).toHaveTextContent(/^Retry$/);
+    await userEvent.click(retry);
     expect(onRetry).toHaveBeenCalledOnce();
   });
 

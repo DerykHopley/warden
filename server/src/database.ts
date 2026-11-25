@@ -52,6 +52,23 @@ export function databaseRoleNames(env: Record<string, string | undefined>): Data
   throw new Error(`WARDEN_DATABASE_ROLES must be live or preview, not ${JSON.stringify(value)}`);
 }
 
+/**
+ * Throws unless `db` is connected as `names`' migration role, naming the role and the PGUSER to set: "`doing` as
+ * warden_migrate, not warden_app: set PGUSER=warden_migrate". For the jobs only that role may run (the migrations,
+ * the reference data loads), since it owns the tables they make or fill.
+ */
+export async function requireMigrationRole(
+  db: Pick<pg.ClientBase, "query">,
+  names: DatabaseRoleNames,
+  doing: string,
+): Promise<void> {
+  const { rows } = await db.query<{ user: string }>('select current_user as "user"');
+  const user = rows[0]?.user;
+  if (user !== names.migrate) {
+    throw new Error(`${doing} as ${names.migrate}, not ${user}: set PGUSER=${names.migrate}`);
+  }
+}
+
 /** Why a database role may not serve requests: it can get around row-level security. */
 export type DatabaseRoleRefusal = { role: string; reason: string };
 

@@ -347,7 +347,8 @@ describe("the detail card's Proposals, from GET /api/proposals", () => {
     await userEvent.click(await cardOf("lodash 4.17.20 has a known vulnerability"));
     await within(card()).findByText("Couldn't load Proposals");
 
-    await userEvent.click(within(card()).getByRole("button", { name: "Retry" }));
+    // The Proposals' own Retry: a Patch Finding's card has the Patch section's too, named apart.
+    await userEvent.click(within(card()).getByRole("button", { name: "Retry Proposals" }));
 
     expect(
       await within(card()).findByRole("list", { name: "Pending Proposals" }),

@@ -4,11 +4,23 @@
 import type pg from "pg";
 import { DATABASE_ROLE_NAMES, PREVIEW_DATABASE_ROLE_NAMES } from "./database.ts";
 
+/** Why a table of Patch's CVE snapshot isn't Team data. */
+const CVE_REFERENCE_DATA = (what: string) =>
+  `public CVE reference data (${what}), the same for every Team; read-only for the app ` +
+  "(0009_cve_reference revokes its writes), replaced only by the CVE snapshot loader";
+
 /** Tables in `public` that aren't Team data, each with why. Anything not named here counts as Team-owned. */
 const NOT_TEAM_DATA: Record<string, string> = {
   kysely_migration:
     "Kysely's record of applied migrations; 0001_app_grants revokes warden_app's access",
   kysely_migration_lock: "Kysely's migration lock; 0001_app_grants revokes warden_app's access",
+  // Patch's CVE snapshot (0009_cve_reference).
+  cve_snapshot: CVE_REFERENCE_DATA("which snapshot is loaded: its date and its files' digest"),
+  cve_sources: CVE_REFERENCE_DATA("each source's licence and attribution"),
+  cves: CVE_REFERENCE_DATA("NVD's CVEs for Patch's frameworks"),
+  cve_kev: CVE_REFERENCE_DATA("CISA's Known Exploited Vulnerabilities entries"),
+  cve_epss: CVE_REFERENCE_DATA("FIRST's EPSS scores"),
+  cve_osv: CVE_REFERENCE_DATA("OSV's affected and fixed versions"),
 };
 
 // Protected: row-level security enabled and forced (so the owner is bound too), with a Team policy covering each of

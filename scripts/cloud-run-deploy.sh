@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Deploys one Warden image to Cloud Run, in three steps: migrate the database with a Cloud Run job, deploy a revision
-# with the whole configuration set afresh, and wait for its /api/health to answer 200. A release first checks that the
-# Scan Job is there; after the health gate it gives the Scan Job the image, moves all of the service's traffic to the
-# revision, and gives the daily Job the image. README.md's "Owner previews" and "Releasing" say when each runs and
-# what it shows.
+# Deploys one Warden image to Cloud Run, in three steps: migrate the database and load Patch's CVE snapshot with a
+# Cloud Run job, deploy a revision with the whole configuration set afresh, and wait for its /api/health to answer
+# 200. A release first checks that the Scan Job is there; after the health gate it gives the Scan Job the image, moves
+# all of the service's traffic to the revision, and gives the daily Job the image. README.md's "Owner previews" and
+# "Releasing" say when each runs and what it shows.
 #
 # Usage: scripts/cloud-run-deploy.sh <image> preview <name>
 #        scripts/cloud-run-deploy.sh <image> release
@@ -71,6 +71,9 @@ readonly CLERK_JWT_SECRET=warden-clerk-jwt-key
 # The read-only GitHub app's (#132): a release's revision only, until previews get theirs.
 readonly GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
 readonly GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key
+# The migration job's one execution: the migrations, then Patch's CVE snapshot (README.md's "CVE data"). A failure in
+# either fails the job, so no revision is deployed. gcloud splits --args at commas, so this holds none.
+readonly MIGRATE_COMMAND="node server/src/migrate.ts && node server/src/modules/patch/cve-snapshot.ts"
 
 migrate() {
   local password
@@ -80,8 +83,8 @@ migrate() {
     --region="$REGION" \
     --service-account="$MIGRATE_ACCOUNT@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
     --set-cloudsql-instances="$CLOUD_SQL_CONNECTION" \
-    --command=node \
-    --args=server/src/migrate.ts \
+    --command=sh \
+    --args="-c,$MIGRATE_COMMAND" \
     --max-retries=0 \
     --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "WARDEN_DATABASE_ROLES=$DATABASE_ROLES" \
       "PGUSER=$MIGRATE_USER" "PGDATABASE=$DATABASE")" \

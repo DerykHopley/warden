@@ -83,6 +83,26 @@ export async function lockTeamFindings(tx: Transaction<Database>, team: string):
   await sql`select pg_advisory_xact_lock(hashtextextended(${team}::text, 0))`.execute(tx);
 }
 
+/** How long a transaction may wait for a lock, and for any one statement, before it fails. */
+export type TransactionLimits = { lockTimeoutMs?: number; statementTimeoutMs?: number };
+
+/** The daily Job's limits for each Team's transaction: 30 s for its lock, 60 s on one statement. */
+export const DAILY_JOB_LIMITS = { lockTimeoutMs: 30_000, statementTimeoutMs: 60_000 } as const;
+
+/**
+ * Sets `limits` for this transaction only, each one not given at DAILY_JOB_LIMITS'. A Team stuck behind its lock (a
+ * long reconcile, a hung transaction) then fails with 55P03, and a slow statement with 57014, so the Job logs it and
+ * goes on to the next.
+ */
+export async function setTransactionLimits(
+  tx: Transaction<Database>,
+  limits: TransactionLimits,
+): Promise<void> {
+  const { lockTimeoutMs, statementTimeoutMs } = { ...DAILY_JOB_LIMITS, ...limits };
+  await sql`select set_config('lock_timeout', ${`${lockTimeoutMs}ms`}, true),
+                   set_config('statement_timeout', ${`${statementTimeoutMs}ms`}, true)`.execute(tx);
+}
+
 /**
  * The time a row is written, for a history row's `at` and a Proposal's `requested_at` and `decided_at`: the clock
  * when the statement runs, under the Team's lock, not `now()`, which is when the transaction began. A transaction can

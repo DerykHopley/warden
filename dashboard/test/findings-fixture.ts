@@ -1,7 +1,13 @@
 // Findings as GET /api/findings answers them: each a valid Finding v1, so the page's parse takes them. `demoFindings`
 // is what the server's demo seed leaves, built from the same data (`@warden/contracts/demo`): 11 Findings, 7 Open
 // (2 Critical), 2 Fixed (one an Unconfirmed fix), 1 Accepted and 1 False positive, from Guard and Patch.
-import { fingerprint, type Finding, type Location, type Observation } from "@warden/contracts";
+import {
+  fingerprint,
+  type Finding,
+  type Location,
+  type Observation,
+  type Product,
+} from "@warden/contracts";
 import { DEMO_OBSERVATIONS, DEMO_OUTCOME, type DemoKey } from "@warden/contracts/demo";
 
 /** The Team the fixtures belong to. */
@@ -66,3 +72,12 @@ function demoFinding(name: DemoKey): Finding {
 }
 
 export const demoFindings: Finding[] = (Object.keys(ID) as DemoKey[]).map(demoFinding);
+
+/** A saved Product, "Shop web": its id is the Asset ref its Findings carry. */
+export const PRODUCT_ID = "5e1f0000-0000-4000-8000-0000000000aa";
+export const SHOP_WEB: Product = {
+  id: PRODUCT_ID,
+  name: "Shop web",
+  repo_urls: [],
+  dependencies: [],
+};

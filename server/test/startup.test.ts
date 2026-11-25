@@ -1,8 +1,10 @@
 // The real server process: its configuration check at start-up, staying up when the database is gone, shutting down
-// cleanly, and wiring the GitHub client when its settings are given.
+// cleanly, the modules it wires in, and wiring the GitHub client when its settings are given.
+import { randomUUID } from "node:crypto";
 import type { CryptoKey } from "jose";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type pg from "pg";
+import { FindingsBody } from "@warden/contracts";
 import { createWithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
@@ -10,12 +12,13 @@ import {
   ADMIN,
   gitHubAppKey,
   newTeam,
+  seedTeam,
   sessionToken,
   testKey,
   testPublishableKey,
 } from "./helpers.ts";
 import { closedPort } from "./ports.ts";
-import { startServer as start, waitForListening } from "./server-process.ts";
+import { pgConnection, startServer as start, waitForListening } from "./server-process.ts";
 
 /** A server on a spare port with the test Clerk settings, the `database` settings and `extra`, once it's listening. */
 async function startWith(database: Record<string, string>, extra: Record<string, string> = {}) {
@@ -141,5 +144,57 @@ describe("start-up with or without the GitHub app's settings", () => {
 
   it("starts without them, and the link route answers 503", async () => {
     expect(await linkStatus({})).toBe(503);
+  });
+});
+
+describe("the start-up file's wiring", () => {
+  // Story 3 end to end: the start-up file gives Patch's routes the Patch Scan, so a saved Product's CVEs are Findings.
+  it("answers a Lead's saved Product with its CVE Findings", async () => {
+    const database = inject("testDatabase");
+    const pool = poolAs("warden_app", database);
+    const team = `org_${randomUUID()}`;
+    try {
+      await seedTeam(createWithTeam(pool), team, [["user_lead", "lead"]]);
+    } finally {
+      await pool.end();
+    }
+    const { privateKey, publicPem } = await testKey();
+    const port = await closedPort();
+    const server = start({
+      CLERK_SECRET_KEY: "clerk-secret-value",
+      CLERK_JWT_KEY: publicPem,
+      VITE_CLERK_PUBLISHABLE_KEY: testPublishableKey,
+      ...pgConnection(),
+      PGUSER: "warden_app",
+      PGDATABASE: database,
+      PORT: String(port),
+    });
+    await waitForListening(server.output);
+    const token = await sessionToken(privateKey, "user_lead", 60, activeOrganization(team));
+    const request = (path: string, init: RequestInit = {}) =>
+      fetch(`http://127.0.0.1:${port}${path}`, {
+        ...init,
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      });
+
+    const saved = await request("/api/products", {
+      method: "POST",
+      body: JSON.stringify({
+        name: "Chatbot",
+        repo_urls: [],
+        dependencies: [
+          { framework: "langchain", version: "0.0.200", usage: "library", internet_facing: false },
+        ],
+      }),
+    });
+    const { findings } = FindingsBody.parse(await (await request("/api/findings")).json());
+
+    expect(saved.status).toBe(201);
+    expect(findings.map(({ location }) => location)).toContainEqual({
+      kind: "dependency",
+      package: "pkg:pypi/langchain",
+      version: "0.0.200",
+      vulnerability: "CVE-2023-36188",
+    });
   });
 });
