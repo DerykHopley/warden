@@ -22,6 +22,7 @@ import {
   DATABASE_ROLE_NAMES,
   databaseRoleNames,
   type DatabaseRoleNames,
+  requireMigrationRole,
 } from "./database.ts";
 import { createLogger, type Logger } from "./log.ts";
 
@@ -96,16 +97,7 @@ export async function migrate(
   // Only the migration role's tables get the default grants, so any other user would make tables the app can't use
   // (or, as a superuser, tables nobody else owns).
   try {
-    const { rows } = await pool.query<{ user: string }>('select current_user as "user"');
-    const user = rows[0]?.user;
-    if (user !== names.migrate) {
-      return {
-        applied: [],
-        error: new Error(
-          `migrations run as ${names.migrate}, not ${user}: set PGUSER=${names.migrate}`,
-        ),
-      };
-    }
+    await requireMigrationRole(pool, names, "migrations run");
   } catch (error) {
     return { applied: [], error };
   }
