@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createClerkClient } from "@clerk/backend";
 import { serve } from "@hono/node-server";
-import { createApp } from "./app.ts";
+import { createApp, type AppDeps } from "./app.ts";
 import { createClerkVerifier } from "./auth.ts";
 import { clerkOrganizations } from "./clerk-organizations.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
@@ -13,6 +13,8 @@ import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
 import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { patchMoveRule } from "./modules/patch/move-rule.ts";
+import { createProducts } from "./modules/patch/products.ts";
+import { patchRoutes } from "./modules/patch/routes.ts";
 import { createShutdown } from "./shutdown.ts";
 import { createWithTeam } from "./with-team.ts";
 
@@ -74,7 +76,7 @@ pool.query("select 1").catch((error: unknown) => {
 // Clerk's Backend API, with the secret key: a Warden Admin is Clerk's org:admin too (ADR 0008).
 const clerk = createClerkClient({ secretKey: config.clerk.secretKey });
 const withTeam = createWithTeam(pool);
-const app = createApp({
+const appDeps: AppDeps = {
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
   members: createMembers({
@@ -91,7 +93,9 @@ const app = createApp({
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,
   dashboardDir: existsSync(`${dashboardDir}/index.html`) ? dashboardDir : undefined,
-});
+};
+// Each module's routes, behind the app's middleware (ADR 0005).
+const app = createApp(appDeps, patchRoutes({ products: createProducts({ withTeam }) }));
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   logger.info("listening", { port });
