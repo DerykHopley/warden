@@ -425,13 +425,6 @@ const answeredProposal = (fields: Partial<Proposal> = {}): Proposal => {
   return answer as Proposal;
 };
 
-/** A date-time's day in the person's own time zone, as a date input holds it. */
-const localDay = (iso: string) => {
-  const d = new Date(iso);
-  const two = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
-};
-
 /** The first instant of `day` (a date input's value) in the person's own time zone, as epoch milliseconds. */
 const dayStart = (day: string) => new Date(`${day}T00:00`).getTime();
 
@@ -833,7 +826,7 @@ describe("a Lead's decision", () => {
     expect(form.getByRole("button", { name: "Mark moved" })).toBeDisabled();
   });
 
-  it("the submit is disabled for a blank or whitespace reason and an empty or too early Reopens on; the reason takes at most 2,000 characters", async () => {
+  it("the submit is disabled for a blank or whitespace reason and an empty Reopens on; the reason takes at most 2,000 characters", async () => {
     const { card } = show(OPEN, listed([]), { role: "lead" });
     const form = await openForm(card, "Accept");
     const submit = form.getByRole("button", { name: "Accept" });
@@ -846,8 +839,6 @@ describe("a Lead's decision", () => {
     await userEvent.type(whyField(form), "Fixed next sprint");
     expect(submit).toBeEnabled();
     pickUntil(form, "");
-    expect(submit).toBeDisabled();
-    pickUntil(form, localDay(new Date().toISOString()));
     expect(submit).toBeDisabled();
   });
 
@@ -1024,45 +1015,55 @@ describe("a Lead's decision", () => {
   });
 });
 
-describe("a Reopens on day that midnight has made today", () => {
+// One branch for both: a day midnight has made today, and a day before tomorrow typed into the date field.
+describe("a Reopens on day before tomorrow, typed in or made today by midnight", () => {
   afterEach(() => vi.useRealTimers());
 
-  /** Opens `button`'s form at 23:58, picks the next day, and submits it at 00:01: the day it picked is now today. */
-  async function submitPastMidnight(button: string, role: Role, submitName: string) {
+  /**
+   * Opens `button`'s form at 23:58, types a reason and picks the next day; at 00:01 types one more character, which
+   * redraws the form: the day it picked is now today.
+   */
+  async function editPastMidnight(shown: Finding, button: string, role: Role, submitName: string) {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(2026, 10, 25, 23, 58));
     // As the server refuses an until that isn't later than now: the words the form must not show.
     serve({ findingAction: () => json(400, { error: "until: until must be later than now" }) });
-    const { card } = show(OPEN, listed([]), { role });
+    const { card } = show(shown, listed([]), { role });
     const form = await openForm(card, button);
+    await userEvent.clear(whyField(form));
     await userEvent.type(whyField(form), "Fixed next sprint");
     pickUntil(form, "2026-11-26");
 
     vi.setSystemTime(new Date(2026, 10, 26, 0, 1));
-    await userEvent.click(form.getByRole("button", { name: submitName }));
-    return form;
+    await userEvent.type(whyField(form), ".");
+    return { form, submit: form.getByRole("button", { name: submitName }) };
   }
 
-  it.each<[string, Role, string]>([
-    ["Accept", "lead", "Accept"],
-    ["Propose accepting", "member", "Propose"],
+  it.each<[string, Finding, Role, string]>([
+    ["Accept", OPEN, "lead", "Accept"],
+    ["Renew acceptance", ACCEPTED, "lead", "Renew acceptance"],
+    ["Propose accepting", OPEN, "member", "Propose"],
   ])(
-    "%s refuses in the form's own words, keeps the reason, and sends nothing",
-    async (button, role, submitName) => {
-      const form = await submitPastMidnight(button, role, submitName);
+    "%s keeps its submit on, then refuses in the form's own words, keeps the reason, and sends nothing",
+    async (button, shown, role, submitName) => {
+      const { form, submit } = await editPastMidnight(shown, button, role, submitName);
+
+      expect(submit).toBeEnabled();
+      await userEvent.click(submit);
 
       const refusal = await form.findByRole("alert");
       expect(refusal).toHaveTextContent(
         /^Reopens on must be a later day\. Pick tomorrow or later\.$/,
       );
       expect(refusal).not.toHaveTextContent(/until/i);
-      expect(whyField(form)).toHaveValue("Fixed next sprint");
+      expect(whyField(form)).toHaveValue("Fixed next sprint.");
       expect(fetchMock).not.toHaveBeenCalled();
     },
   );
 
   it("after that refusal, Reopens on's earliest day is the day after the new today", async () => {
-    const form = await submitPastMidnight("Accept", "lead", "Accept");
+    const { form, submit } = await editPastMidnight(OPEN, "Accept", "lead", "Accept");
+    await userEvent.click(submit);
 
     await form.findByRole("alert");
     expect(form.getByLabelText(REOPENS_ON)).toHaveAttribute("min", "2026-11-27");
