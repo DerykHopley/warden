@@ -19,6 +19,29 @@ const dynamicImports = {
   "a template literal": "await import(`./modules/guard/move-rule.ts`);\nexport {};\n",
 };
 
+const LITERAL_PATHS_ONLY = /shared code imports by a literal path only \(ADR 0005\)/;
+
+const computedImports = {
+  "a variable": 'const name = "./findings/index.ts";\nawait import(name);\nexport {};\n',
+  "a concatenated string": 'await import("./mod" + "ules/x.ts");\nexport {};\n',
+  "a template literal with an expression":
+    'const x = "findings/index.ts";\nawait import(`./${x}`);\nexport {};\n',
+};
+
+const createRequires = {
+  "a named import": [
+    'import { createRequire } from "node:module";',
+    "const load = createRequire(import.meta.url);",
+    'load("./findings/index.ts");',
+    "",
+  ].join("\n"),
+  "a namespace import": [
+    'import * as nodeModule from "node:module";',
+    'nodeModule.createRequire(import.meta.url)("./findings/index.ts");',
+    "",
+  ].join("\n"),
+};
+
 describe("ADR 0005's import rule", () => {
   it.each(Object.entries(dynamicImports))(
     "refuses a dynamic import() of a module from shared code, with %s",
@@ -52,5 +75,38 @@ describe("ADR 0005's import rule", () => {
     expect(
       await lint('await import("./findings/index.ts");\nexport {};\n', "server/src/x.ts"),
     ).toEqual([]);
+    expect(
+      await lint("await import(`./findings/index.ts`);\nexport {};\n", "server/src/x.ts"),
+    ).toEqual([]);
+  });
+
+  // A lint rule can't follow a variable, so shared code may only import() by a literal path, and never createRequire.
+  it.each(Object.entries(computedImports))(
+    "refuses a computed import() in shared code, with %s",
+    async (_name, code) => {
+      expect(await lint(code, "server/src/findings/loader.ts")).toEqual([
+        expect.stringMatching(LITERAL_PATHS_ONLY),
+      ]);
+    },
+  );
+
+  it.each(Object.entries(createRequires))(
+    "refuses createRequire in shared code, with %s",
+    async (_name, code) => {
+      const messages = await lint(code, "server/src/findings/loader.ts");
+      expect(messages.length).toBeGreaterThan(0);
+      for (const message of messages) expect(message).toMatch(LITERAL_PATHS_ONLY);
+    },
+  );
+
+  it.each([
+    "server/src/modules/guard/loader.ts",
+    "server/src/index.ts",
+    "server/src/seed.ts",
+    "server/src/findings/loader.test.ts",
+  ])("lets %s import() by a computed path and use createRequire", async (filePath) => {
+    for (const code of [...Object.values(computedImports), ...Object.values(createRequires)]) {
+      expect(await lint(code, filePath)).toEqual([]);
+    }
   });
 });

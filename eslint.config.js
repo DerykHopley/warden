@@ -5,6 +5,8 @@ import globals from "globals";
 
 const MODULE_IMPORT_MESSAGE =
   "shared code never imports a module (ADR 0005): wire Guard, Patch and Vouch in server/src/index.ts";
+const LITERAL_PATH_MESSAGE =
+  "shared code imports by a literal path only (ADR 0005): lint can't follow a computed import() or createRequire to tell whether it reaches a module";
 /** The ADR 0005 pattern, `(^|/)modules(/|$)`, as an esquery regex. */
 const MODULES_PATH = String.raw`/(^|\/)modules(\/|$)/`;
 
@@ -56,7 +58,8 @@ export default tseslint.config(
     // ADR 0005: Guard, Patch and Vouch import the shared code, never the other way. The start-up files wire the
     // modules in (the server's, and the demo seed's, which reconciles as the server does), and tests may import them
     // as they do. A dynamic import() counts too, when its specifier is a string or a template literal naming a
-    // modules path.
+    // modules path. A lint rule can't follow a variable, so any other import() specifier is refused, and so is
+    // createRequire, by name wherever it appears (an import of it, a call, or a member of node:module).
     files: ["server/src/**/*.ts"],
     ignores: [
       "server/src/modules/**",
@@ -85,6 +88,18 @@ export default tseslint.config(
         {
           selector: `ImportExpression > TemplateLiteral.source > TemplateElement[value.raw=${MODULES_PATH}]`,
           message: MODULE_IMPORT_MESSAGE,
+        },
+        {
+          selector: "ImportExpression[source.type!='Literal'][source.type!='TemplateLiteral']",
+          message: LITERAL_PATH_MESSAGE,
+        },
+        {
+          selector: "ImportExpression > TemplateLiteral.source[expressions.length>0]",
+          message: LITERAL_PATH_MESSAGE,
+        },
+        {
+          selector: "Identifier[name='createRequire']",
+          message: LITERAL_PATH_MESSAGE,
         },
       ],
     },

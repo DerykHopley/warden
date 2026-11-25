@@ -30,6 +30,12 @@ afterEach(() => vi.unstubAllGlobals());
 const ID = "3f9a1c2e-0000-4000-8000-000000000001";
 const OTHER = "a1c4e7f0-0000-4000-8000-000000000002";
 
+/**
+ * `wallClock` ("2027-02-22T12:00") in the person's own time zone, as the server answers a date-time. A fixture's day is
+ * then the day the card shows in every time zone, where a fixed UTC noon falls on the next day at UTC+13 and UTC+14.
+ */
+const localAt = (wallClock: string) => new Date(wallClock).toISOString();
+
 const proposal = (fields: Partial<PendingProposal> = {}): PendingProposal => ({
   id: "p-1",
   finding_id: ID,
@@ -37,7 +43,7 @@ const proposal = (fields: Partial<PendingProposal> = {}): PendingProposal => ({
   reason: "The file is a test fixture",
   until: null,
   requested_by: { kind: "person", id: "user_grace" },
-  requested_at: "2026-11-24T12:30:00Z",
+  requested_at: localAt("2026-11-24T12:30"),
   state: "pending",
   decided_by: null,
   decided_at: null,
@@ -202,7 +208,7 @@ describe("the detail card's Finding", () => {
       finding(ID, {
         status: "accepted",
         accepted_reason: "Fixed next sprint",
-        accepted_until: "2027-02-22T12:00:00Z",
+        accepted_until: localAt("2027-02-22T12:00"),
       }),
     );
     expect(card.getByText("Accepted")).toBeInTheDocument();
@@ -259,7 +265,7 @@ describe("the detail card's pending Proposals", () => {
           id: "p-2",
           decision: "accept",
           reason: "Fixed next sprint",
-          until: "2027-01-15T12:00:00Z",
+          until: localAt("2027-01-15T12:00"),
           requested_by: { kind: "person", id: "user_ada" },
         }),
         proposal({ id: "p-3", requested_by: { kind: "agent", id: "guard-bot" } }),
@@ -346,7 +352,7 @@ const OPEN = finding(ID);
 const ACCEPTED = finding(ID, {
   status: "accepted",
   accepted_reason: "Fixed next sprint",
-  accepted_until: "2027-02-22T12:00:00Z",
+  accepted_until: localAt("2027-02-22T12:00"),
 });
 const FALSE_POSITIVE = finding(ID, { status: "false_positive" });
 const UNCONFIRMED = finding(ID, { status: "fixed", unconfirmed_fix: { candidates: [OTHER] } });
