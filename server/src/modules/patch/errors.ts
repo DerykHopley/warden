@@ -10,3 +10,22 @@ export class VersionRefused extends Error {
     this.name = "VersionRefused";
   }
 }
+
+/** A Product id the Team doesn't have, another Team's included: nothing was changed (Patch's 404). */
+export class ProductNotFound extends Error {
+  constructor(id: string) {
+    super(`No Product ${id} in this Team`);
+    this.name = "ProductNotFound";
+  }
+}
+
+/**
+ * A name another Product in the Team already has, whatever its case or the spaces around it: nothing was written
+ * (Patch's 409). The unique index decides it, so two Leads saving at once get it too.
+ */
+export class ProductNameTaken extends Error {
+  constructor(name: string) {
+    super(`Another Product in this Team is already called "${name}"`);
+    this.name = "ProductNameTaken";
+  }
+}
