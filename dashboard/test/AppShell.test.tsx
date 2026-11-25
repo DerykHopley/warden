@@ -58,6 +58,7 @@ describe("the landing page by Role", () => {
       ["Findings", "/findings"],
       ["Overview", "/overview"],
       ["People", "/people"],
+      ["Setup", "/setup"],
     ]);
     expect(header().getByRole("link", { name: "Findings" })).toHaveAttribute(
       "aria-current",
@@ -85,6 +86,7 @@ describe("the landing page by Role", () => {
         ["Findings", "/findings"],
         ["Overview", "/overview"],
         ["People", "/people"],
+        ["Setup", "/setup"],
       ]);
       expect(header().getByRole("link", { name: "Overview" })).toHaveAttribute(
         "aria-current",
@@ -135,6 +137,22 @@ describe("the landing page by Role", () => {
     ).toBeInTheDocument();
     expect(location.pathname).toBe("/people");
     expect(header().getByRole("link", { name: "People" })).toHaveAttribute("aria-current", "page");
+  });
+
+  it.each([
+    ["/setup", "Setup"],
+    ["/setup/github", "Connect GitHub"],
+    ["/setup/github/callback", "Connect GitHub"],
+  ])("at %s, shows the %s page with the header's Setup link current", async (path, heading) => {
+    window.history.replaceState(null, "", path);
+    clerk.auth.orgId = "org_a";
+    serve({ me: () => me("org_a", "member"), repos: () => json(200, { repos: [] }) });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
+    expect(location.pathname).toBe(path);
+    expect(header().getByRole("link", { name: "Setup" })).toHaveAttribute("aria-current", "page");
+    expect(header().getByRole("link", { name: "People" })).not.toHaveAttribute("aria-current");
   });
 });
 

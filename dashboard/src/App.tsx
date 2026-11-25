@@ -12,12 +12,14 @@ import {
 import { askAboutTeam, type GetToken } from "./api.ts";
 import { AskWardenPanel, usePanelState } from "./AskWardenPanel.tsx";
 import { FindingsPage } from "./Findings.tsx";
+import { GitHubCallbackPage } from "./GitHubCallback.tsx";
 import { landingPage } from "./landing.ts";
 import { fetchMe, type MeResult } from "./me.ts";
 import { OverviewPage } from "./Overview.tsx";
 import type { PagePanel, PanelContext } from "./panel.ts";
 import { PeoplePage } from "./People.tsx";
 import { ROLE_WORDS } from "./roles.ts";
+import { GitHubSetupPage, SetupPage } from "./Setup.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 export function App() {
@@ -121,20 +123,37 @@ export type PageProps = {
 /** The default context's callbacks: with no focus there is nothing to clear, and no Finding to ask for again. */
 const nothingToDo = () => {};
 
+type Page = { path: string; label: string; Page: ComponentType<PageProps> };
+
 /**
  * Warden's pages, in the header's order. The main area shows the one whose path is the address bar's; `/` shows the
- * person's landing page (`landingPage`). Each later slice adds its page here.
+ * person's landing page (`landingPage`). A page's `more` are pages at other paths that keep its header link current
+ * (Setup's GitHub pages, where GitHub sends the person back). Each later slice adds its page here.
  */
-const PAGES: { path: string; label: string; Page: ComponentType<PageProps> }[] = [
+const PAGES: (Page & { more?: Record<string, ComponentType<PageProps>> })[] = [
   { path: "/findings", label: "Findings", Page: FindingsPage },
   { path: "/overview", label: "Overview", Page: OverviewPage },
   { path: "/people", label: "People", Page: PeoplePage },
+  {
+    path: "/setup",
+    label: "Setup",
+    Page: SetupPage,
+    more: { "/setup/github": GitHubSetupPage, "/setup/github/callback": GitHubCallbackPage },
+  },
 ];
 
 /** The address bar's path without a trailing slash; `/` stays `/`. */
 const currentPath = () => location.pathname.replace(/\/+$/, "") || "/";
 
-const pageAt = (path: string) => PAGES.find((page) => page.path === path);
+/** The page at `path`, under its header entry's path and label. */
+function pageAt(path: string): Page | undefined {
+  for (const page of PAGES) {
+    if (page.path === path) return page;
+    const more = page.more?.[path];
+    if (more !== undefined) return { path: page.path, label: page.label, Page: more };
+  }
+  return undefined;
+}
 
 // "Personal account" is never a choice: Warden works only inside a Team.
 const switcher = <OrganizationSwitcher hidePersonal />;

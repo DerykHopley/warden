@@ -75,9 +75,7 @@ function fakeGitHub(...answers: AppAnswer[]) {
 function githubApp(github?: ReturnType<typeof fakeGitHub>["github"]) {
   const guardLines: string[] = [];
   const logger = createLogger((line) => guardLines.push(line));
-  const routes = github
-    ? guardRoutes({ repoAssets, github, logger })
-    : guardRoutes({ repoAssets });
+  const routes = github ? guardRoutes({ repoAssets, github, logger }) : guardRoutes({ repoAssets });
   const { app, lines } = testApp({ publicPem, withTeam, moduleRoutes: [routes] });
   return { app, logLines: () => [...lines, ...guardLines] };
 }
@@ -86,7 +84,9 @@ type App = ReturnType<typeof githubApp>["app"];
 
 async function askApp(app: App, team: string, as = ADMIN) {
   const token = await sessionToken(key, as, 60, activeOrganization(team));
-  const res = await app.request("/api/github/app", { headers: { Authorization: `Bearer ${token}` } });
+  const res = await app.request("/api/github/app", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   return { status: res.status, body: (await res.json()) as unknown };
 }
 

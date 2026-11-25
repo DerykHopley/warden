@@ -91,13 +91,23 @@ describe("the summary line and the top 5", () => {
     expect(cards().map((card) => card.textContent)).toEqual(before);
   });
 
-  it("with no Findings at all, shows the summary line only", async () => {
+  it("with no Findings at all, shows the summary line and the line to Setup only", async () => {
     open("/findings", []);
-    expect(
-      await screen.findByText("No Findings yet: they appear after the first Scan."),
-    ).toBeInTheDocument();
+    const summary = await screen.findByText("No Findings yet: they appear after the first Scan.");
+    const setup = screen.getByText(/^Connect GitHub on/);
+
+    expect(setup).toHaveTextContent(/^Connect GitHub on Setup to run the first Scan\.$/);
+    expect(setup).toHaveClass("setup-line");
+    expect(within(setup).getByRole("link", { name: "Setup" })).toHaveAttribute("href", "/setup");
+    expect(summary.compareDocumentPosition(setup) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Start here" })).not.toBeInTheDocument();
+  });
+
+  it("with Findings, has no line to Setup", async () => {
+    open();
+    await screen.findByRole("table");
+    expect(screen.queryByText(/^Connect GitHub on/)).not.toBeInTheDocument();
   });
 });
 

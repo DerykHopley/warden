@@ -179,6 +179,11 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
         <>
           {me.level !== null && <LevelLine level={me.level} />}
           <h1 className="summary-line">{summaryLine(findings)}</h1>
+          {findings.length === 0 && (
+            <p className="setup-line">
+              Connect GitHub on <a href="/setup">Setup</a> to run the first Scan.
+            </p>
+          )}
           <TopFive findings={topFive(findings)} focused={focused} onSelect={select} />
           {findings.length > 0 && (
             <section className="all-findings" aria-labelledby="all-findings">

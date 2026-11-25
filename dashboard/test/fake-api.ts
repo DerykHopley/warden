@@ -15,6 +15,10 @@ export type Routes = {
   findings?: () => Answer;
   proposals?: () => Answer;
   overview?: () => Answer;
+  githubApp?: () => Answer;
+  repos?: () => Answer;
+  /** POST /api/github/installations, with the parsed body. */
+  linkInstallation?: (body: unknown) => Answer;
   /** PUT /api/team/members/:userId/role, with the user id and the parsed body. */
   changeRole?: (userId: string, body: unknown) => Answer;
   /**
@@ -41,6 +45,13 @@ export function serve(routes: Routes) {
     if (url === "/api/findings" && method === "GET" && routes.findings) return routes.findings();
     if (url === "/api/proposals" && method === "GET" && routes.proposals) return routes.proposals();
     if (url === "/api/overview" && method === "GET" && routes.overview) return routes.overview();
+    if (url === "/api/github/app" && method === "GET" && routes.githubApp) {
+      return routes.githubApp();
+    }
+    if (url === "/api/repos" && method === "GET" && routes.repos) return routes.repos();
+    if (url === "/api/github/installations" && method === "POST" && routes.linkInstallation) {
+      return routes.linkInstallation(sentBody(init));
+    }
     const change = /^\/api\/team\/members\/([^/]+)\/role$/.exec(url);
     if (change && method === "PUT" && routes.changeRole) {
       return routes.changeRole(decodeURIComponent(change[1] ?? ""), JSON.parse(String(init?.body)));
