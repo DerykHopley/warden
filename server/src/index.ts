@@ -9,10 +9,13 @@ import { clerkOrganizations } from "./clerk-organizations.ts";
 import { ConfigError, loadConfig, type Config } from "./config.ts";
 import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings } from "./findings/index.ts";
+import { localScanJobStarter } from "./local-scan-job-starter.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
 import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { patchMoveRule } from "./modules/patch/move-rule.ts";
+import { SCANNERS } from "./scan-job.ts";
+import { createScans } from "./scans.ts";
 import { createShutdown } from "./shutdown.ts";
 import { createWithTeam } from "./with-team.ts";
 
@@ -87,6 +90,12 @@ const app = createApp({
     withTeam,
     moveRules: { guard: guardMoveRule, patch: patchMoveRule },
   }),
+  scans: createScans({ withTeam }),
+  // The Job's own list, so a start names the Rules the Job will run.
+  scanners: SCANNERS,
+  // Off Cloud Run the Job runs as a child process; on Cloud Run none is wired until the Cloud Run Job (slice 1b), so a
+  // start answers 503 there.
+  startScanJob: config.behindCloudRun ? undefined : localScanJobStarter({ logger }),
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,

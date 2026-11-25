@@ -11,6 +11,7 @@ import { createLogger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
+import { createScans, type ScanJobStarter, type Scanners, type Scans } from "../src/scans.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
@@ -103,6 +104,8 @@ const noFindings: Findings = {
   expireAcceptances: noDatabase,
 };
 
+const noScans: Scans = { queue: noDatabase, get: noDatabase, move: noDatabase };
+
 /** A Clerk seam for a test that doesn't look at Clerk: every call is refused (a Role change answers 502; a join logs it). */
 const noClerk: ClerkOrganizations = {
   setMembershipRole: () =>
@@ -124,6 +127,10 @@ export function testApp(options: {
   /** How long the members module waits for Clerk; short in a test of Clerk not answering. */
   clerkTimeoutMs?: number;
   mount?: MountRoutes;
+  /** Each module's scanner for `POST /api/scans`; none by default, as index.ts wires them in this slice. */
+  scanners?: Scanners;
+  /** The Scan Job starter; none by default, so a start answers 503. */
+  startScanJob?: ScanJobStarter;
 }) {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
@@ -149,6 +156,9 @@ export function testApp(options: {
             moveRules: { guard: guardMoveRule, patch: patchMoveRule },
           })
         : noFindings,
+      scans: options.withTeam ? createScans({ withTeam: options.withTeam }) : noScans,
+      scanners: options.scanners ?? {},
+      startScanJob: options.startScanJob,
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),
       frontendApiHost: FRONTEND_API_HOST,

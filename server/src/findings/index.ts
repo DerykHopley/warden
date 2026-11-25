@@ -85,6 +85,13 @@ export interface ScanRecorder {
 }
 
 export interface ScanCoverage {
+  /**
+   * The Scan's id and when it started: the queued Scan's, so a retried Scan Job execution reconciles under the same
+   * pair and changes nothing (ADR 0009); reconcile refuses an id it already applied with another start. A fresh id
+   * and the time `scan` is called when not given.
+   */
+  id?: string;
+  started_at?: string;
   team: string;
   module: Module;
   /** The Assets the Scan covers. */
@@ -241,9 +248,10 @@ export function createFindings({
       );
     },
 
-    async scan({ team, module, assets, rules }, work) {
-      const id = randomUUID();
-      const started_at = new Date().toISOString();
+    async scan(
+      { id = randomUUID(), started_at = new Date().toISOString(), team, module, assets, rules },
+      work,
+    ) {
       const covered = new Set(assets.map(assetKey));
       const coveredRules = new Set<string>(rules);
       const observations: Observation[] = [];

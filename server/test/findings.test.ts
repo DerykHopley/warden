@@ -9,6 +9,7 @@ import {
   createFindings,
   FindingNotFound,
   type Findings,
+  type ScanCoverage,
   type ScanRecorder,
 } from "../src/findings/index.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
@@ -123,6 +124,27 @@ describe("findings.scan: the call a module writes", () => {
       reopened: [],
       alreadyApplied: false,
     });
+  });
+
+  // ADR 0009: a retried Scan Job execution reconciles under the queued Scan's id and first start, so it changes nothing.
+  it("reconciles under the coverage's id and start when given them, and a fresh id otherwise", async () => {
+    const team = await newTeam();
+    const id = `scan-${randomUUID()}`;
+    const started_at = "2026-11-25T09:00:00.000Z";
+    const coverage: ScanCoverage = { team, module: "guard", assets: [app], rules: [ENV] };
+    const saw = async (scan: ScanRecorder) => scan.saw(observation());
+
+    const first = await findings.scan({ ...coverage, id, started_at }, saw);
+    const again = await findings.scan({ ...coverage, id, started_at }, saw);
+    await findings.scan(coverage, saw);
+
+    const scans = (await stored(team)).scans;
+    expect(scans).toHaveLength(2);
+    expect(scans.find((scan) => scan.id === id)?.started_at).toEqual(new Date(started_at));
+    expect(scans.find((scan) => scan.id !== id)?.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first.opened).toHaveLength(1);
+    expect(again).toMatchObject({ alreadyApplied: true, opened: [] });
+    expect((await findings.list(team))[0]!.first_seen_scan).toBe(id);
   });
 
   it("throws at once on an Asset or a Rule the Scan doesn't cover", async () => {
