@@ -38,7 +38,8 @@ import {
 } from "./findings/index.ts";
 import { teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
-import type { Members, TeamMemberRow } from "./members.ts";
+import type { Members, RoleChanged, TeamMemberRow } from "./members.ts";
+import { idParam, pathId } from "./path-id.ts";
 import { refusedBody } from "./refused-body.ts";
 import {
   SCANS_PER_HOUR,
@@ -237,12 +238,16 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
     const team = c.get("team");
     const userId = c.req.param("userId");
-    const result = await deps.members.changeRole({
-      team,
-      userId,
-      role: parsed.data.role,
-      actorId: c.get("session").userId,
-    });
+    // An id that can be no stored one is no member, before Postgres or Clerk sees it.
+    const result: RoleChanged =
+      pathId(userId) === undefined
+        ? { kind: "no_such_member" }
+        : await deps.members.changeRole({
+            team,
+            userId,
+            role: parsed.data.role,
+            actorId: c.get("session").userId,
+          });
     switch (result.kind) {
       case "changed":
       case "unchanged":
@@ -288,14 +293,17 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
   /**
    * One POST route that changes a Finding or a Proposal (story 4): `requireRole(role)`, the body parsed with its
-   * contracts schema (none: no body is read), the Team and the person taken from the session, never the request. Each
-   * refusal answers through findingRefusal; success answers `status` with what `act` returns.
+   * contracts schema (none: no body is read), the path's id read as the path names it (a Finding's or a Proposal's,
+   * `idParam`), the Team and the person taken from the session, never the request. Each refusal answers through
+   * findingRefusal; success answers `status` with what `act` returns.
    */
   function findingsRoute<Body extends object, Answer>(
-    path: string,
+    path: `/api/${"findings" | "proposals"}/:id/${string}`,
     { role, schema, status = 200 }: { role: Role; schema?: z.ZodType<Body>; status?: 200 | 201 },
     act: (team: string, id: string, body: Body, actor: Actor) => Promise<Answer>,
   ) {
+    // The path says whose id it holds, so the 404 for an id that can be none can't disagree with it.
+    const missing = path.startsWith("/api/proposals/") ? ProposalNotFound : FindingNotFound;
     app.post(path, requireRole(role), async (c) => {
       let body = {} as Body;
       if (schema) {
@@ -305,7 +313,7 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
         body = parsed.data;
       }
       try {
-        const answer = await act(c.get("team"), c.req.param("id")!, body, sessionActor(c));
+        const answer = await act(c.get("team"), idParam(c, missing), body, sessionActor(c));
         return c.json(answer, status);
       } catch (error) {
         return findingRefusal(c, error);
@@ -387,7 +395,7 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   // Any person in the Team reads a Finding's history, oldest first.
   app.get("/api/findings/:id/history", requireRole("member"), async (c) => {
     try {
-      const history = await findings.history(c.get("team"), c.req.param("id"));
+      const history = await findings.history(c.get("team"), idParam(c, FindingNotFound));
       return c.json({ history } satisfies HistoryBody);
     } catch (error) {
       return findingRefusal(c, error);
@@ -434,9 +442,10 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     }
   });
 
-  // Any person in the Team reads one of its Scans, to follow its state.
+  // Any person in the Team reads one of its Scans, to follow its state. An id that can be no stored one is no Scan.
   app.get("/api/scans/:id", requireRole("member"), async (c) => {
-    const scan = await deps.scans.get(c.get("team"), c.req.param("id"));
+    const id = pathId(c.req.param("id"));
+    const scan = id === undefined ? undefined : await deps.scans.get(c.get("team"), id);
     if (scan === undefined) return c.json({ error: "No such Scan" }, 404);
     return c.json(scan satisfies ScanBody);
   });
