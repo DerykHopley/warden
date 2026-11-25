@@ -363,14 +363,157 @@ const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
     : [];
 
 /**
- * `claude`, or `claude-code` (as `npx @anthropic-ai/claude-code` runs it), as a command word: at the start, or after
- * white space, `;`, `&`, `|`, `(`, a backquote or `/`, then a space. A hook that only names the flag, to grep for it,
- * doesn't run it.
+ * Where a word stands in its command: whether it is the command word, after a wrapper, or a word to skip (a redirect's
+ * target, a function's name).
  */
-const RUNS_CLAUDE = /(?:^|[\s;&|(`/])claude(?:-code)? /g;
+type Position = { command: boolean; wrapped: boolean; target: boolean };
 
-/** The characters that end a command, unless a redirect, a group or backquotes holds them. */
-const ENDS_COMMAND = new Set([";", "&", "|", "\n", ")"]);
+/** The first word of a command, as after `;`, `&&`, `|`, a newline, `(` or an opening backquote. */
+const COMMAND_START: Position = { command: true, wrapped: false, target: false };
+
+/** Any word after the command word, when that command isn't a wrapper. */
+const AFTER_COMMAND: Position = { command: false, wrapped: false, target: false };
+
+/** The characters that end a word, unless a backslash escapes them or (an `&` or `|`) a redirect holds them. */
+const ENDS_WORD = new Set([" ", "\t", "\r", "\n", ";", "&", "|", "(", ")", "`"]);
+
+/** The ends of a word that also end its command, so the next word is a command word. */
+const STARTS_COMMAND = new Set(["\n", ";", "&", "|"]);
+
+/** Words that keep the next word a command word, when they are themselves in command position. */
+const RESERVED = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", "time"]);
+
+/** A word in command position whose next word is a name, with a command after it: `function f { claude …; }`. */
+const NAMES_NEXT = "function";
+
+/** The end of a word that a `(` after it continues, as a command or process substitution: `x=$(…)bar`, `<(…)`. */
+const SUBSTITUTES = /[$<>]$/;
+
+/** Commands that run a later word of theirs as a command, past any options and values between. */
+const WRAPPERS = new Set([
+  "env",
+  "exec",
+  "command",
+  "nohup",
+  "nice",
+  "timeout",
+  "sudo",
+  "xargs",
+  "npx",
+  "bunx",
+  "pnpm",
+  "yarn",
+]);
+
+/** `NAME=value` (or `NAME+=value`) before the command word. */
+const ASSIGNMENT = /^[A-Za-z_]\w*\+?=/;
+
+/** A redirect before the command word, with its target (`>out`, `2>/dev/null`) or without it (`>`, `2>>`). */
+const REDIRECT = /^\d*(?:[<>]|&>)/;
+const REDIRECT_ALONE = /^\d*(?:[<>]{1,2}|&>>?|[<>]&|>\|)$/;
+
+/** A word's last `/`-segment: the command `/usr/bin/claude` or `@anthropic-ai/claude-code` runs. */
+const commandName = (word: string) => word.slice(word.lastIndexOf("/") + 1);
+
+/** Whether a word, its backslashes removed, runs the agent: `claude`, or `claude-code` as `npx` runs it. */
+const isAgent = (word: string) => /^claude(?:-code)?$/.test(commandName(word));
+
+/** Whether `word` starts a run of the agent from `at`, and where the word after it stands. */
+function readWord(at: Position, word: string): [runs: boolean, next: Position] {
+  if (at.target) return [false, { ...at, target: false }];
+  if (!at.command) return at.wrapped && isAgent(word) ? [true, AFTER_COMMAND] : [false, at];
+  if (ASSIGNMENT.test(word) || RESERVED.has(word)) return [false, at];
+  if (word === NAMES_NEXT) return [false, { ...at, target: true }];
+  if (REDIRECT.test(word)) return [false, { ...at, target: REDIRECT_ALONE.test(word) }];
+  if (isAgent(word)) return [true, AFTER_COMMAND];
+  return [false, { ...AFTER_COMMAND, wrapped: WRAPPERS.has(commandName(word)) }];
+}
+
+/**
+ * Where each run of the agent's arguments starts, in a command with its quotes masked: just after each word that runs
+ * it. Reads command words, not the whole shell grammar. A word ends at unescaped white space, `;`, `&`, `|`, `(`, `)`
+ * or a backquote; a backslash joins the character it escapes to the word, and a line continuation joins the words
+ * either side. A word runs the agent when it is the command word (the first of a command, past `NAME=value`, a
+ * redirect and reserved words such as `then` or `!`) or any later word after a wrapper (`env`, `sudo`, `npx`, …). An
+ * unescaped `#` at a word's start hides the rest of its line. Each `(` and backquote starts a command, and its close
+ * restores where the word before it stood; inside backquotes, an escaped backquote opens or closes a nested one. A
+ * backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the word: it goes on after the close. After a `)` that
+ * closes nothing (a `case` pattern's) or one whose `(` came after a command's word (a `case` pattern's `(a)`, a
+ * function's `()`), a command starts; so it does after `function` and the name that follows it.
+ */
+function agentRunStarts(masked: string): number[] {
+  const starts: number[] = [];
+  // What each open `(`, backquote (`` ` ``) or nested backquote (`` \` ``) interrupted: where the next word stands at
+  // its close, and the word it is inside (`x=$`), which goes on after the close.
+  const open: { by: string; after: Position; word: string | undefined }[] = [];
+  const inBackquotes = () => open.some(({ by }) => by !== "(");
+  let at = COMMAND_START;
+  let word: string | undefined;
+  const endWord = (index: number) => {
+    if (word === undefined) return;
+    const [runs, next] = readWord(at, word);
+    if (runs) starts.push(index);
+    at = next;
+    word = undefined;
+  };
+  const enter = (by: string, after: Position = at) => {
+    open.push({ by, after, word });
+    at = COMMAND_START;
+    word = undefined;
+  };
+  const close = (index: number) => {
+    const { by, after, word: outer } = open[index]!;
+    at = after;
+    word = outer === undefined ? undefined : outer + (by === "(" ? ")" : "`");
+    open.length = index;
+  };
+  for (let index = 0; index < masked.length; index++) {
+    const char = masked[index]!;
+    if (char === "\\") {
+      const length = escapedLength(masked, index);
+      const escaped = masked.slice(index + 1, index + 1 + length);
+      index += length;
+      if (escaped === "\n" || escaped === "\r\n" || escaped === "") continue;
+      if (escaped !== "`" || !inBackquotes()) {
+        word = (word ?? "") + escaped;
+        continue;
+      }
+      endWord(index - 1);
+      const nested = open.findLastIndex(({ by }) => by !== "(");
+      if (open[nested]!.by === "\\`") close(nested);
+      else enter("\\`");
+    } else if (char === "#" && word === undefined) {
+      // A comment, to the end of its line, or to the backquote that closes the command it is in.
+      const ends = inBackquotes() ? /\n|`/g : /\n/g;
+      ends.lastIndex = index;
+      index = (ends.exec(masked)?.index ?? masked.length) - 1;
+    } else if (!ENDS_WORD.has(char) || isRedirect(masked, index)) {
+      word = (word ?? "") + char;
+    } else if (
+      (char === "`" && !inBackquotes()) ||
+      (char === "(" && SUBSTITUTES.test(word ?? ""))
+    ) {
+      enter(char);
+    } else {
+      endWord(index);
+      if (STARTS_COMMAND.has(char)) at = COMMAND_START;
+      // A `(` after a command's word opens a `case` pattern (`(a)`) or a function's `()`: a command follows its close.
+      else if (char === "(") enter("(", at.command ? at : COMMAND_START);
+      else if (char === ")" && open.at(-1)?.by === "(") close(open.length - 1);
+      // A `)` that closes nothing ends a `case` pattern (`a)`): a command follows.
+      else if (char === ")") at = COMMAND_START;
+      else if (char === "`") close(open.findIndex(({ by }) => by === "`"));
+    }
+  }
+  endWord(masked.length);
+  return starts;
+}
+
+/**
+ * The characters that end a command, unless a redirect, a group or backquotes holds them: those that start the next
+ * one, and the `)` that closes the group or substitution the command is in.
+ */
+const ENDS_COMMAND = new Set([...STARTS_COMMAND, ")"]);
 
 /**
  * Where a run's arguments end, from `start` in a command with its quotes masked: the index of the `;`, `&`, `|`,
@@ -447,14 +590,13 @@ const isOneWord = (quoted: string) => !/\s/.test(quoted);
  */
 function agentRuns(command: string): string[] {
   const masked = withQuotesMasked(command);
-  // A copy, so no position is kept between calls in the shared regex's `lastIndex`.
-  const runsClaude = new RegExp(RUNS_CLAUDE);
   const runs: string[] = [];
-  while (runsClaude.exec(masked) !== null) {
-    const start = runsClaude.lastIndex;
-    const end = runArgumentsEnd(masked, start);
+  let end = 0;
+  for (const start of agentRunStarts(masked)) {
+    // A run inside an earlier run's arguments (`claude -p $(claude -p y)`) is part of that run.
+    if (start < end) continue;
+    end = runArgumentsEnd(masked, start);
     runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
-    runsClaude.lastIndex = end;
   }
   return runs;
 }

@@ -504,6 +504,57 @@ describe("guard/permission-skip", () => {
       // A backquote starts a command word, as `$(` does.
       `x=\`claude ${FLAG} -p x\``,
       `echo \`claude -p x ${FLAG}\``,
+      // An escaped backslash escapes nothing after it; a line continuation joins no word to the agent's.
+      `echo \\\\\`claude -p x ${FLAG}\``,
+      `echo \\\\;claude -p x ${FLAG}`,
+      `echo \\(claude -p x; claude -p y ${FLAG}`,
+      `cd x && \\\nclaude -p x ${FLAG}`,
+      `cd x;\\\nclaude -p x ${FLAG}`,
+      // An escaped backquote inside backquotes opens a nested command substitution.
+      `echo \`echo \\\`claude -p x ${FLAG}\\\`\``,
+      // A backslash inside the command word is removed: the word is still the agent.
+      `/usr/bin\\/claude -p x ${FLAG}`,
+      `\\claude -p x ${FLAG}`,
+      `c\\laude -p x ${FLAG}`,
+      `cd x && \\claude -p x ${FLAG}`,
+      `\\claude-code -p x ${FLAG}`,
+      // `claude` as an earlier command's argument doesn't hide a later run.
+      `echo claude; claude -p y ${FLAG}`,
+      // A `#` inside a word, escaped, or on an earlier line starts no comment over the run.
+      `echo a#b; claude -p x ${FLAG}`,
+      `echo $#; claude -p x ${FLAG}`,
+      `echo \\#; claude -p x ${FLAG}`,
+      `echo hi # x\nclaude -p x ${FLAG}`,
+      // Command position: after a separator, an assignment, a reserved word or a redirect.
+      `echo x | claude -p x ${FLAG}`,
+      `false || claude -p x ${FLAG}`,
+      `cd x\nclaude -p x ${FLAG}`,
+      `FOO=1 claude -p x ${FLAG}`,
+      `x=$(foo)bar claude -p x ${FLAG}`,
+      `x=\`foo\`bar claude -p x ${FLAG}`,
+      `if true; then claude -p x ${FLAG}; fi`,
+      `for i in 1; do claude -p x ${FLAG}; done`,
+      `if false; then :; else claude -p x ${FLAG}; fi`,
+      `! claude -p x ${FLAG}`,
+      `{ claude -p x ${FLAG}; }`,
+      `>out claude -p x ${FLAG}`,
+      `2>/dev/null claude -p x ${FLAG}`,
+      // After a wrapper, whatever options or values stand between.
+      `env FOO=1 claude -p x ${FLAG}`,
+      `env -u HOME claude -p x ${FLAG}`,
+      `timeout 60 claude -p x ${FLAG}`,
+      `nohup claude -p x ${FLAG}`,
+      `exec claude -p x ${FLAG}`,
+      `command claude -p x ${FLAG}`,
+      `time claude -p x ${FLAG}`,
+      `echo y | xargs claude -p x ${FLAG}`,
+      `sudo -u bob claude -p x ${FLAG}`,
+      `pnpm dlx @anthropic-ai/claude-code -p x ${FLAG}`,
+      // A `case` pattern's `)` and a function's `()` are followed by a command, as the pattern read them before.
+      `case x in a) claude -p x ${FLAG};; esac`,
+      `f() { claude -p x ${FLAG}; }; f`,
+      `case x in (a) claude -p x ${FLAG};; esac`,
+      `function f { claude -p x ${FLAG}; }; f`,
     ].map((command): [string, string, string, string] => [
       ".claude/settings.json",
       "PreToolUse",
@@ -592,6 +643,39 @@ describe("guard/permission-skip", () => {
       "has an escaped backquote before a run of claude without the flag, then has it in a later command",
       `echo \\\`; claude -p x && echo ${FLAG}`,
     ],
+    // An escaped character joins the word, so `claude` after it is no command word.
+    ["has an escaped backquote before claude", `echo \\\`claude -p x ${FLAG}`],
+    ["has an escaped ( before claude", `echo \\(claude -p x ${FLAG}`],
+    ["has an escaped ; before claude", `echo \\;claude -p x ${FLAG}`],
+    ["has an escaped & before claude", `echo \\&claude -p x ${FLAG}`],
+    ["has an escaped | before claude", `echo \\|claude -p x ${FLAG}`],
+    ["has an escaped space before claude", `echo a\\ claude -p x ${FLAG}`],
+    ["has an escaped tab before claude", `echo a\\\tclaude -p x ${FLAG}`],
+    ["joins a word to claude with a line continuation", `echo a\\\nclaude -p x ${FLAG}`],
+    ["has an escaped ( after an escaped backslash", `echo \\\\\\(claude -p x ${FLAG}`],
+    ["has an escaped ( before claude inside $(…)", `echo $(echo \\(claude -p x ${FLAG})`],
+    ["has an escaped ( before claude-code", `echo \\(claude-code -p x ${FLAG}`],
+    [
+      "has the flag after an escaped ; and claude, then runs claude without it",
+      `echo \\;claude ${FLAG} -p x; claude -p y`,
+    ],
+    // `claude` as another command's argument.
+    ["echoes claude", `echo claude -p x ${FLAG}`],
+    ["echoes claude after &&", `cd x && echo claude -p x ${FLAG}`],
+    ["greps for claude", `grep claude ${FLAG}`],
+    ["reads a file named claude", `cat /usr/bin/claude ${FLAG}`],
+    ["echoes a reserved word, then claude", `echo then claude -p x ${FLAG}`],
+    ["echoes a wrapper, then claude", `echo env claude -p x ${FLAG}`],
+    [
+      "echoes claude with the flag, then runs claude without it",
+      `echo claude ${FLAG}; claude -p y`,
+    ],
+    ["names a loop variable claude", `for claude in a; do :; done; echo ${FLAG}`],
+    // `claude` in a comment.
+    ["has claude in a comment after a space", `echo hi # claude -p x ${FLAG}`],
+    ["has claude in a comment with no space after #", `echo hi #claude -p x ${FLAG}`],
+    ["is only a comment", `# claude -p x ${FLAG}`],
+    ["has claude in a comment after ;", `echo hi;# claude -p x ${FLAG}`],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
   });
