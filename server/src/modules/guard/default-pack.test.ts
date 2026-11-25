@@ -1,8 +1,9 @@
 // The Default Pack as data (Guard spec, story 3): the Rules a Guard Scan checks, each with its Severity, title and fix,
 // and the Rules Guard's scanner says it covers.
+import { DEMO_OBSERVATIONS } from "@warden/contracts/demo";
 import { describe, expect, it } from "vitest";
 import { createLogger } from "../../log.ts";
-import { DEFAULT_PACK, packRule } from "./default-pack.ts";
+import { DEFAULT_PACK, DEFAULT_PACK_RULE_IDS, packRule, SECRET_IN_REPO } from "./default-pack.ts";
 import { guardScanner } from "./scanner.ts";
 
 describe("the Default Pack", () => {
@@ -54,5 +55,10 @@ describe("the Default Pack", () => {
     });
 
     expect(scanner.rules).toEqual(DEFAULT_PACK.map((rule) => rule.ruleId));
+  });
+
+  it("holds the Rule the demo's committed-secret Finding names, so a rename can't leave the demo behind", () => {
+    expect(DEMO_OBSERVATIONS.secret.rule_id).toBe(SECRET_IN_REPO);
+    expect(DEFAULT_PACK_RULE_IDS).toContain(DEMO_OBSERVATIONS.secret.rule_id);
   });
 });
