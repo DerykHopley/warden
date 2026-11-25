@@ -101,12 +101,14 @@ function show(
       onSessionEnded={calls.onSessionEnded}
     />
   );
-  const { rerender } = render(element(focused, proposals));
+  const { rerender, unmount } = render(element(focused, proposals));
   return {
     card: within(screen.getByRole("region", { name: focused.title })),
     ...calls,
     /** The card again, as the page hands it a changed Finding or Proposals list. */
     update: (shown: Finding, listedNow = proposals) => rerender(element(shown, listedNow)),
+    /** The card goes, as when the focus is cleared or moves to another Finding. */
+    unmount,
   };
 }
 
@@ -651,6 +653,32 @@ describe("a Member's Proposal", () => {
     expect(shown.card.queryByRole("form")).not.toBeInTheDocument();
     expect(shown.onProposalsChanged).toHaveBeenCalledOnce();
     expect(shown.onFindingChanged).not.toHaveBeenCalled();
+  });
+
+  it("after a 201, the sent line shows alone: the waiting line comes back once the card is opened again", async () => {
+    serve({ findingAction: answer });
+    const shown = show(OPEN, listed([]), { role: "member" });
+    const form = await openForm(shown.card, "Propose accepting");
+    await fill(form);
+    await userEvent.click(form.getByRole("button", { name: "Propose" }));
+    await shown.card.findByRole("status");
+
+    // The panel asks the Proposals again; the list that comes back holds the one just sent.
+    const mine = listed([proposal({ requested_by: { kind: "person", id: ME } })]);
+    shown.update(OPEN, mine);
+
+    expect(shown.card.getByRole("status")).toHaveTextContent(
+      "Proposal sent. A Lead or an Admin decides.",
+    );
+    expect(shown.card.queryByText(WAITING)).not.toBeInTheDocument();
+    expect(shown.card.getAllByText(/./, { selector: ".card-line" })).toHaveLength(1);
+    expect(rowButtons(shown.card)).toEqual([]);
+
+    shown.unmount();
+    const again = show(OPEN, mine, { role: "member" });
+
+    expect(again.card.queryByRole("status")).not.toBeInTheDocument();
+    expect(again.card.getByText(WAITING)).toBeInTheDocument();
   });
 
   it.each<[string, number, string, "refreshMe" | "onFindingChanged"]>([
