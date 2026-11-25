@@ -1,5 +1,6 @@
 // Configuration, read once at start-up and checked. `pg` reads the PG* variables itself; they are checked here
 // so a missing one stops the server at start rather than at its first query.
+import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
 
 /** Clerk's Frontend API host, which a publishable key carries as base64 of `<host>$`. */
@@ -56,6 +57,38 @@ const Env = z.object({
   }),
 });
 
+/** The read-only GitHub App's settings, read only when one of them is set: they come together or not at all. */
+const GitHubApp = z
+  .object({
+    /** The App's client id: the JWT's issuer, as GitHub recommends, and the user flow's client. */
+    GITHUB_APP_CLIENT_ID: required,
+    GITHUB_APP_CLIENT_SECRET: required,
+    /** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
+    GITHUB_APP_PRIVATE_KEY: required.refine(isRsaPrivateKey, {
+      message: "isn't an RSA private key",
+    }),
+  })
+  .transform((app) => ({
+    clientId: app.GITHUB_APP_CLIENT_ID,
+    clientSecret: app.GITHUB_APP_CLIENT_SECRET,
+    privateKey: app.GITHUB_APP_PRIVATE_KEY,
+  }));
+
+/** Whether Node can read `pem` as an RSA private key, which RS256 signs with. */
+function isRsaPrivateKey(pem: string): boolean {
+  try {
+    return createPrivateKey(pem).asymmetricKeyType === "rsa";
+  } catch {
+    return false;
+  }
+}
+
+const GITHUB_VARIABLES = [
+  "GITHUB_APP_CLIENT_ID",
+  "GITHUB_APP_CLIENT_SECRET",
+  "GITHUB_APP_PRIVATE_KEY",
+] as const;
+
 /** `https://host[:port]` and nothing more: what a token's `azp` holds. */
 function isOrigin(value: string): boolean {
   try {
@@ -81,6 +114,8 @@ export type Config = {
     /** Only a token made for one of these origins signs anyone in; another app's on the same instance doesn't. */
     authorizedParties: string[];
   };
+  /** The read-only GitHub App, which a Team's repos are linked through; unset, none can be linked. */
+  github: { clientId: string; clientSecret: string; privateKey: string } | undefined;
 };
 
 /** A variable is missing or malformed. Its message names the variables, never their values. */
@@ -97,8 +132,13 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   // An empty value counts as unset: `.envrc` exports "" when a keyring entry is missing.
   const present = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== ""));
   const parsed = Env.safeParse(present);
-  if (!parsed.success) {
-    throw new ConfigError([...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))]);
+  // One of the App's settings without the others links nothing, and is a mistake to say at start, with the rest.
+  const github = GITHUB_VARIABLES.some((name) => name in present)
+    ? GitHubApp.safeParse(present)
+    : undefined;
+  if (!parsed.success || github?.success === false) {
+    const issues = [...(parsed.error?.issues ?? []), ...(github?.error?.issues ?? [])];
+    throw new ConfigError([...new Set(issues.map((issue) => String(issue.path[0])))]);
   }
   const { data } = parsed;
   const behindCloudRun = data.K_SERVICE !== undefined;
@@ -116,5 +156,6 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       frontendApiHost: data.VITE_CLERK_PUBLISHABLE_KEY,
       authorizedParties: data.CLERK_AUTHORIZED_PARTIES ?? [LOCAL_DASHBOARD_ORIGIN],
     },
+    github: github?.data,
   };
 }
