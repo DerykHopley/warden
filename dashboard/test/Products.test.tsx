@@ -625,7 +625,7 @@ describe("ProductsPage's Product form", () => {
     await vi.waitFor(() => expect(order).toEqual(["me:org_b", "me:org_a", "save"]));
   });
 
-  it("drops a save's answer that arrives after a Team switch", async () => {
+  it("drops a save's answer that arrives after a Team switch, reading nothing", async () => {
     const answer = deferred<Response>();
     let team = "org_a";
     let posted = false;
@@ -649,11 +649,13 @@ describe("ProductsPage's Product form", () => {
     team = "org_b";
     props.rerender({ team });
     await screen.findByRole("heading", { level: 2, name: "Bluebird" });
+    const reads = listReads().length;
     await act(async () => {
       answer.resolve(json(201, { ...SEARCH, id: "prod_new", name: "Docs bot" }));
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
 
+    expect(listReads()).toHaveLength(reads);
     expect(screen.queryByRole("heading", { level: 2, name: "Docs bot" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
       "Bluebird",
@@ -700,32 +702,78 @@ describe("ProductsPage's Product form", () => {
     expect(screen.queryByRole("heading", { level: 2, name: "Docs bot" })).not.toBeInTheDocument();
   });
 
-  it.each([
-    ["a Team switch", 201, { team: "org_b" }, { team: "org_a" }],
-    ["a Role lowered to Member", 201, { role: "member" as Role }, { role: "admin" as Role }],
-    ["a Role lowered to Member", 401, { role: "member" as Role }, { role: "admin" as Role }],
-  ])(
-    "drops a save's answer that arrives after %s and back (a %i), the form opened since left as it is",
-    async (_case, status, away, back) => {
-      const answer = deferred<Response>();
-      const saveProduct = vi.fn(() => answer.promise);
-      const props = await openAdd({ saveProduct });
-      await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
-      await userEvent.click(form().getByRole("button", { name: "Save" }));
-      await vi.waitFor(() => expect(saveProduct).toHaveBeenCalled());
+  /**
+   * Saves "Docs bot" as an Admin with its answer held, goes `away` and `back`, and opens Add again once the list
+   * shows. `products` answers the list's reads.
+   */
+  async function saveThenAwayAndBack(
+    away: { team?: string; role?: Role },
+    back: { team?: string; role?: Role },
+    products?: () => Response | Promise<Response>,
+  ) {
+    const answer = deferred<Response>();
+    const saveProduct = vi.fn(() => answer.promise);
+    const props = await openAdd(
+      products === undefined ? { saveProduct } : { saveProduct, products },
+    );
+    await userEvent.type(form().getByRole("textbox", { name: "Name" }), "Docs bot");
+    await userEvent.click(form().getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(saveProduct).toHaveBeenCalled());
 
-      props.rerender(away);
-      props.rerender(back);
-      await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
-      await userEvent.click(screen.getByRole("button", { name: "Add a Product" }));
+    props.rerender(away);
+    props.rerender(back);
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+    await userEvent.click(screen.getByRole("button", { name: "Add a Product" }));
+    return { ...props, answer };
+  }
+
+  it("drops a save's answer that arrives after a Role lowered to Member and back (a 401), the form opened since left as it is", async () => {
+    const { answer, onSessionEnded } = await saveThenAwayAndBack(
+      { role: "member" },
+      { role: "admin" },
+    );
+    const reads = listReads().length;
+    await act(async () => {
+      answer.resolve(json(401, {}));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(onSessionEnded).not.toHaveBeenCalled();
+    expect(listReads()).toHaveLength(reads);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(form().getByRole("textbox", { name: "Name" })).toHaveFocus();
+  });
+
+  const DOCS_BOT = { ...SEARCH, id: "prod_new", name: "Docs bot" };
+  it.each([
+    ["a Team switch", "a 201", { team: "org_b" }, { team: "org_a" }, DOCS_BOT],
+    [
+      "a Role lowered to Member",
+      "a 201",
+      { role: "member" as Role },
+      { role: "admin" as Role },
+      DOCS_BOT,
+    ],
+    ["a Team switch", "a 201 with no Product", { team: "org_b" }, { team: "org_a" }, {}],
+  ])(
+    "a save's answer that arrives after %s and back (%s) reads the list again, so it shows what the server stored; the form opened since left as it is",
+    async (_case, _answer, away, back, body) => {
+      let stored = [CHAT, SEARCH];
+      const { answer, onSessionEnded } = await saveThenAwayAndBack(away, back, () =>
+        productsAnswer(stored),
+      );
       const reads = listReads().length;
+      stored = [CHAT, SEARCH, DOCS_BOT];
       await act(async () => {
-        answer.resolve(json(status, status === 201 ? { ...CHAT, id: "prod_new" } : {}));
+        answer.resolve(json(201, body));
         await new Promise((resolve) => setTimeout(resolve, 50));
       });
 
-      expect(props.onSessionEnded).not.toHaveBeenCalled();
-      expect(listReads()).toHaveLength(reads);
+      expect(
+        await screen.findByRole("heading", { level: 2, name: "Docs bot" }),
+      ).toBeInTheDocument();
+      expect(listReads()).toHaveLength(reads + 1);
+      expect(onSessionEnded).not.toHaveBeenCalled();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
       expect(form().getByRole("textbox", { name: "Name" })).toHaveFocus();
     },
