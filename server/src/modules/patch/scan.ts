@@ -7,7 +7,7 @@
  */
 import type { Framework, Observation, Product, ProductDependency } from "@warden/contracts";
 import type { Transaction } from "kysely";
-import type { Findings, ReconcileOutcome } from "../../findings/index.ts";
+import type { Findings, ReconcileOutcome, TransactionLimits } from "../../findings/index.ts";
 import type { Logger } from "../../log.ts";
 import type { Database } from "../../schema.ts";
 import { cvssSeverity } from "./cvss-band.ts";
@@ -209,14 +209,18 @@ async function requireSnapshot(tx: Transaction<Database>): Promise<void> {
 /**
  * The Product, its CVE tables and its Findings are all read in the one Team transaction that reconciles, under the
  * Team's Findings lock. The CVE tables are reference data, the same for every Team; with no snapshot loaded the Scan
- * throws (`requireSnapshot`), recording nothing. `logger` records a dependency the Scan skips.
+ * throws (`requireSnapshot`), recording nothing. `logger` records a dependency the Scan skips. With `limits` (the
+ * daily Job's), a Scan stuck behind the Team's lock or on one statement fails instead of waiting; a save's Scan has
+ * none.
  */
 export function createPatchScan({
   findings,
   logger,
+  limits,
 }: {
   findings: Findings;
   logger: Logger;
+  limits?: TransactionLimits;
 }): PatchScan {
   return {
     scanProduct: (team, { id }) =>
@@ -260,6 +264,7 @@ export function createPatchScan({
             }
           }
         },
+        limits,
       ),
   };
 }

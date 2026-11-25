@@ -24,7 +24,7 @@ import {
   guardDatabaseRole,
   type DatabaseRoleNames,
 } from "./database.ts";
-import { createFindings, type Findings } from "./findings/index.ts";
+import { createFindings, DAILY_JOB_LIMITS, type Findings } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { patchMoveRule } from "./modules/patch/move-rule.ts";
@@ -39,7 +39,10 @@ import { createWithTeam } from "./with-team.ts";
  * later). It does its database work inside `withTeam` for that Team.
  */
 export interface DailyStep {
-  /** Named in the log when the step fails for a Team, and as its counts' key in the closing line. */
+  /**
+   * Named in the log when the step fails for a Team, and as its counts' key in the closing line, beside the Job's own
+   * `teamsFailed`: the Teams it failed for, in part or whole.
+   */
   name: string;
   /** `failed` when the Team's work failed in part (the step logs which part); throwing fails it whole. */
   run(team: string): Promise<{ failed: boolean; counts: Record<string, number> }>;
@@ -78,9 +81,10 @@ export async function runDailyExpiry({
 
   let failed = 0;
   let reopened = 0;
-  // Each step's counts, summed over the Teams.
+  // Each step's counts, summed over the Teams, and the Teams it failed for (in part, or thrown whole), so a step that
+  // threw for a Team never reads as clean.
   const stepCounts: Record<string, Record<string, number>> = {};
-  for (const step of steps) stepCounts[step.name] = {};
+  for (const step of steps) stepCounts[step.name] = { teamsFailed: 0 };
   for (const team of teams) {
     let teamFailed = false;
     try {
@@ -90,12 +94,13 @@ export async function runDailyExpiry({
       logger.error("daily expiry: a Team failed; the others still run", { team, error });
     }
     for (const step of steps) {
+      const sums = stepCounts[step.name]!;
       try {
         const { failed: stepFailed, counts } = await step.run(team);
-        const sums = stepCounts[step.name]!;
         for (const [key, n] of Object.entries(counts)) sums[key] = (sums[key] ?? 0) + n;
         if (stepFailed) {
           teamFailed = true;
+          sums.teamsFailed = (sums.teamsFailed ?? 0) + 1;
           logger.error("daily expiry: a step failed in part for a Team; the rest still run", {
             team,
             step: step.name,
@@ -103,6 +108,7 @@ export async function runDailyExpiry({
         }
       } catch (error) {
         teamFailed = true;
+        sums.teamsFailed = (sums.teamsFailed ?? 0) + 1;
         logger.error("daily expiry: a step failed for a Team; the rest still run", {
           team,
           step: step.name,
@@ -191,7 +197,8 @@ async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
         createPatchRefresh({
           products: createProducts({ withTeam }),
           findings,
-          scan: createPatchScan({ findings, logger }),
+          // The expiry's limits, so one Team stuck behind its lock fails its Scans instead of hanging the Job.
+          scan: createPatchScan({ findings, logger, limits: DAILY_JOB_LIMITS }),
           logger,
         }),
       ],

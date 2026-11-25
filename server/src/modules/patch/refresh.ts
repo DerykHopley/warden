@@ -1,9 +1,10 @@
 /**
  * Patch's daily step (spec #101, story 7): the daily Job runs it for each Team, so CVE Findings follow the snapshot
  * and each Product as stored, though nobody saves it. One Patch Scan per Product, then one per `product` Asset that
- * still has an Open Patch Finding but no Product row: a delete whose Scan failed left them Open, and that Scan, of a
- * Product the Team doesn't have, turns them Fixed. Each Scan reads the Product under the Team's Findings lock, so a
- * Product changed between the lists here and its Scan is scanned as it is then.
+ * still has an Open or Accepted Patch Finding but no Product row: a delete whose Scan failed left them so, and that
+ * Scan, of a Product the Team doesn't have, turns them Fixed (reconcile fixes an unseen Accepted Finding as it does an
+ * Open one). Each Scan reads the Product under the Team's Findings lock, so a Product changed between the lists here
+ * and its Scan is scanned as it is then.
  */
 import type { Findings } from "../../findings/index.ts";
 import type { Logger } from "../../log.ts";
@@ -27,7 +28,7 @@ export function createPatchRefresh({
   logger,
 }: {
   products: Pick<Products, "list">;
-  findings: Pick<Findings, "list">;
+  findings: Pick<Findings, "assetRefs">;
   scan: PatchScan;
   logger: Logger;
 }): PatchRefresh {
@@ -35,15 +36,12 @@ export function createPatchRefresh({
     name: "patch-refresh",
     async run(team) {
       const ids = new Set((await products.list(team)).map((product) => product.id));
-      for (const finding of await findings.list(team)) {
-        if (
-          finding.module === "patch" &&
-          finding.status === "open" &&
-          finding.asset.kind === "product"
-        ) {
-          ids.add(finding.asset.ref);
-        }
-      }
+      const swept = await findings.assetRefs(team, {
+        module: "patch",
+        kind: "product",
+        statuses: ["open", "accepted"],
+      });
+      for (const ref of swept) ids.add(ref);
       const counts: PatchRefreshCounts = { productsScanned: 0, productsFailed: 0 };
       for (const id of ids) {
         try {

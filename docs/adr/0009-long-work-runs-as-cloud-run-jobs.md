@@ -8,7 +8,7 @@ Cloud Scheduler. Nothing long runs in the service after it answers, and nothing 
 |---|---|---|
 | A Scan started by a request (a Lead's "scan now", a webhook) | One execution of the Scan job | Warden's service, after the Role check (ADR 0008), through `jobs.run` with the Scan's id and Team as an override |
 | The daily expiry job (reopens Accepted Findings past their expiry) | One execution of the daily job | Cloud Scheduler, once a day, through `jobs.run` |
-| Patch's CVE refresh (built: Patch spec #101, #159) | A step in the daily job, run for each Team after its expiry: one Patch Scan per Product, plus one per Product Asset with an Open Patch Finding and no Product row (a delete whose Scan failed), which turns those Findings Fixed | Cloud Scheduler, with the daily job |
+| Patch's CVE refresh (built: Patch spec #101, #159) | A step in the daily job, run for each Team after its expiry: one Patch Scan per Product, plus one per Product Asset with an Open or Accepted Patch Finding and no Product row (a delete whose Scan failed), which turns those Findings Fixed | Cloud Scheduler, with the daily job |
 | The Judge (provisional: Guard spec) | One execution per Spot run over a Team's Agent sessions | Warden's service when a session ends, plus a scheduled sweep for any missed |
 
 ## How

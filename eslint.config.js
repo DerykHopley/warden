@@ -57,9 +57,10 @@ export default tseslint.config(
   {
     // ADR 0005: Guard, Patch and Vouch import the shared code, never the other way. The start-up files wire the
     // modules in (the server's, the demo seed's, which reconciles as the server does, and the daily Job's, which runs
-    // each module's daily step), and tests may import them as they do. A dynamic import() counts too, when its specifier is a string or a template literal naming a
-    // modules path. A lint rule can't follow a variable, so any other import() specifier is refused, and so is
-    // createRequire, by name wherever it appears (an import of it, a call, or a member of node:module).
+    // each module's daily step), and tests may import them as they do. A dynamic import() counts too, when its
+    // specifier is a string or a template literal naming a modules path. A lint rule can't follow a variable, so any
+    // other import() specifier is refused, and so is createRequire, by name wherever it appears (an import of it, a
+    // call, or a member of node:module).
     files: ["server/src/**/*.ts"],
     ignores: [
       "server/src/modules/**",

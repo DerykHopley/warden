@@ -10,15 +10,10 @@ import { applyExpiry } from "../src/findings/expiry.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
 import { createLogger } from "../src/log.ts";
-import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
-import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
-import { createProducts } from "../src/modules/patch/products.ts";
-import { createPatchRefresh } from "../src/modules/patch/refresh.ts";
-import { createPatchScan } from "../src/modules/patch/scan.ts";
 import { createWithAdmin, type WithAdmin } from "../src/with-admin.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createMigratedTestDatabase, poolAs, testName } from "./databases.ts";
-import { seedPatchFinding, seedProduct } from "./helpers.ts";
+import { patchRefresh, seedPatchFinding, seedProduct } from "./helpers.ts";
 
 const ends: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -340,7 +335,11 @@ describe("runDailyExpiry's per-Team steps", () => {
       teamsVisited: 3,
       teamsFailed: 1,
       findingsReopened: 3,
-      steps: { first: { things: 2 }, second: { things: 3 } },
+    });
+    // The Team the first step threw for counts under that step, so its counts don't read as clean.
+    expect(logged.at(-1).steps).toEqual({
+      first: { things: 2, teamsFailed: 1 },
+      second: { things: 3, teamsFailed: 0 },
     });
   }, 30_000);
 
@@ -362,7 +361,8 @@ describe("runDailyExpiry's per-Team steps", () => {
     expect(logged.filter((e) => e.severity === "ERROR")).toEqual([
       expect.objectContaining({ team: "org_report_b", step: "reporting" }),
     ]);
-    expect(logged.at(-1)).toMatchObject({ teamsFailed: 1, steps: { reporting: { things: 2 } } });
+    expect(logged.at(-1)).toMatchObject({ teamsFailed: 1 });
+    expect(logged.at(-1).steps).toEqual({ reporting: { things: 2, teamsFailed: 1 } });
   }, 30_000);
 
   it("with the expiry and every step passing for every Team, returns 0", async () => {
@@ -394,30 +394,18 @@ describe("runDailyExpiry's per-Team steps", () => {
     await newTeam(db, team, [PAST]);
     const productId = await seedProduct(db.withTeam, team, { name: "Chatbot" });
     const patch = await seedPatchFinding(db.withTeam, team, productId, { cve: "CVE-2023-36188" });
-    const findings = createFindings({
-      withTeam: db.withTeam,
-      moveRules: { guard: guardMoveRule, patch: patchMoveRule },
-    });
     const lines: string[] = [];
     const logger = createLogger((line) => lines.push(line));
 
     const code = await runDailyExpiry({
-      withAdmin: db.withAdmin,
-      findings,
-      steps: [
-        createPatchRefresh({
-          products: createProducts({ withTeam: db.withTeam }),
-          findings,
-          scan: createPatchScan({ findings, logger }),
-          logger,
-        }),
-      ],
+      ...db,
+      steps: [patchRefresh(db.withTeam, logger)],
       logger,
       now: NOW,
     });
 
     expect(code).toBe(1);
-    const after = await findings.list(team);
+    const after = await db.findings.list(team);
     expect(after.find((f) => f.id === patch.id)).toEqual(patch);
     expect(after.filter((f) => f.module === "guard").map((f) => f.status)).toEqual(["open"]);
     const errors = lines.map((line) => JSON.parse(line)).filter((e) => e.severity === "ERROR");
