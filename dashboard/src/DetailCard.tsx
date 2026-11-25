@@ -12,6 +12,7 @@ import {
 } from "@warden/contracts";
 import {
   useEffect,
+  useId,
   useRef,
   useState,
   type FormEvent,
@@ -485,7 +486,7 @@ export function DetailCard(props: {
         )}
         {finding.status === "accepted" && finding.accepted_until !== null && (
           <>
-            <dt>Until</dt>
+            <dt>Reopens on</dt>
             <dd>
               <time dateTime={finding.accepted_until}>{dayWords(finding.accepted_until)}</time>
             </dd>
@@ -593,8 +594,9 @@ function OpenerButton(props: {
 }
 
 /**
- * A decision's, a Proposal's or a rejection's form: Reason always; Until (from `until`, the earliest day) on an
- * accept; the candidates on Mark moved. Its submit is disabled until it's ready, and busy while its call runs.
+ * A decision's, a Proposal's or a rejection's form: Reason always, asked as "Why accept this risk?" on an accept, with
+ * Reopens on (from `until`, the earliest day) and its hint; the candidates on Mark moved. Its submit is disabled until
+ * it's ready, and busy while its call runs.
  */
 function ActionForm(props: {
   name: string;
@@ -611,6 +613,9 @@ function ActionForm(props: {
   onCancel: () => void;
 }) {
   const { draft, onDraft } = props;
+  const accepts = props.until !== null;
+  const untilId = useId();
+  const hintId = useId();
   // Esc anywhere in the form cancels it (focus back on its opener). Marked handled, so a floating panel's Esc, which
   // listens on the document, leaves the panel open.
   function onKeyDown(event: KeyboardEvent) {
@@ -626,7 +631,7 @@ function ActionForm(props: {
       onKeyDown={onKeyDown}
     >
       <label className="field">
-        <span className="field-label">Reason</span>
+        <span className="field-label">{accepts ? "Why accept this risk?" : "Reason"}</span>
         <textarea
           rows={3}
           maxLength={2000}
@@ -635,15 +640,23 @@ function ActionForm(props: {
         />
       </label>
       {props.until !== null && (
-        <label className="field">
-          <span className="field-label">Until</span>
+        // A div, not a label: the hint sits under the input, read as its description, not as part of its name.
+        <div className="field">
+          <label className="field-label" htmlFor={untilId}>
+            Reopens on
+          </label>
           <input
+            id={untilId}
             type="date"
             min={props.until}
             value={draft.until}
+            aria-describedby={hintId}
             onChange={(event) => onDraft({ until: event.target.value })}
           />
-        </label>
+          <p id={hintId} className="form-note muted">
+            Warden reopens it on this date so the Team looks again.
+          </p>
+        </div>
       )}
       {props.candidates !== null &&
         (props.candidates.length === 0 ? (
@@ -748,8 +761,7 @@ function ProposalItem(props: { proposal: PendingProposal; who: string; children:
         {PROPOSAL_DECISION_WORDS[proposal.decision]}
         {proposal.until !== null && (
           <>
-            {" "}
-            until <time dateTime={proposal.until}>{dayWords(proposal.until)}</time>
+            , reopens on <time dateTime={proposal.until}>{dayWords(proposal.until)}</time>
           </>
         )}
       </p>

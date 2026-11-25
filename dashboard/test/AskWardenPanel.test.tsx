@@ -426,8 +426,11 @@ describe("a Lead's decision in the detail card", () => {
 
     await userEvent.click(within(card()).getByRole("button", { name: "Accept" }));
     const form = within(within(card()).getByRole("form", { name: "Accept" }));
-    await userEvent.type(form.getByRole("textbox", { name: "Reason" }), "Only a dev dependency");
-    fireEvent.change(form.getByLabelText("Until"), { target: { value: "2099-01-15" } });
+    await userEvent.type(
+      form.getByRole("textbox", { name: "Why accept this risk?" }),
+      "Only a dev dependency",
+    );
+    fireEvent.change(form.getByLabelText("Reopens on"), { target: { value: "2099-01-15" } });
     await userEvent.click(form.getByRole("button", { name: "Accept" }));
 
     expect(await within(card()).findByRole("status")).toHaveTextContent(/^Accepted until/);

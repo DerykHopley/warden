@@ -1,7 +1,7 @@
 // The detail card (story 9, story 3, story 4): the focused Finding's fields in the dashboard's words, then its pending
 // Proposals; a Lead's decisions and a Member's Proposals on it, and a Lead's approval or rejection of a Proposal. It
 // renders DetailCard alone, Warden's server faked; how the panel asks for the Proposals, and how a decision reaches
-// the Findings table, is in AskWardenPanel.test.tsx. The Until's time-zone rule is decisions.test.ts's.
+// the Findings table, is in AskWardenPanel.test.tsx. The until's time-zone rule is decisions.test.ts's.
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
@@ -196,7 +196,7 @@ describe("the detail card's Finding", () => {
     expect(fields(card).Control).toBe("SOC 2 CC6.1");
   });
 
-  it("shows an Accepted Finding's reason and until date", () => {
+  it("shows an Accepted Finding's reason and until date, as the day it reopens on", () => {
     const { card } = show(
       finding(ID, {
         status: "accepted",
@@ -207,8 +207,9 @@ describe("the detail card's Finding", () => {
     expect(card.getByText("Accepted")).toBeInTheDocument();
     expect(fields(card)).toMatchObject({
       "Accepted because": "Fixed next sprint",
-      Until: "Feb 22, 2027",
+      "Reopens on": "Feb 22, 2027",
     });
+    expect(fields(card)).not.toHaveProperty("Until");
   });
 
   it("shows the Unconfirmed fix flag with its number of candidates", () => {
@@ -271,8 +272,8 @@ describe("the detail card's pending Proposals", () => {
     expect(items[0]).toHaveTextContent("Mark False positive");
     expect(items[0]).toHaveTextContent("The file is a test fixture");
     expect(items[0]).toHaveTextContent(/Asked by Grace Hopper, Nov 24, 2026/);
-    expect(items[0]).not.toHaveTextContent("until");
-    expect(items[1]).toHaveTextContent("Accept until Jan 15, 2027");
+    expect(items[0]).not.toHaveTextContent(/until|reopens on/i);
+    expect(items[1]).toHaveTextContent("Accept, reopens on Jan 15, 2027");
     expect(items[1]).toHaveTextContent("Fixed next sprint");
     expect(items[1]).toHaveTextContent("Asked by ada@acme.test");
     expect(items[2]).toHaveTextContent("Asked by an agent");
@@ -360,14 +361,20 @@ async function openForm(card: Card, name: string): Promise<Form> {
   return formNamed(card, name);
 }
 
-const reasonField = (form: Form) => form.getByRole("textbox", { name: "Reason" });
-const pickUntil = (form: Form, day: string) =>
-  fireEvent.change(form.getByLabelText("Until"), { target: { value: day } });
+const WHY = "Why accept this risk?";
+const REOPENS_ON = "Reopens on";
+const REOPENS_HINT = "Warden reopens it on this date so the Team looks again.";
 
-/** Fills each field the form has: the reason, Until (DAY), and the first candidate. */
+const reasonField = (form: Form) => form.getByRole("textbox", { name: "Reason" });
+/** An accept form's reason: it asks why the risk is accepted. */
+const whyField = (form: Form) => form.getByRole("textbox", { name: WHY });
+const pickUntil = (form: Form, day: string) =>
+  fireEvent.change(form.getByLabelText(REOPENS_ON), { target: { value: day } });
+
+/** Fills each field the form has: the reason (or an accept's why), Reopens on (DAY), and the first candidate. */
 async function fill(form: Form, reason = "Checked by hand") {
-  await userEvent.type(reasonField(form), reason);
-  if (form.queryByLabelText("Until") !== null) pickUntil(form, DAY);
+  await userEvent.type(form.queryByRole("textbox", { name: "Reason" }) ?? whyField(form), reason);
+  if (form.queryByLabelText(REOPENS_ON) !== null) pickUntil(form, DAY);
   const [candidate] = form.queryAllByRole("radio");
   if (candidate !== undefined) await userEvent.click(candidate);
 }
@@ -391,6 +398,48 @@ const localDay = (iso: string) => {
   const two = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
 };
+
+describe("each form's words", () => {
+  /** The opened form's element, for what the queries can't name: its date input. */
+  const formElement = (card: Card, name: string) => card.getByRole("form", { name });
+
+  it.each<[string, Finding, Role]>([
+    ["Accept", OPEN, "lead"],
+    ["Renew acceptance", ACCEPTED, "lead"],
+    ["Propose accepting", OPEN, "member"],
+  ])(
+    "%s asks why the risk is accepted, and the day it reopens on, with a hint read with the date",
+    async (button, focused, role) => {
+      const { card } = show(focused, listed([]), { role });
+      const form = await openForm(card, button);
+
+      expect(whyField(form)).toBeInTheDocument();
+      expect(form.queryByRole("textbox", { name: "Reason" })).not.toBeInTheDocument();
+      const date = form.getByLabelText(REOPENS_ON);
+      expect(date).toHaveAttribute("type", "date");
+      expect(date).toHaveAccessibleName(REOPENS_ON);
+      expect(date).toHaveAccessibleDescription(REOPENS_HINT);
+      expect(form.queryByLabelText("Until")).not.toBeInTheDocument();
+    },
+  );
+
+  it.each<[string, Finding, Role, PendingProposal[]]>([
+    ["Mark False positive", OPEN, "lead", []],
+    ["Confirm fix", UNCONFIRMED, "lead", []],
+    ["Mark moved", UNCONFIRMED, "lead", []],
+    ["Reopen", FALSE_POSITIVE, "lead", []],
+    ["Propose False positive", OPEN, "member", []],
+    ["Reject", OPEN, "lead", [proposal()]],
+  ])("%s keeps Reason, and asks no date", async (button, focused, role, pending) => {
+    const { card } = show(focused, listed(pending), { role, candidates: [CANDIDATE] });
+    const form = await openForm(card, button);
+
+    expect(reasonField(form)).toBeInTheDocument();
+    expect(form.queryByText(WHY)).not.toBeInTheDocument();
+    expect(form.queryByText(REOPENS_HINT)).not.toBeInTheDocument();
+    expect(formElement(card, button).querySelector('input[type="date"]')).toBeNull();
+  });
+});
 
 describe("a Lead's decision buttons", () => {
   it.each<[string, Finding, string[]]>([
@@ -446,14 +495,14 @@ describe("a Member's Propose buttons", () => {
 describe("a Member's Proposal", () => {
   const answer = () => json(201, answeredProposal({ requested_by: { kind: "person", id: ME } }));
 
-  it("Propose accepting sends the reason and the Until as a ProposeBody accept, and needs both", async () => {
+  it("Propose accepting sends the reason and the Reopens on day as a ProposeBody accept, and needs both", async () => {
     serve({ findingAction: answer });
     const { card } = show(OPEN, listed([]), { role: "member" });
     const form = await openForm(card, "Propose accepting");
     const submit = form.getByRole("button", { name: "Propose" });
 
     expect(submit).toBeDisabled();
-    await userEvent.type(reasonField(form), "Fixed next sprint");
+    await userEvent.type(whyField(form), "Fixed next sprint");
     expect(submit).toBeDisabled();
     pickUntil(form, DAY);
     await userEvent.click(submit);
@@ -475,7 +524,7 @@ describe("a Member's Proposal", () => {
     const form = await openForm(card, "Propose False positive");
     const submit = form.getByRole("button", { name: "Propose" });
 
-    expect(form.queryByLabelText("Until")).not.toBeInTheDocument();
+    expect(form.queryByLabelText(REOPENS_ON)).not.toBeInTheDocument();
     expect(submit).toBeDisabled();
     await userEvent.type(reasonField(form), "A test fixture");
     await userEvent.click(submit);
@@ -545,11 +594,11 @@ describe("a Member's Proposal", () => {
 });
 
 describe("a Lead's decision", () => {
-  it("Accept sends the reason and an until on the chosen day in the person's time zone; Until's earliest day is tomorrow", async () => {
+  it("Accept sends the reason and an until on the chosen day in the person's time zone; Reopens on's earliest day is tomorrow", async () => {
     serve({ findingAction: () => json(200, ACCEPTED) });
     const { card } = show(OPEN, listed([]), { role: "lead" });
     const form = await openForm(card, "Accept");
-    expect(form.getByLabelText("Until")).toHaveAttribute("min", earliestUntil());
+    expect(form.getByLabelText(REOPENS_ON)).toHaveAttribute("min", earliestUntil());
 
     await fill(form, "Fixed next sprint");
     await userEvent.click(form.getByRole("button", { name: "Accept" }));
@@ -652,17 +701,17 @@ describe("a Lead's decision", () => {
     expect(form.getByRole("button", { name: "Mark moved" })).toBeDisabled();
   });
 
-  it("the submit is disabled for a blank or whitespace reason and an empty or too early Until; the reason takes at most 2,000 characters", async () => {
+  it("the submit is disabled for a blank or whitespace reason and an empty or too early Reopens on; the reason takes at most 2,000 characters", async () => {
     const { card } = show(OPEN, listed([]), { role: "lead" });
     const form = await openForm(card, "Accept");
     const submit = form.getByRole("button", { name: "Accept" });
-    expect(reasonField(form)).toHaveAttribute("maxlength", "2000");
+    expect(whyField(form)).toHaveAttribute("maxlength", "2000");
 
     pickUntil(form, DAY);
     expect(submit).toBeDisabled();
-    await userEvent.type(reasonField(form), "   ");
+    await userEvent.type(whyField(form), "   ");
     expect(submit).toBeDisabled();
-    await userEvent.type(reasonField(form), "Fixed next sprint");
+    await userEvent.type(whyField(form), "Fixed next sprint");
     expect(submit).toBeEnabled();
     pickUntil(form, "");
     expect(submit).toBeDisabled();

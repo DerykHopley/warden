@@ -19,7 +19,7 @@ import {
 const panel = (page: Page) => page.getByRole("complementary", { name: "Ask Warden" });
 const card = (page: Page) => panel(page).locator(".detail-card");
 
-/** A far Until, so every run's accept is in the future whatever the day. */
+/** A far Reopens on day, so every run's accept is in the future whatever the day. */
 const UNTIL = "2099-01-15";
 
 type FindingRow = { id: string; title: string; status: string };
@@ -108,8 +108,10 @@ test("story 4: Linus accepts and reopens a Finding; Margaret proposes a False po
     const statusCell = rowById(page, lodash.id).locator("td").last();
     await card(page).getByRole("button", { name: "Accept" }).click();
     const accept = card(page).getByRole("form", { name: "Accept" });
-    await accept.getByRole("textbox", { name: "Reason" }).fill("Only a dev dependency");
-    await accept.getByLabel("Until").fill(UNTIL);
+    await accept
+      .getByRole("textbox", { name: "Why accept this risk?" })
+      .fill("Only a dev dependency");
+    await accept.getByLabel("Reopens on").fill(UNTIL);
     await accept.getByRole("button", { name: "Accept" }).click();
     await expect(card(page).getByRole("status")).toHaveText(/^Accepted until /);
     await expect(card(page).locator(".detail-status")).toContainText("Accepted");
@@ -214,16 +216,18 @@ test.describe("the keyboard", () => {
 
       await c.getByRole("button", { name: "Accept" }).click();
       const form = c.getByRole("form", { name: "Accept" });
-      await form.getByRole("textbox", { name: "Reason" }).fill("Checked by keyboard");
-      await form.getByLabel("Until").fill(UNTIL);
+      await form
+        .getByRole("textbox", { name: "Why accept this risk?" })
+        .fill("Checked by keyboard");
+      await form.getByLabel("Reopens on").fill(UNTIL);
       // Tab on from the card's ✕, just before the form: past the page's end, Firefox leaves the page, not wraps.
       await c.getByRole("button", { name: "Clear the focus" }).focus();
       await reachEach(page, [
-        form.getByRole("textbox", { name: "Reason" }),
+        form.getByRole("textbox", { name: "Why accept this risk?" }),
         // The ring is read off the date input itself. In WebKit the keyboard focuses its inner fields, so the input
         // never matches :focus-visible; styles.css rings it through :focus-within, which this reads (failed in WebKit
         // before that rule, run 45488827212).
-        form.getByLabel("Until"),
+        form.getByLabel("Reopens on"),
         form.getByRole("button", { name: "Accept" }),
         form.getByRole("button", { name: "Cancel" }),
       ]);
@@ -281,8 +285,8 @@ test.describe("at 390px", () => {
       await c.getByRole("button", { name: "Accept" }).click();
       const form = c.getByRole("form", { name: "Accept" });
       await expectTargets([
-        form.getByRole("textbox", { name: "Reason" }),
-        form.getByLabel("Until"),
+        form.getByRole("textbox", { name: "Why accept this risk?" }),
+        form.getByLabel("Reopens on"),
         form.getByRole("button", { name: "Accept" }),
         form.getByRole("button", { name: "Cancel" }),
       ]);
