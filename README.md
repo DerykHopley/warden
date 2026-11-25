@@ -139,7 +139,8 @@ setup builds the dashboard in Vite's `e2e` mode, where a stand-in replaces `@cle
 key pair it makes, and starts the server with that key's public half as `CLERK_JWT_KEY`. It opens three Teams through
 the API as their Admins, fills two with the demo seed (the third holds only the Products tests' Products), then drops
 the database when the tests end. A production build holds no part of the stand-in (a dashboard test checks).
-`pnpm e2e --ui` opens Playwright's UI; a failed test leaves its trace in `e2e/test-results/`.
+`pnpm e2e e2e/products.spec.ts` runs only the spec files named, `pnpm e2e --ui` opens Playwright's UI, and a failed
+test leaves its trace in `e2e/test-results/`.
 
 The pre-push hook (`.githooks/pre-push`) runs `pnpm lint`, `pnpm format:check`, `pnpm typecheck` and
 `pnpm design-lint`.
