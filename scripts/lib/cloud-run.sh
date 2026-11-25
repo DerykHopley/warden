@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# What the Cloud Run deploy and rollback scripts share: the region, the daily Job and how it's configured, the pinned
+# What the Cloud Run deploy and rollback scripts share: the region, the daily Job and the Scan Job and how each is
+# configured, the pinned
 # secret versions, the service's URLs and serving revision, and the health check. Sourced, never run; the script sets
 # PROGRAM (its name, for messages) and USAGE first, and GCP_PROJECT_ID and CLOUD_SQL_CONNECTION before calling
 # anything that reaches gcloud.
@@ -12,6 +13,9 @@ readonly REGION=europe-west1
 readonly RELEASE_PREFIX=warden-rel-
 readonly DAILY_JOB=warden-daily-expiry
 readonly DAILY_ACCOUNT=warden-daily
+# The Scan Job (ADR 0009): the service starts one execution per Scan, naming it by WARDEN_SCAN_JOB.
+readonly SCAN_JOB=warden-scan
+readonly SCAN_ACCOUNT=warden-scan
 
 # Secret Manager versions the deploys read, one per secret: the only place a version number lives. gcp-setup.sh makes
 # each generated password as version 1; check a hand-made secret's with `gcloud secrets versions list <secret>`.
@@ -114,5 +118,28 @@ update_daily_job() {
     --max-retries=1 \
     --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" PGUSER=warden_app PGDATABASE=warden)" \
     --set-secrets="$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")" \
+    --project="$GCP_PROJECT_ID"
+}
+
+# The Scan Job's resource name, as the live revision's WARDEN_SCAN_JOB holds it.
+scan_job_name() { echo "projects/$GCP_PROJECT_ID/locations/$REGION/jobs/$SCAN_JOB"; }
+
+# <image>: the Scan Job (ADR 0009) runs that image, with its whole configuration set afresh from here: the same on a
+# release and a rollback. Each execution's override holds only a Scan id and a Team; the Job works inside that Team,
+# as warden_app, so it gets the app password alone, never the admin password or a Clerk key. Returns gcloud's status.
+update_scan_job() {
+  local app_password
+  app_password=$(pinned warden-db-app-password) || exit 1
+  gcloud run jobs update "$SCAN_JOB" \
+    --image="$1" \
+    --region="$REGION" \
+    --service-account="$SCAN_ACCOUNT@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
+    --set-cloudsql-instances="$CLOUD_SQL_CONNECTION" \
+    --command=node \
+    --args=server/src/scan-job.ts \
+    --max-retries=1 \
+    --task-timeout=3600s \
+    --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" PGUSER=warden_app PGDATABASE=warden)" \
+    --set-secrets="$(dict "PGPASSWORD=$app_password")" \
     --project="$GCP_PROJECT_ID"
 }

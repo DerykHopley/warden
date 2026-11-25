@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Deploys one Warden image to Cloud Run, in three steps: migrate the database with a Cloud Run job, deploy a revision
 # with the whole configuration set afresh, and wait for its /api/health to answer 200. A release then moves all of the
-# service's traffic to that revision and gives the daily Job the same image. README.md's "Owner previews" and
-# "Releasing" say when each runs and what it shows.
+# service's traffic to that revision and gives the daily Job and the Scan Job the same image. README.md's "Owner
+# previews" and "Releasing" say when each runs and what it shows.
 #
 # Usage: scripts/cloud-run-deploy.sh <image> preview <name>
 #        scripts/cloud-run-deploy.sh <image> release
@@ -11,7 +11,8 @@
 #        digits and hyphens, starting with a letter and not ending in a hyphen (20 keeps the revision name short).
 #        release: the warden service, a revision tagged candidate on the warden database, as the live accounts only;
 #        after its health gate, 100% of traffic by revision name (the release it replaces tagged previous, for a
-#        rollback), then the daily Job warden-daily-expiry's image. Run in a checkout with main's whole history: it
+#        rollback), then the daily Job warden-daily-expiry's image and the Scan Job warden-scan's, which the revision
+#        names in WARDEN_SCAN_JOB (a preview has no Scan Job). Run in a checkout with main's whole history: it
 #        releases only a commit on main that is newer than the serving release's (release_order).
 # Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>) and VITE_CLERK_PUBLISHABLE_KEY (public),
 #        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT (default 1), which GitHub
@@ -86,10 +87,14 @@ migrate() {
 }
 
 deploy_revision() {
-  local parties=$1 password clerk_secret clerk_jwt
+  local parties=$1 password clerk_secret clerk_jwt env
   password=$(pinned "$APP_PASSWORD_SECRET") || exit 1
   clerk_secret=$(pinned "$CLERK_SECRET") || exit 1
   clerk_jwt=$(pinned "$CLERK_JWT_SECRET") || exit 1
+  env=("PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "PGUSER=$APP_USER" "PGDATABASE=$DATABASE"
+    "VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY" "CLERK_AUTHORIZED_PARTIES=$parties")
+  # A release's revision starts Scans on the Scan Job; a preview's has none, so its "Scan now" answers 503.
+  if [[ $SERVICE == warden ]]; then env+=("WARDEN_SCAN_JOB=$(scan_job_name)"); fi
   gcloud run deploy "$SERVICE" \
     --image="$IMAGE" \
     --region="$REGION" \
@@ -98,8 +103,7 @@ deploy_revision() {
     --revision-suffix="$SUFFIX" \
     --service-account="$RUN_ACCOUNT@$GCP_PROJECT_ID.iam.gserviceaccount.com" \
     --set-cloudsql-instances="$CLOUD_SQL_CONNECTION" \
-    --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "PGUSER=$APP_USER" "PGDATABASE=$DATABASE" \
-      "VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY" "CLERK_AUTHORIZED_PARTIES=$parties")" \
+    --set-env-vars="$(dict "${env[@]}")" \
     --set-secrets="$(dict "PGPASSWORD=$password" "CLERK_SECRET_KEY=$clerk_secret" "CLERK_JWT_KEY=$clerk_jwt")" \
     --project="$GCP_PROJECT_ID"
 }
@@ -201,7 +205,8 @@ main() {
         ;;
       job)
         update_daily_job "$IMAGE" || fail "updating the daily Job $DAILY_JOB failed; it still runs an older image"
-        say "\`$serving\`, from this commit, is already serving; only $DAILY_JOB was set to its image."
+        update_scan_job "$IMAGE" || fail "updating the Scan Job $SCAN_JOB failed; it still runs an older image"
+        say "\`$serving\`, from this commit, is already serving; only $DAILY_JOB and $SCAN_JOB were set to its image."
         return 0
         ;;
     esac
@@ -218,7 +223,9 @@ main() {
   move_traffic "$described"
   update_daily_job "$IMAGE" ||
     fail "traffic moved to $SERVICE-$SUFFIX, but updating the daily Job $DAILY_JOB failed; it still runs the previous image. Dispatch the release again, or set it by hand (README.md, Releasing)"
-  say "Released \`$SERVICE-$SUFFIX\`: it has 100% of traffic at ${service[0]}, and $DAILY_JOB runs its image."
+  update_scan_job "$IMAGE" ||
+    fail "traffic moved to $SERVICE-$SUFFIX, but updating the Scan Job $SCAN_JOB failed; it still runs the previous image. Dispatch the release again, or set it by hand (README.md, Releasing)"
+  say "Released \`$SERVICE-$SUFFIX\`: it has 100% of traffic at ${service[0]}, and $DAILY_JOB and $SCAN_JOB run its image."
 }
 
 main "$@"
