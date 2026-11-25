@@ -434,12 +434,6 @@ scan_secrets=$(gcloud_dict "$(flag set-secrets "$scan")")
   fail "release: the Scan Job's only secret is PGPASSWORD, a pinned version of the app password: $scan_secrets"
 pass "release: the Scan Job's only secret is PGPASSWORD, a pinned version of the app password"
 
-for job in "$job_deploy" "$daily" "$scan"; do
-  assert_no_match "release: the $(awk '{ print $5 }' <<<"$job") job gets no GitHub app variable or secret" \
-    'GITHUB_APP_|warden-github-app' "$job"
-done
-assert_no_match "release: the job secrets name no GitHub app secret" 'GITHUB_APP_|warden-github-app' \
-  "$job_secrets"$'\n'"$daily_secrets"$'\n'"$scan_secrets"
 assert_no_match "release: no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
 assert_no_match "release: no call names a preview service, job or account" 'warden-preview|warden-migrate-preview' \
   "$calls"

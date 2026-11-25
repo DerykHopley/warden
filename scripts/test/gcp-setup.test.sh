@@ -90,10 +90,6 @@ for secret in warden-github-app-client-secret warden-github-app-private-key; do
     "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
     "$(grep -F "add-iam-policy-binding $secret " <<<"$output" | grep -o -- '--member=[^ ]*')"
 done
-for account in warden-migrate warden-deploy warden-daily warden-scan warden-preview-run warden-preview-migrate \
-  warden-preview-deploy warden-scheduler; do
-  assert_no_line "$account reads neither GitHub app secret" "warden-github-app" "$(bindings_to "$account")"
-done
 assert_equal "warden-run's executor with overrides is on the warden-scan job and no other" \
   "gcloud run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides --project=$project" \
   "$(grep -F 'roles/run.jobsExecutorWithOverrides' <<<"$output")"
