@@ -11,6 +11,7 @@ import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } f
 import { createFindings } from "./findings/index.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
+import { createGitHub } from "./modules/guard/github.ts";
 import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";
@@ -93,7 +94,12 @@ const app = createApp({
   scanners: SCANNERS,
   // A Guard Scan names only the Team's Repo Assets.
   assetChecks: { guard: guardAssetCheck(repoAssets) },
-  moduleRoutes: [guardRoutes({ repoAssets })],
+  // Linking a GitHub installation needs the GitHub app's settings; without them its route answers 503.
+  moduleRoutes: [
+    guardRoutes(
+      config.github ? { repoAssets, github: createGitHub(config.github), logger } : { repoAssets },
+    ),
+  ],
   // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503).
   startScanJob: scanJobStarterFor(config, { logger }),
   behindCloudRun: config.behindCloudRun,
