@@ -22,7 +22,7 @@ import {
   type Scanners,
   type Scans,
 } from "./scans.ts";
-import { MOVE_RULES, SCANNERS } from "./wiring.ts";
+import { MOVE_RULES, scanners } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
 export async function runScanJob({
@@ -73,12 +73,20 @@ export async function runScanJob({
 
   // From here every exit ends the Scan: done, failed, or left running for the retry to finish.
   let outcome: Awaited<ReturnType<Findings["scan"]>>;
+  let dropped = 0;
   try {
     const startedAt = running.started_at;
     if (startedAt === null) throw new Error("the Scan has no start after moving to running");
+    // Story 15: the start checked the Assets when it was queued; the Team may have dropped one since. The Scan covers
+    // only those it still holds, so a dropped one is never read and its Findings stay as they are.
+    const held = scanner.held ? await scanner.held(team, assets) : assets;
+    dropped = assets.length - held.length;
+    if (held.length === 0) {
+      throw new Error(`the Team holds none of the Scan's Assets (${dropped} dropped)`);
+    }
     outcome = await findings.scan(
-      { id: scanId, started_at: startedAt, team, module, assets, rules },
-      (recorder) => scanner.scan({ team, assets, rules }, recorder),
+      { id: scanId, started_at: startedAt, team, module, assets: held, rules },
+      (recorder) => scanner.scan({ team, assets: held, rules }, recorder),
     );
   } catch (error) {
     // findings.scan reconciles nothing when the scanner throws or a report is refused. The message stays in the log,
@@ -87,6 +95,7 @@ export async function runScanJob({
       scanId,
       team,
       module,
+      dropped,
       error,
     });
     try {
@@ -117,6 +126,7 @@ export async function runScanJob({
     scanId,
     team,
     module,
+    dropped,
     opened: outcome.opened.length,
     fixed: outcome.fixed.length,
     reopened: outcome.reopened.length,
@@ -153,9 +163,9 @@ async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
       scanId,
       team,
       scans: createScans({ withTeam }),
-      // ADR 0005: the modules come in here, as in index.ts.
+      // ADR 0005: the modules come in here, as in index.ts. No RepoReader yet (slice 3b), so a Guard Scan fails.
       findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
-      scanners: SCANNERS,
+      scanners: scanners({ withTeam, logger }),
       logger,
     });
   } catch (error) {
