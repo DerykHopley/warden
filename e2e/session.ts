@@ -2,7 +2,7 @@
 // setup made (the server trusts its public half through CLERK_JWT_KEY), handed to the dashboard's Clerk stand-in
 // before the page loads.
 import { test as base, type Page } from "@playwright/test";
-import { ProductsBody, type ProductInput } from "@warden/contracts";
+import { Product, ProductsBody, type ProductInput } from "@warden/contracts";
 import { importJWK, SignJWT, type JWK } from "jose";
 
 /** The Clerk Frontend API host the test publishable key names. Nothing is ever fetched from it. */
@@ -51,10 +51,11 @@ export const KATHERINE: Person = {
 };
 
 /**
- * Two Teams, each opened by its Admin and seeded with the demo Findings. Acme also has Grace, a Member; Bluebird has
- * Margaret, a Member (only e2e/decisions.spec.ts reads Bluebird, so its decisions can't touch Acme's tests). A third,
- * Cedar, has no demo Findings: the Products tests create their Products there, as a Product's Scan opens Findings that
- * would change the counts Acme's and Bluebird's tests read.
+ * Two Teams, each opened by its Admin and seeded with the demo Findings but not the demo Product (`--no-product`), so
+ * no CVE Findings join the counts their tests read. Acme also has Grace, a Member; Bluebird has Margaret, a Member
+ * (only e2e/decisions.spec.ts reads Bluebird, so its decisions can't touch Acme's tests). A third, Cedar, has no demo
+ * seed: the Products tests create their Products there, and with the CVE snapshot loaded, each save's Patch Scan opens
+ * CVE Findings that would change Acme's and Bluebird's counts.
  */
 export const ACME = { id: "org_e2e_acme", name: "Acme", admin: ADA, people: [ADA, GRACE] };
 export const BLUEBIRD = {
@@ -122,22 +123,24 @@ export async function signingKey() {
 
 /**
  * Creates `product` in `team` through the API, as the Team's Admin, unless the Team already has a Product by that
- * name, so a spec's `beforeAll` can run again in a restarted worker.
+ * name, so a spec's `beforeAll` can run again in a restarted worker. Its id either way.
  */
-export async function ensureProduct(team: Team, product: ProductInput) {
+export async function ensureProduct(team: Team, product: ProductInput): Promise<string> {
   const admin = await asAdmin(team);
   const { origin, headers } = admin;
-  const alreadyThere = async () =>
-    (await listProducts(team, admin)).some(({ name }) => name === product.name);
-  if (await alreadyThere()) return;
+  const idThere = async () =>
+    (await listProducts(team, admin)).find(({ name }) => name === product.name)?.id;
+  const before = await idThere();
+  if (before !== undefined) return before;
   const res = await fetch(`${origin}/api/products`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
     body: JSON.stringify(product),
   });
-  if (res.status === 201) return;
+  if (res.status === 201) return Product.parse(await res.json()).id;
   // Workers run at once: another may have created it between the look and the post. Then it's there now.
-  if (res.status === 409 && (await alreadyThere())) return;
+  const after = res.status === 409 ? await idThere() : undefined;
+  if (after !== undefined) return after;
   throw new Error(`creating ${product.name} in ${team.name}: ${res.status} ${await res.text()}`);
 }
 

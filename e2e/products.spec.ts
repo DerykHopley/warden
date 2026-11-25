@@ -1,6 +1,7 @@
 // Stories 1 and 2: a Member sees the Team's Products, with their Repo URLs and the frameworks they use, and nothing on
 // the page that changes them; an Admin adds a Product on the page and changes it. In Cedar, the Team with no demo
 // Findings.
+import type { ProductInput } from "@warden/contracts";
 import {
   CEDAR,
   CHAT_ASSISTANT,
@@ -40,6 +41,35 @@ test("a Member sees each Product's name, Repo URLs and dependencies, with nothin
 
   // The page's own controls: none (the unit tests check each kind). The header's and the panel's buttons are the shell's.
   await expect(page.getByRole("main").getByRole("button")).toHaveCount(0);
+});
+
+/** This test's own Product, saved fresh each run, so the CVE Findings it reads can only come from its save. */
+const VULNERABLE: ProductInput = {
+  name: "Hedy's LangChain app",
+  repo_urls: [],
+  dependencies: [
+    { framework: "langchain", version: "0.0.200", usage: "library", internet_facing: true },
+  ],
+};
+
+test("a Product's save opens its CVE Findings from the loaded snapshot, on the Team's Findings page", async ({
+  page,
+  signIn,
+}) => {
+  await removeProducts(CEDAR, [VULNERABLE.name]);
+  const id = await ensureProduct(CEDAR, VULNERABLE);
+  await signIn(HEDY, CEDAR);
+  await page.goto("/findings");
+
+  // On the saved Product's Asset (a Finding names it by its id). How many the snapshot gives isn't fixed: a newer
+  // snapshot changes it.
+  const titles = page
+    .getByRole("table", { name: "All Findings" })
+    .getByRole("row")
+    .filter({ has: page.locator(".asset-ref", { hasText: id }) })
+    .locator(".finding-title")
+    .filter({ hasText: /^CVE-\d{4}-\d+/ });
+  await expect(titles.first()).toBeVisible();
 });
 
 /** This test's own Products, by name, so it never changes the Product another spec reads. */

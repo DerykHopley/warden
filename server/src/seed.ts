@@ -1,24 +1,29 @@
 // The demo seed: the demo Findings (`@warden/contracts/demo`) in one Team, so local development and an owner preview
 // show a filled Findings page. It writes only through the Findings module, as a module and a Lead would: Scans through
-// `reconcile`, a Spot run through `report`, and two named decisions made as the Team's oldest Admin or Lead. The
-// browser tests seed their Teams with it too.
+// `reconcile`, a Spot run through `report`, and two named decisions made as the Team's oldest Admin or Lead. Then it
+// creates the demo Product (`DEMO_PRODUCT`) through the Products store and runs its Patch Scan, as a save does, so the
+// Product's CVE Findings come from the loaded CVE snapshot. The browser tests seed their Teams with it too, without
+// the Product (`--no-product`), so the Findings their tests count stay the demo ones.
 //
-// As its own process: `WARDEN_SEED_DEMO=1 pnpm --filter @warden/server seed <team-id>`, the Team being the Clerk
-// Organization id (`org_…`) that the Team's Admin has already opened Warden in. See `seedRefusal` for when it refuses
-// to start. It connects as the PG* variables say (`pnpm seed` sets warden_app), with the server's role check on
-// connect: a role that can get around row-level security exits 1. Exit 0 when seeded or already seeded; 1 otherwise,
-// naming why.
+// As its own process: `WARDEN_SEED_DEMO=1 pnpm --filter @warden/server seed <team-id> [--no-product]`, the Team being
+// the Clerk Organization id (`org_…`) that the Team's Admin has already opened Warden in. See `seedRefusal` for when
+// it refuses to start. It connects as the PG* variables say (`pnpm seed` sets warden_app), with the server's role
+// check on connect: a role that can get around row-level security exits 1. Exit 0 when seeded or already seeded; 1
+// otherwise, naming why.
+import { isDeepStrictEqual } from "node:util";
 import {
   fingerprint,
   problemKeyOf,
   type Finding,
   type Location,
   type Observation,
+  type Product,
 } from "@warden/contracts";
 import {
   DEMO_ACCEPTED_DAYS,
   DEMO_OBSERVATIONS,
   DEMO_OUTCOME,
+  DEMO_PRODUCT,
   DEMO_RUN_IDS,
   demoRuns,
   type DemoKey,
@@ -30,19 +35,26 @@ import { createFindings } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
 import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { patchMoveRule } from "./modules/patch/move-rule.ts";
+import { createProducts } from "./modules/patch/products.ts";
+import { createPatchScan, PATCH_RULE } from "./modules/patch/scan.ts";
 import { createWithTeam } from "./with-team.ts";
 
 export type SeedResult =
+  /** `findings` counts every Finding of the Team: the demo ones and the demo Product's CVE Findings. */
   | { kind: "seeded"; findings: number }
-  /** Every demo run was already applied, and the Findings are as the seed leaves them: nothing was written. */
+  /** Every demo run was already applied, and the Team is as the seed leaves it: nothing was written. */
   | { kind: "already_seeded"; findings: number }
   /** Warden has no such Team: its Admin hasn't opened Warden in it yet. */
   | { kind: "no_team" }
   /** The Team has no Admin or Lead to make the demo decisions. */
   | { kind: "no_lead" }
-  /** The Team has Findings the seed didn't write: nothing was written. */
+  /** Not yet seeded, the Team has Findings of its own: nothing was written. (Once seeded, they are a mismatch.) */
   | { kind: "other_findings"; findings: number }
-  /** The demo Findings aren't as the seed leaves them (a seed cut short, or changed since). */
+  /** The CVE snapshot isn't loaded, so the demo Product's Scan can't run: nothing was written. */
+  | { kind: "no_cve_snapshot" }
+  /** Not yet seeded, the Team has Products of its own: nothing was written, and none of them changed. */
+  | { kind: "other_products"; products: number }
+  /** The demo Findings or the demo Product aren't as the seed leaves them (a seed cut short, or changed since). */
   | { kind: "mismatch"; problems: string[] };
 
 /** The hosts that are this machine: the compose database, or a local socket when PGHOST is unset. */
@@ -116,19 +128,54 @@ function differences(list: readonly Finding[]): string[] {
   return problems;
 }
 
+/** The Team's demo Product, by its name: a first seed with the Product refuses a Team that already has one, so it's
+ * the seed's own unless a Lead named one so after a seed without it (then it must match `DEMO_PRODUCT`). */
+const demoProductIn = (products: readonly Product[]) =>
+  products.find((product) => product.name === DEMO_PRODUCT.name);
+
+/** Whether `finding` is on Product `id`'s Asset. On the demo Product's, it is one of the seed's own. */
+export const onProduct = (finding: Finding, id: string | undefined) =>
+  id !== undefined && finding.asset.kind === "product" && finding.asset.ref === id;
+
 /**
- * Seeds `team` with the demo Findings, as of `now`, through connections from `pool` (warden_app). One seed runs per
- * Team at a time: a second waits for the first, then finds the Team seeded. A Team is seeded when every demo run id is
- * applied and its Findings are as the seed leaves them; one with Findings of its own is left as it is.
+ * How the demo Product differs from what the seed leaves, one line each, naming "demo Product"; empty when it is as
+ * `DEMO_PRODUCT` with at least one CVE Finding on it, in any Status (a Lead may have decided each one since). The
+ * number of CVE Findings isn't fixed: a newer snapshot changes it.
  */
-export async function seedDemoFindings({
+function productProblems(product: Product, list: readonly Finding[]): string[] {
+  const problems: string[] = [];
+  const { id, ...stored } = product;
+  if (!isDeepStrictEqual(stored, DEMO_PRODUCT)) {
+    problems.push(`demo Product: ${JSON.stringify(stored)} (want ${JSON.stringify(DEMO_PRODUCT)})`);
+  }
+  if (!list.some((f) => onProduct(f, id) && f.rule_id === PATCH_RULE)) {
+    problems.push("demo Product: no CVE Finding");
+  }
+  return problems;
+}
+
+/**
+ * Seeds `team` with the demo Findings, then (`withProduct`, the default) the demo Product and its Patch Scan, as of
+ * `now`, through connections from `pool` (warden_app). One seed runs per Team at a time: a second waits for the first,
+ * then finds the Team seeded. A Team is seeded when every demo run id is applied, its demo Findings are as the seed
+ * leaves them, and (`withProduct`) its demo Product is as `DEMO_PRODUCT` with a CVE Finding; the Findings on the demo
+ * Product's Asset are the seed's own. A Team seeded without the demo Product (`withProduct` false, or a Product step
+ * cut short) gets it on a rerun with it. One with Findings of its own, or (`withProduct`, not yet seeded) Products of
+ * its own, is left as it is; so is every Team when the CVE snapshot the Product's Scan needs isn't loaded. `logger`
+ * takes the Scan's log lines.
+ */
+export async function seedDemo({
   pool,
   team,
   now = new Date(),
+  withProduct = true,
+  logger = createLogger(),
 }: {
   pool: pg.Pool;
   team: string;
   now?: Date;
+  withProduct?: boolean;
+  logger?: Logger;
 }): Promise<SeedResult> {
   const withTeam = createWithTeam(pool);
   // Every module's move rule, as the server wires them: the demo's Unconfirmed fix comes from Guard's.
@@ -136,6 +183,43 @@ export async function seedDemoFindings({
     withTeam,
     moveRules: { guard: guardMoveRule, patch: patchMoveRule },
   });
+  const products = createProducts({ withTeam });
+
+  /**
+   * The Team's Findings, its demo Product if it has one, and how the Team differs from what the seed leaves. A missing
+   * demo Product isn't one of the problems: the caller decides whether the seed still has to create it.
+   */
+  async function check() {
+    const list = await findings.list(team);
+    const demo = demoProductIn(await products.list(team));
+    const problems = differences(list.filter((f) => !onProduct(f, demo?.id)));
+    if (withProduct && demo !== undefined) problems.push(...productProblems(demo, list));
+    return { list, demo, problems };
+  }
+
+  /** The demo runs, then the two named decisions, made as Admin or Lead `lead`. */
+  async function writeDemoFindings(lead: string) {
+    const { scans, spotRun } = demoRuns(team, now);
+    for (const scan of scans) await findings.reconcile(scan);
+    await findings.report(spotRun);
+
+    const actor = { kind: "person", id: lead } as const;
+    const seeded = demoFindingsIn(await findings.list(team));
+    const idOf = (name: DemoKey) => {
+      const id = seeded[name]?.id;
+      if (id === undefined) throw new Error(`the demo seed lost its ${name} Finding`);
+      return id;
+    };
+    await findings.accept(team, idOf("axios"), {
+      actor,
+      reason: DEMO_OUTCOME.axios.decidedReason!,
+      until: new Date(now.getTime() + DEMO_ACCEPTED_DAYS * 24 * 3600_000).toISOString(),
+    });
+    await findings.markFalsePositive(team, idOf("push"), {
+      actor,
+      reason: DEMO_OUTCOME.push.decidedReason!,
+    });
+  }
 
   const lock = await pool.connect();
   const key = `demo_seed:${team}`;
@@ -155,53 +239,57 @@ export async function seedDemoFindings({
         .select("id")
         .where("id", "in", [...DEMO_RUN_IDS])
         .execute(),
+      // Only counted before a seed: once a demo run is applied, check() names every Finding the seed didn't write,
+      // and the Findings on the demo Product's Asset (its Scan's ids are random) are the seed's own.
       others: await tx
         .selectFrom("findings")
         .select(sql<string>`count(*)`.as("count"))
         .where("first_seen_scan", "not in", [...DEMO_RUN_IDS])
         .executeTakeFirstOrThrow(),
+      products: await tx
+        .selectFrom("products")
+        .select(sql<string>`count(*)`.as("count"))
+        .executeTakeFirstOrThrow(),
+      snapshot: await tx.selectFrom("cve_snapshot").select("as_of").executeTakeFirst(),
     }));
     if (found.team === undefined) return { kind: "no_team" };
     if (found.lead === undefined) return { kind: "no_lead" };
-    const others = Number(found.others.count);
-    if (others > 0) return { kind: "other_findings", findings: others };
 
     if (found.runs.length > 0) {
-      const list = await findings.list(team);
-      const problems = differences(list);
+      const { list, demo, problems } = await check();
       if (found.runs.length < DEMO_RUN_IDS.length) {
         problems.unshift(
           `only ${found.runs.length} of the ${DEMO_RUN_IDS.length} demo runs applied`,
         );
       }
-      return problems.length === 0
-        ? { kind: "already_seeded", findings: list.length }
-        : { kind: "mismatch", problems };
+      if (problems.length > 0) return { kind: "mismatch", problems };
+      if (!withProduct || demo !== undefined) {
+        return { kind: "already_seeded", findings: list.length };
+      }
+      // Seeded without the demo Product (with --no-product, before the seed made one, or a Product step cut short
+      // after the Findings): the rest of this run finishes it.
+      if (found.snapshot === undefined) return { kind: "no_cve_snapshot" };
+    } else {
+      const others = Number(found.others.count);
+      if (others > 0) return { kind: "other_findings", findings: others };
+      if (withProduct && found.snapshot === undefined) return { kind: "no_cve_snapshot" };
+      const ownProducts = Number(found.products.count);
+      if (withProduct && ownProducts > 0) {
+        return { kind: "other_products", products: ownProducts };
+      }
+      await writeDemoFindings(found.lead.user_id);
     }
 
-    const { scans, spotRun } = demoRuns(team, now);
-    for (const scan of scans) await findings.reconcile(scan);
-    await findings.report(spotRun);
+    if (withProduct) {
+      // As a save does: the Product, then its Scan against the loaded snapshot.
+      const { id } = await products.create(team, DEMO_PRODUCT);
+      await createPatchScan({ findings, logger }).scanProduct(team, { id });
+    }
 
-    const actor = { kind: "person", id: found.lead.user_id } as const;
-    const seeded = demoFindingsIn(await findings.list(team));
-    const idOf = (name: DemoKey) => {
-      const id = seeded[name]?.id;
-      if (id === undefined) throw new Error(`the demo seed lost its ${name} Finding`);
-      return id;
-    };
-    await findings.accept(team, idOf("axios"), {
-      actor,
-      reason: DEMO_OUTCOME.axios.decidedReason!,
-      until: new Date(now.getTime() + DEMO_ACCEPTED_DAYS * 24 * 3600_000).toISOString(),
-    });
-    await findings.markFalsePositive(team, idOf("push"), {
-      actor,
-      reason: DEMO_OUTCOME.push.decidedReason!,
-    });
-
-    const list = await findings.list(team);
-    const problems = differences(list);
+    const { list, demo, problems } = await check();
+    if (withProduct && demo === undefined) {
+      problems.push(`demo Product: missing (no Product named ${DEMO_PRODUCT.name})`);
+    }
     return problems.length === 0
       ? { kind: "seeded", findings: list.length }
       : { kind: "mismatch", problems };
@@ -221,13 +309,28 @@ async function main(
     logger.error(`demo seed refused: ${refusal}`);
     return 1;
   }
-  const team = argv[0]?.trim();
+  const [first, ...rest] = argv;
+  const team = first?.trim();
   if (!team) {
     logger.error(
-      "Name the Team to seed: pnpm --filter @warden/server seed <team-id> (its Clerk Organization id, org_…)",
+      "Name the Team to seed: pnpm --filter @warden/server seed <team-id> [--no-product] (its Clerk Organization id, org_…)",
     );
     return 1;
   }
+  if (team.startsWith("--")) {
+    logger.error(
+      `Name the Team to seed first, then ${team}: pnpm --filter @warden/server seed <team-id> [--no-product]`,
+    );
+    return 1;
+  }
+  const unknown = rest.filter((arg) => arg !== "--no-product");
+  if (unknown.length > 0) {
+    logger.error("demo seed: unknown argument(s) after the Team id; only --no-product is known", {
+      arguments: unknown,
+    });
+    return 1;
+  }
+  const withProduct = !rest.includes("--no-product");
   const pool = createPool(logger, {
     max: 3,
     onConnect: guardDatabaseRole(({ role, reason }) => {
@@ -238,10 +341,16 @@ async function main(
     }),
   });
   try {
-    const result = await seedDemoFindings({ pool, team });
+    const result = await seedDemo({ pool, team, withProduct, logger });
     switch (result.kind) {
       case "seeded":
-        logger.info("demo Findings seeded", { team, findings: result.findings });
+        logger.info(
+          withProduct ? "demo Findings and demo Product seeded" : "demo Findings seeded",
+          {
+            team,
+            findings: result.findings,
+          },
+        );
         return 0;
       case "already_seeded":
         logger.info("the Team is already seeded; nothing changed", {
@@ -264,8 +373,21 @@ async function main(
           findings: result.findings,
         });
         return 1;
+      case "no_cve_snapshot":
+        logger.error(
+          "The CVE snapshot isn't loaded, so the demo Product can't be scanned; nothing seeded. Run " +
+            "PGUSER=warden_migrate pnpm --filter @warden/server load-cves first, or seed with --no-product",
+          { team },
+        );
+        return 1;
+      case "other_products":
+        logger.error("The Team has Products of its own; nothing seeded", {
+          team,
+          products: result.products,
+        });
+        return 1;
       case "mismatch":
-        logger.error("The Team's demo Findings aren't as the seed leaves them", {
+        logger.error("The Team's demo Findings or demo Product aren't as the seed leaves them", {
           team,
           problems: result.problems,
         });
