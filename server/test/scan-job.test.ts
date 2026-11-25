@@ -8,14 +8,26 @@ import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createFindings, type Findings } from "../src/findings/index.ts";
-import { createLogger } from "../src/log.ts";
+import { createLogger, type Logger } from "../src/log.ts";
+import type { GitHubRepo } from "../src/modules/guard/github.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
+import type { RepoFile, RepoReader } from "../src/modules/guard/repo-reader.ts";
 import { runScanJob } from "../src/scan-job.ts";
-import { createScans, QUEUED_SCAN_LIMIT_MINUTES, type Scanner, type Scans } from "../src/scans.ts";
+import {
+  createScans,
+  QUEUED_SCAN_LIMIT_MINUTES,
+  type Scanner,
+  type Scanners,
+  type Scans,
+} from "../src/scans.ts";
+import { scanners } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
+import { AWS_KEY } from "./secret-fixtures.ts";
 import {
   activeOrganization,
+  linkRepos,
   minutesAgo,
   seedTeam,
   sessionToken,
@@ -28,6 +40,7 @@ let pool: pg.Pool;
 let withTeam: WithTeam;
 let scans: Scans;
 let findings: Findings;
+let repoAssets: RepoAssets;
 let key: CryptoKey;
 let publicPem: string;
 
@@ -36,6 +49,7 @@ beforeAll(async () => {
   withTeam = createWithTeam(pool);
   scans = createScans({ withTeam });
   findings = createFindings({ withTeam, moveRules: { guard: guardMoveRule } });
+  repoAssets = createRepoAssets({ withTeam });
   ({ privateKey: key, publicPem } = await testKey());
 });
 
@@ -123,20 +137,28 @@ async function setBackToRunning(team: string, id: string) {
   );
 }
 
+/**
+ * Runs the Job with `scanner` as Guard's, or with the scanners `scanners` builds over the Job's logger, so the
+ * scanners' log lines land in `lines` too.
+ */
 function job(
   team: string,
   scanId: string,
   scanner: Scanner | undefined,
-  { through = scans }: { through?: Scans } = {},
+  {
+    through = scans,
+    scanners: build,
+  }: { through?: Scans; scanners?: (logger: Logger) => Scanners } = {},
 ) {
   const lines: string[] = [];
+  const logger = createLogger((line) => lines.push(line));
   const run = runScanJob({
     scanId,
     team,
     scans: through,
     findings,
-    scanners: scanner ? { guard: scanner } : {},
-    logger: createLogger((line) => lines.push(line)),
+    scanners: build ? build(logger) : scanner ? { guard: scanner } : {},
+    logger,
   });
   return { run, lines };
 }
@@ -299,7 +321,7 @@ describe("runScanJob", () => {
     await withTeam(team, (tx) =>
       sql`update scan_requests set queued_at = ${late} where id = ${scan.id}`.execute(tx),
     );
-    await scans.get(team, scan.id);
+    expect(await scans.get(team, scan.id)).toMatchObject({ state: "failed" });
 
     expect(await job(team, scan.id, fakeScanner().scanner).run).toBe(0);
 
@@ -366,6 +388,166 @@ describe("runScanJob", () => {
     expect(logEntries(lines.join(""))).toContainEqual(
       expect.objectContaining({ severity: "ERROR", scanId: scan.id, module: "guard" }),
     );
+  });
+});
+
+describe("runScanJob with Guard's scanner (stories 3, 15)", () => {
+  const repoA: Asset = { kind: "repo", ref: "https://github.com/example/repo-a" };
+  const repoB: Asset = { kind: "repo", ref: "https://github.com/example/repo-b" };
+  const withSecret: RepoFile[] = [{ path: "src/config.ts", text: `const key = "${AWS_KEY}";` }];
+  const clean: RepoFile[] = [{ path: "src/config.ts", text: "const key = process.env.KEY;" }];
+
+  /** A RepoReader that gives each ref's files and records each call; a ref it has no files for can't be read. */
+  function fakeReader(files: Record<string, RepoFile[]>) {
+    const calls: { installationId: number; repo: GitHubRepo }[] = [];
+    const reader: RepoReader = {
+      async *readRepo(installationId, repo) {
+        calls.push({ installationId, repo });
+        const given = files[repo.ref];
+        if (given === undefined) throw new Error(`the reader can't read ${repo.ref}`);
+        yield* given;
+      },
+    };
+    return { calls, reader };
+  }
+
+  /** A Guard Scan of `assets` queued for `team`, with the Rules Guard's scanner names. */
+  async function queuedGuard(team: string, assets: Asset[]) {
+    const { guard } = scanners({ withTeam, logger: createLogger(() => {}) });
+    const outcome = await scans.queue(team, {
+      module: "guard",
+      assets,
+      rules: [...guard!.rules],
+      requestedBy: LEAD,
+    });
+    if (outcome.kind !== "queued") throw new Error("the test's Scan was rate limited");
+    return outcome.scan;
+  }
+
+  /** The Job's options for Guard's scanner as the wiring builds it, given `reader` (none: as the Job is wired today). */
+  const wired = (reader?: RepoReader) => ({
+    scanners: (logger: Logger) => scanners({ withTeam, reader, logger }),
+  });
+
+  const statuses = async (team: string) =>
+    Object.fromEntries(
+      (await findings.list(team)).map((finding) => [finding.asset.ref, finding.status]),
+    );
+
+  it("fails a Guard Scan with no reader, logging that GitHub isn't set up for the Scan Job", async () => {
+    const team = await newTeam();
+    await linkRepos(repoAssets, team, [repoA.ref], LEAD);
+    const scan = await queuedGuard(team, [repoA]);
+    const { run, lines } = job(team, scan.id, undefined, wired());
+
+    expect(await run).toBe(1);
+
+    expect(await scans.get(team, scan.id)).toMatchObject({ state: "failed" });
+    expect(await findings.list(team)).toEqual([]);
+    expect(logEntries(lines.join(""))).toContainEqual(
+      expect.objectContaining({
+        severity: "ERROR",
+        scanId: scan.id,
+        error: expect.objectContaining({ message: "GitHub isn't set up for the Scan Job" }),
+      }),
+    );
+  });
+
+  it("reads only the repos the Team still holds: a repo a relink dropped keeps its Open Finding (story 15)", async () => {
+    const team = await newTeam();
+    const installationId = await linkRepos(repoAssets, team, [repoA.ref, repoB.ref], LEAD);
+    const first = await queuedGuard(team, [repoA, repoB]);
+    const before = fakeReader({ [repoA.ref]: withSecret, [repoB.ref]: withSecret });
+    expect(await job(team, first.id, undefined, wired(before.reader)).run).toBe(0);
+    expect(await statuses(team)).toEqual({ [repoA.ref]: "open", [repoB.ref]: "open" });
+
+    const second = await queuedGuard(team, [repoA, repoB]);
+    // An Admin relinks the installation without repo B before the Job runs.
+    await repoAssets.link(team, {
+      installationId,
+      linkedBy: LEAD,
+      repos: [{ ref: repoA.ref, githubId: 1 }],
+    });
+    const after = fakeReader({ [repoA.ref]: clean, [repoB.ref]: clean });
+    const { run, lines } = job(team, second.id, undefined, wired(after.reader));
+
+    expect(await run).toBe(0);
+
+    expect(after.calls).toEqual([{ installationId, repo: { ref: repoA.ref, githubId: 1 } }]);
+    expect(await statuses(team)).toEqual({ [repoA.ref]: "fixed", [repoB.ref]: "open" });
+    const covered = await withTeam(team, (tx) =>
+      tx
+        .selectFrom("scan_coverage")
+        .select("asset_ref")
+        .distinct()
+        .where("scan_id", "=", second.id)
+        .execute(),
+    );
+    expect(covered).toEqual([{ asset_ref: repoA.ref }]);
+    expect(logEntries(lines.join(""))).toContainEqual(
+      expect.objectContaining({ message: "scan job done", scanId: second.id, dropped: 1 }),
+    );
+  });
+
+  it("reads nothing and fails a Scan in Team B naming Team A's repo; Team A's Findings are unchanged (story 15)", async () => {
+    const teamA = await newTeam();
+    const teamB = await newTeam();
+    await linkRepos(repoAssets, teamA, [repoA.ref], LEAD);
+    const scanA = await queuedGuard(teamA, [repoA]);
+    expect(
+      await job(teamA, scanA.id, undefined, wired(fakeReader({ [repoA.ref]: withSecret }).reader))
+        .run,
+    ).toBe(0);
+    const teamAFindings = await findings.list(teamA);
+    expect(teamAFindings).toHaveLength(1);
+    // Past the route's check: the row is queued straight through the store.
+    const scanB = await queuedGuard(teamB, [repoA]);
+    const reader = fakeReader({ [repoA.ref]: clean });
+    const { run, lines } = job(teamB, scanB.id, undefined, wired(reader.reader));
+
+    expect(await run).toBe(1);
+
+    expect(reader.calls).toEqual([]);
+    expect(await scans.get(teamB, scanB.id)).toMatchObject({ state: "failed" });
+    expect(await findings.list(teamB)).toEqual([]);
+    expect(await findings.list(teamA)).toEqual(teamAFindings);
+    expect(logEntries(lines.join(""))).toContainEqual(
+      expect.objectContaining({
+        severity: "ERROR",
+        scanId: scanB.id,
+        error: expect.objectContaining({ message: expect.stringContaining("1 dropped") }),
+      }),
+    );
+  });
+
+  it("skips a file whose path a Finding can't hold, and counts it in the repo's log line without the path (story 3)", async () => {
+    const team = await newTeam();
+    await linkRepos(repoAssets, team, [repoA.ref], LEAD);
+    const scan = await queuedGuard(team, [repoA]);
+    // Over 1024 characters, a `\`, and a drive letter: each refused as a Location's path.
+    const refused = [`${"deep/".repeat(205)}config.ts`, "src\\config.ts", "C:/config.ts"];
+    const reader = fakeReader({
+      [repoA.ref]: [
+        ...refused.map((path) => ({ path, text: `const key = "${AWS_KEY}";` })),
+        ...withSecret,
+      ],
+    });
+    const { run, lines } = job(team, scan.id, undefined, wired(reader.reader));
+
+    expect(await run).toBe(0);
+
+    expect((await findings.list(team)).map((finding) => finding.location)).toEqual([
+      { kind: "file", path: "src/config.ts", line: 1 },
+    ]);
+    expect(logEntries(lines.join(""))).toContainEqual(
+      expect.objectContaining({
+        message: "guard scan: repo read",
+        files: 4,
+        skipped: 3,
+        observations: 1,
+      }),
+    );
+    expect(lines.join("")).not.toContain("config.ts");
   });
 });
 

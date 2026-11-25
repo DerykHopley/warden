@@ -32,6 +32,12 @@ export interface Scanner {
     target: { team: string; assets: Asset[]; rules: RuleId[] },
     recorder: ScanRecorder,
   ): Promise<void>;
+  /**
+   * Which of `assets` the Team still holds, in the order given (story 15). The Scan Job asks just before it scans, as
+   * a start's AssetCheck ran when the Scan was queued and the Team may have dropped one since; the Scan then covers
+   * only these. A module without it scans the Assets as queued.
+   */
+  held?(team: string, assets: readonly Asset[]): Promise<Asset[]>;
 }
 
 /** Each module's scanner, as a start-up file wires them; a module without one can't be scanned. */

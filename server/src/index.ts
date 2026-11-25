@@ -19,7 +19,7 @@ import { guardRoutes } from "./modules/guard/routes.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";
 import { createScans } from "./scans.ts";
 import { createShutdown } from "./shutdown.ts";
-import { MOVE_RULES, SCANNERS } from "./wiring.ts";
+import { MOVE_RULES, scanners } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
 const logger = createLogger();
@@ -93,8 +93,8 @@ const app = createApp({
   // ADR 0005: the modules come in here, through the wiring the Scan Job and the demo seed share.
   findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
   scans: createScans({ withTeam }),
-  // The Job's own list, so a start names the Rules the Job will run.
-  scanners: SCANNERS,
+  // The Job's own list, so a start names the Rules the Job will run; the server reads no repo, so no RepoReader.
+  scanners: scanners({ withTeam, logger }),
   // A Guard Scan names only the Team's Repo Assets.
   assetChecks: { guard: guardAssetCheck(repoAssets) },
   // Linking a GitHub installation needs the GitHub app's settings; without them its route answers 503.
