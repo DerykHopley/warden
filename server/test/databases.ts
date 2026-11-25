@@ -14,6 +14,7 @@ import {
   createPool,
   DATABASE_ROLE_NAMES,
   type DatabaseRoleNames,
+  isPgError,
 } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { migrate, MIGRATIONS_FOLDER } from "../src/migrate.ts";
@@ -23,9 +24,10 @@ import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 
 /** Returns once the superuser's Postgres takes a connection and answers. A container started seconds before the
  * run resets connections until Postgres listens on TCP (initdb's first server listens on its socket only, which is
- * what an in-container `pg_isready` checks), and the global setup's first query failing there ended the run before
- * any test file, with no summary (#99). An unreachable Postgres is tried every `intervalMs` until `timeoutMs`, then
- * the error names the address; any other error, such as a refused login, throws at once. */
+ * what an in-container `pg_isready` checks), then may answer "the database system is starting up" (57P03); the
+ * global setup's first query failing there ended the run before any test file, with no summary (#99). Either is
+ * tried again every `intervalMs` until `timeoutMs`, then the error names the address; any other error, such as a
+ * refused login, throws at once. */
 export async function waitForPostgres(
   connection: pg.PoolConfig = {},
   { timeoutMs = 30_000, intervalMs = 200 } = {},
@@ -36,7 +38,7 @@ export async function waitForPostgres(
       await withPool(connection, (pool) => pool.query("select 1"));
       return;
     } catch (error) {
-      if (connectionFailure(error) !== "unreachable") throw error;
+      if (connectionFailure(error) !== "unreachable" && !isPgError(error, "57P03")) throw error;
       if (Date.now() >= deadline) {
         const host = connection.host ?? process.env.PGHOST;
         const port = connection.port ?? process.env.PGPORT;

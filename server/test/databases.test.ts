@@ -1,6 +1,7 @@
 // Clearing out test databases and test roles a killed run left behind, without touching one a run still uses or one a
 // person made; and waiting for a Postgres that takes no connection yet.
 import { randomBytes } from "node:crypto";
+import { connect, createServer, type Socket } from "node:net";
 import { setTimeout } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { createPool } from "../src/database.ts";
@@ -104,8 +105,51 @@ describe("dropStaleTestDatabases and dropStaleTestRoles", () => {
   }, 30_000);
 });
 
-// A container started seconds before the run resets connections until Postgres listens on TCP, and the global
-// setup's first query failing there ended the run before any test, with no summary (#99).
+/** A proxy to Postgres on `target` that answers each login as a Postgres still starting up does (FATAL 57P03) until
+ * `finish()`, then passes connections through. `refused()` counts the logins it answered so. */
+async function startingUpPostgres(target: number) {
+  let finished = false;
+  let refused = 0;
+  const sockets: Socket[] = [];
+  const fields = ["SFATAL", "VFATAL", "C57P03", "Mthe database system is starting up"];
+  const body = Buffer.from(fields.map((field) => `${field}\0`).join("") + "\0");
+  const length = Buffer.alloc(4);
+  length.writeInt32BE(body.length + 4);
+  const startingUp = Buffer.concat([Buffer.from("E"), length, body]);
+  const server = createServer((socket) => {
+    sockets.push(socket);
+    if (!finished) {
+      // After the client's startup message, as Postgres answers it.
+      socket.once("data", () => {
+        refused += 1;
+        socket.end(startingUp);
+      });
+      return;
+    }
+    const upstream = connect(target, "127.0.0.1");
+    sockets.push(upstream);
+    socket.pipe(upstream).pipe(socket);
+    socket.on("error", () => upstream.destroy());
+    upstream.on("error", () => socket.destroy());
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  return {
+    port,
+    finish: () => {
+      finished = true;
+    },
+    refused: () => refused,
+    close: async () => {
+      sockets.forEach((socket) => socket.destroy());
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+// A container started seconds before the run resets connections until Postgres listens on TCP, then may answer
+// that it's starting up; the global setup's first query failing there ended the run before any test, with no
+// summary (#99).
 describe("waitForPostgres", () => {
   it("waits out a Postgres that hangs up on connections at first, then returns", async () => {
     const late = await gatedProxy(Number(process.env.PGPORT));
@@ -116,6 +160,22 @@ describe("waitForPostgres", () => {
       await expect(waiting).resolves.toBeUndefined();
     } finally {
       await late.close();
+    }
+  });
+
+  it("waits out a Postgres that answers it's starting up, then returns", async () => {
+    const starting = await startingUpPostgres(Number(process.env.PGPORT));
+    try {
+      const waiting = waitForPostgres(
+        { host: "127.0.0.1", port: starting.port },
+        { intervalMs: 50 },
+      );
+      await setTimeout(300);
+      starting.finish();
+      await expect(waiting).resolves.toBeUndefined();
+      expect(starting.refused()).toBeGreaterThan(1);
+    } finally {
+      await starting.close();
     }
   });
 
