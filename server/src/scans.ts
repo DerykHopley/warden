@@ -3,14 +3,24 @@
 // comes in as `Scanners`, wired by the start-up files from `wiring.ts`, and the starter as a
 // `ScanJobStarter`.
 import { randomUUID } from "node:crypto";
-import { sql, type Selectable } from "kysely";
+import { sql, type Selectable, type Transaction } from "kysely";
 import { ScanBody, type Asset, type Module, type RuleId, type ScanState } from "@warden/contracts";
 import type { ScanRecorder } from "./findings/index.ts";
 import type { Database } from "./schema.ts";
 import type { WithTeam } from "./with-team.ts";
 
-/** At most this many Scans per Team in a rolling hour, counted from the table, failed ones included. */
+/**
+ * At most this many Scans per Team in a rolling hour, counted from the table, failed ones included, except a Scan the
+ * time limit below ended.
+ */
 export const SCANS_PER_HOUR = 10;
+
+/**
+ * A Scan still queued this long after its `queued_at` never had its Job start (the Job takes 15 to 29 s to start), and
+ * is ended as failed with `ended_at` exactly this long after `queued_at`: the moment the limit ran out, and the mark
+ * the hourly count leaves it out by. A Job that starts later still runs it, as a rerun of a failed Scan.
+ */
+export const QUEUED_SCAN_LIMIT_MINUTES = 15;
 
 /**
  * What a module hands over to be scanned: the Rules it checks, and the function that checks the Assets and reports
@@ -51,7 +61,8 @@ export const TEAM_VARIABLE = "WARDEN_TEAM";
 
 /**
  * What a starter throws when it can't tell whether the Job started: its request may have reached the Job's host before
- * the answer was lost. The Scan stays queued, as a failed start would make the Lead start another.
+ * the answer was lost. The Scan stays queued, as a failed start would make the Lead start another; if the Job never
+ * started, QUEUED_SCAN_LIMIT_MINUTES ends it.
  */
 export class ScanJobStartUnknown extends Error {
   override name = "ScanJobStartUnknown";
@@ -109,6 +120,23 @@ function toBody(row: Selectable<Database["scan_requests"]>): ScanBody {
   });
 }
 
+/** QUEUED_SCAN_LIMIT_MINUTES as an interval, a literal so the database can compare `ended_at` to it exactly. */
+const QUEUED_LIMIT = sql<string>`make_interval(mins => ${sql.lit(QUEUED_SCAN_LIMIT_MINUTES)})`;
+
+/**
+ * Ends the transaction's Team's Scans still queued QUEUED_SCAN_LIMIT_MINUTES after they were queued, as failed and
+ * ended when the limit ran out. Row-level security binds it to the Team `withTeam` set; a Scan that ever started is
+ * past `queued` and never touched.
+ */
+async function endStaleQueued(tx: Transaction<Database>): Promise<void> {
+  await tx
+    .updateTable("scan_requests")
+    .set({ state: "failed", ended_at: sql<Date>`queued_at + ${QUEUED_LIMIT}` })
+    .where("state", "=", "queued")
+    .where("queued_at", "<=", sql<Date>`now() - ${QUEUED_LIMIT}`)
+    .execute();
+}
+
 export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
   return {
     queue(team, { module, assets, rules, requestedBy }) {
@@ -117,6 +145,9 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
         await sql`select pg_advisory_xact_lock(hashtextextended(${`scans:${team}`}, 0))`.execute(
           tx,
         );
+        await endStaleQueued(tx);
+        // A Scan the time limit ended is the only one with no start and an end exactly that limit after its queueing;
+        // it never ran, so it doesn't count. A start the route failed ends within seconds, and still counts.
         const recent = await tx
           .selectFrom("scan_requests")
           .select([
@@ -126,6 +157,9 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
             ),
           ])
           .where("queued_at", ">", sql<Date>`now() - interval '1 hour'`)
+          .where(
+            sql<boolean>`not (started_at is null and ended_at is not distinct from queued_at + ${QUEUED_LIMIT})`,
+          )
           .executeTakeFirstOrThrow();
         if (recent.count >= SCANS_PER_HOUR) {
           return { kind: "rate_limited", retryAfterSeconds: Math.max(1, recent.retry_after) };
@@ -148,6 +182,7 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
 
     get(team, id) {
       return withTeam(team, async (tx) => {
+        await endStaleQueued(tx);
         const row = await tx
           .selectFrom("scan_requests")
           .selectAll()

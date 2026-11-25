@@ -103,6 +103,9 @@ export async function newTeam(
   return team;
 }
 
+/** The time `minutes` minutes before now. */
+export const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+
 /** A GitHub repo's ref, as GitHub's `html_url` names it. */
 export const repoRef = (name: string) => `https://github.com/example/${name}`;
 
