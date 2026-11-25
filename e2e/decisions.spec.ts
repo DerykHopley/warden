@@ -105,7 +105,11 @@ test("story 4: Linus accepts and reopens a Finding; Margaret proposes a False po
     await expect(card(page).getByRole("status")).toHaveText(
       "Proposal sent. A Lead or an Admin decides.",
     );
-    // One pending Proposal per Finding: hers waits, so the line stands in the Propose buttons' place.
+    // One pending Proposal per Finding: hers waits, so no Propose buttons. The sent line says so, alone: one box.
+    await expect(card(page).getByRole("button", { name: /^Propose/ })).toHaveCount(0);
+    await expect(card(page).locator(".card-line")).toHaveCount(1);
+    // Opened again, the waiting line stands in the Propose buttons' place.
+    await focus(page, disk);
     await expect(card(page).getByText(WAITING)).toBeVisible();
     await expect(card(page).getByRole("button", { name: /^Propose/ })).toHaveCount(0);
 
