@@ -103,8 +103,15 @@ function fakeGitHub({
       201,
     ),
   tarball = (call) => archive(call),
+  tarballUrl = TARBALL_URL,
   archiveTimeoutMs = 50,
-}: { accessToken?: Answer; tarball?: Answer; archiveTimeoutMs?: number } = {}) {
+}: {
+  accessToken?: Answer;
+  tarball?: Answer;
+  /** Where the fake serves the tarball: the repo's own `/repos/<owner>/<repo>/tarball`. */
+  tarballUrl?: string;
+  archiveTimeoutMs?: number;
+} = {}) {
   const calls: Call[] = [];
   const lines: string[] = [];
   const fetch: Fetch = async (url, init) => {
@@ -112,7 +119,7 @@ function fakeGitHub({
     calls.push(call);
     const routes: Record<string, Answer | undefined> = {
       [`POST ${ACCESS_TOKENS_URL}`]: accessToken,
-      [`GET ${TARBALL_URL}`]: tarball,
+      [`GET ${tarballUrl}`]: tarball,
     };
     const route = routes[`${init.method ?? "GET"} ${url}`];
     if (route === undefined) throw new Error(`unexpected call to ${init.method} ${url}`);
@@ -186,6 +193,23 @@ describe("createGitHubReader", () => {
     expect(tarballCall!.init.method ?? "GET").toBe("GET");
     expect(header(tarballCall!, "Authorization")).toBe(`Bearer ${INSTALLATION_TOKEN}`);
     for (const { init } of calls) expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("reads a repo whose owner has an underscore, as an Enterprise Managed User's does", async () => {
+    const tarballUrl = "https://api.github.com/repos/alice_acme/notes/tarball";
+    const { reader, calls } = fakeGitHub({ tarballUrl });
+
+    const read = await readAll(reader, INSTALLATION_ID, {
+      ref: "https://github.com/alice_acme/notes",
+      githubId: 1,
+    });
+
+    expect(read).toEqual([
+      { path: "README.md", text: "# Guarded\n" },
+      { path: "src/config.ts", text: "export const a = 1;\n" },
+      { path: "logo.png", unread: true },
+    ]);
+    expect(calls.map(({ url }) => url)).toEqual([ACCESS_TOKENS_URL, tarballUrl]);
   });
 
   it("logs one line per repo with its ref and counts, and no path, text, token or URL", async () => {
@@ -290,6 +314,8 @@ describe("createGitHubReader", () => {
     "https://github.com/../guarded",
     "https://github.com/example/guarded?x=1",
     "https://github.com/example/guarded.git#x",
+    "https://github.com/_/..",
+    "https://github.com/a_b/c/d",
   ])("refuses the ref %s, which isn't a GitHub repo's URL, before any call", async (ref) => {
     const { reader, calls } = fakeGitHub();
 

@@ -22,7 +22,7 @@ import { gitHubRepoReader, MOVE_RULES, scanners } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { AWS_KEY, GITHUB_TOKEN } from "./secret-fixtures.ts";
-import { chunks, tarballOf } from "./tarballs.ts";
+import { chunks, tarballOf, type RepoLink } from "./tarballs.ts";
 import {
   activeOrganization,
   gitHubAppKey,
@@ -184,7 +184,7 @@ const INSTALLATION_TOKEN = "ghs_the-fake-installation-token";
  * built from `served()`, for a call carrying that token. fetch follows GitHub's redirect to the download itself, so the
  * fake answers the tarball call with the archive. Anything else, a tarball call without the token included, is a 404.
  */
-function fakeGitHubFetch(served: () => RepoFile[]) {
+function fakeGitHubFetch(served: () => (RepoFile | RepoLink)[]) {
   const calls: string[] = [];
   const fetch: Fetch = async (url, init) => {
     const method = init.method ?? "GET";
@@ -214,7 +214,7 @@ function fakeGitHubFetch(served: () => RepoFile[]) {
 }
 
 /** The app, its Scan Job reading the repo through the GitHub reader from fake GitHub serving `served()`. */
-function gitHubGuardApp(served: () => RepoFile[]) {
+function gitHubGuardApp(served: () => (RepoFile | RepoLink)[]) {
   const github = fakeGitHubFetch(served);
   const guard = guardApp((logger) =>
     gitHubRepoReader(
@@ -478,6 +478,26 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     expect((await scanRepo(guard, team)).exit).toBe(0);
 
     expect(await listFindings(guard, team)).toEqual(opened);
+  });
+
+  it("opens no whole-repo Finding when the guarding root settings file becomes a symlink, which it doesn't follow (story 3)", async () => {
+    const team = await newTeam();
+    const claudeMd: RepoFile = { path: "CLAUDE.md", text: "# Guarded\n" };
+    let current: (RepoFile | RepoLink)[] = [claudeMd, guarded];
+    const { guard } = gitHubGuardApp(() => current);
+    await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+    expect(await listFindings(guard, team)).toEqual([]);
+
+    // The settings now live elsewhere, read only through the link, which a Scan reports unread.
+    current = [
+      claudeMd,
+      { path: "config/claude-settings.json", text: guarded.text },
+      { path: ".claude/settings.json", link: "../config/claude-settings.json" },
+    ];
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+
+    expect(await listFindings(guard, team)).toEqual([]);
   });
 
   it("fails a Scan whose repo the reader can't read, reconciling nothing and logging why", async () => {
