@@ -1021,6 +1021,42 @@ describe("a Lead's decision", () => {
   });
 });
 
+describe("a Reopens on day that midnight has made today", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it.each<[string, Finding, Role, string]>([
+    ["Accept", OPEN, "lead", "Accept"],
+    ["Renew acceptance", ACCEPTED, "lead", "Renew acceptance"],
+    ["Propose accepting", OPEN, "member", "Propose"],
+  ])(
+    "%s refuses in the form's own words, keeps the reason, sends nothing, and Reopens on's earliest day moves on",
+    async (button, focused, role, submitName) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(2026, 10, 25, 23, 58));
+      // As the server refuses an until that isn't later than now: the words the form must not show.
+      serve({ findingAction: () => json(400, { error: "until: until must be later than now" }) });
+      const { card } = show(focused, listed([]), { role });
+      const form = await openForm(card, button);
+      await userEvent.clear(whyField(form));
+      await userEvent.type(whyField(form), "Fixed next sprint");
+      pickUntil(form, "2026-11-26");
+
+      // The form stays open past midnight: the day it offered as the earliest is now today.
+      vi.setSystemTime(new Date(2026, 10, 26, 0, 1));
+      await userEvent.click(form.getByRole("button", { name: submitName }));
+
+      const refusal = await form.findByRole("alert");
+      expect(refusal).toHaveTextContent(
+        /^Reopens on must be a later day\. Pick tomorrow or later\.$/,
+      );
+      expect(refusal).not.toHaveTextContent(/until/i);
+      expect(whyField(form)).toHaveValue("Fixed next sprint");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(form.getByLabelText(REOPENS_ON)).toHaveAttribute("min", "2026-11-27");
+    },
+  );
+});
+
 describe("the reason an accept form opens with", () => {
   it("Renew acceptance opens with the current acceptance reason, editable, and no Reopens on: its submit waits for a day", async () => {
     const { card } = show(ACCEPTED, listed([]), { role: "lead" });

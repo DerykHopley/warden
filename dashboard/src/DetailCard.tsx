@@ -108,6 +108,7 @@ const REFUSED = {
   proposalChanged:
     "This Proposal was decided already, or its Finding changed. The list is refreshed.",
   notAnswering: "Warden's server isn't answering. Your reason is kept: try again.",
+  untilPassed: "Reopens on must be a later day. Pick tomorrow or later.",
 };
 
 /** The server's words as one sentence: ending with a full stop, once. */
@@ -323,6 +324,12 @@ export function DetailCard(props: {
   function submit(event: FormEvent) {
     event.preventDefault();
     if (form === null || form.kind === "approve" || !ready(form)) return;
+    // The form may have stayed open past midnight: the day it offered as the earliest is then today, which the server
+    // refuses in its own words. Checked against the day now, it's refused here, in the form's words, with no call.
+    if (asksUntil(form) && draft.until < earliestUntil()) {
+      setLine({ kind: "refused", text: REFUSED.untilPassed, at: keyOf(form) });
+      return;
+    }
     const reason = draft.reason.trim();
     switch (form.kind) {
       case "decide": {
