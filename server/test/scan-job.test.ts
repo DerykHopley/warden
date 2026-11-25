@@ -8,16 +8,23 @@ import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createFindings, type Findings } from "../src/findings/index.ts";
-import { createLogger } from "../src/log.ts";
+import { createLogger, type Logger } from "../src/log.ts";
 import type { GitHubRepo } from "../src/modules/guard/github.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import type { RepoFile, RepoReader } from "../src/modules/guard/repo-reader.ts";
 import { runScanJob } from "../src/scan-job.ts";
-import { createScans, QUEUED_SCAN_LIMIT_MINUTES, type Scanner, type Scans } from "../src/scans.ts";
+import {
+  createScans,
+  QUEUED_SCAN_LIMIT_MINUTES,
+  type Scanner,
+  type Scanners,
+  type Scans,
+} from "../src/scans.ts";
 import { scanners } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
+import { AWS_KEY } from "./secret-fixtures.ts";
 import {
   activeOrganization,
   linkRepos,
@@ -130,20 +137,28 @@ async function setBackToRunning(team: string, id: string) {
   );
 }
 
+/**
+ * Runs the Job with `scanner` as Guard's, or with the scanners `scanners` builds over the Job's logger, so the
+ * scanners' log lines land in `lines` too.
+ */
 function job(
   team: string,
   scanId: string,
   scanner: Scanner | undefined,
-  { through = scans }: { through?: Scans } = {},
+  {
+    through = scans,
+    scanners: build,
+  }: { through?: Scans; scanners?: (logger: Logger) => Scanners } = {},
 ) {
   const lines: string[] = [];
+  const logger = createLogger((line) => lines.push(line));
   const run = runScanJob({
     scanId,
     team,
     scans: through,
     findings,
-    scanners: scanner ? { guard: scanner } : {},
-    logger: createLogger((line) => lines.push(line)),
+    scanners: build ? build(logger) : scanner ? { guard: scanner } : {},
+    logger,
   });
   return { run, lines };
 }
@@ -377,8 +392,6 @@ describe("runScanJob", () => {
 });
 
 describe("runScanJob with Guard's scanner (stories 3, 15)", () => {
-  /** A made-up AWS access key id, joined from parts so the source never holds a whole one. */
-  const AWS_KEY = ["AKIA", "Q7XJ2M4N6P8R3T5V"].join("");
   const repoA: Asset = { kind: "repo", ref: "https://github.com/example/repo-a" };
   const repoB: Asset = { kind: "repo", ref: "https://github.com/example/repo-b" };
   const withSecret: RepoFile[] = [{ path: "src/config.ts", text: `const key = "${AWS_KEY}";` }];
@@ -411,20 +424,10 @@ describe("runScanJob with Guard's scanner (stories 3, 15)", () => {
     return outcome.scan;
   }
 
-  /** Runs the Job with Guard's scanner as the wiring builds it, given `reader` (none: as the Job is wired today). */
-  function guardJob(team: string, scanId: string, reader?: RepoReader) {
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line));
-    const run = runScanJob({
-      scanId,
-      team,
-      scans,
-      findings,
-      scanners: scanners({ withTeam, reader, logger }),
-      logger,
-    });
-    return { run, lines };
-  }
+  /** The Job's options for Guard's scanner as the wiring builds it, given `reader` (none: as the Job is wired today). */
+  const wired = (reader?: RepoReader) => ({
+    scanners: (logger: Logger) => scanners({ withTeam, reader, logger }),
+  });
 
   const statuses = async (team: string) =>
     Object.fromEntries(
@@ -435,7 +438,7 @@ describe("runScanJob with Guard's scanner (stories 3, 15)", () => {
     const team = await newTeam();
     await linkRepos(repoAssets, team, [repoA.ref], LEAD);
     const scan = await queuedGuard(team, [repoA]);
-    const { run, lines } = guardJob(team, scan.id);
+    const { run, lines } = job(team, scan.id, undefined, wired());
 
     expect(await run).toBe(1);
 
@@ -455,7 +458,7 @@ describe("runScanJob with Guard's scanner (stories 3, 15)", () => {
     const installationId = await linkRepos(repoAssets, team, [repoA.ref, repoB.ref], LEAD);
     const first = await queuedGuard(team, [repoA, repoB]);
     const before = fakeReader({ [repoA.ref]: withSecret, [repoB.ref]: withSecret });
-    expect(await guardJob(team, first.id, before.reader).run).toBe(0);
+    expect(await job(team, first.id, undefined, wired(before.reader)).run).toBe(0);
     expect(await statuses(team)).toEqual({ [repoA.ref]: "open", [repoB.ref]: "open" });
 
     const second = await queuedGuard(team, [repoA, repoB]);
@@ -466,7 +469,7 @@ describe("runScanJob with Guard's scanner (stories 3, 15)", () => {
       repos: [{ ref: repoA.ref, githubId: 1 }],
     });
     const after = fakeReader({ [repoA.ref]: clean, [repoB.ref]: clean });
-    const { run, lines } = guardJob(team, second.id, after.reader);
+    const { run, lines } = job(team, second.id, undefined, wired(after.reader));
 
     expect(await run).toBe(0);
 
@@ -492,14 +495,15 @@ describe("runScanJob with Guard's scanner (stories 3, 15)", () => {
     await linkRepos(repoAssets, teamA, [repoA.ref], LEAD);
     const scanA = await queuedGuard(teamA, [repoA]);
     expect(
-      await guardJob(teamA, scanA.id, fakeReader({ [repoA.ref]: withSecret }).reader).run,
+      await job(teamA, scanA.id, undefined, wired(fakeReader({ [repoA.ref]: withSecret }).reader))
+        .run,
     ).toBe(0);
     const teamAFindings = await findings.list(teamA);
     expect(teamAFindings).toHaveLength(1);
     // Past the route's check: the row is queued straight through the store.
     const scanB = await queuedGuard(teamB, [repoA]);
     const reader = fakeReader({ [repoA.ref]: clean });
-    const { run, lines } = guardJob(teamB, scanB.id, reader.reader);
+    const { run, lines } = job(teamB, scanB.id, undefined, wired(reader.reader));
 
     expect(await run).toBe(1);
 
@@ -514,6 +518,36 @@ describe("runScanJob with Guard's scanner (stories 3, 15)", () => {
         error: expect.objectContaining({ message: expect.stringContaining("1 dropped") }),
       }),
     );
+  });
+
+  it("skips a file whose path a Finding can't hold, and counts it in the repo's log line without the path (story 3)", async () => {
+    const team = await newTeam();
+    await linkRepos(repoAssets, team, [repoA.ref], LEAD);
+    const scan = await queuedGuard(team, [repoA]);
+    // Over 1024 characters, a `\`, and a drive letter: each refused as a Location's path.
+    const refused = [`${"deep/".repeat(205)}config.ts`, "src\\config.ts", "C:/config.ts"];
+    const reader = fakeReader({
+      [repoA.ref]: [
+        ...refused.map((path) => ({ path, text: `const key = "${AWS_KEY}";` })),
+        ...withSecret,
+      ],
+    });
+    const { run, lines } = job(team, scan.id, undefined, wired(reader.reader));
+
+    expect(await run).toBe(0);
+
+    expect((await findings.list(team)).map((finding) => finding.location)).toEqual([
+      { kind: "file", path: "src/config.ts", line: 1 },
+    ]);
+    expect(logEntries(lines.join(""))).toContainEqual(
+      expect.objectContaining({
+        message: "guard scan: repo read",
+        files: 4,
+        skipped: 3,
+        observations: 1,
+      }),
+    );
+    expect(lines.join("")).not.toContain("config.ts");
   });
 });
 

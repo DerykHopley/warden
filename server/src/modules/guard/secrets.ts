@@ -8,55 +8,74 @@ import type { RepoFile } from "./repo-reader.ts";
 
 /**
  * Each secret type and its pattern. The lookbehinds and lookaheads keep a match from starting or ending inside a
- * longer word; the upper bounds keep a match to a token's size.
+ * longer word; the upper bounds keep a match to a token's size. A `body` group holds what follows the type's fixed
+ * prefix, where it has one.
  */
 const SECRET_TYPES: readonly { type: string; pattern: RegExp }[] = [
   {
     type: "AWS access key id",
-    pattern: /(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])/g,
+    pattern: /(?<![A-Za-z0-9])(?:AKIA|ASIA)(?<body>[A-Z0-9]{16})(?![A-Za-z0-9])/g,
   },
   {
     type: "GitHub token",
     pattern:
-      /(?<![A-Za-z0-9_])(?:gh[pousr]_[A-Za-z0-9]{36,251}|github_pat_[A-Za-z0-9_]{36,244})(?![A-Za-z0-9_])/g,
+      /(?<![A-Za-z0-9_])(?:gh[pousr]_(?<body>[A-Za-z0-9]{36,251})|github_pat_[A-Za-z0-9_]{36,244})(?![A-Za-z0-9_])/g,
   },
   { type: "private key", pattern: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g },
   {
     type: "Stripe live secret key",
-    pattern: /(?<![A-Za-z0-9_])sk_live_[A-Za-z0-9]{24,247}(?![A-Za-z0-9])/g,
+    pattern: /(?<![A-Za-z0-9_])sk_live_(?<body>[A-Za-z0-9]{24,247})(?![A-Za-z0-9])/g,
   },
-  { type: "Slack token", pattern: /(?<![A-Za-z0-9])xox[abeoprs]-[A-Za-z0-9-]{10,250}/g },
-  { type: "Anthropic key", pattern: /(?<![A-Za-z0-9_-])sk-ant-[A-Za-z0-9_-]{32,250}/g },
-  { type: "OpenRouter key", pattern: /(?<![A-Za-z0-9_-])sk-or-v1-[A-Za-z0-9]{32,250}/g },
+  { type: "Slack token", pattern: /(?<![A-Za-z0-9])xox[abeoprs]-(?<body>[A-Za-z0-9-]{10,250})/g },
+  { type: "Anthropic key", pattern: /(?<![A-Za-z0-9_-])sk-ant-(?<body>[A-Za-z0-9_-]{32,250})/g },
+  { type: "OpenRouter key", pattern: /(?<![A-Za-z0-9_-])sk-or-v1-(?<body>[A-Za-z0-9]{32,250})/g },
   {
     // A project, service account or admin key, or the older kind with `T3BlbkFJ` in the middle.
     type: "OpenAI key",
     pattern:
-      /(?<![A-Za-z0-9_-])sk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,250}|[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20})/g,
+      /(?<![A-Za-z0-9_-])sk-(?:(?:proj|svcacct|admin)-(?<body>[A-Za-z0-9_-]{20,250})|[A-Za-z0-9]{20}T3BlbkFJ[A-Za-z0-9]{20})/g,
   },
   {
     type: "Google API key",
-    pattern: /(?<![A-Za-z0-9_-])AIza[A-Za-z0-9_-]{35}(?![A-Za-z0-9_-])/g,
+    pattern: /(?<![A-Za-z0-9_-])AIza(?<body>[A-Za-z0-9_-]{35})(?![A-Za-z0-9_-])/g,
   },
 ];
+
+/** A placeholder's word: `your`, `here`, `placeholder` or a run of `x`, standing alone between non-letters. */
+const PLACEHOLDER_WORD = /(?:^|[^a-z0-9])(?:your|here|placeholder|x{4,})(?:[^a-z0-9]|$)/i;
+
+/**
+ * A match that is a placeholder from docs or a template, not a secret: it says `example`, holds a placeholder word,
+ * or its body, separators aside, is one character repeated.
+ */
+function isPlaceholder(value: string, body: string | undefined): boolean {
+  return (
+    /example/i.test(value) ||
+    PLACEHOLDER_WORD.test(value) ||
+    (body !== undefined && /^(.)\1*$/.test(body.replace(/[-_]/g, "")))
+  );
+}
 
 /** The first 4 characters, then 8 `*` whatever the length, so the mask never tells how long the secret is. */
 const mask = (secret: string) => `${secret.slice(0, 4)}********`;
 
 /**
  * Each secret in a file's text, in the order they appear: its type, the file's path, its line (from 1) and its mask,
- * as `SecretEvidence` takes it. Never the value. Where two patterns match the same text, the earlier match is kept.
+ * as `SecretEvidence` takes it. Never the value. Placeholders are left out. Where two patterns match the same text,
+ * the earlier match is kept.
  */
 export function findSecrets(path: string, text: string): SecretEvidence[] {
   const found: SecretEvidence[] = [];
   text.split("\n").forEach((content, i) => {
     const matches = SECRET_TYPES.flatMap(({ type, pattern }) =>
-      Array.from(content.matchAll(pattern), (match) => ({
-        type,
-        start: match.index,
-        end: match.index + match[0].length,
-        value: match[0],
-      })),
+      Array.from(content.matchAll(pattern))
+        .filter((match) => !isPlaceholder(match[0], match.groups?.body))
+        .map((match) => ({
+          type,
+          start: match.index,
+          end: match.index + match[0].length,
+          value: match[0],
+        })),
     ).sort((a, b) => a.start - b.start);
     let end = 0;
     for (const match of matches) {

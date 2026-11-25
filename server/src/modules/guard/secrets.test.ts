@@ -3,15 +3,16 @@
 // by joining its parts, so the source never holds a whole one for a secret scanner to flag.
 import { Observation, SecretEvidence, type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_PACK } from "./default-pack.ts";
+import { AWS_KEY, GITHUB_TOKEN } from "../../../test/secret-fixtures.ts";
+import { packRule } from "./default-pack.ts";
 import { findSecrets, secretObservations } from "./secrets.ts";
 
 const join = (...parts: string[]) => parts.join("");
 
 /** One made-up secret of each type, with the type's name. */
 const SECRETS = {
-  "AWS access key id": join("AKIA", "Q7XJ2M4N6P8R3T5V"),
-  "GitHub token": join("ghp", "_", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"),
+  "AWS access key id": AWS_KEY,
+  "GitHub token": GITHUB_TOKEN,
   "private key": join("-----BEGIN ", "RSA PRIVATE KEY-----"),
   "Stripe live secret key": join("sk", "_live_", "4eC39HqLyjWDarjtT1zdp7dc"),
   "Slack token": join("xox", "b-", "123456789012-1234567890123-", "AbCdEfGhIjKlMnOpQrStUvWx"),
@@ -30,7 +31,6 @@ const GITHUB_TOKENS = [
 ];
 
 const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
-const fixOf = (rule: string) => DEFAULT_PACK.find((entry) => entry.ruleId === rule)!.fix;
 
 describe("findSecrets", () => {
   it.each(Object.entries(SECRETS))("finds a %s, masked", (type, secret) => {
@@ -68,6 +68,10 @@ describe("findSecrets", () => {
 
   it.each([
     ["an AWS placeholder", 'aws_access_key_id = "AKIAEXAMPLE"'],
+    ["AWS's documented example key", join('aws_access_key_id = "AKIA', 'IOSFODNN7EXAMPLE"')],
+    ["a Slack placeholder", join('SLACK_BOT_TOKEN="xox', 'b-your-bot-token-here"')],
+    ["an OpenAI placeholder", join('OPENAI_API_KEY="sk-', 'proj-your-api-key-goes-here"')],
+    ["a GitHub token of one repeated character", join("token: ghp", "_", "x".repeat(36))],
     ["a short GitHub-like word", "see ghp_docs for the format"],
     ["a public key", join("-----BEGIN ", "PUBLIC KEY-----")],
     ["a Stripe test key", join("sk", "_test_", "4eC39HqLyjWDarjtT1zdp7dc")],
@@ -119,7 +123,7 @@ describe("secretObservations", () => {
         severity: "high",
         title: "A secret is committed to the repo",
         evidence: {
-          summary: `3 secrets (GitHub token, AWS access key id) in config/app.ts, first on line 2. To fix: ${fixOf("guard/secret-in-repo")}`,
+          summary: `3 secrets (GitHub token, AWS access key id) in config/app.ts, first on line 2. To fix: ${packRule("guard/secret-in-repo").fix}`,
           secret: { type: "GitHub token", path: "config/app.ts", line: 2, mask: "ghp_********" },
         },
       },
@@ -136,7 +140,7 @@ describe("secretObservations", () => {
     });
 
     expect(observation!.evidence.summary).toBe(
-      `1 secret (AWS access key id) in .mcp.json, on line 2. To fix: ${fixOf("guard/secret-in-agent-settings")}`,
+      `1 secret (AWS access key id) in .mcp.json, on line 2. To fix: ${packRule("guard/secret-in-agent-settings").fix}`,
     );
     expect(observation!.title).toBe("A secret sits in an agent settings file");
   });

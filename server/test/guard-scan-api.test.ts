@@ -10,7 +10,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createFindings } from "../src/findings/index.ts";
 import { createLogger } from "../src/log.ts";
-import { DEFAULT_PACK } from "../src/modules/guard/default-pack.ts";
+import { packRule } from "../src/modules/guard/default-pack.ts";
 import { createRepoAssets, guardAssetCheck } from "../src/modules/guard/repo-assets.ts";
 import type { RepoFile, RepoReader } from "../src/modules/guard/repo-reader.ts";
 import { runScanJob } from "../src/scan-job.ts";
@@ -18,6 +18,7 @@ import { createScans, type ScanJobStarter } from "../src/scans.ts";
 import { MOVE_RULES, scanners } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
+import { AWS_KEY, GITHUB_TOKEN } from "./secret-fixtures.ts";
 import {
   activeOrganization,
   linkRepos,
@@ -43,10 +44,7 @@ afterAll(async () => {
 });
 
 const LEAD = "user_lead";
-const AWS_KEY = ["AKIA", "Q7XJ2M4N6P8R3T5V"].join("");
-const GITHUB_TOKEN = ["ghp", "_", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"].join("");
 const repo: Asset = { kind: "repo", ref: "https://github.com/example/guarded" };
-const fixOf = (rule: string) => DEFAULT_PACK.find((entry) => entry.ruleId === rule)!.fix;
 
 const planted: RepoFile[] = [
   { path: "README.md", text: "# Guarded\n" },
@@ -151,7 +149,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
           severity: "high",
           location: { kind: "file", path: "src/config.ts", line: 3 },
           evidence: {
-            summary: `1 secret (AWS access key id) in src/config.ts, on line 3. To fix: ${fixOf("guard/secret-in-repo")}`,
+            summary: `1 secret (AWS access key id) in src/config.ts, on line 3. To fix: ${packRule("guard/secret-in-repo").fix}`,
             secret: {
               type: "AWS access key id",
               path: "src/config.ts",
@@ -167,7 +165,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
           severity: "high",
           location: { kind: "file", path: ".claude/settings.local.json", line: 3 },
           evidence: {
-            summary: `1 secret (GitHub token) in .claude/settings.local.json, on line 3. To fix: ${fixOf("guard/secret-in-agent-settings")}`,
+            summary: `1 secret (GitHub token) in .claude/settings.local.json, on line 3. To fix: ${packRule("guard/secret-in-agent-settings").fix}`,
             secret: {
               type: "GitHub token",
               path: ".claude/settings.local.json",
