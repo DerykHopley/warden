@@ -157,8 +157,12 @@ function padSemver(bare: string): string {
   return parts.join(".") + rest;
 }
 
-/** A comparable version in the ecosystem's order. Throws VersionError when the ecosystem can't read it. */
+/**
+ * A comparable version in the ecosystem's order. Throws VersionError when the ecosystem can't read it, or when Patch
+ * has no version rules for the ecosystem: OSV data comes from JSON, so it may name one the type doesn't (crates.io).
+ */
 export function parseVersion(ecosystem: Ecosystem, text: string): ParsedVersion {
+  if (!isEcosystem(ecosystem)) throw new VersionError(`no version rules for ${pyRepr(ecosystem)}`);
   text = strip(text);
   if (ecosystem === "PyPI") {
     if (pep440.parse(text) !== null) return { kind: "pep440", text };

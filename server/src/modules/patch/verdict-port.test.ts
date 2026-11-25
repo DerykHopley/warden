@@ -110,6 +110,28 @@ describe("an ecosystem Patch has no version rules for", () => {
       "OSV ecosystem 'crates.io' has no version rules here: Patch reads PyPI, npm and Go",
     );
   });
+
+  // The OSV data is read from JSON, so its ecosystem is whatever the file says, whatever the type claims. The spike
+  // gives `unknown`, never a verdict from another ecosystem's rules (the verifier's finding on #107).
+  it("the verdict is unknown, naming the ecosystem, not affected by semver's rules", () => {
+    const crate = [
+      {
+        ecosystem: "crates.io" as OsvEntry["ecosystem"],
+        package: "candle-core",
+        ranges: [{ introduced: "0", fixed: "1.2.0", last_affected: null }],
+        fixed: ["1.2.0"],
+      },
+    ];
+
+    expect(summary(verdict("package", crate, "library", "1.0"))).toEqual([
+      "unknown",
+      "version not understood: no version rules for 'crates.io'",
+      null,
+    ]);
+    expect(() => parseVersion("crates.io" as OsvEntry["ecosystem"], "1.0")).toThrow(
+      new VersionError("no version rules for 'crates.io'"),
+    );
+  });
 });
 
 describe("a CVE whose OSV entries mix PyPI with npm versions", () => {
