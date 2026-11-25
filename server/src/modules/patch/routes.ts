@@ -2,13 +2,20 @@
  * Patch's API, mounted by the start-up file behind the app's middleware (ADR 0005: shared code never imports it). The
  * Team is always the session's, never the request's.
  */
-import { ProductInput, type FrameworksBody, type ProductsBody } from "@warden/contracts";
+import {
+  ProductInput,
+  type FrameworksBody,
+  type Product,
+  type ProductsBody,
+} from "@warden/contracts";
 import type { Context } from "hono";
 import type { z } from "zod";
 import type { AppEnv, MountRoutes } from "../../app.ts";
+import type { Logger } from "../../log.ts";
 import { ProductNameTaken, ProductNotFound } from "./errors.ts";
 import { PATCH_FRAMEWORKS } from "./frameworks.ts";
 import type { Products } from "./products.ts";
+import type { PatchScan } from "./scan.ts";
 
 const FRAMEWORK_IDS = new Set(PATCH_FRAMEWORKS.map(({ id }) => id));
 
@@ -90,7 +97,32 @@ async function withProduct(
   return refusing(c, () => work(parsed.data));
 }
 
-export function patchRoutes({ products }: { products: Products }): MountRoutes {
+/**
+ * Patch's routes. After a Product's change commits, `scan` runs its Patch Scan before the answer, so its CVE Findings
+ * open and turn Fixed with the change (stories 3 and 4). A Scan that throws leaves the change standing and answering
+ * as usual: `logger` records it, and the daily refresh catches the Product up.
+ */
+export function patchRoutes({
+  products,
+  scan,
+  logger,
+}: {
+  products: Products;
+  scan: PatchScan;
+  logger: Logger;
+}): MountRoutes {
+  async function scanAfterChange(team: string, product: Pick<Product, "id" | "dependencies">) {
+    try {
+      await scan.scanProduct(team, product);
+    } catch (error) {
+      logger.error("the Patch Scan after a Product change failed; the change stands", {
+        team,
+        productId: product.id,
+        error,
+      });
+    }
+  }
+
   return (app, requireRole) => {
     // Any person in the Team reads its Products (stories 1 and 2).
     app.get("/api/products", requireRole("member"), async (c) => {
@@ -99,20 +131,30 @@ export function patchRoutes({ products }: { products: Products }): MountRoutes {
     });
 
     // A Lead or an Admin creates, changes and deletes them (stories 1 and 2); a Member gets requireRole's 403.
+    // Each change's Scan runs only once the store has written it: a refused change (400, 404, 409) scans nothing.
     app.post("/api/products", requireRole("lead"), (c) =>
-      withProduct(c, async (input) => c.json(await products.create(c.get("team"), input), 201)),
+      withProduct(c, async (input) => {
+        const product = await products.create(c.get("team"), input);
+        await scanAfterChange(c.get("team"), product);
+        return c.json(product, 201);
+      }),
     );
 
     // PUT replaces the whole Product: Repo URLs and dependencies left out are gone.
     app.put("/api/products/:id", requireRole("lead"), (c) =>
-      withProduct(c, async (input) =>
-        c.json(await products.update(c.get("team"), c.req.param("id"), input)),
-      ),
+      withProduct(c, async (input) => {
+        const product = await products.update(c.get("team"), c.req.param("id"), input);
+        await scanAfterChange(c.get("team"), product);
+        return c.json(product);
+      }),
     );
 
+    // A deleted Product is scanned with no dependencies, so every Finding on it turns Fixed.
     app.delete("/api/products/:id", requireRole("lead"), (c) =>
       refusing(c, async () => {
-        await products.remove(c.get("team"), c.req.param("id"));
+        const id = c.req.param("id");
+        await products.remove(c.get("team"), id);
+        await scanAfterChange(c.get("team"), { id, dependencies: [] });
         return c.body(null, 204);
       }),
     );

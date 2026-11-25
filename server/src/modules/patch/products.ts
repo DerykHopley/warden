@@ -88,7 +88,10 @@ async function readOne(tx: Transaction<Database>, id: string): Promise<Product> 
   return product;
 }
 
-/** The Product's dependency rows, each version as the routes give it (trimmed). */
+/**
+ * The Product's dependency rows, each version trimmed as ProductChange trims it, so every caller (the routes, the
+ * daily step, the seed) stores a version with no line break, whatever it was given.
+ */
 async function writeDependencies(
   tx: Transaction<Database>,
   team: string,
@@ -98,7 +101,14 @@ async function writeDependencies(
   if (dependencies.length === 0) return;
   await tx
     .insertInto("product_dependencies")
-    .values(dependencies.map((dependency) => ({ team_id: team, product_id: id, ...dependency })))
+    .values(
+      dependencies.map(({ version, ...dependency }) => ({
+        team_id: team,
+        product_id: id,
+        ...dependency,
+        version: version?.trim() ?? null,
+      })),
+    )
     .execute();
 }
 

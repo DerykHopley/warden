@@ -8,11 +8,35 @@ import type { HealthBody, ProductInput, Role } from "@warden/contracts";
 import { createApp, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
-import { createLogger } from "../src/log.ts";
+import { createLogger, type Logger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
+import { createProducts } from "../src/modules/patch/products.ts";
+import { patchRoutes } from "../src/modules/patch/routes.ts";
+import { createPatchScan, type PatchScan } from "../src/modules/patch/scan.ts";
 import type { WithTeam } from "../src/with-team.ts";
+
+/** Each module's move rule, as the start-up file wires them. */
+const MOVE_RULES = { guard: guardMoveRule, patch: patchMoveRule };
+
+/**
+ * Patch's routes as the start-up file mounts them: the Products store, and the Patch Scan reporting to a Findings
+ * module with the start-up file's move rules, all on `withTeam`. `scan` stands in for the Patch Scan; `logger` takes
+ * the routes' log lines (none are kept unless given).
+ */
+export function patchMount(
+  withTeam: WithTeam,
+  { scan, logger = createLogger(() => {}) }: { scan?: PatchScan; logger?: Logger } = {},
+): MountRoutes {
+  return patchRoutes({
+    products: createProducts({ withTeam }),
+    scan:
+      scan ??
+      createPatchScan({ findings: createFindings({ withTeam, moveRules: MOVE_RULES }), withTeam }),
+    logger,
+  });
+}
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
 
@@ -167,10 +191,7 @@ export function testApp(options: {
           })
         : noMembers,
       findings: options.withTeam
-        ? createFindings({
-            withTeam: options.withTeam,
-            moveRules: { guard: guardMoveRule, patch: patchMoveRule },
-          })
+        ? createFindings({ withTeam: options.withTeam, moveRules: MOVE_RULES })
         : noFindings,
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),

@@ -8,12 +8,11 @@ import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { AppEnv } from "../src/app.ts";
-import { createProducts } from "../src/modules/patch/products.ts";
-import { patchRoutes } from "../src/modules/patch/routes.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
   activeOrganization,
+  patchMount,
   seedProduct,
   seedTeam,
   sessionToken,
@@ -34,11 +33,7 @@ beforeAll(async () => {
   key = privateKey;
   pool = poolAs("warden_app", inject("testDatabase"));
   withTeam = createWithTeam(pool);
-  ({ app } = testApp({
-    publicPem,
-    withTeam,
-    mount: patchRoutes({ products: createProducts({ withTeam }) }),
-  }));
+  ({ app } = testApp({ publicPem, withTeam, mount: patchMount(withTeam) }));
 });
 
 afterAll(() => pool.end());

@@ -10,10 +10,16 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { AppEnv } from "../src/app.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
-import { patchRoutes } from "../src/modules/patch/routes.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
+import {
+  activeOrganization,
+  patchMount,
+  seedTeam,
+  sessionToken,
+  testApp,
+  testKey,
+} from "./helpers.ts";
 
 const MEMBER = "user_member";
 const LEAD = "user_lead";
@@ -29,11 +35,7 @@ beforeAll(async () => {
   key = privateKey;
   pool = poolAs("warden_app", inject("testDatabase"));
   withTeam = createWithTeam(pool);
-  ({ app } = testApp({
-    publicPem,
-    withTeam,
-    mount: patchRoutes({ products: createProducts({ withTeam }) }),
-  }));
+  ({ app } = testApp({ publicPem, withTeam, mount: patchMount(withTeam) }));
 });
 
 afterAll(() => pool.end());
@@ -172,6 +174,32 @@ describe("a Lead or an Admin changing the Team's Products", () => {
     expect(versions([product])).toEqual(["1.4.0", "0.6.1"]);
     expect(versions(await list(teamId))).toEqual(["1.4.0", "0.6.1"]);
     expect((await list(teamId))[0]!.repo_urls).toEqual(["https://github.com/example/support-bot"]);
+  });
+
+  // Bug slice 4 (#113's verifier): the store trims too, so a caller other than the route never stores a line break.
+  it("has the store trim each version on create and update, for any caller", async () => {
+    const teamId = await team();
+    const store = createProducts({ withTeam });
+    const dependency = (version: string) => ({
+      framework: "langchain",
+      version,
+      usage: "library" as const,
+      internet_facing: false,
+    });
+
+    const made = await store.create(teamId, {
+      ...supportBot,
+      dependencies: [dependency(" 2.0\n")],
+    });
+    const changed = await store.update(teamId, made.id, {
+      ...supportBot,
+      dependencies: [dependency("\t2.1 ")],
+    });
+    const { dependencies } = await stored(teamId);
+
+    expect(made.dependencies.map(({ version }) => version)).toEqual(["2.0"]);
+    expect(changed.dependencies.map(({ version }) => version)).toEqual(["2.1"]);
+    expect(dependencies.map(({ version }) => version)).toEqual(["2.1"]);
   });
 });
 
