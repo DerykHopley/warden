@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
 import type pg from "pg";
 import type { HealthBody, ProductInput, Role } from "@warden/contracts";
-import { createApp, type MountRoutes } from "../src/app.ts";
+import type { Hono } from "hono";
+import { createApp, type AppEnv, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createLogger, type Logger } from "../src/log.ts";
@@ -146,6 +147,42 @@ export async function seedTeam(
       await tx.insertInto("team_members").values({ team_id: team, user_id, role }).execute();
     }
   });
+}
+
+/** A new Team of its own, with these people in it at these Roles: its id. */
+export async function newTeam(
+  withTeam: WithTeam,
+  people: [userId: string, role: Role][],
+): Promise<string> {
+  const id = `org_${randomUUID()}`;
+  await seedTeam(withTeam, id, people);
+  return id;
+}
+
+/**
+ * A request to `app` as `as`, signed in to Team `teamId` with a session token signed by `key`: `body` sent as JSON,
+ * or as it is when it's already a string. Its status, Retry-After, body read as JSON (undefined when empty) and text.
+ */
+export async function call(
+  app: Hono<AppEnv>,
+  key: CryptoKey,
+  method: string,
+  path: string,
+  { as, teamId, body }: { as: string; teamId: string; body?: unknown },
+) {
+  const token = await sessionToken(key, as, 60, activeOrganization(teamId));
+  const res = await app.request(path, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    ...(body === undefined ? {} : { body: typeof body === "string" ? body : JSON.stringify(body) }),
+  });
+  const text = await res.text();
+  return {
+    status: res.status,
+    retryAfter: res.headers.get("Retry-After"),
+    body: text === "" ? undefined : (JSON.parse(text) as unknown),
+    text,
+  };
 }
 
 /**

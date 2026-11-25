@@ -3,9 +3,9 @@
  * Team is always the session's, never the request's.
  */
 import {
+  PatchAssessment,
   ProductInput,
   type FrameworksBody,
-  type PatchAssessment,
   type Product,
   type ProductsBody,
 } from "@warden/contracts";
@@ -112,14 +112,19 @@ function refusedBody(error: z.ZodError): string {
 }
 
 /**
- * The answer `work` gives, or the store's refusal of it, with nothing written: 404 for an id the Team doesn't have,
- * 409 for a name taken.
+ * The answer `work` gives, or its refusal, with nothing written: 404 for a Product or a Patch Finding the Team doesn't
+ * have (naming nothing of anyone's) and for a CVE the loaded snapshot doesn't hold (naming that CVE), 409 for a name
+ * taken.
  */
 async function refusing(c: Context<AppEnv>, work: () => Promise<Response>): Promise<Response> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof ProductNotFound) return c.json({ error: "No such Product" }, 404);
+    if (error instanceof PatchFindingNotFound) {
+      return c.json({ error: "No such Patch Finding" }, 404);
+    }
+    if (error instanceof CveNotInSnapshot) return c.json({ error: error.message }, 404);
     if (error instanceof ProductNameTaken) return c.json({ error: error.message }, 409);
     throw error;
   }
@@ -132,6 +137,13 @@ async function refusing(c: Context<AppEnv>, work: () => Promise<Response>): Prom
 function productId(c: Context<AppEnv>): string {
   const id = c.req.param("id") ?? "";
   if (id.includes("\0")) throw new ProductNotFound(id);
+  return id;
+}
+
+/** The path's Finding id: one holding a NUL is no Finding's id, so it's PatchFindingNotFound, as `productId` does. */
+function findingId(c: Context<AppEnv>): string {
+  const id = c.req.param("id") ?? "";
+  if (id.includes("\0")) throw new PatchFindingNotFound(id);
   return id;
 }
 
@@ -237,18 +249,11 @@ export function patchRoutes({
 
     // Any person in the Team reads one Patch Finding's assessment, worked out now (stories 5 and 6). An id that isn't
     // one of the Team's Patch Findings is a 404 naming nothing of anyone's (story 8); so is a CVE the loaded snapshot
-    // doesn't hold, naming that CVE.
-    app.get("/api/patch/findings/:id/assessment", requireRole("member"), async (c) => {
-      try {
-        const answer = await assessment.read(c.get("team"), c.req.param("id"));
-        return c.json(answer satisfies PatchAssessment);
-      } catch (error) {
-        if (error instanceof PatchFindingNotFound) {
-          return c.json({ error: "No such Patch Finding" }, 404);
-        }
-        if (error instanceof CveNotInSnapshot) return c.json({ error: error.message }, 404);
-        throw error;
-      }
-    });
+    // doesn't hold, naming that CVE. The answer is parsed, not only typed, so its Text limits and URLs hold at run time.
+    app.get("/api/patch/findings/:id/assessment", requireRole("member"), (c) =>
+      refusing(c, async () =>
+        c.json(PatchAssessment.parse(await assessment.read(c.get("team"), findingId(c)))),
+      ),
+    );
   };
 }

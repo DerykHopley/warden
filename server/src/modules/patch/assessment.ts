@@ -3,16 +3,20 @@
  * acts, and the priority with its due date, worked out when asked from the Finding, the Product's dependency as stored
  * now and the loaded CVE snapshot. Nothing is stored, and Finding v1 is unchanged.
  */
-import type { Finding, PatchAssessment, ProductDependency } from "@warden/contracts";
+import { PatchAssessment, type Finding, type ProductDependency } from "@warden/contracts";
 import { sql } from "kysely";
 import type { Findings } from "../../findings/index.ts";
 import type { WithTeam } from "../../with-team.ts";
 import { cvssSeverity, type NvdSeverity } from "./cvss-band.ts";
 import { CveNotInSnapshot, PatchFindingNotFound } from "./errors.ts";
 import { PATCH_FRAMEWORKS } from "./frameworks.ts";
-import { PATCH_POLICY, priority } from "./priority.ts";
+import { PATCH_POLICY, priority, utcDay } from "./priority.ts";
 import { readDependencies } from "./products.ts";
+import { cut } from "./scan.ts";
 import { noFix, verdict, type OsvEntry } from "./verdict.ts";
+
+/** The longest reason the contract takes: a longer one is cut to fit. */
+const REASON_MAX = PatchAssessment.shape.reason.maxLength ?? Infinity;
 
 /** What the CVE snapshot holds for one CVE, its dates as YYYY-MM-DD. */
 export interface CveRecord {
@@ -30,20 +34,31 @@ export interface CveRecord {
   osv: (OsvEntry & { advisory: string })[];
 }
 
-/** A Patch Finding as the assessment reads it: its CVE is its Location's `vulnerability`. */
+/** A Patch Finding as the assessment reads it: on a Product, its CVE its Location's `vulnerability`. */
 type PatchFinding = Finding & {
+  asset: { kind: "product" };
   location: Extract<Finding["location"], { kind: "dependency" }> & { vulnerability: string };
 };
 
+/** Patch's, on a Product Asset, with a CVE to assess: anything else isn't a Patch Finding the assessment reads. */
+function isPatchFinding(finding: Finding): finding is PatchFinding {
+  return (
+    finding.module === "patch" &&
+    finding.asset.kind === "product" &&
+    finding.location.kind === "dependency" &&
+    finding.location.vulnerability !== undefined
+  );
+}
+
 /**
  * The assessment of `finding` on `cve`, for the Product's `dependency` on the CVE's framework (null when it's gone),
- * `today` a YYYY-MM-DD.
+ * as of `now`: "today" is its UTC day.
  */
 export function assess(
   finding: PatchFinding,
   dependency: ProductDependency | null,
   cve: CveRecord,
-  today: string,
+  now: Date,
 ): PatchAssessment {
   // A framework that left PATCH_FRAMEWORKS has no OSV coverage Patch can read: its verdict is unknown.
   const coverage = PATCH_FRAMEWORKS.find((f) => f.id === cve.framework)?.coverage ?? "none";
@@ -64,21 +79,27 @@ export function assess(
       status: finding.status,
       review_date:
         finding.status === "accepted" && finding.accepted_until !== null
-          ? new Date(finding.accepted_until).toISOString().slice(0, 10)
+          ? utcDay(new Date(finding.accepted_until))
           : null,
       published: cve.published,
       no_fix: noFix(coverage, entries),
     },
     PATCH_POLICY,
-    today,
+    utcDay(now),
   );
+  // An acceptance ends at its exact time, at or before now as the daily expiry reads it, not on its UTC day: before
+  // then the Finding isn't overdue, even on the day it ends. The review date only ever says the same or earlier.
+  const acceptanceEnded =
+    finding.status !== "accepted" ||
+    finding.accepted_until === null ||
+    new Date(finding.accepted_until) <= now;
   const advisories = [...new Set(cve.osv.map((e) => e.advisory).filter((a) => a !== ""))];
   return {
     finding_id: finding.id,
     cve_id: cve.id,
     dependency,
     verdict: outcome.verdict,
-    reason: outcome.reason,
+    reason: cut(outcome.reason, REASON_MAX),
     fixed_version: outcome.fixed_version,
     fixes: [...outcome.fixes],
     who_acts: dependency === null ? null : outcome.who_acts,
@@ -87,7 +108,7 @@ export function assess(
       reasons: [...due.reasons],
       due_date: due.due_date,
       due_from: due.due_from,
-      overdue: due.overdue,
+      overdue: due.overdue && acceptanceEnded,
     },
     kev: cve.kev,
     epss: cve.epss,
@@ -100,9 +121,8 @@ export function assess(
 
 export interface PatchAssessments {
   /**
-   * Finding `findingId`'s assessment under `team`, as of today (UTC). Throws PatchFindingNotFound for an id that isn't
-   * one of the Team's Patch Findings (one holding a NUL before anything is read), and CveNotInSnapshot for a Patch
-   * Finding whose CVE the loaded snapshot doesn't hold.
+   * Finding `findingId`'s assessment under `team`, as of now. Throws PatchFindingNotFound for an id that isn't one of
+   * the Team's Patch Findings, and CveNotInSnapshot for a Patch Finding whose CVE the loaded snapshot doesn't hold.
    */
   read(team: string, findingId: string): Promise<PatchAssessment>;
 }
@@ -126,21 +146,12 @@ export function createPatchAssessment({
 }): PatchAssessments {
   return {
     async read(team, findingId) {
-      // Postgres can't store a NUL in text, so an id holding one is no Finding's id.
-      if (findingId.includes("\0")) throw new PatchFindingNotFound(findingId);
       const finding = (await findings.list(team)).find((f) => f.id === findingId);
-      if (
-        finding === undefined ||
-        finding.module !== "patch" ||
-        finding.asset.kind !== "product" ||
-        finding.location.kind !== "dependency" ||
-        finding.location.vulnerability === undefined
-      ) {
+      if (finding === undefined || !isPatchFinding(finding)) {
         throw new PatchFindingNotFound(findingId);
       }
-      const patchFinding = finding as PatchFinding;
-      const cveId = patchFinding.location.vulnerability;
-      const today = now().toISOString().slice(0, 10);
+      const cveId = finding.location.vulnerability;
+      const asOf = now();
 
       return withTeam(team, async (tx) => {
         const cve = await tx
@@ -171,7 +182,7 @@ export function createPatchAssessment({
           .where("product", "=", cve.product)
           .orderBy("position")
           .execute();
-        const dependencies = await readDependencies(tx, patchFinding.asset.ref);
+        const dependencies = await readDependencies(tx, finding.asset.ref);
         const record: CveRecord = {
           id: cve.id,
           framework: cve.product,
@@ -194,7 +205,7 @@ export function createPatchAssessment({
           osv,
         };
         const dependency = dependencies.find((d) => d.framework === cve.product) ?? null;
-        return assess(patchFinding, dependency, record, today);
+        return assess(finding, dependency, record, asOf);
       });
     },
   };

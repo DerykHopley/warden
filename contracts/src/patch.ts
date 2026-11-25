@@ -6,15 +6,22 @@ import { z } from "zod";
 import { Id, Text } from "./finding.ts";
 import { ProductDependency } from "./products.ts";
 
-/** Whether a CVE touches the version in use: Patch's verdict.py values. */
-export const VerdictKind = z.enum(["affected", "not_affected", "unknown"]);
-export type VerdictKind = z.infer<typeof VerdictKind>;
+/**
+ * Whether a CVE touches the version in use: Patch's verdict.py values. Not called a Verdict, which the glossary keeps
+ * for Vouch's judgement of a Control; the assessment's field is still `verdict`. The one place they live: the Patch
+ * module's verdict follows this list.
+ */
+export const AffectedKind = z.enum(["affected", "not_affected", "unknown"]);
+export type AffectedKind = z.infer<typeof AffectedKind>;
 
-/** Who acts on a CVE, from how the Product uses the framework: you, the package that brings it in, or the vendor. */
+/**
+ * Who acts on a CVE, from how the Product uses the framework: you, the package that brings it in, or the vendor. The
+ * one place they live.
+ */
 export const WhoActs = z.enum(["you", "upstream", "vendor"]);
 export type WhoActs = z.infer<typeof WhoActs>;
 
-/** How urgent a CVE is for the Team, highest first. */
+/** How urgent a CVE is for the Team, highest first. The one place they live: Patch's priority follows this list. */
 export const PriorityLevel = z.enum(["urgent", "high", "normal", "low"]);
 export type PriorityLevel = z.infer<typeof PriorityLevel>;
 
@@ -34,7 +41,8 @@ export const PatchAssessment = z.strictObject({
    */
   dependency: ProductDependency.nullable(),
   /** For the Finding Location's version (`"unknown"` read as none), not the dependency's version now. */
-  verdict: VerdictKind,
+  verdict: AffectedKind,
+  /** Cut to fit, with `…` last, when the verdict's reason runs longer. */
   reason: Text(2000),
   /** The fix for this version when known; otherwise the newest fix OSV lists; null when it lists none. */
   fixed_version: z.string().min(1).nullable(),

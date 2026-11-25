@@ -1,10 +1,11 @@
 // The assessment's own logic, below the API: how it reads the Severity band, the OSV links, a dependency that's gone,
-// an Accepted Finding's review date and a framework Patch no longer knows. The API test covers the rest.
+// when an Accepted Finding's acceptance ends, a reason too long for the contract and a framework Patch no longer
+// knows. The API test covers the rest.
 import { PatchAssessment, type ProductDependency } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import { assess, type CveRecord } from "./assessment.ts";
 
-const TODAY = "2026-10-13";
+const NOW = new Date("2026-10-13T09:30:00Z");
 
 const finding = (given: { status?: "open" | "accepted"; accepted_until?: string | null } = {}) => ({
   id: "finding-1",
@@ -69,7 +70,7 @@ describe("the priority's Severity", () => {
     ["NVD's word with no score", { cvss: null, severity: "HIGH" }, ["high severity"]],
     ["none when NVD gave NONE and no score", { cvss: null, severity: "NONE" }, ["not scored yet"]],
   ] as const)("reads %s", (_case, scores, reasons) => {
-    const answer = assessed(finding(), dependency(false), cve(scores), TODAY);
+    const answer = assessed(finding(), dependency(false), cve(scores), NOW);
     expect(answer.priority.reasons).toEqual(reasons);
   });
 });
@@ -81,7 +82,7 @@ describe("the OSV links", () => {
       entry("GHSA-aaaa-aaaa-aaaa", "1.3.0"),
       entry("GHSA-bbbb-bbbb-bbbb", "1.3.1"),
     ];
-    const answer = assessed(finding(), dependency(false), cve({ osv }), TODAY);
+    const answer = assessed(finding(), dependency(false), cve({ osv }), NOW);
     expect(answer.links.osv).toEqual([
       "https://osv.dev/vulnerability/GHSA-bbbb-bbbb-bbbb",
       "https://osv.dev/vulnerability/GHSA-aaaa-aaaa-aaaa",
@@ -89,30 +90,50 @@ describe("the OSV links", () => {
   });
 
   it("gives none when OSV has none", () => {
-    const answer = assessed(finding(), dependency(false), cve({ osv: [] }), TODAY);
-    expect([answer.links.osv, answer.verdict]).toEqual([[], "unknown"]);
+    const answer = assessed(finding(), dependency(false), cve({ osv: [] }), NOW);
+    expect(answer.links.osv).toEqual([]);
   });
 });
 
-it("counts a dependency that's gone as not internet-facing, with no one to act", () => {
-  const facing = assessed(finding(), dependency(true), cve(), TODAY);
-  const gone = assessed(finding(), null, cve(), TODAY);
+it("counts a dependency that's gone as not internet-facing", () => {
+  const facing = assessed(finding(), dependency(true), cve(), NOW);
+  const gone = assessed(finding(), null, cve(), NOW);
 
   expect(facing.priority.reasons).toEqual(["critical", "internet-facing"]);
   expect(gone.priority.reasons).toEqual(["critical"]);
-  expect([gone.who_acts, gone.verdict, gone.fixed_version]).toEqual([null, "affected", "1.3.0"]);
 });
 
-it("reads an Accepted Finding's review date as the UTC day its acceptance ends", () => {
-  // 23:30 at -02:00 on the 13th is the 14th in UTC: the review date hasn't come, so it isn't overdue yet.
-  const accepted = finding({ status: "accepted", accepted_until: "2026-10-13T23:30:00-02:00" });
-  const due = finding({ status: "accepted", accepted_until: "2026-10-13T00:30:00Z" });
+it("counts an Accepted Finding overdue only once its acceptance has ended, to the moment", () => {
+  // The CVE's due date (published + 30 days) is long past, so only the acceptance keeps it from being overdue. It
+  // ends at or before now, as the daily expiry reads it; a later time on the same UTC day hasn't ended it yet.
+  const overdue = (accepted_until: string) =>
+    assessed(finding({ status: "accepted", accepted_until }), dependency(false), cve(), NOW)
+      .priority.overdue;
 
-  expect(assessed(accepted, dependency(false), cve(), TODAY).priority.overdue).toBe(false);
-  expect(assessed(due, dependency(false), cve(), TODAY).priority.overdue).toBe(true);
+  expect(overdue("2026-10-13T00:30:00Z")).toBe(true);
+  expect(overdue("2026-10-13T09:30:00Z")).toBe(true);
+  expect(overdue("2026-10-13T12:00:00Z")).toBe(false);
+  expect(overdue("2026-10-13T23:30:00-02:00")).toBe(false);
+});
+
+it("cuts a reason longer than the contract's 2000 characters to fit, with … last", () => {
+  // Langflow's own fix, then 80 other packages OSV lists with a different fix, each named in the reason.
+  const others = Array.from({ length: 80 }, (_, i) => ({
+    ...entry(`GHSA-${i}`, "2.0.0"),
+    package: `langflow-plugin-${i}`,
+  }));
+  const osv = [entry("GHSA-aaaa-aaaa-aaaa", "1.3.0"), ...others];
+
+  const { reason } = assessed(finding(), dependency(false), cve({ osv }), NOW);
+
+  expect(reason.length).toBeLessThanOrEqual(2000);
+  expect(reason).toMatch(
+    /^1\.2\.0 is before the fixed version 1\.3\.0 \(langflow\); OSV also lists langflow-plugin-0, fixed in 2\.0\.0/,
+  );
+  expect(reason.endsWith("…")).toBe(true);
 });
 
 it("reads verdict unknown for a CVE on a framework Patch no longer knows", () => {
-  const answer = assessed(finding(), null, cve({ framework: "retired-framework" }), TODAY);
+  const answer = assessed(finding(), null, cve({ framework: "retired-framework" }), NOW);
   expect([answer.verdict, answer.reason]).toEqual(["unknown", "no version data for this product"]);
 });

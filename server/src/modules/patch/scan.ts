@@ -90,7 +90,7 @@ export function cvePackage(framework: Framework, entries: readonly OsvEntry[]): 
  * `text` whole when it fits in `max` UTF-16 units, else cut to fit with `…` last. A cut never splits a character
  * made of two units (an emoji, say): it drops the first half too.
  */
-function cut(text: string, max: number): string {
+export function cut(text: string, max: number): string {
   if (text.length <= max) return text;
   let kept = text.slice(0, max - 1);
   const last = kept.charCodeAt(kept.length - 1);

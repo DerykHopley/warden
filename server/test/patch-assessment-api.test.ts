@@ -19,14 +19,7 @@ import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createSaveLimit } from "../src/modules/patch/save-limit.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import {
-  activeOrganization,
-  patchMount,
-  seedTeam,
-  sessionToken,
-  testApp,
-  testKey,
-} from "./helpers.ts";
+import { call, newTeam, patchMount, testApp, testKey } from "./helpers.ts";
 
 const MEMBER = "user_member";
 const LEAD = "user_lead";
@@ -51,33 +44,11 @@ beforeAll(async () => {
 
 afterAll(() => pool.end());
 
-async function team() {
-  const id = `org_${randomUUID()}`;
-  await seedTeam(withTeam, id, [
+const team = () =>
+  newTeam(withTeam, [
     [MEMBER, "member"],
     [LEAD, "lead"],
   ]);
-  return id;
-}
-
-async function call(
-  method: string,
-  path: string,
-  { as, teamId, body, on = app }: { as: string; teamId: string; body?: unknown; on?: Hono<AppEnv> },
-) {
-  const token = await sessionToken(key, as, 60, activeOrganization(teamId));
-  const res = await on.request(path, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  const text = await res.text();
-  return {
-    status: res.status,
-    body: text === "" ? undefined : (JSON.parse(text) as unknown),
-    text,
-  };
-}
 
 const langflow = (version: string | null): ProductInput["dependencies"][number] => ({
   framework: "langflow",
@@ -94,14 +65,18 @@ const flows = (version: string | null): ProductInput => ({
 
 /** Team A's Lead saves Product "Flows"; its id, and its Finding for CVE-2025-3248. */
 async function savedFlows(teamId: string, version: string | null, on = app) {
-  const saved = await call("POST", "/api/products", { as: LEAD, teamId, body: flows(version), on });
+  const saved = await call(on, key, "POST", "/api/products", {
+    as: LEAD,
+    teamId,
+    body: flows(version),
+  });
   expect(saved.status).toBe(201);
   const productId = Product.parse(saved.body).id;
   return { productId, finding: await findingFor(teamId, productId) };
 }
 
 async function findingFor(teamId: string, productId: string): Promise<Finding> {
-  const { status, body } = await call("GET", "/api/findings", { as: MEMBER, teamId });
+  const { status, body } = await call(app, key, "GET", "/api/findings", { as: MEMBER, teamId });
   expect(status).toBe(200);
   const [finding, ...more] = FindingsBody.parse(body).findings.filter(
     (f) =>
@@ -117,10 +92,9 @@ const assessmentPath = (findingId: string) => `/api/patch/findings/${findingId}/
 
 /** A Member's read of the assessment: 200, parsed with the PatchAssessment contract. */
 async function assessment(teamId: string, findingId: string, on = app) {
-  const { status, body } = await call("GET", assessmentPath(findingId), {
+  const { status, body } = await call(on, key, "GET", assessmentPath(findingId), {
     as: MEMBER,
     teamId,
-    on,
   });
   expect(status).toBe(200);
   return PatchAssessment.parse(body);
@@ -180,7 +154,7 @@ describe("a Patch Finding's assessment (stories 5 and 6)", () => {
     const teamId = await team();
     const { productId, finding } = await savedFlows(teamId, "1.2.0");
     const until = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
-    const accepted = await call("POST", `/api/findings/${finding.id}/accept`, {
+    const accepted = await call(app, key, "POST", `/api/findings/${finding.id}/accept`, {
       as: LEAD,
       teamId,
       body: { reason: "Behind the VPN until the upgrade", until },
@@ -189,7 +163,7 @@ describe("a Patch Finding's assessment (stories 5 and 6)", () => {
 
     expect((await assessment(teamId, finding.id)).priority.overdue).toBe(false);
 
-    const upgraded = await call("PUT", `/api/products/${productId}`, {
+    const upgraded = await call(app, key, "PUT", `/api/products/${productId}`, {
       as: LEAD,
       teamId,
       body: flows("1.3.0"),
@@ -205,7 +179,7 @@ describe("a Patch Finding's assessment (stories 5 and 6)", () => {
   it("answers a Fixed Finding with no dependency and no one to act once Langflow is removed", async () => {
     const teamId = await team();
     const { productId, finding } = await savedFlows(teamId, "1.2.0");
-    const removed = await call("PUT", `/api/products/${productId}`, {
+    const removed = await call(app, key, "PUT", `/api/products/${productId}`, {
       as: LEAD,
       teamId,
       body: { ...flows(null), dependencies: [] },
@@ -224,7 +198,7 @@ describe("refusals", () => {
     const teamB = await team();
     const { productId, finding } = await savedFlows(teamA, "1.2.0");
 
-    const { status, body, text } = await call("GET", assessmentPath(finding.id), {
+    const { status, body, text } = await call(app, key, "GET", assessmentPath(finding.id), {
       as: LEAD,
       teamId: teamB,
     });
@@ -262,7 +236,10 @@ describe("refusals", () => {
     const guard = (await findings.list(teamId)).find((f) => f.module === "guard")!;
 
     for (const id of [randomUUID(), "a%00b", guard.id]) {
-      const { status, body } = await call("GET", assessmentPath(id), { as: MEMBER, teamId });
+      const { status, body } = await call(app, key, "GET", assessmentPath(id), {
+        as: MEMBER,
+        teamId,
+      });
       expect([id, status, body]).toEqual([id, 404, { error: expect.any(String) }]);
     }
   });
@@ -299,7 +276,10 @@ describe("refusals", () => {
       (f) => f.location.kind === "dependency" && f.location.vulnerability === unloaded,
     )!;
 
-    const { status, body } = await call("GET", assessmentPath(stale.id), { as: MEMBER, teamId });
+    const { status, body } = await call(app, key, "GET", assessmentPath(stale.id), {
+      as: MEMBER,
+      teamId,
+    });
 
     expect(status).toBe(404);
     expect(body).toEqual({ error: expect.stringContaining(unloaded) });
@@ -319,11 +299,10 @@ describe("refusals", () => {
       mount: patchMount(withTeam, { now: () => TODAY, saveLimit: createSaveLimit({ max: 1 }) }),
     });
     const { finding } = await savedFlows(teamId, "1.2.0", limited);
-    const again = await call("POST", "/api/products", {
+    const again = await call(limited, key, "POST", "/api/products", {
       as: LEAD,
       teamId,
       body: { ...flows("1.2.0"), name: "Flows 2" },
-      on: limited,
     });
     expect(again.status).toBe(429);
 

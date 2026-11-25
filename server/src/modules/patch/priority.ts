@@ -1,11 +1,9 @@
 // Patch's priority (A16): how urgent an open CVE is for a Team, with the reasons and a due date. A pure function,
 // ported from the spike `architecture/spikes/stack-ts/patch-p3` (src/priority.ts, status.ts, settings.ts), itself a
 // port of Patch's backend/app/priority.py. Same behaviour; the policy is fixed in code (no Team setting).
-import type { Status } from "@warden/contracts";
+import type { PriorityLevel, Status } from "@warden/contracts";
 import { isNvdSeverity, type NvdSeverity } from "./cvss-band.ts";
 import type { VerdictKind } from "./verdict.ts";
-
-export type PriorityLevel = "urgent" | "high" | "normal" | "low";
 
 export const ALERT_PRIORITY: Readonly<Record<PriorityLevel, number>> = {
   urgent: 5,
@@ -130,14 +128,15 @@ function percent(p: number): number {
   return Math.trunc(Number((p * 100).toFixed(6)));
 }
 
+/** The UTC calendar day `date` falls on, as YYYY-MM-DD. */
+export function utcDay(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
 /** A real calendar day written YYYY-MM-DD, so that comparing two as text compares the days. */
 function isoDate(date: string): Date {
   const d = new Date(`${date}T00:00:00Z`);
-  if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-    Number.isNaN(d.getTime()) ||
-    d.toISOString().slice(0, 10) !== date
-  ) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(d.getTime()) || utcDay(d) !== date) {
     throw new RangeError(`Invalid isoformat string: '${date}'`);
   }
   return d;
@@ -146,7 +145,7 @@ function isoDate(date: string): Date {
 function addDays(date: string, days: number): string {
   const d = isoDate(date);
   d.setUTCDate(d.getUTCDate() + days);
-  return d.toISOString().slice(0, 10);
+  return utcDay(d);
 }
 
 /** An Accepted Finding whose review date has come. No review date counts as due. */

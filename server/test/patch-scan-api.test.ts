@@ -2,7 +2,6 @@
 // Finding on the Product; an upgrade past the fix, dropping the dependency, or deleting the Product turns it Fixed;
 // and no Team sees or changes another's. Through the real app with Patch's routes mounted as the start-up file mounts
 // them, on the suite's shared database (which holds the CVE snapshot) with Teams of this file's own.
-import { randomUUID } from "node:crypto";
 import { Finding, FindingsBody, Product, type ProductInput } from "@warden/contracts";
 import type { Hono } from "hono";
 import type { CryptoKey } from "jose";
@@ -14,15 +13,7 @@ import { createProducts } from "../src/modules/patch/products.ts";
 import type { PatchScan } from "../src/modules/patch/scan.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import {
-  activeOrganization,
-  patchMount,
-  patchScan,
-  seedTeam,
-  sessionToken,
-  testApp,
-  testKey,
-} from "./helpers.ts";
+import { newTeam, patchMount, patchScan, call as request, testApp, testKey } from "./helpers.ts";
 
 const LEAD = "user_lead";
 
@@ -41,27 +32,15 @@ beforeAll(async () => {
 
 afterAll(() => pool.end());
 
-async function team() {
-  const id = `org_${randomUUID()}`;
-  await seedTeam(withTeam, id, [[LEAD, "lead"]]);
-  return id;
-}
+const team = () => newTeam(withTeam, [[LEAD, "lead"]]);
 
-async function call(
+/** A request to `on` as the Team's Lead. */
+const call = (
   on: Hono<AppEnv>,
   method: string,
   path: string,
-  { teamId, body }: { teamId: string; body?: unknown },
-) {
-  const token = await sessionToken(key, LEAD, 60, activeOrganization(teamId));
-  const res = await on.request(path, {
-    method,
-    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  });
-  const text = await res.text();
-  return { status: res.status, body: text === "" ? undefined : (JSON.parse(text) as unknown) };
-}
+  given: { teamId: string; body?: unknown },
+) => request(on, key, method, path, { as: LEAD, ...given });
 
 const langchain = (version: string | null): ProductInput["dependencies"][number] => ({
   framework: "langchain",
