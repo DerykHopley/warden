@@ -611,15 +611,16 @@ main() {
       --role=roles/cloudsql.client --condition=None
   done
   grant_secrets "$project" "$run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-app-password
-  # The GitHub app's client secret and private key: the live service alone, for now (#151). The Scan Job and the
-  # preview accounts get them when their own slices need them.
+  # The GitHub app's client secret and private key: the live service reads both (#151). The Scan Job reads the private
+  # key alone (below); the preview accounts get them when their own slice needs them.
   grant_secrets "$project" "$run_sa" warden-github-app-client-secret warden-github-app-private-key
   grant_secrets "$project" "$migrate_sa" warden-db-app-password warden-db-migrate-password
   # warden-daily (the daily Job, ADR 0009): the only account that reads the admin password, so the server can't.
   grant_secrets "$project" "$daily_sa" warden-db-app-password warden-db-admin-password
-  # warden-scan (the Scan Job, ADR 0009): the app password only. It works inside one Team and lists none, so it never
-  # needs the admin password.
-  grant_secrets "$project" "$scan_sa" warden-db-app-password
+  # warden-scan (the Scan Job, ADR 0009): the app password, and the GitHub app's private key to read a Team's repos
+  # (#188). It works inside one Team and lists none, so it never needs the admin password; and it never gets the
+  # GitHub app's client secret, so it can't sign anyone in to GitHub.
+  grant_secrets "$project" "$scan_sa" warden-db-app-password warden-github-app-private-key
   grant_secrets "$project" "$preview_run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-preview-app-password
   grant_secrets "$project" "$preview_migrate_sa" warden-db-preview-migrate-password
   # warden-deploy (main): Cloud Run on the project, the warden repository, the live accounts (a release updates the

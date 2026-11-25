@@ -4,8 +4,8 @@
 #   2. read the serving revision again, and stop if a release moved the traffic meanwhile; otherwise move 100% of
 #      warden's traffic to it by name;
 #   3. give the daily Job warden-daily-expiry that revision's image, by digest, with the Job's whole configuration set
-#      afresh as a release sets it (scripts/lib/cloud-run.sh), then the Scan Job warden-scan the same, so the Jobs and
-#      the service run the same code;
+#      afresh as a release sets it (scripts/lib/cloud-run.sh), then the Scan Job warden-scan the same, with the GitHub
+#      app's client id and private key, so the Jobs and the service run the same code;
 #   4. check that the service's own /api/health answers 200.
 # README.md's "Releasing" says when to use it.
 #
@@ -14,7 +14,8 @@
 #        placeholder.
 #        With none: the release revision tagged previous, which a release tags when it takes the traffic from it, so
 #        only a revision that served is chosen. A newer revision whose health gate failed never gets that tag.
-# Env:   GCP_PROJECT_ID and CLOUD_SQL_CONNECTION (<project>:<region>:<instance>), required. ROLLBACK_FROM, optional:
+# Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>) and WARDEN_GITHUB_APP_CLIENT_ID (the
+#        read-only GitHub app's client id, public, for the Scan Job), required. ROLLBACK_FROM, optional:
 #        the revision the caller saw serving; when another serves now, it stops before changing anything.
 #        HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound each health check.
 # Needs: gcloud signed in as an account that may change warden's traffic and update the daily Job and the Scan Job;
@@ -40,7 +41,7 @@ main() {
     usage_error "'$target' isn't a release: a rollback goes only to a release revision (${RELEASE_PREFIX}…); nothing changed"
   [[ -z $from || $from =~ $REVISION_NAME ]] || usage_error "ROLLBACK_FROM '$from' isn't a revision name"
   local var
-  for var in GCP_PROJECT_ID CLOUD_SQL_CONNECTION; do
+  for var in GCP_PROJECT_ID CLOUD_SQL_CONNECTION WARDEN_GITHUB_APP_CLIENT_ID; do
     [[ -n ${!var:-} ]] || usage_error "set $var"
   done
 

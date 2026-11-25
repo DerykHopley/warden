@@ -10,6 +10,8 @@ rollback="$root/scripts/cloud-run-rollback.sh"
 project=test-project
 connection="$project:europe-west1:test-db"
 registry="europe-west1-docker.pkg.dev/$project/warden/warden"
+# The GitHub app's client id (public), as the repository variable WARDEN_GITHUB_APP_CLIENT_ID holds it.
+github_client_id=Iv23liExampleClientId
 service_url=https://warden-123456789012.europe-west1.run.app
 rollback_url=https://rollback---warden-123456789012.europe-west1.run.app
 
@@ -104,13 +106,14 @@ FAKE
 chmod +x "$scratch/gcloud" "$scratch/curl"
 
 # run_rollback <health> <serving revision> [VAR=value...] -- [arguments]: the script with only the stubs, /usr/bin
-# and /bin on PATH, GCP_PROJECT_ID and CLOUD_SQL_CONNECTION plus any variable given (VAR= unsets one), and
-# aaaaaaa-10-1 tagged previous unless FAKE_PREVIOUS says otherwise; no wait between health tries. Its output (stdout
-# and stderr) is in $out, its exit code in $code, the stubs' calls in $calls.
+# and /bin on PATH, GCP_PROJECT_ID, CLOUD_SQL_CONNECTION and WARDEN_GITHUB_APP_CLIENT_ID plus any variable given
+# (VAR= unsets one), and aaaaaaa-10-1 tagged previous unless FAKE_PREVIOUS says otherwise; no wait between health
+# tries. Its output (stdout and stderr) is in $out, its exit code in $code, the stubs' calls in $calls.
 run_rollback() {
   local health=$1 serving=$2
   shift 2
-  local vars=(GCP_PROJECT_ID="$project" CLOUD_SQL_CONNECTION="$connection" FAKE_PREVIOUS=warden-rel-aaaaaaa-10-1)
+  local vars=(GCP_PROJECT_ID="$project" CLOUD_SQL_CONNECTION="$connection"
+    WARDEN_GITHUB_APP_CLIENT_ID="$github_client_id" FAKE_PREVIOUS=warden-rel-aaaaaaa-10-1)
   while [[ $1 != -- ]]; do
     vars+=("$1")
     shift
@@ -186,15 +189,17 @@ WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
   "$(sed 's/:[^:]*$//' <<<"$job_secrets")"
 assert_equal "each of the daily Job's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$job_secrets" || true)"
-# The Scan Job's configuration comes from update_scan_job, which the deploy test checks; here, only what a rollback
-# adds: the target's image, and when.
+# The Scan Job's configuration comes from update_scan_job, which the deploy test checks in full; here, only what a
+# rollback adds: the target's image, when, and the rollback's own WARDEN_GITHUB_APP_CLIENT_ID passed on to it.
 (($(line_no "gcloud run jobs update warden-daily-expiry ") < $(line_no "gcloud run jobs update warden-scan "))) ||
   fail "the Scan Job moves before the daily Job does"
 (($(line_no "gcloud run jobs update warden-scan ") < $(line_no "curl -sS -o /dev/null -w %{http_code} --max-time 10 $service_url"))) ||
   fail "the service's health check runs before the Scan Job moves"
 pass "the Scan Job moves after the daily Job, before the service's health check"
-assert_equal "the Scan Job runs aaaaaaa-10-1's image by digest" "$registry@sha256:aaaa" \
-  "$(flag image "$(call_of "gcloud run jobs update warden-scan ")")"
+scan=$(call_of "gcloud run jobs update warden-scan ")
+assert_equal "the Scan Job runs aaaaaaa-10-1's image by digest" "$registry@sha256:aaaa" "$(flag image "$scan")"
+assert_line "the Scan Job gets the rollback's GitHub app client id" "GITHUB_APP_CLIENT_ID=$github_client_id" \
+  "$(gcloud_dict "$(flag set-env-vars "$scan")")"
 assert_no_match "no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
 assert_line "it says where traffic went" "warden-rel-aaaaaaa-10-1" "$out"
 assert_line "its last line names the daily Job" "warden-daily-expiry" "$(tail -1 <<<"$out")"
@@ -298,5 +303,6 @@ bad_input "a revision name with a space" "usage:" -- "warden rel"
 bad_input "a ROLLBACK_FROM that isn't a revision name" "usage:" "ROLLBACK_FROM=--to-latest" --
 bad_input "an unset GCP_PROJECT_ID" "GCP_PROJECT_ID" GCP_PROJECT_ID= --
 bad_input "an unset CLOUD_SQL_CONNECTION" "CLOUD_SQL_CONNECTION" CLOUD_SQL_CONNECTION= --
+bad_input "an unset WARDEN_GITHUB_APP_CLIENT_ID" "WARDEN_GITHUB_APP_CLIENT_ID" WARDEN_GITHUB_APP_CLIENT_ID= --
 
 echo "cloud-run-rollback: all passed"

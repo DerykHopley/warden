@@ -216,10 +216,10 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 
 | Account | Used by | May |
 |---|---|---|
-| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (the only account that reads the GitHub app's two); start `warden-scan` with an override (`roles/run.jobsExecutorWithOverrides` on that Job only) |
+| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (the only account that reads the GitHub app's client secret, which signs people in); start `warden-scan` with an override (`roles/run.jobsExecutorWithOverrides` on that Job only) |
 | `warden-migrate` | the live migration job | Cloud SQL client; read `warden-db-app-password` and `warden-db-migrate-password`. Not the `postgres` password |
 | `warden-daily` | the daily expiry Job `warden-daily-expiry` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-db-admin-password`. The only account that reads the admin password, so the server can't list Teams |
-| `warden-scan` | the Scan Job `warden-scan` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` only. Never the admin password: it works inside one Team and lists none |
+| `warden-scan` | the Scan Job `warden-scan` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-github-app-private-key`, to read the Team's repos as the GitHub app. Never the admin password: it works inside one Team and lists none. Never the GitHub app's client secret, so it can't sign anyone in to GitHub |
 | `warden-deploy` | GitHub Actions on `main` | Cloud Run developer on the project; writer on the `warden` repository; act as `warden-run`, `warden-migrate`, `warden-daily` and `warden-scan`. Reads no secret |
 | `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key` |
 | `warden-preview-migrate` | the `warden-migrate-preview` job | Cloud SQL client; read `warden-db-preview-migrate-password` only |
@@ -367,7 +367,8 @@ the repository variables `GCP_PROJECT_ID`, `GCP_DEPLOY_SA`, `GCP_WIF_PROVIDER`, 
 `VITE_CLERK_PUBLISHABLE_KEY`. Without any of the five, a release deploys nothing and the run stays green, with a
 notice naming each missing variable (a rollback needs the first four). A release also needs
 `WARDEN_GITHUB_APP_CLIENT_ID`: without it, the release fails naming it after the image is pushed to Artifact Registry,
-before anything is migrated or deployed.
+before anything is migrated or deployed. A rollback needs it too, for the Scan Job: without it, the rollback fails
+naming it before it changes anything.
 
 **What a release does** (`.github/workflows/release.yml`, then `scripts/cloud-run-deploy.sh <image> release`):
 
@@ -394,7 +395,8 @@ before anything is migrated or deployed.
    for up to about 90 seconds until it answers 200. If it never does, the release fails and the revision gets no
    traffic.
 6. **The Scan Job:** `warden-scan` gets the same image and its settings afresh (`node server/src/scan-job.ts`, as
-   `warden-scan`, one retry, a task timeout of an hour, the app password alone, pinned), before any traffic moves, so
+   `warden-scan`, one retry, a task timeout of an hour, the app password and the GitHub app's private key, both
+   pinned, and the app's client id as `GITHUB_APP_CLIENT_ID`; never its client secret), before any traffic moves, so
    the revision that takes the traffic never starts a Job still on an older image. If this step fails, the release
    fails with no traffic moved: dispatch it again.
 7. **Traffic:** 100% of the service's traffic to that revision, by its name. The same call tags the release it took
@@ -437,7 +439,7 @@ Secrets are pinned as for previews: see "Secrets are pinned" in "Owner previews"
 `warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and
 `warden-github-app-private-key`; the migration job
 `warden-db-migrate-password`; the daily Job `warden-db-app-password` and `warden-db-admin-password`; the Scan Job
-`warden-db-app-password` alone. A new version
+`warden-db-app-password` and `warden-github-app-private-key`, never the client secret. A new version
 reaches them with the next release after the PR that moves its number.
 
 **Roll back** with the "Rollback" workflow, by hand from `main`, which runs `scripts/cloud-run-rollback.sh

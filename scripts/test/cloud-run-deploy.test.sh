@@ -433,15 +433,20 @@ assert_equal "release: the Scan Job has the Cloud SQL instance attached" "$conne
   "$(flag set-cloudsql-instances "$scan")"
 assert_equal "release: the Scan Job retries once" 1 "$(flag max-retries "$scan")"
 assert_equal "release: the Scan Job's task may take an hour" 3600s "$(flag task-timeout "$scan")"
-assert_equal "release: the Scan Job's plain values: as warden_app on warden" \
+assert_equal "release: the Scan Job's plain values: as warden_app on warden, and the GitHub app's client id" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_app
-PGDATABASE=warden" \
+PGDATABASE=warden
+GITHUB_APP_CLIENT_ID=$github_client_id" \
   "$(gcloud_dict "$(flag set-env-vars "$scan")")"
+# The Scan Job reads repos with the GitHub app's private key alone: never its client secret, which signs people in.
 scan_secrets=$(gcloud_dict "$(flag set-secrets "$scan")")
-[[ $scan_secrets =~ ^PGPASSWORD=warden-db-app-password:[1-9][0-9]*$ ]] ||
-  fail "release: the Scan Job's only secret is PGPASSWORD, a pinned version of the app password: $scan_secrets"
-pass "release: the Scan Job's only secret is PGPASSWORD, a pinned version of the app password"
+assert_equal "release: the Scan Job's two secrets: the app password and the GitHub app's private key" \
+  "PGPASSWORD=warden-db-app-password
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
+  "$(sed 's/:[^:]*$//' <<<"$scan_secrets")"
+assert_equal "release: each of the Scan Job's secrets is pinned to a version number" "" \
+  "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$scan_secrets" || true)"
 
 assert_no_match "release: no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
 assert_no_match "release: no call names a preview service, job or account" 'warden-preview|warden-migrate-preview' \
