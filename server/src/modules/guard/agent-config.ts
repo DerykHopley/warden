@@ -386,7 +386,7 @@ function runArgumentsEnd(masked: string, start: number): number {
   let inBackquotes = false;
   for (let index = start; index < masked.length; index++) {
     const char = masked[index]!;
-    if (char === "\\") index += masked.startsWith("\r\n", index + 1) ? 2 : 1;
+    if (char === "\\") index += escapedLength(masked, index);
     else if (char === "`" && startsInBackquotes && depth === 0) return index;
     else if (char === "`") inBackquotes = !inBackquotes;
     else if (inBackquotes) continue;
@@ -404,10 +404,15 @@ function runArgumentsEnd(masked: string, start: number): number {
 function backquotesOpenAt(masked: string, index: number): boolean {
   let open = false;
   for (let at = 0; at < index; at++) {
-    if (masked[at] === "\\") at++;
+    if (masked[at] === "\\") at += escapedLength(masked, at);
     else if (masked[at] === "`") open = !open;
   }
   return open;
+}
+
+/** How many characters the backslash at `index` escapes: two for a CRLF line continuation, otherwise one. */
+function escapedLength(masked: string, index: number): number {
+  return masked.startsWith("\r\n", index + 1) ? 2 : 1;
 }
 
 /** Whether the `&` or `|` at `index` belongs to a redirect: `>&`, `<&`, `&>` (`&>>` too) or `>|`. */
