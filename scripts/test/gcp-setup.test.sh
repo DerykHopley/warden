@@ -530,8 +530,8 @@ assert_equal "without application-default credentials: it changes nothing" "" "$
 fix="gcloud auth application-default set-quota-project $project"
 ADC_QUOTA=other-project real_run adc-other-quota fresh
 assert_equal "ADC with another quota project: exit 1" 1 "$code"
-assert_line "ADC with another quota project: names it" "other-project" "$out"
-assert_line "ADC with another quota project: names the target project" "not $project" "$out"
+assert_line "ADC with another quota project: names both projects, quoted (#109)" \
+  "quota project is 'other-project', not '$project'" "$out"
 assert_line "ADC with another quota project: names the fix" "$fix" "$out"
 assert_equal "ADC with another quota project: it changes nothing" "" "$(changes)"
 
@@ -580,8 +580,14 @@ assert_equal "a missing GOOGLE_APPLICATION_CREDENTIALS file: it changes nothing"
 real_run quota-env-other fresh GOOGLE_CLOUD_QUOTA_PROJECT=other-project
 assert_equal "GOOGLE_CLOUD_QUOTA_PROJECT set to another project: exit 1" 1 "$code"
 assert_line "GOOGLE_CLOUD_QUOTA_PROJECT set to another project: names the variable and both projects" \
-  "GOOGLE_CLOUD_QUOTA_PROJECT is other-project, not $project" "$out"
+  "GOOGLE_CLOUD_QUOTA_PROJECT is 'other-project', not '$project'" "$out"
 assert_equal "GOOGLE_CLOUD_QUOTA_PROJECT set to another project: it changes nothing" "" "$(changes)"
+# One that differs only by a trailing space: the quotes show it (#109).
+real_run quota-env-trailing-space fresh GOOGLE_CLOUD_QUOTA_PROJECT="$project "
+assert_equal "GOOGLE_CLOUD_QUOTA_PROJECT with a trailing space: exit 1" 1 "$code"
+assert_line "GOOGLE_CLOUD_QUOTA_PROJECT with a trailing space: the quotes show the space" \
+  "GOOGLE_CLOUD_QUOTA_PROJECT is '$project ', not '$project'" "$out"
+assert_equal "GOOGLE_CLOUD_QUOTA_PROJECT with a trailing space: it changes nothing" "" "$(changes)"
 ADC_QUOTA=other-project real_run quota-env-overrides fresh GOOGLE_CLOUD_QUOTA_PROJECT="$project"
 [[ $code == 0 ]] || fail "GOOGLE_CLOUD_QUOTA_PROJECT set to the target over a file with another: the run failed: $out"
 pass "GOOGLE_CLOUD_QUOTA_PROJECT set to the target over a file with another: a run ends"
@@ -602,7 +608,7 @@ pass "an empty GOOGLE_CLOUD_QUOTA_PROJECT: a run ends"
 real_run csql-quota-other fresh CSQL_PROXY_QUOTA_PROJECT=other-project
 assert_equal "CSQL_PROXY_QUOTA_PROJECT set to another project: exit 1" 1 "$code"
 assert_line "CSQL_PROXY_QUOTA_PROJECT set to another project: names the variable and both projects" \
-  "CSQL_PROXY_QUOTA_PROJECT is other-project, not $project" "$out"
+  "CSQL_PROXY_QUOTA_PROJECT is 'other-project', not '$project'" "$out"
 assert_equal "CSQL_PROXY_QUOTA_PROJECT set to another project: it changes nothing" "" "$(changes)"
 real_run csql-quota-blank fresh CSQL_PROXY_QUOTA_PROJECT=" "
 assert_line "a blank CSQL_PROXY_QUOTA_PROJECT: says it's blank" \
