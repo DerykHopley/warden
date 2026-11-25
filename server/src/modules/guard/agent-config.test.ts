@@ -458,6 +458,7 @@ describe("guard/permission-skip", () => {
 
   it.each([
     [".claude/settings.json", "Stop", `claude ${FLAG} -p x`, FLAG],
+    [".claude/settings.json", "Stop", `claude ${FLAG} -p "review"`, FLAG],
     [
       ".claude/settings.json",
       "PreToolUse",
@@ -491,6 +492,14 @@ describe("guard/permission-skip", () => {
     ["runs claude without the flag", 'claude -p "review the diff"'],
     ["greps for the flag with claude in quotes", `grep -q 'claude ${FLAG}' && exit 2 || true`],
     ["runs a command whose name only ends in claude", `myclaude ${FLAG}`],
+    [
+      "greps for the flag with claude after a space in double quotes",
+      `grep -q "run claude ${FLAG}" && exit 2`,
+    ],
+    [
+      "greps for the flag with claude after ;, | and && in double quotes",
+      `grep -qE "(^|;|[|]|&&) claude ${FLAG}" && exit 2`,
+    ],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
   });
@@ -593,6 +602,10 @@ describe("the whole-repo Rules, at the end of a repo", () => {
       "Read(./.env*)",
       "Read(/.env)",
       "Read(//**/.env)",
+      "Read(./**/.env)",
+      "Read(./**/.env*)",
+      "Read(/**/.env)",
+      "Read(/**/.env*)",
     ].flatMap((entry) => [
       [entry, ".claude/settings.json"],
       [entry, ".claude/settings.local.json"],
@@ -605,6 +618,7 @@ describe("the whole-repo Rules, at the end of a repo", () => {
 
   it.each([
     ["Read(./.env.*) alone", ".claude/settings.json", ["Read(./.env.*)"]],
+    ["Read(./**/.env.*) alone", ".claude/settings.json", ["Read(./**/.env.*)"]],
     ["Read(./.env) only in a subfolder's settings", "sub/.claude/settings.json", ["Read(./.env)"]],
     ["a deny of other files", ".claude/settings.json", ["Read(./secrets/**)", "Read(./.envrc)"]],
     ["a deny of another tool on .env", ".claude/settings.json", ["Edit(./.env)"]],

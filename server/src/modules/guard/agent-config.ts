@@ -368,10 +368,27 @@ const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
  */
 const RUNS_CLAUDE = /(?:^|[ ;&|(/])claude(?:-code)? /;
 
+/**
+ * A backslash and the character it escapes, or a single- or double-quoted argument (to the end of the text when it
+ * isn't closed). In double quotes a backslash escapes the next character; in single quotes nothing is escaped.
+ */
+const ESCAPE_OR_QUOTED = /\\[\s\S]|"(?:[^"\\]|\\[\s\S])*"?|'[^']*'?/g;
+
+/**
+ * A shell command with each quoted argument, its quotes too, masked by `_`, so its length and every index stay the
+ * same: text inside quotes is never a command word. `bash -c "claude …"` is missed, as a guard hook that greps for the
+ * flag is the commoner case.
+ */
+const unquoted = (command: string) =>
+  command.replace(ESCAPE_OR_QUOTED, (match) =>
+    match.startsWith("\\") ? match : "_".repeat(match.length),
+  );
+
 /** Each hook command that runs the agent, once per flag after the command word, on the `command` value's line. */
 const hookPlaces = ({ hooks }: ClaudeSettings): Place[] =>
   hooks.flatMap(({ command, line }) => {
-    const run = RUNS_CLAUDE.exec(command);
+    // The flag or mode value after the command word may be quoted, so it is searched for in the command as written.
+    const run = RUNS_CLAUDE.exec(unquoted(command));
     if (run === null) return [];
     const after = command.slice(run.index + run[0].length);
     return SKIP_FLAGS.flatMap(({ kind, pattern }) =>
@@ -405,8 +422,10 @@ const where = (count: number, line: number) =>
   count === 1 ? `on line ${line}` : `first on line ${line}`;
 
 // A deny entry that stops a read of `.env`: the whole Read tool, or a Read pattern that ends in `.env` or `.env*`,
-// after an optional `./`, `/`, `**/` or `//**/`. `Read(./.env.*)` stops only `.env.local` and the like.
-const DENIES_ENV = /^Read(?:\((?:\.\/|\/|\*\*\/|\/\/\*\*\/)?\.env\*?\))?$/;
+// after an optional `./`, `/`, `**/`, `./**/`, `/**/` or `//**/`. In project settings `/` is the project root, and
+// `**` matches across folders, none included, so each reaches the root `.env`. `Read(./.env.*)` stops only
+// `.env.local` and the like.
+const DENIES_ENV = /^Read(?:\((?:\.?\/|(?:\.\/|\/\/?)?\*\*\/)?\.env\*?\))?$/;
 
 function agentCanReadEnv(asset: Asset, deny: readonly PermissionEntry[]): Observation | undefined {
   if (deny.some(({ rule }) => DENIES_ENV.test(rule))) return undefined;
