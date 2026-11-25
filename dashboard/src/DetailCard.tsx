@@ -406,6 +406,7 @@ export function DetailCard(props: {
 
   function ready(action: Action): boolean {
     if (draft.reason.trim() === "") return false;
+    // Against the day this render saw: a form open past midnight is checked again, at the day now, in submit.
     if (asksUntil(action) && (draft.until === "" || draft.until < earliest)) return false;
     if (asksCandidate(action)) {
       return mergeable.some((candidate) => candidate.id === draft.candidate);
