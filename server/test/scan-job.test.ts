@@ -4,13 +4,14 @@
 import { randomUUID } from "node:crypto";
 import { ScanBody, type Asset, type Observation } from "@warden/contracts";
 import type { CryptoKey } from "jose";
+import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createLogger } from "../src/log.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { runScanJob } from "../src/scan-job.ts";
-import { createScans, type Scanner, type Scans } from "../src/scans.ts";
+import { createScans, QUEUED_SCAN_LIMIT_MINUTES, type Scanner, type Scans } from "../src/scans.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { activeOrganization, seedTeam, sessionToken, testApp, testKey } from "./helpers.ts";
@@ -280,6 +281,26 @@ describe("runScanJob", () => {
 
     expect(counting.runs).toEqual([]);
     expect(await scans.get(team, scan.id)).toMatchObject({ state: "failed" });
+  });
+
+  it("still runs a Scan the time limit ended, when its Job starts late", async () => {
+    const team = await newTeam();
+    const scan = await queued(team);
+    // Its Job never started in time: set its queueing back past the limit (the schema keeps `queued_at` unwritable).
+    const late = new Date(Date.now() - (QUEUED_SCAN_LIMIT_MINUTES + 5) * 60_000);
+    await withTeam(team, (tx) =>
+      sql`update scan_requests set queued_at = ${late} where id = ${scan.id}`.execute(tx),
+    );
+    expect(await scans.get(team, scan.id)).toMatchObject({ state: "failed", started_at: null });
+
+    expect(await job(team, scan.id, fakeScanner().scanner).run).toBe(0);
+
+    const after = await scans.get(team, scan.id);
+    expect(after).toMatchObject({ state: "done" });
+    expect(after!.started_at).toEqual(expect.any(String));
+    expect(await findings.list(team)).toEqual([
+      expect.objectContaining({ rule_id: ENV, status: "open", first_seen_scan: scan.id }),
+    ]);
   });
 
   it("returns 0 for a Scan already done, without running the scanner", async () => {

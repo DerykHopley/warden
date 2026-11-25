@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createRepoAssets, guardAssetCheck } from "../src/modules/guard/repo-assets.ts";
 import {
   createScans,
+  QUEUED_SCAN_LIMIT_MINUTES,
   ScanJobStartUnknown,
   type AssetChecks,
   type ScanJobStarter,
@@ -125,6 +126,50 @@ const read = (app: App, team: string, id: string, as = MEMBER) =>
 /** The Team's queued-Scan rows, read as that Team. */
 const rows = (team: string) =>
   withTeam(team, (tx) => tx.selectFrom("scan_requests").selectAll().orderBy("queued_at").execute());
+
+const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+
+/** Writes the Team's Scan row straight to the table, as if it were queued `queued` minutes ago; answers its id. */
+async function insertScan(
+  team: string,
+  {
+    queued,
+    state = "queued",
+    startedAt = null,
+    endedAt = null,
+  }: {
+    queued: number;
+    state?: "queued" | "running" | "done" | "failed";
+    startedAt?: Date | null;
+    endedAt?: Date | null;
+  },
+) {
+  const id = randomUUID();
+  await withTeam(team, (tx) =>
+    tx
+      .insertInto("scan_requests")
+      .values({
+        team_id: team,
+        id,
+        module: "guard",
+        assets: JSON.stringify([repo()]),
+        rules: [ENV],
+        state,
+        started_at: startedAt,
+        ended_at: endedAt,
+        requested_by: LEAD,
+        queued_at: minutesAgo(queued),
+      })
+      .execute(),
+  );
+  return id;
+}
+
+/** The Team's Scan row with this id, read straight from the table as that Team, not through `Scans`. */
+const row = (team: string, id: string) =>
+  withTeam(team, (tx) =>
+    tx.selectFrom("scan_requests").selectAll().where("id", "=", id).executeTakeFirstOrThrow(),
+  );
 
 describe("POST /api/scans: a Lead starts a Scan (story 2)", () => {
   it("answers 202 with the queued Scan, the scanner's Rules and no start or end yet", async () => {
@@ -436,5 +481,99 @@ describe("GET /api/scans/:id: any person in the Team reads a Scan", () => {
       status: 404,
       body: { error: "No such Scan" },
     });
+  });
+});
+
+describe("A Scan whose Job never started ends after QUEUED_SCAN_LIMIT_MINUTES (story 2)", () => {
+  const LIMIT_MS = QUEUED_SCAN_LIMIT_MINUTES * 60_000;
+
+  it("reads a Scan queued 16 minutes ago and never started as failed, and stores it so", async () => {
+    const team = await newTeam();
+    const { app } = scanApp();
+    const id = await insertScan(team, { queued: 16 });
+
+    const res = await read(app, team, id);
+
+    expect(res.status).toBe(200);
+    const scan = ScanBody.parse(res.body);
+    expect(scan).toMatchObject({ id, state: "failed", started_at: null });
+    expect(scan.ended_at).toEqual(expect.any(String));
+    const stored = await row(team, id);
+    expect(stored).toMatchObject({ state: "failed", started_at: null });
+    // It ended when the limit ran out, which is how the hourly count tells it from any other failed Scan.
+    expect(stored.ended_at!.getTime()).toBe(stored.queued_at.getTime() + LIMIT_MS);
+  });
+
+  it("leaves a Scan queued 14 minutes ago queued", async () => {
+    const team = await newTeam();
+    const { app } = scanApp();
+    const id = await insertScan(team, { queued: 14 });
+
+    const res = await read(app, team, id);
+
+    expect(res.status).toBe(200);
+    expect(ScanBody.parse(res.body)).toMatchObject({ id, state: "queued", ended_at: null });
+    expect(await row(team, id)).toMatchObject({ state: "queued", ended_at: null });
+  });
+
+  it("never ends a running Scan queued an hour ago, after a GET or a start", async () => {
+    const team = await newTeam();
+    const { app } = scanApp({ startScanJob: fakeStarter().start });
+    const id = await insertScan(team, { queued: 60, state: "running", startedAt: minutesAgo(59) });
+
+    expect(ScanBody.parse((await read(app, team, id)).body)).toMatchObject({
+      state: "running",
+      ended_at: null,
+    });
+    expect((await start(app, team)).status).toBe(202);
+
+    expect(await row(team, id)).toMatchObject({ state: "running", ended_at: null });
+  });
+
+  it("ends a Lead's stale queued Scans before counting, so 10 queued 20 minutes ago don't block a start", async () => {
+    const team = await newTeam();
+    const { app } = scanApp({ startScanJob: fakeStarter().start });
+    const stale = [];
+    for (let i = 0; i < 10; i++) stale.push(await insertScan(team, { queued: 20 }));
+
+    const res = await start(app, team);
+
+    expect(res.status).toBe(202);
+    for (const id of stale) {
+      expect(await row(team, id)).toMatchObject({ state: "failed", started_at: null });
+    }
+  });
+
+  it("still counts 10 Scans the route marked failed seconds after queueing: the 11th start is 429", async () => {
+    const team = await newTeam();
+    const starter = fakeStarter();
+    const { app } = scanApp({ startScanJob: starter.start });
+    for (let i = 0; i < 10; i++) {
+      const queued = 30 + i;
+      await insertScan(team, {
+        queued,
+        state: "failed",
+        endedAt: new Date(minutesAgo(queued).getTime() + 5_000),
+      });
+    }
+
+    const res = await start(app, team);
+
+    expect(res.status).toBe(429);
+    expect(starter.calls).toEqual([]);
+  });
+
+  it("never ends another Team's stale Scan: Team B's start and GET leave Team A's queued (story 15)", async () => {
+    const teamA = await newTeam();
+    const teamB = await newTeam();
+    const { app } = scanApp({ startScanJob: fakeStarter().start });
+    const staleA = await insertScan(teamA, { queued: 20 });
+    const staleB = await insertScan(teamB, { queued: 20 });
+
+    expect((await start(app, teamB)).status).toBe(202);
+    expect((await read(app, teamB, staleB)).body).toMatchObject({ state: "failed" });
+    expect((await read(app, teamB, staleA)).status).toBe(404);
+
+    expect(await row(teamA, staleA)).toMatchObject({ state: "queued", ended_at: null });
   });
 });

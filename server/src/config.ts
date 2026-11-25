@@ -11,8 +11,11 @@ function frontendApiHost(publishableKey: string): string | undefined {
   return /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(host) ? host : undefined;
 }
 
-/** A Cloud Run Job's resource name: the project (its id or number), the region and the job. */
-const JOB_NAME = /^projects\/[a-z0-9.:-]+\/locations\/[a-z0-9-]+\/jobs\/[a-z0-9-]+$/;
+/**
+ * A Cloud Run Job's resource name: the project (its id or number), the region and the job. A project id may hold a
+ * dot (`example.com:my-project`), but never is `.` or `..`, which the starter's URL would normalise to another path.
+ */
+const JOB_NAME = /^projects\/(?!\.\.?\/)[a-z0-9.:-]+\/locations\/[a-z0-9-]+\/jobs\/[a-z0-9-]+$/;
 
 const required = z.string().min(1);
 const optional = z

@@ -95,8 +95,17 @@ describe("loadConfig", () => {
   });
 
   it.each([
+    "projects/example.com:my-project/locations/europe-west1/jobs/warden-scan",
+    "projects/123456789/locations/europe-west1/jobs/warden-scan",
+  ])("accepts a Scan Job in a domain-scoped project or a project number: %s", (name) => {
+    expect(loadConfig({ ...env, WARDEN_SCAN_JOB: name }).scanJob).toBe(name);
+  });
+
+  it.each([
     ["a bare job name", "warden-scan"],
     ["a URL", "https://run.googleapis.com/v2/projects/p/locations/europe-west1/jobs/warden-scan"],
+    ["a project of ..", "projects/../locations/r/jobs/j"],
+    ["a project of .", "projects/./locations/r/jobs/j"],
   ])("refuses a Scan Job named by %s, naming only WARDEN_SCAN_JOB", (_name, value) => {
     try {
       loadConfig({ ...env, WARDEN_SCAN_JOB: value });
