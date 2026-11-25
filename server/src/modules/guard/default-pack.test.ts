@@ -6,13 +6,30 @@ import { DEFAULT_PACK, packRule } from "./default-pack.ts";
 import { guardScanner } from "./scanner.ts";
 
 describe("the Default Pack", () => {
-  it("holds the two secret Rules and the two per-file agent-config Rules", () => {
+  it("holds the two secret Rules, the two per-file agent-config Rules and the two whole-repo ones", () => {
     expect(DEFAULT_PACK.map((rule) => rule.ruleId)).toEqual([
       "guard/secret-in-repo",
       "guard/secret-in-agent-settings",
       "guard/blanket-bash-allow",
       "guard/permission-skip",
+      "guard/agent-can-read-env",
+      "guard/no-runtime-guard",
     ]);
+  });
+
+  it("gives the whole-repo agent-config Rules their Severity, title and fix", () => {
+    expect(packRule("guard/agent-can-read-env")).toEqual({
+      ruleId: "guard/agent-can-read-env",
+      severity: "high",
+      title: "The agent can read .env files",
+      fix: "Add Read(./.env) and Read(./.env.*) to permissions.deny in .claude/settings.json.",
+    });
+    expect(packRule("guard/no-runtime-guard")).toEqual({
+      ruleId: "guard/no-runtime-guard",
+      severity: "medium",
+      title: "Nothing checks the agent's tool calls",
+      fix: "Add permissions.deny rules for secret files and a PreToolUse guard hook to .claude/settings.json.",
+    });
   });
 
   it("gives the agent-config Rules their Severity, title and fix", () => {

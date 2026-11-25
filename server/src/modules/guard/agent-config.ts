@@ -1,29 +1,76 @@
-// Guard's agent-config Rules (Guard spec, story 3): what a repo's Claude Code config lets the agent do. Slice 4a holds
-// the two per-file Rules: a broad Bash allow in a settings file, and the flag or mode that skips permission checks.
-// A settings file is read as Claude Code reads it, through its own keys (`permissions.allow`, `permissions.defaultMode`);
-// a file that isn't valid JSON holds no rules, as Claude Code wouldn't apply it either. A summary quotes only allow
-// entries that match the broad patterns, which can't hold a secret, and never a line of a file. The flag and the mode
-// are built here by joining their parts, so this file never holds a whole one for a Guard Scan of Warden to report.
+// Guard's agent-config Rules (Guard spec, story 3): what a repo's Claude Code config lets the agent do. Two are per
+// file: a broad Bash allow in a settings file, and the flag or mode that skips permission checks. Two are whole-repo,
+// answered once every file has been seen: the agent can read .env, and nothing checks the agent's tool calls.
+// A settings file is read as Claude Code reads it, through its own keys (`permissions.allow`, `permissions.deny`,
+// `permissions.defaultMode`, `hooks`); a file that isn't valid JSON holds no rules, as Claude Code wouldn't apply it
+// either. A summary quotes only allow entries that match the broad patterns, which can't hold a secret, and never a
+// line of a file. The flag and the mode are built here by joining their parts, so this file never holds a whole one
+// for a Guard Scan of Warden to report.
 import type { Asset, Observation, RuleId } from "@warden/contracts";
-import { BLANKET_BASH_ALLOW, packRule, PERMISSION_SKIP } from "./default-pack.ts";
+import {
+  AGENT_CAN_READ_ENV,
+  BLANKET_BASH_ALLOW,
+  NO_RUNTIME_GUARD,
+  packRule,
+  PERMISSION_SKIP,
+} from "./default-pack.ts";
 import type { RepoFile } from "./repo-reader.ts";
 
-/** A repo's agent-config check, made once per repo: `see` takes each of its files in turn. */
+/**
+ * A repo's agent-config check, made once per repo: `see` takes each of its files in turn, `unread` each file the
+ * reader couldn't read, and `end` answers the whole-repo Rules once all of them have been through.
+ */
 export interface AgentConfigCheck {
   /** The per-file Rules' Observations for one file: at most one per Rule. */
   see(file: RepoFile): Observation[];
+  /** Notes a file the reader couldn't read: its path still shows whether the repo uses Claude Code. */
+  unread(path: string): void;
+  /**
+   * The whole-repo Rules' Observations, at most one per Rule; none for a repo that doesn't use Claude Code. Undefined
+   * when a root settings file was unread, as what the repo's agent config holds is then unknown.
+   */
+  end(): Observation[] | undefined;
 }
 
+/** The root settings files, which Claude Code merges into the repo's agent config. */
+const ROOT_SETTINGS = [".claude/settings.json", ".claude/settings.local.json"];
+const ROOT_CONFIG = ROOT_SETTINGS.join(" or ");
+/** Where each whole-repo Observation sits, with no line: the root settings file a fix goes in. */
+export const WHOLE_REPO_PATH = ".claude/settings.json";
+
 export function agentConfigCheck(asset: Asset): AgentConfigCheck {
+  let usesClaudeCode = false;
+  let rootUnread = false;
+  const root: ClaudeSettings[] = [];
   return {
     see(file) {
+      usesClaudeCode ||= isClaudeCodePath(file.path);
       const settings = isClaudeSettingsFile(file.path) ? readClaudeSettings(file.text) : undefined;
+      if (settings !== undefined && ROOT_SETTINGS.includes(file.path)) root.push(settings);
       return [
         blanketBashAllow(asset, file.path, settings),
         permissionSkip(asset, file, settings),
       ].filter((observation) => observation !== undefined);
     },
+    unread(path) {
+      usesClaudeCode ||= isClaudeCodePath(path);
+      rootUnread ||= ROOT_SETTINGS.includes(path);
+    },
+    end() {
+      if (rootUnread) return undefined;
+      if (!usesClaudeCode) return [];
+      const deny = root.flatMap((settings) => settings.deny);
+      const hooks = root.flatMap((settings) => settings.hooks);
+      return [agentCanReadEnv(asset, deny), noRuntimeGuard(asset, deny, hooks)].filter(
+        (observation) => observation !== undefined,
+      );
+    },
   };
+}
+
+/** A sign the repo uses Claude Code: a `.claude` folder, or a `CLAUDE.md` or `.mcp.json`, in any folder. */
+function isClaudeCodePath(path: string): boolean {
+  return /(?:^|\/)(?:\.claude\/|(?:CLAUDE\.md|\.mcp\.json)$)/.test(path);
 }
 
 /** A Claude Code settings file: `.claude/settings.json` or `.claude/settings.local.json` in any folder. */
@@ -31,41 +78,78 @@ function isClaudeSettingsFile(path: string): boolean {
   return /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/.test(path);
 }
 
+type Entry = { rule: string; line: number };
+
+/** A hook that runs a command: its event (`PreToolUse`, `Stop`, …), and the `command` value with its line. */
+type HookCommand = { event: string; command: string; line: number };
+
 /** What the agent-config Rules read from a settings file, each value with the line it starts on. */
 type ClaudeSettings = {
   /** `permissions.allow`'s string entries, in order. */
-  allow: readonly { rule: string; line: number }[];
+  allow: readonly Entry[];
+  /** `permissions.deny`'s string entries, in order. */
+  deny: readonly Entry[];
   /** `permissions.defaultMode`, when it is a string. */
   defaultMode: { mode: string; line: number } | undefined;
+  /** Every `type: "command"` hook with a string `command`, under any event. */
+  hooks: readonly HookCommand[];
 };
 
-const NO_SETTINGS: ClaudeSettings = { allow: [], defaultMode: undefined };
+const NO_SETTINGS: ClaudeSettings = { allow: [], deny: [], defaultMode: undefined, hooks: [] };
 
-/** A settings file's permissions. A file that isn't valid JSON, and a field of another type, hold nothing. */
-function readClaudeSettings(text: string): ClaudeSettings {
+const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
+
+/** How deep `valueLines` reads: down to a hook's `command`, at `hooks.<event>.<group>.hooks.<hook>.command`. */
+const SETTINGS_DEPTH = 6;
+
+/**
+ * A settings file's permissions and hook commands. Text that starts with a byte order mark is read without it. A file
+ * that still isn't valid JSON, and a field of another type, hold nothing.
+ */
+function readClaudeSettings(file: string): ClaudeSettings {
+  const text = file.startsWith(BYTE_ORDER_MARK) ? file.slice(1) : file;
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
     return NO_SETTINGS;
   }
-  const permissions = isObject(parsed) ? parsed.permissions : undefined;
-  if (!isObject(permissions)) return NO_SETTINGS;
-  const lines = valueLines(text, 3);
+  if (!isObject(parsed)) return NO_SETTINGS;
+  const lines = valueLines(text, SETTINGS_DEPTH);
   const lineOf = (...path: (string | number)[]) => lines.get(JSON.stringify(path)) ?? 1;
-  const allow = Array.isArray(permissions.allow) ? (permissions.allow as unknown[]) : [];
+  const permissions = isObject(parsed.permissions) ? parsed.permissions : {};
+  const entries = (key: "allow" | "deny"): Entry[] =>
+    asArray(permissions[key]).flatMap((rule, i) =>
+      typeof rule === "string" ? [{ rule, line: lineOf("permissions", key, i) }] : [],
+    );
   const mode = permissions.defaultMode;
   return {
-    allow: allow.flatMap((rule, i) =>
-      typeof rule === "string" ? [{ rule, line: lineOf("permissions", "allow", i) }] : [],
-    ),
+    allow: entries("allow"),
+    deny: entries("deny"),
     defaultMode:
       typeof mode === "string" ? { mode, line: lineOf("permissions", "defaultMode") } : undefined,
+    hooks: Object.entries(isObject(parsed.hooks) ? parsed.hooks : {}).flatMap(([event, groups]) =>
+      asArray(groups).flatMap((group, g) =>
+        asArray(isObject(group) ? group.hooks : undefined).flatMap((hook, h) =>
+          isObject(hook) && hook.type === "command" && typeof hook.command === "string"
+            ? [
+                {
+                  event,
+                  command: hook.command,
+                  line: lineOf("hooks", event, g, "hooks", h, "command"),
+                },
+              ]
+            : [],
+        ),
+      ),
+    ),
   };
 }
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const asArray = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
 
 /**
  * The line (from 1) each value at most `depth` levels deep starts on, keyed by its path as JSON (`["permissions",
@@ -244,10 +328,11 @@ function permissionSkip(
   { path, text }: RepoFile,
   settings: ClaudeSettings | undefined,
 ): Observation | undefined {
-  // A settings file counts only through its parsed `defaultMode`: its text can name the flag to deny or block it.
+  // A settings file counts only through its parsed `defaultMode` and the hooks that run the agent: its text can name
+  // the flag to deny or block it.
   const places =
     settings !== undefined
-      ? defaultModePlaces(settings)
+      ? [...defaultModePlaces(settings), ...hookPlaces(settings)]
       : DOCS_FILE.test(path)
         ? []
         : flagPlaces(text);
@@ -277,6 +362,23 @@ const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
       ]
     : [];
 
+/**
+ * `claude`, or `claude-code` (as `npx @anthropic-ai/claude-code` runs it), as a command word: at the start, or after a
+ * space, `;`, `&`, `|`, `(` or `/`, then a space. A hook that only names the flag, to grep for it, doesn't run it.
+ */
+const RUNS_CLAUDE = /(?:^|[ ;&|(/])claude(?:-code)? /;
+
+/** Each hook command that runs the agent, once per flag after the command word, on the `command` value's line. */
+const hookPlaces = ({ hooks }: ClaudeSettings): Place[] =>
+  hooks.flatMap(({ command, line }) => {
+    const run = RUNS_CLAUDE.exec(command);
+    if (run === null) return [];
+    const after = command.slice(run.index + run[0].length);
+    return SKIP_FLAGS.flatMap(({ kind, pattern }) =>
+      Array.from(after.matchAll(pattern), () => ({ kind, line })),
+    );
+  });
+
 function flagPlaces(text: string): Place[] {
   const lines = text.split("\n");
   // Where each line starts in `text`, to find the line a match starts on.
@@ -302,19 +404,50 @@ function flagPlaces(text: string): Place[] {
 const where = (count: number, line: number) =>
   count === 1 ? `on line ${line}` : `first on line ${line}`;
 
-/** One Observation under a Pack Rule, its summary ending with the Rule's fix. */
+// A deny entry that stops a read of `.env`: the whole Read tool, or a Read pattern that ends in `.env` or `.env*`,
+// after an optional `./`, `/`, `**/` or `//**/`. `Read(./.env.*)` stops only `.env.local` and the like.
+const DENIES_ENV = /^Read(?:\((?:\.\/|\/|\*\*\/|\/\/\*\*\/)?\.env\*?\))?$/;
+
+function agentCanReadEnv(asset: Asset, deny: readonly Entry[]): Observation | undefined {
+  if (deny.some(({ rule }) => DENIES_ENV.test(rule))) return undefined;
+  return observation(
+    asset,
+    AGENT_CAN_READ_ENV,
+    WHOLE_REPO_PATH,
+    undefined,
+    `No permissions.deny rule in ${ROOT_CONFIG} stops the agent reading .env`,
+  );
+}
+
+/** Whether a guard is set up (a deny rule or a PreToolUse hook command), not whether it works. */
+function noRuntimeGuard(
+  asset: Asset,
+  deny: readonly Entry[],
+  hooks: readonly HookCommand[],
+): Observation | undefined {
+  if (deny.length > 0 || hooks.some(({ event }) => event === "PreToolUse")) return undefined;
+  return observation(
+    asset,
+    NO_RUNTIME_GUARD,
+    WHOLE_REPO_PATH,
+    undefined,
+    `Nothing checks the agent's tool calls: no permissions.deny rule and no PreToolUse hook in ${ROOT_CONFIG}`,
+  );
+}
+
+/** One Observation under a Pack Rule, its summary ending with the Rule's fix. A whole-repo one has no line. */
 function observation(
   asset: Asset,
   ruleId: RuleId,
   path: string,
-  line: number,
+  line: number | undefined,
   summary: string,
 ): Observation {
   const rule = packRule(ruleId);
   return {
     asset,
     rule_id: rule.ruleId,
-    location: { kind: "file", path, line },
+    location: line === undefined ? { kind: "file", path } : { kind: "file", path, line },
     severity: rule.severity,
     title: rule.title,
     evidence: { summary: `${summary}. To fix: ${rule.fix}` },
