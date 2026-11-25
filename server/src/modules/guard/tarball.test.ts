@@ -102,8 +102,8 @@ describe("readTarball", () => {
     ]);
 
     expect(files.map((f) => f.path)).toEqual(["kept.txt", "exactly-1MiB.txt", "src/kept.ts"]);
-    // A regular file at a repo path whose text the Scan can't read: the Findings in it stay as they are.
-    expect(unread).toEqual(["image.png", "latin1.txt", "big.txt"]);
+    // A link, or a regular file whose text the Scan can't read, at a repo path: the Findings in it stay as they are.
+    expect(unread).toEqual(["link", "hard", "image.png", "latin1.txt", "big.txt"]);
     expect(counts.files).toBe(3);
     // The top folder itself is a directory too.
     expect(counts.skipped).toEqual({
@@ -113,6 +113,21 @@ describe("readTarball", () => {
       notUtf8: 1,
       badPath: 6,
     });
+  });
+
+  it("yields a link as unread, never its target, and nothing for a link at a path that could escape the repo", async () => {
+    const { files, unread, counts } = await readAll([
+      file("settings.md", "# Settings\n"),
+      { path: `${TOP}/.claude/settings.json`, type: "2", linkname: "../settings.md" },
+      { path: `${TOP}/../link`, type: "2", linkname: "/etc/passwd" },
+      { path: `${TOP}/a/../../hard`, type: "1", linkname: `${TOP}/settings.md` },
+      { path: "/etc/link", type: "2", linkname: "/etc/passwd" },
+    ]);
+
+    expect(files).toEqual([{ path: "settings.md", text: "# Settings\n" }]);
+    expect(unread).toEqual([".claude/settings.json"]);
+    // The top folder and the four links.
+    expect(counts.skipped).toMatchObject({ notAFile: 5, badPath: 0 });
   });
 
   it("counts the compressed and uncompressed bytes it read", async () => {

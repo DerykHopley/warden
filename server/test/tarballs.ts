@@ -104,9 +104,18 @@ export function gitHubTarball(entries: TarEntry[]): Buffer {
   );
 }
 
-/** A repo's files, each `{ path, text }`, as GitHub's tarball of it. */
-export const tarballOf = (files: { path: string; text: string }[]) =>
-  gitHubTarball(files.map(({ path, text }) => file(path, text)));
+/** A symlink in a repo: its path, and the path it points at. */
+export type RepoLink = { path: string; link: string };
+
+/** A repo's entries, each a file `{ path, text }` or a symlink `{ path, link }`, as GitHub's tarball of it. */
+export const tarballOf = (entries: ({ path: string; text: string } | RepoLink)[]) =>
+  gitHubTarball(
+    entries.map((entry) =>
+      "link" in entry
+        ? { path: `${TOP}/${entry.path}`, type: "2", linkname: entry.link }
+        : file(entry.path, entry.text),
+    ),
+  );
 
 /** `bytes` served in chunks of `size`, as a response body streams them. */
 export async function* chunks(bytes: Uint8Array, size = 4096): AsyncGenerator<Uint8Array> {

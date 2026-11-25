@@ -5,8 +5,9 @@
 //
 // What a Scan can't read is skipped and counted, its text never yielded: anything that isn't a regular file (a
 // directory, a link, a device), a file over the size limit, a binary one (a NUL in its first 8 KiB), one that isn't
-// UTF-8, and a path that could escape the repo (a `..` segment, a leading `/`, a `\`, a drive letter). A too-large,
-// binary or non-UTF-8 file is yielded as unread, so the Scan leaves the Findings in it as they are. An archive past
+// UTF-8, and a path that could escape the repo (a `..` segment, a leading `/`, a `\`, a drive letter). A symlink or
+// hard link, a too-large, binary or non-UTF-8 file, each at a repo path, is yielded as unread, so the Scan leaves the
+// Findings in it as they are; a link's target is never read or followed. An archive past
 // its compressed or uncompressed limit, or one that's malformed (not gzip, a bad header, cut short), throws
 // GitHubUnavailable and isn't read further. No error keeps its source's cause: a lost download's error may name its
 // URL, which carries a token.
@@ -257,11 +258,14 @@ const padded = (size: number) => Math.ceil(size / BLOCK) * BLOCK;
 
 /** Regular files: "0", the old NUL, and "7" (contiguous, read as regular). */
 const REGULAR = new Set(["0", "\0", "7"]);
+/** Links: "1" a hard link, "2" a symlink. */
+const LINK = new Set(["1", "2"]);
 
 /**
  * The archive's regular files, one at a time: each one's text, or, for one at a repo path whose text it can't read
- * (too large, binary, not UTF-8), that it's unread. `counts` gathers what was read and skipped; `limits` defaults to
- * ARCHIVE_LIMITS. Throws GitHubUnavailable, naming `step`, for an archive past a limit or a malformed one.
+ * (too large, binary, not UTF-8), that it's unread. A link at a repo path is unread too. `counts` gathers what was
+ * read and skipped; `limits` defaults to ARCHIVE_LIMITS. Throws GitHubUnavailable, naming `step`, for an archive past
+ * a limit or a malformed one.
  */
 export async function* readTarball(
   gzipped: AsyncIterable<Uint8Array>,
@@ -322,11 +326,13 @@ export async function* readTarball(
         counts.skipped[reason] += 1;
         await bytes.skip(padded(size));
       };
+      const path = name === undefined ? undefined : repoPath(name);
       if (!REGULAR.has(header.type)) {
         await skip("notAFile");
+        // A link at a path that could escape the repo is skipped like any other entry there.
+        if (LINK.has(header.type) && path !== undefined) yield { path, unread: true };
         continue;
       }
-      const path = name === undefined ? undefined : repoPath(name);
       if (path === undefined) {
         await skip("badPath");
         continue;
