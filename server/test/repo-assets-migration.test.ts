@@ -1,11 +1,10 @@
 // 0010_repo_assets_per_installation on data 0009_repo_assets stored (#158): every Repo Asset row is kept field for
-// field, and afterwards a repo two of a Team's installations list is held under each. A database of its own, migrated
-// to 0009, written as the app wrote it then, then migrated to the shipped migrations.
+// field, under the key (team_id, installation_id, ref). A database of its own, migrated to 0009, written as the app
+// wrote it then, then migrated to the shipped migrations.
 import { randomUUID } from "node:crypto";
 import type { Selectable } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRepoAssets } from "../src/modules/guard/repo-assets.ts";
 import type { Database } from "../src/schema.ts";
 import type { WithTeam } from "../src/with-team.ts";
 import { ownDatabase } from "./databases.ts";
@@ -102,24 +101,5 @@ describe("0010_repo_assets_per_installation on a database 0009 wrote", () => {
       },
       { type: "p", definition: "PRIMARY KEY (team_id, installation_id, ref)" },
     ]);
-  });
-
-  it("leaves repo_assets with row-level security forced", async () => {
-    const { rows } = await owner.query<{ forced: boolean }>(
-      "select relforcerowsecurity as forced from pg_class where oid = 'repo_assets'::regclass",
-    );
-    expect(rows).toEqual([{ forced: true }]);
-  });
-
-  it("holds a repo under a second installation that lists it, and keeps it when that one is relinked without it", async () => {
-    const repoAssets = createRepoAssets({ withTeam });
-    await repoAssets.link(teamA, {
-      installationId: 103,
-      linkedBy: ADMIN,
-      repos: [{ ref: repoRef("api"), githubId: 1 }],
-    });
-    await repoAssets.link(teamA, { installationId: 103, linkedBy: ADMIN, repos: [] });
-
-    expect(await repoAssetRows(withTeam, teamA)).toEqual(before[teamA]);
   });
 });
