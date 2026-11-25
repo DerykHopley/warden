@@ -364,9 +364,10 @@ const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
 
 /**
  * `claude`, or `claude-code` (as `npx @anthropic-ai/claude-code` runs it), as a command word: at the start, or after
- * white space, `;`, `&`, `|`, `(` or `/`, then a space. A hook that only names the flag, to grep for it, doesn't run it.
+ * white space, `;`, `&`, `|`, `(`, a backquote or `/`, then a space. A hook that only names the flag, to grep for it,
+ * doesn't run it.
  */
-const RUNS_CLAUDE = /(?:^|[\s;&|(/])claude(?:-code)? /g;
+const RUNS_CLAUDE = /(?:^|[\s;&|(`/])claude(?:-code)? /g;
 
 /** The characters that end a command, unless a redirect, a group or backquotes holds them. */
 const ENDS_COMMAND = new Set([";", "&", "|", "\n", ")"]);
@@ -376,14 +377,17 @@ const ENDS_COMMAND = new Set([";", "&", "|", "\n", ")"]);
  * newline or `)` that ends the command, or the command's length. A backslash and the character it escapes (a line
  * continuation among them) don't end it. Nor does a redirect's `&` (`>&`, `<&`, `&>`, `&>>`) or `|` (`>|`), though
  * `&&`, `|&` and a lone `&` or `|` do. Any `(` the run opens (`$(`, `<(`, `$((` or a bare one) and a backquote hold
- * everything up to their close, the close included; one that never closes runs to the end. A `)` the run didn't open still ends it.
+ * everything up to their close, the close included; one that never closes runs to the end. A `)` the run didn't open
+ * still ends it, as does a backquote it didn't open: the one that closes the backquotes the run started in.
  */
 function runArgumentsEnd(masked: string, start: number): number {
+  const startsInBackquotes = backquotesOpenAt(masked, start);
   let depth = 0;
   let inBackquotes = false;
   for (let index = start; index < masked.length; index++) {
     const char = masked[index]!;
     if (char === "\\") index += masked.startsWith("\r\n", index + 1) ? 2 : 1;
+    else if (char === "`" && startsInBackquotes && depth === 0) return index;
     else if (char === "`") inBackquotes = !inBackquotes;
     else if (inBackquotes) continue;
     else if (char === "(") depth++;
@@ -391,6 +395,19 @@ function runArgumentsEnd(masked: string, start: number): number {
     else if (depth === 0 && ENDS_COMMAND.has(char) && !isRedirect(masked, index)) return index;
   }
   return masked.length;
+}
+
+/**
+ * Whether `index` in a command with its quotes masked is inside backquotes: an odd number of backquotes before it,
+ * skipping a backslash and the character it escapes. Backquotes escaped inside backquotes aren't nested spans here.
+ */
+function backquotesOpenAt(masked: string, index: number): boolean {
+  let open = false;
+  for (let at = 0; at < index; at++) {
+    if (masked[at] === "\\") at++;
+    else if (masked[at] === "`") open = !open;
+  }
+  return open;
 }
 
 /** Whether the `&` or `|` at `index` belongs to a redirect: `>&`, `<&`, `&>` (`&>>` too) or `>|`. */
