@@ -78,6 +78,9 @@ jobs:
         env:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
+          # The Scan Job's GitHub app client id (public). Not in the gate above: without it the script stops red,
+          # naming it, before any gcloud call, as a release does.
+          WARDEN_GITHUB_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_APP_CLIENT_ID }}
           REVISION: ${{ inputs.revision }}
           ROLLBACK_FROM: ${{ inputs.from }}
         # The inputs go in as environment variables, never into the script's text, and the script checks each is a

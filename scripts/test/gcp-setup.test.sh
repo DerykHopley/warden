@@ -83,21 +83,26 @@ secrets warden-db-app-password roles/secretmanager.secretAccessor
 secrets warden-github-app-client-secret roles/secretmanager.secretAccessor
 secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-run)"
-# The GitHub app's two secrets (#151): the live service reads them, and no other account. The Scan Job and the preview
-# accounts get them in later slices.
-for secret in warden-github-app-client-secret warden-github-app-private-key; do
-  assert_equal "only warden-run reads $secret" \
-    "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
-    "$(grep -F "add-iam-policy-binding $secret " <<<"$output" | grep -o -- '--member=[^ ]*')"
-done
+# The GitHub app's two secrets (#151, #188): the live service reads both; the Scan Job reads the private key alone, so
+# it can read repos but never sign anyone in. The preview accounts get them in a later slice.
+assert_equal "only warden-run reads warden-github-app-client-secret" \
+  "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
+  "$(grep -F "add-iam-policy-binding warden-github-app-client-secret " <<<"$output" | grep -o -- '--member=[^ ]*')"
+assert_equal "only warden-run and warden-scan read warden-github-app-private-key" \
+  "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com" \
+  "$(grep -F "add-iam-policy-binding warden-github-app-private-key " <<<"$output" | grep -o -- '--member=[^ ]*' |
+    sort)"
 assert_equal "warden-run's executor with overrides is on the warden-scan job and no other" \
   "gcloud run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides --project=$project" \
   "$(grep -F 'roles/run.jobsExecutorWithOverrides' <<<"$output")"
 
-# The Scan Job (ADR 0009): it lists no Teams, so it reads the app password only, never the admin one.
-assert_equal "warden-scan gets Cloud SQL client and the app password, nothing else" \
+# The Scan Job (ADR 0009): it lists no Teams, so it reads the app password, never the admin one; and the GitHub app's
+# private key, never its client secret.
+assert_equal "warden-scan gets Cloud SQL client, the app password and the GitHub app's private key, nothing else" \
   "projects $project roles/cloudsql.client
-secrets warden-db-app-password roles/secretmanager.secretAccessor" \
+secrets warden-db-app-password roles/secretmanager.secretAccessor
+secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-scan)"
 assert_line "it makes the warden-scan service account" \
   "gcloud iam service-accounts create warden-scan '--display-name=Warden: warden-scan' --project=$project"
@@ -829,6 +834,11 @@ assert_no_line "a rerun keeps each job's image" "--image=" "$(grep -F 'run jobs 
 assert_line "a rerun puts the daily Job's Scheduler job back" \
   "scheduler jobs update http warden-daily-expiry --location=europe-west1 --schedule=0 4 * * * --time-zone=Etc/UTC --uri=https://run.googleapis.com/v2/projects/$project/locations/europe-west1/jobs/warden-daily-expiry:run --http-method=POST --oauth-service-account-email=warden-scheduler@$project.iam.gserviceaccount.com --project=$project" \
   "$calls"
+scan_reads_key="secrets add-iam-policy-binding warden-github-app-private-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor"
+assert_line "a rerun on a project that has warden-scan grants it the GitHub app's private key" "$scan_reads_key" \
+  "$calls"
+assert_no_line "a rerun never grants warden-scan the GitHub app's client secret" \
+  "add-iam-policy-binding warden-github-app-client-secret --member=serviceAccount:warden-scan@" "$calls"
 assert_equal "a rerun runs the roles script for both sets again" \
   "live warden
 preview warden_preview" \
@@ -846,6 +856,7 @@ run jobs create warden-scan --image=us-docker.pkg.dev/cloudrun/container/job:lat
 for binding in \
   "projects add-iam-policy-binding $project --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/cloudsql.client" \
   "secrets add-iam-policy-binding warden-db-app-password --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "$scan_reads_key" \
   "iam service-accounts add-iam-policy-binding warden-scan@$project.iam.gserviceaccount.com --member=serviceAccount:warden-deploy@$project.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser" \
   "run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides"; do
   assert_line "a rerun before the Scan Job binds: ${binding%% --member*} ${binding##*--role=}" "$binding" "$calls"
