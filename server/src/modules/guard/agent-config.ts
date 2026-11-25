@@ -362,22 +362,44 @@ const defaultModePlaces = ({ defaultMode }: ClaudeSettings): Place[] =>
       ]
     : [];
 
-/**
- * Where a word stands in its command: whether it is the command word, after a wrapper, or a word to skip (a redirect's
- * target, a function's name); and the options the reserved word `time` before it may still take, in order.
- */
+/** Where a word stands in its command. */
 type Position = {
+  /** It may be the command word. */
   command: boolean;
+  /** An assignment or a redirect came first in its command, so no word of it is a reserved word. */
+  prefixed: boolean;
+  /** It comes after a wrapper's command word. */
   wrapped: boolean;
+  /** It is a word to skip: a redirect's target, a function's name, the value of an option of the `time` program. */
   target: boolean;
+  /** The options the reserved word `time` before it may still take, in order. */
   timeOptions: readonly string[];
+  /** It may be an option of the `time` program before it, rather than that program's command word. */
+  timeProgram: boolean;
+  /** It is the first word after the reserved word `coproc`. */
+  coproc: boolean;
+  /**
+   * It follows the first word after `coproc`, which is the coprocess's name when this word starts a compound command,
+   * and otherwise was the command word: `ifCommand` is where this word then stands, and `start` where that word's run
+   * of the agent starts, if it ran it.
+   */
+  named: { ifCommand: Position; start: number | undefined } | undefined;
 };
 
 /** The first word of a command, as after `;`, `&&`, `|`, a newline, `(` or an opening backquote. */
-const COMMAND_START: Position = { command: true, wrapped: false, target: false, timeOptions: [] };
+const COMMAND_START: Position = {
+  command: true,
+  prefixed: false,
+  wrapped: false,
+  target: false,
+  timeOptions: [],
+  timeProgram: false,
+  coproc: false,
+  named: undefined,
+};
 
 /** Any word after the command word, when that command isn't a wrapper. */
-const AFTER_COMMAND: Position = { command: false, wrapped: false, target: false, timeOptions: [] };
+const AFTER_COMMAND: Position = { ...COMMAND_START, command: false };
 
 /** The characters that end a word, unless a backslash escapes them or (an `&` or `|`) a redirect holds them. */
 const ENDS_WORD = new Set([" ", "\t", "\r", "\n", ";", "&", "|", "(", ")", "`"]);
@@ -385,17 +407,32 @@ const ENDS_WORD = new Set([" ", "\t", "\r", "\n", ";", "&", "|", "(", ")", "`"])
 /** The ends of a word that also end its command, so the next word is a command word. */
 const STARTS_COMMAND = new Set(["\n", ";", "&", "|"]);
 
-/** The reserved word `time`, read apart from the `time` program by path (`/usr/bin/time`), which is a wrapper. */
+/**
+ * The reserved word `time`, as the first word of a command; after an assignment or a redirect, or by path
+ * (`/usr/bin/time`), the word runs the `time` program instead.
+ */
 const TIME = "time";
 
-/** Words that keep the next word a command word, when they are themselves in command position. */
+/** Words that keep the next word a command word, when they are themselves reserved words. */
 const RESERVED = new Set(["if", "then", "else", "elif", "do", "while", "until", "!", "{", TIME]);
 
 /** The options the reserved word `time` takes before its command word, as bash reads them: one `-p`, then one `--`. */
 const TIME_OPTIONS = ["-p", "--"];
 
-/** A word in command position whose next word is a name, with a command after it: `function f { claude …; }`. */
+/**
+ * An option of the `time` program that takes the next word as its value: `-f`, `-o`, `--format` or `--output`, or a
+ * cluster of short options whose first `f` or `o` is its last letter (`-ao`).
+ */
+const TIME_PROGRAM_VALUE = /^(?:-[^-fo]*[fo]|--(?:format|output))$/;
+
+/** A reserved word whose next word is a name, with a command after it: `function f { claude …; }`. */
 const NAMES_NEXT = "function";
+
+/** The reserved word that runs a command as a coprocess, maybe named: `coproc NAME { claude …; }`. */
+const COPROC = "coproc";
+
+/** The words that start a compound command, which `coproc` runs as it is anywhere (a `(` does too). */
+const COMPOUND_STARTS = new Set(["{", "if", "while", "until", "for", "select", "case", "[["]);
 
 /** The end of a word that a `(` after it continues, as a command or process substitution: `x=$(…)bar`, `<(…)`. */
 const SUBSTITUTES = /[$<>]$/;
@@ -408,8 +445,6 @@ const WRAPPERS = new Set([
   "nohup",
   "nice",
   "timeout",
-  // Only the program by path: the bare word is the reserved word, which `RESERVED` reads first.
-  TIME,
   "sudo",
   "xargs",
   "npx",
@@ -431,18 +466,52 @@ const commandName = (word: string) => word.slice(word.lastIndexOf("/") + 1);
 /** Whether a word, its backslashes removed, runs the agent: `claude`, or `claude-code` as `npx` runs it. */
 const isAgent = (word: string) => /^claude(?:-code)?$/.test(commandName(word));
 
-/** Whether `word` starts a run of the agent from `at`, and where the word after it stands. */
-function readWord(at: Position, word: string): [runs: boolean, next: Position] {
-  if (at.target) return [false, { ...at, target: false }];
-  if (!at.command) return at.wrapped && isAgent(word) ? [true, AFTER_COMMAND] : [false, at];
+/**
+ * Where a run of the agent starts if `word`, which ends at `end`, starts one from `at` (at `end`, or at the end of the
+ * word after `coproc` when this word shows that one was the command word), and where the word after it stands.
+ */
+function readWord(
+  at: Position,
+  word: string,
+  end: number,
+): [start: number | undefined, next: Position] {
+  if (at.target) return [undefined, { ...at, target: false }];
+  if (at.named !== undefined) {
+    if (COMPOUND_STARTS.has(word)) return readWord(COMMAND_START, word, end);
+    const [start, next] = readWord(at.named.ifCommand, word, end);
+    return [at.named.start ?? start, next];
+  }
+  if (!at.command) return at.wrapped && isAgent(word) ? [end, AFTER_COMMAND] : [undefined, at];
+  if (at.coproc) {
+    if (COMPOUND_STARTS.has(word)) return readWord(COMMAND_START, word, end);
+    // Bash reads no reserved word here but a compound command's: `coproc ! claude` runs a command named `!`.
+    const [start, next] = readWord({ ...at, coproc: false, prefixed: true }, word, end);
+    if (ASSIGNMENT.test(word) || REDIRECT.test(word)) return [start, next];
+    return [undefined, { ...AFTER_COMMAND, named: { ifCommand: next, start } }];
+  }
   const option = at.timeOptions.indexOf(word);
-  if (option >= 0) return [false, { ...at, timeOptions: at.timeOptions.slice(option + 1) }];
-  const afterWord = { ...at, timeOptions: word === TIME ? TIME_OPTIONS : [] };
-  if (ASSIGNMENT.test(word) || RESERVED.has(word)) return [false, afterWord];
-  if (word === NAMES_NEXT) return [false, { ...afterWord, target: true }];
-  if (REDIRECT.test(word)) return [false, { ...afterWord, target: REDIRECT_ALONE.test(word) }];
-  if (isAgent(word)) return [true, AFTER_COMMAND];
-  return [false, { ...AFTER_COMMAND, wrapped: WRAPPERS.has(commandName(word)) }];
+  if (option >= 0) return [undefined, { ...at, timeOptions: at.timeOptions.slice(option + 1) }];
+  if (at.timeProgram && word.startsWith("-")) {
+    const value = TIME_PROGRAM_VALUE.test(word);
+    return [undefined, { ...at, timeProgram: word !== "--", target: value }];
+  }
+  if (ASSIGNMENT.test(word)) return [undefined, { ...at, prefixed: true, timeOptions: [] }];
+  if (REDIRECT.test(word)) {
+    const alone = REDIRECT_ALONE.test(word);
+    return [undefined, { ...at, prefixed: true, timeOptions: [], target: alone }];
+  }
+  if (!at.prefixed && RESERVED.has(word)) {
+    return [undefined, { ...at, timeOptions: word === TIME ? TIME_OPTIONS : [] }];
+  }
+  if (!at.prefixed && word === NAMES_NEXT) {
+    return [undefined, { ...at, timeOptions: [], target: true }];
+  }
+  if (!at.prefixed && word === COPROC) return [undefined, { ...COMMAND_START, coproc: true }];
+  if (isAgent(word)) return [end, AFTER_COMMAND];
+  if (commandName(word) === TIME) {
+    return [undefined, { ...COMMAND_START, prefixed: true, timeProgram: true }];
+  }
+  return [undefined, { ...AFTER_COMMAND, wrapped: WRAPPERS.has(commandName(word)) }];
 }
 
 /**
@@ -450,9 +519,13 @@ function readWord(at: Position, word: string): [runs: boolean, next: Position] {
  * it. Reads command words, not the whole shell grammar. A word ends at unescaped white space, `;`, `&`, `|`, `(`, `)`
  * or a backquote; a backslash joins the character it escapes to the word, and a line continuation joins the words
  * either side. A word runs the agent when it is the command word (the first of a command, past `NAME=value`, a
- * redirect and reserved words such as `then` or `!`, and `time`'s `-p` and `--`) or any later word after a wrapper
- * (`env`, `sudo`, `npx`, `/usr/bin/time`, …). An unescaped `#` at a word's start hides the rest of its line. Each `(`
- * and backquote starts a command, and its close restores where the word before it stood; inside backquotes, an escaped
+ * redirect and reserved words such as `then` or `!`, and `time`'s `-p` and `--`), the `time` program's command word
+ * (past its options and their values), or any later word after a wrapper (`env`, `sudo`, `npx`, …). A word is a
+ * reserved word only before any assignment or redirect in its command; after one, it is the command word, and `time`
+ * is the `time` program, as it is by path (`/usr/bin/time`). After the reserved word `coproc`, a compound command is
+ * read as it is anywhere; any other word is its command word, unless a compound command follows that word, which makes
+ * it the coprocess's name. An unescaped `#` at a word's start hides the rest of its line. Each `(` and backquote
+ * starts a command, and its close restores where the word before it stood; inside backquotes, an escaped
  * backquote opens or closes a nested one. A backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the
  * word: it goes on after the close. After a `)` that closes nothing (a `case` pattern's) or one whose `(` came after a
  * command's word (a `case` pattern's `(a)`, a function's `()`), a command starts; so it does after `function` and the
@@ -468,8 +541,8 @@ function agentRunStarts(masked: string): number[] {
   let word: string | undefined;
   const endWord = (index: number) => {
     if (word === undefined) return;
-    const [runs, next] = readWord(at, word);
-    if (runs) starts.push(index);
+    const [start, next] = readWord(at, word, index);
+    if (start !== undefined) starts.push(start);
     at = next;
     word = undefined;
   };
@@ -523,7 +596,8 @@ function agentRunStarts(masked: string): number[] {
     }
   }
   endWord(masked.length);
-  return starts;
+  // A run after `coproc` is known only at the next word, after any run inside that word: `coproc claude $(claude …)`.
+  return starts.sort((a, b) => a - b);
 }
 
 /**
