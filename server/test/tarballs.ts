@@ -81,6 +81,13 @@ export const file = (path: string, body: string | Uint8Array): TarEntry => ({
   body,
 });
 
+/** A link under the top folder: "2" a symlink (the default) or "1" a hard link, pointing at `target`. */
+export const link = (path: string, target: string, type: "1" | "2" = "2"): TarEntry => ({
+  path: `${TOP}/${path}`,
+  type,
+  linkname: target,
+});
+
 /** A file whose path runs past ustar's 100 bytes, named by a pax `path` record before it. */
 export const paxFile = (path: string, body: string): TarEntry[] => [
   { path: "PaxHeaders/long-path", type: "x", body: paxRecords({ path: `${TOP}/${path}` }) },
@@ -111,9 +118,7 @@ export type RepoLink = { path: string; link: string };
 export const tarballOf = (entries: ({ path: string; text: string } | RepoLink)[]) =>
   gitHubTarball(
     entries.map((entry) =>
-      "link" in entry
-        ? { path: `${TOP}/${entry.path}`, type: "2", linkname: entry.link }
-        : file(entry.path, entry.text),
+      "link" in entry ? link(entry.path, entry.link) : file(entry.path, entry.text),
     ),
   );
 

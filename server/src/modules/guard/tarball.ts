@@ -262,8 +262,8 @@ const REGULAR = new Set(["0", "\0", "7"]);
 const LINK = new Set(["1", "2"]);
 
 /**
- * The archive's regular files, one at a time: each one's text, or, for one at a repo path whose text it can't read
- * (too large, binary, not UTF-8), that it's unread. A link at a repo path is unread too. `counts` gathers what was
+ * The archive's regular files and links at repo paths, one at a time: a regular file's text, or that it's unread,
+ * for a link (never followed) or a file whose text it can't read (too large, binary, not UTF-8). `counts` gathers what was
  * read and skipped; `limits` defaults to ARCHIVE_LIMITS. Throws GitHubUnavailable, naming `step`, for an archive past
  * a limit or a malformed one.
  */
@@ -329,7 +329,7 @@ export async function* readTarball(
       const path = name === undefined ? undefined : repoPath(name);
       if (!REGULAR.has(header.type)) {
         await skip("notAFile");
-        // A link at a path that could escape the repo is skipped like any other entry there.
+        // A link at a repo path is unread; one at a path that could escape the repo yields nothing.
         if (LINK.has(header.type) && path !== undefined) yield { path, unread: true };
         continue;
       }

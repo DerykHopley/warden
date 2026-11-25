@@ -9,6 +9,7 @@ import {
   file,
   gitHubTarball,
   gnuLongFile,
+  link,
   paxFile,
   tar,
   TOP,
@@ -85,8 +86,8 @@ describe("readTarball", () => {
   it("skips and counts a symlink, a directory, a binary file, a non-UTF-8 file, one over 1 MiB and a bad path, naming the files it couldn't read", async () => {
     const { files, unread, counts } = await readAll([
       file("kept.txt", "kept\n"),
-      { path: `${TOP}/link`, type: "2", linkname: "/etc/passwd" },
-      { path: `${TOP}/hard`, type: "1", linkname: `${TOP}/kept.txt` },
+      link("link", "/etc/passwd"),
+      link("hard", `${TOP}/kept.txt`, "1"),
       { path: `${TOP}/src/`, type: "5" },
       file("image.png", Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x0d])),
       file("latin1.txt", Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])),
@@ -115,19 +116,18 @@ describe("readTarball", () => {
     });
   });
 
-  it("yields a link as unread, never its target, and nothing for a link at a path that could escape the repo", async () => {
+  it("yields nothing for a link at a path that could escape the repo", async () => {
     const { files, unread, counts } = await readAll([
       file("settings.md", "# Settings\n"),
-      { path: `${TOP}/.claude/settings.json`, type: "2", linkname: "../settings.md" },
-      { path: `${TOP}/../link`, type: "2", linkname: "/etc/passwd" },
-      { path: `${TOP}/a/../../hard`, type: "1", linkname: `${TOP}/settings.md` },
+      link("../link", "/etc/passwd"),
+      link("a/../../hard", `${TOP}/settings.md`, "1"),
       { path: "/etc/link", type: "2", linkname: "/etc/passwd" },
     ]);
 
     expect(files).toEqual([{ path: "settings.md", text: "# Settings\n" }]);
-    expect(unread).toEqual([".claude/settings.json"]);
-    // The top folder and the four links.
-    expect(counts.skipped).toMatchObject({ notAFile: 5, badPath: 0 });
+    expect(unread).toEqual([]);
+    // The top folder and the three links.
+    expect(counts.skipped).toMatchObject({ notAFile: 4, badPath: 0 });
   });
 
   it("counts the compressed and uncompressed bytes it read", async () => {
