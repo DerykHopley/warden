@@ -1,6 +1,6 @@
 ## Working state
 
-Level: **Build**, review mode: **Throughput**, will become: **product**, phase: **building**. Set by `/rig:project-kickoff` (`~/development/rig`, rig 2026-11-23 @14b198b); rerun it to change either, or to bring in the rig's newer rules.
+Level: **Build**, review mode: **Throughput**, will become: **product**, phase: **building**. Set by `/rig:project-kickoff` (`~/development/rig`, rig 2026-11-24 @afd2e14); rerun it to change either, or to bring in the rig's newer rules.
 
 - Work lives in GitHub issues. **Each piece of work is a Fix, a Feature or a Spec (on trial),** chosen when it's triaged, not once per project, so specs come and go without a kickoff:
 
@@ -11,7 +11,7 @@ Level: **Build**, review mode: **Throughput**, will become: **product**, phase: 
   | **Spec** | stories that only work together, or share a core change, so landing them one at a time would leave main half-done | an integration branch, through `/rig:spec-build` and `/rig:spec-close` (Specs, below) |
 
 - **Which unit, by phase (on trial).** The working state's phase says which unit new work takes:
-  - **Building** (before the first release to real users): new work is a spec, opened with `/rig:spec-open` after `/grill-with-docs`. The first is the **foundation spec**: the walking skeleton plus the contracts the other specs share; every other spec is blocked by it, so the shared parts land once before specs build side by side. A bug in a running spec's area becomes a slice of that spec; a bug in landed code or tooling is a Fix, with no urgent lane, as no user hits it yet. Features wait for live.
+  - **Building** (before the first release to real users): new work is a spec, opened with `/rig:spec-open` from a grilling (`/grill-with-docs`) or from the written record when the grillings already decided it. The foundation spec files the other specs the record names as `planned` issues, and `/rig:spec-run` opens them while it builds. The first is the **foundation spec**: the walking skeleton plus the contracts the other specs share; every other spec is blocked by it, so the shared parts land once before specs build side by side. A bug in a running spec's area becomes a slice of that spec; a bug in landed code or tooling is a Fix, with no urgent lane, as no user hits it yet. Features wait for live.
   - **Live** (after the first release): bigger work is grilled first, then split with `/to-tickets` into Features that each land alone (the `feature` label). It's a spec (`/rig:spec-open`) for a new module, or for stories that can't land alone: grouped into specs, smaller work waits on itself and clashes on shared files.
   - **Going live:** at each spec's Landed, `/rig:spec-close` asks the owner whether it was the first release to real users. Their yes changes the phase above to live.
 - **A Feature** goes through the ticket loop below, its verifier before the PR, then the merge gate. With a UI change, it gets an **owner preview** (below) before its merge, with one-line "try this" steps: blocking feedback is built on the same PR, polish becomes a Fix, and it merges after the owner's go. A Fix keeps the Fixes lane's batch check instead.
@@ -27,7 +27,7 @@ Level: **Build**, review mode: **Throughput**, will become: **product**, phase: 
 - **Secure defaults (on trial):** `docs/secure-defaults.md` lists the defaults the owner accepted for this project's traits (a public URL, paid model calls, more than one user, …). A ticket that brings a trait in carries that trait's accepted defaults as criteria; a trait the file doesn't have yet is offered to the owner first, the way `~/development/rig/skills/project-kickoff/secure-defaults.md` says.
 - Run `/security-review` before the first deploy, and before each deploy that changes sign-in, secrets or what users can reach.
 - **Owner preview:** a `preview/<name>` branch deploys to the separate `warden-preview` Cloud Run service as a revision with `--no-traffic --tag <name>`, on the `warden_preview` database, under the preview identities, and the owner tests its tagged URL. The live `warden` service and its data are never touched.
-- **The desk:** every report to the owner (a coordinator's, a spec's or a Feature's) ends with what's waiting on them (Blocking, Hands-on steps, Ready to merge, Decided for you), so the latest message is all the owner needs to read.
+- **The desk:** every report to the owner (a coordinator's, a spec's or a Feature's) ends with what's waiting on them now (Blocking, Hands-on steps, Ready to merge), short enough to read on a phone, so the latest message is all the owner needs to read. Choices decided for them stay on GitHub with the `decided` label, not on the desk.
 - Name `/mattpocock-skills:improve-codebase-architecture` to the owner when the same files keep changing together across tickets.
 - **A product others will run (on trial).** It's built to be installed, upgraded and trusted by someone other than the owner, so these are part of done, not a final polish:
   - **Releases:** versioned releases with a changelog entry each. Migrations only run forwards, on upgrade, with a test from the last release's data.
@@ -40,7 +40,7 @@ Level: **Build**, review mode: **Throughput**, will become: **product**, phase: 
 
 These rules hold while a spec is open; with none open, they wait.
 
-- A spec holds at most **12 tickets**: about one day of review. A larger plan becomes two specs.
+- **A spec's size is what belongs together, not a count (on trial).** Stories that share a core change, or can't land alone, stay in one spec; stories that can land apart are their own spec. About 12 slices is the point to look for that split when the spec is drafted, never a stop while it builds.
 - **Tickets are written just in time (on trial).** The spec carries a `## Build order`: numbered slices, one line each, naming the user stories each delivers. `/rig:spec-open` writes it with the spec, `/rig:spec-build` writes it for a spec made another way, and a `rig:ticket-writer` writes each slice's ticket when a build slot frees up, against the code as it is then. `/to-tickets` isn't needed for a spec; tickets it wrote count as slices, rewritten in place when their turn comes.
 - Parallel implementers are the one other use of subagents: each ticket needs little from the others, so a fresh context per ticket loses nothing.
 - **`/rig:spec-build <spec>` builds a spec** (not Matt's `/implement-spec`, which merges locally and reviews once at the end): each ticket goes through the ticket loop below, its own PR into the spec's integration branch (`spec/<spec>-<slug>`) through the merge gate, and a `rig:verifier` on the merge commit. One PR then takes the spec into main and closes its tickets. In Factory mode, this is the queue: a spec's tickets are built by `/rig:spec-build`, never picked up from main on their own. Up to 3 tickets build at once, never two whose `Touches` lines share a file or area.
@@ -54,9 +54,9 @@ These rules hold while a spec is open; with none open, they wait.
   - a bug the spec's own code caused;
   - a prerequisite that makes the remaining tickets smaller, approved by the owner.
 - Everything else goes to a lane below, with a one-line answer: "Filed #N in `<lane>`. It isn't in the spec because …".
-- Bug tickets count toward the 12, so a spec that keeps finding its own bugs reaches the owner instead of never closing.
+- **A spec that keeps finding its own bugs comes back to the owner (on trial):** a bug slice is a bug the spec's own code caused (a verifier finding, or Ready feedback that is a bug). Past about 4 of them, each further one goes to the owner with the list so far: carry on, split the spec, or drop something. Size alone never stops a spec; a spec that isn't converging does.
 - When no slice can start and none is running, report why rather than wait.
-- When the owner says "put it in the spec", add it. Past 12 tickets, say so once ("Spec is now 13 of 12: split it, or drop something?") and let the owner choose.
+- When the owner says "put it in the spec", add it.
 - When the spec's last slice is done, `/rig:spec-build` runs `/rig:spec-close`'s Ready part: the stories verified, then a running copy for the owner to test (**Owner preview**, below). Blocking feedback becomes new slices before the merge, polish becomes Fix tickets after; after the owner's go, the agent merges the spec PR (in Learning mode the owner merges it, and the next spec-build run finds it) and Landed closes the spec and starts the next.
 
 ### Each ticket
@@ -133,7 +133,7 @@ Whoever files an issue sorts it into one lane straight away, with a label or mil
 - A ticket or a Fix: when the local checks pass, push, open the PR, start the merge gate, then start the next ticket. A Feature as **A Feature** above says: its verifier before the PR, and with a UI change the owner's go before the gate. Report a red or timed-out result, not a green one.
 - A spec: its one PR into main merges after the owner has tested a running copy and their blocking points are built (`/rig:spec-close`'s Ready part), with a merge commit through the merge gate. The owner can also merge it themselves, or say "merge it".
 - After merges, refresh the owner's running app when it won't break what they're doing; say what changed.
-- The owner tests in batches: label each merged PR they should try `ready-to-check`, with what to try (and its size when over the 400 target) in its description. The desk lists them under **Ready to check**; the owner's comment, or removing the label, clears one. Not a file: parallel PRs editing one list conflict.
+- The owner tests in batches: label each merged PR they should try `ready-to-check`, with what to try (and its size when over the 400 target) in its description. The desk counts them in one line under **Hands-on steps**, with the link to the list; the owner's comment, or removing the label, clears one. Not a file: parallel PRs editing one list conflict.
 
 ## Agent skills
 
