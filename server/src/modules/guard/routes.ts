@@ -1,6 +1,7 @@
 // Guard's own routes, mounted by the app through `moduleRoutes` (ADR 0005: the app imports no module). The Team is
 // always the session's, never the request's.
 import {
+  assetKey,
   LinkInstallationBody,
   MAX_SCAN_ASSETS,
   type Asset,
@@ -133,10 +134,21 @@ export function guardRoutes(
       }
     });
 
-    // Any person in the Team reads its Repo Assets, by ref (story 1).
+    // Any person in the Team reads its Repo Assets, by ref (story 1), each with its last Guard Scan (story 2): null
+    // when no Scan names it, or with no `scans` here.
     app.get("/api/repos", requireRole("member"), async (c) => {
-      const repos = await repoAssets.list(c.get("team"));
-      return c.json({ repos: repos.map(repoAssetBody) } satisfies ReposBody);
+      const team = c.get("team");
+      const repos = (await repoAssets.list(team)).map(repoAssetBody);
+      const last = deps.scans
+        ? await deps.scans.lastFor(
+            team,
+            "guard",
+            repos.map((repo) => repo.asset),
+          )
+        : new Map<string, ScanBody>();
+      return c.json({
+        repos: repos.map((repo) => ({ ...repo, last_scan: last.get(assetKey(repo.asset)) ?? null })),
+      } satisfies ReposBody);
     });
 
     // An Admin links a GitHub installation to the session's Team (stories 1 and 15): GitHub confirms, with the person's

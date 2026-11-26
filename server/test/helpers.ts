@@ -379,7 +379,12 @@ const noFindings: Findings = {
   expireAcceptances: noDatabase,
 };
 
-const noScans: Scans = { queue: noDatabase, get: noDatabase, move: noDatabase };
+const noScans: Scans = {
+  queue: noDatabase,
+  get: noDatabase,
+  lastFor: noDatabase,
+  move: noDatabase,
+};
 
 /** A Clerk seam for a test that doesn't look at Clerk: every call is refused (a Role change answers 502; a join logs it). */
 const noClerk: ClerkOrganizations = {

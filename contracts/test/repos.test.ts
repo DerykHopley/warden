@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GitHubAppBody, LinkedInstallationBody } from "../src/index.ts";
+import { GitHubAppBody, LinkedInstallationBody, ReposBody } from "../src/index.ts";
 import { expectRefused } from "./refused.ts";
 
 const web = {
@@ -34,6 +34,30 @@ describe("LinkedInstallationBody", () => {
     ["a scan that isn't a Scan", { installation_id: 42, repos: [web], scan: { id: "x" } }],
   ])("refuses %s", (_name, body) => {
     expectRefused(LinkedInstallationBody, body, "scan");
+  });
+
+  it("takes each repo without a last_scan: a link's repos are listed, not read with their Scans", () => {
+    const body = { installation_id: 42, repos: [web], scan: null };
+
+    expect(LinkedInstallationBody.parse(body)).toEqual(body);
+  });
+});
+
+describe("ReposBody", () => {
+  it.each([
+    ["its last Scan", scan],
+    ["null, when no Scan names it", null],
+  ])("accepts a repo with %s in last_scan", (_name, value) => {
+    const body = { repos: [{ ...web, last_scan: value }] };
+
+    expect(ReposBody.parse(body)).toEqual(body);
+  });
+
+  it.each([
+    ["no last_scan", { repos: [web] }],
+    ["a last_scan that isn't a Scan", { repos: [{ ...web, last_scan: { id: "x" } }] }],
+  ])("refuses a repo with %s", (_name, body) => {
+    expectRefused(ReposBody, body, "last_scan");
   });
 });
 
