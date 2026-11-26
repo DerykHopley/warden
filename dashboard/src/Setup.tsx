@@ -6,8 +6,8 @@
 import { useOrganization } from "@clerk/react";
 import {
   assetKey,
-  atLeast,
   MAX_SCAN_ASSETS,
+  startsScans,
   type ListedRepoBody,
   type ScanBody,
 } from "@warden/contracts";
@@ -22,6 +22,7 @@ import {
   installationIdFrom,
   installUrl,
   READ_APP,
+  REPOS_ANCHOR,
   scanRepos,
   startSignIn,
   tooManyTries,
@@ -96,8 +97,8 @@ export function SetupPage(props: PageProps) {
         <AppSection {...props} words={WRITE_WORDS} HowTo={WriteAppHowTo} />
         <WriteGrantList {...props} />
       </section>
-      <section className="setup-section" aria-labelledby="setup-repos">
-        <h2 id="setup-repos">Repos</h2>
+      <section className="setup-section" aria-labelledby={REPOS_ANCHOR}>
+        <h2 id={REPOS_ANCHOR}>Repos</h2>
         <RepoList {...props} />
       </section>
     </>
@@ -340,6 +341,18 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
     return () => clearTimeout(next);
   }, [underWay, list.result, refresh]);
 
+  // Opened at `#setup-repos` (Findings' "Scan now" link, #342), the Repos heading comes into view once the list first
+  // answers: the browser's own jump to the anchor came before the page rendered it. Only once, so a later read of the
+  // list never moves a page the person has scrolled.
+  const firstAnswer = list.result !== "loading";
+  const landed = useRef(false);
+  useEffect(() => {
+    if (!firstAnswer || landed.current) return;
+    landed.current = true;
+    if (location.hash !== `#${REPOS_ANCHOR}`) return;
+    document.getElementById(REPOS_ANCHOR)?.scrollIntoView();
+  }, [firstAnswer]);
+
   async function scanNow(repos: ListedRepoBody[]) {
     if (startRuns.current) return;
     startRuns.current = true;
@@ -386,7 +399,7 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   if (listed.repos.length === 0) return <p className="muted">No repos linked yet.</p>;
   return (
     <>
-      {me.role !== null && atLeast(me.role, "lead") && (
+      {startsScans(me.role) && (
         <div className="scan-now">
           <button
             type="button"

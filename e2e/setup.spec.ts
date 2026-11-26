@@ -6,6 +6,7 @@
 // The global setup holds each Scan Job a few seconds before it runs, so the new Scan reads queued first.
 import { createHash } from "node:crypto";
 import type { Page } from "@playwright/test";
+import { expectNoSidewaysScroll, expectTargets } from "./a11y.ts";
 import { ADA, CEDAR, CEDAR_REPOS, expect, GRACE, HEDY, KATHERINE, test } from "./session.ts";
 
 const APP = { slug: "warden-reader", client_id: "Iv23li-e2e-client" };
@@ -354,6 +355,38 @@ test("a Member sees each repo's last Scan, with no Scan now (story 2)", async ({
   for (const [, words] of rows) expect(words).toMatch(/^(Queued|Running|Failed, .+|Done, .+)$/);
   await expect(page.getByRole("button", { name: "Scan now" })).toHaveCount(0);
 });
+
+// #342: Scans start on Setup, so Findings links a Lead or an Admin to its Repos, and Scan now is in view where it lands.
+// On a real host Setup renders after the browser's own jump to the anchor, which then finds nothing: Clerk loads from
+// its own host first. A held /api/me stands in for that here. The window is short, so Repos starts below it.
+for (const width of [390, 1024, 1600]) {
+  test(`at ${width}px, an Admin's Scan now link on Findings lands on Setup's Repos with Scan now in view (#342)`, async ({
+    page,
+    signIn,
+  }) => {
+    await page.setViewportSize({ width, height: 500 });
+    await signIn(HEDY, CEDAR);
+    await page.goto("/findings");
+
+    const link = page.getByRole("link", { name: "Scan now" });
+    await expect(link).toBeVisible();
+    await expectTargets([link]);
+    await expectNoSidewaysScroll(page);
+    await page.route("**/api/me", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await route.continue();
+    });
+    await link.click();
+
+    await expect(page).toHaveURL(/\/setup#setup-repos$/);
+    const scanNow = page
+      .getByRole("region", { name: "Repos" })
+      .getByRole("button", { name: "Scan now" });
+    await expect(scanNow).toBeInViewport({ ratio: 1 });
+    await expect(page.getByRole("heading", { level: 2, name: "Repos" })).toBeInViewport();
+    await expectNoSidewaysScroll(page);
+  });
+}
 
 test("a Member sees an Admin connects GitHub, with no install link", async ({ page, signIn }) => {
   await signIn(GRACE);

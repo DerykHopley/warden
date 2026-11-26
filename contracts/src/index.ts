@@ -28,6 +28,11 @@ export function atLeast(has: Role, needed: Role): boolean {
   return Role.options.indexOf(has) >= Role.options.indexOf(needed);
 }
 
+/** Whether a person with this Role starts a Scan: a Lead or an Admin (`POST /api/scans`). No Role starts none. */
+export function startsScans(role: Role | null): boolean {
+  return role !== null && atLeast(role, "lead");
+}
+
 /**
  * `GET /api/me`: the signed-in person, as the server read them from their Clerk session token, with their Team (the
  * token's active Clerk Organization id), their Role in it from Warden's own table, and the Team's Level. Each is null

@@ -50,6 +50,9 @@ export const WRITE_APP: WardenApp = {
   heading: "Grant write access",
 };
 
+/** The id of Setup's Repos heading, where Scan now is: Findings' "Scan now" link lands on it (#342). */
+export const REPOS_ANCHOR = "setup-repos";
+
 export type GitHubAppResult =
   | { kind: "app"; app: GitHubAppBody }
   /** 503: this Warden has no settings for the app. */
