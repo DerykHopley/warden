@@ -48,7 +48,10 @@ const rootFile =
 
 const fileNamed = (file: string) => fileAnywhere((name) => name === file);
 
-/** The other AI tools, each with the paths that show it, matched case-sensitively; a folder before a file. */
+/**
+ * The other AI tools, each with the paths that show it, matched case-sensitively. A path's first matching signal places
+ * it, so a folder comes before a file: `.cursor/.cursorrules` is located at `.cursor`, like the rest of that folder.
+ */
 const AI_TOOLS: readonly { tool: string; signals: readonly Signal[] }[] = [
   { tool: "Cursor", signals: [folderAnywhere(".cursor"), fileNamed(".cursorrules")] },
   { tool: "Windsurf", signals: [folderAnywhere(".windsurf"), fileNamed(".windsurfrules")] },
@@ -65,20 +68,24 @@ const AI_TOOLS: readonly { tool: string; signals: readonly Signal[] }[] = [
 ];
 
 export function aiToolCheck(asset: Asset): AiToolCheck {
-  /** Each tool's matched paths, each with where it shows the tool. */
-  const found = AI_TOOLS.map(() => [] as { path: string; at: string }[]);
+  /** Each tool with its matched paths, each with where it shows the tool. */
+  const tools = AI_TOOLS.map(({ tool, signals }) => ({
+    tool,
+    signals,
+    matched: [] as { path: string; at: string }[],
+  }));
   return {
     see(path) {
-      AI_TOOLS.forEach(({ signals }, i) => {
+      for (const { signals, matched } of tools) {
         const at = signals.map((signal) => signal(path)).find((where) => where !== undefined);
-        if (at !== undefined) found[i]!.push({ path, at });
-      });
+        if (at !== undefined) matched.push({ path, at });
+      }
     },
     end() {
       const rule = packRule(UNAPPROVED_AI_TOOL);
-      return AI_TOOLS.flatMap(({ tool }, i): Observation[] => {
+      return tools.flatMap(({ tool, matched: seen }): Observation[] => {
         // Sorted by code unit, not locale, so the location and the names don't change with the server's settings.
-        const matched = found[i]!.toSorted((a, b) => (a.path < b.path ? -1 : 1));
+        const matched = seen.toSorted((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
         const [first] = matched;
         if (first === undefined) return [];
         const count = matched.length;

@@ -90,6 +90,13 @@ describe("aiToolCheck", () => {
   });
 
   it.each([
+    [".cursor/.cursorrules", ".cursor"],
+    [".gemini/GEMINI.md", ".gemini"],
+  ])("locates %s, which both a folder and a file signal match, at the folder", (path, at) => {
+    expect(observe([path])[0]?.location).toEqual({ kind: "file", path: at });
+  });
+
+  it.each([
     ["AGENTS.md alone", ["AGENTS.md"]],
     ["Claude Code's own paths", [".claude/settings.json", "CLAUDE.md", ".mcp.json"]],
     ["a Copilot file outside the repo root", ["docs/.github/copilot-instructions.md"]],
