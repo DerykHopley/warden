@@ -2,7 +2,14 @@
 // Finding through the real app, as the person their session names, and a Member is refused each. Each case uses Teams
 // of its own in the suite's shared database; Findings come from real Scans through the Findings module.
 import { randomUUID } from "node:crypto";
-import { Finding, HistoryBody, type Observation, type Role, type Scan } from "@warden/contracts";
+import {
+  Finding,
+  HistoryBody,
+  NUL_MESSAGE,
+  type Observation,
+  type Role,
+  type Scan,
+} from "@warden/contracts";
 import type { Hono } from "hono";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
@@ -344,6 +351,50 @@ describe("a Finding id holding a NUL (#129)", () => {
     const before = await stored(team);
 
     expect(await post(`/api/findings/a%00b/${route}`, team, body, as)).toEqual(answer);
+    expect(await stored(team)).toEqual(before);
+  });
+});
+
+// Each decision on a Finding it takes, so only the NUL can refuse it: Postgres can't store one (#248).
+describe("a decision's body holding a NUL (#248)", () => {
+  /** A Team's Finding the route's decision takes, and the body's valid fields other than the reason. */
+  type Setup = () => Promise<{ team: string; id: string; rest: Record<string, unknown> }>;
+  const open: Setup = async () => {
+    const { team, finding } = await teamWithFinding();
+    return { team, id: finding.id, rest: {} };
+  };
+  const unconfirmedFix: Setup = async () => {
+    const { team, old, candidate } = await teamWithUnconfirmedFix();
+    return { team, id: old.id, rest: { candidate: candidate.id } };
+  };
+  const accepted: Setup = async () => {
+    const { team, id } = await open();
+    expect(
+      (await post(`/api/findings/${id}/accept`, team, { reason: "r", until: nextWeek() })).status,
+    ).toBe(200);
+    return { team, id, rest: {} };
+  };
+
+  it.each<[string, string, Setup, (rest: Record<string, unknown>) => Record<string, unknown>]>([
+    ["accept", "reason", open, () => ({ reason: "a\0b", until: nextWeek() })],
+    ["false-positive", "reason", open, () => ({ reason: "a\0b" })],
+    ["confirm-fix", "reason", unconfirmedFix, () => ({ reason: "a\0b" })],
+    ["mark-moved", "reason", unconfirmedFix, (rest) => ({ ...rest, reason: "a\0b" })],
+    [
+      "mark-moved",
+      "candidate",
+      unconfirmedFix,
+      (rest) => ({ reason: "r", candidate: `${rest.candidate}\0` }),
+    ],
+    ["reopen", "reason", accepted, () => ({ reason: "a\0b" })],
+  ])("%s answers 400 naming its %s, and writes nothing", async (route, field, setup, body) => {
+    const { team, id, rest } = await setup();
+    const before = await stored(team);
+
+    expect(await post(`/api/findings/${id}/${route}`, team, body(rest))).toEqual({
+      status: 400,
+      body: { error: `${field}: ${NUL_MESSAGE}` },
+    });
     expect(await stored(team)).toEqual(before);
   });
 });

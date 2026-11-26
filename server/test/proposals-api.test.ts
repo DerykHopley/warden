@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import {
   HistoryBody,
+  NUL_MESSAGE,
   Proposal,
   ProposalsBody,
   type Observation,
@@ -516,6 +517,31 @@ describe("a Proposal's bad input", () => {
     const answer = await reject(team, proposal.id, { reason: "  \n " });
 
     expect(answer).toEqual({ status: 400, body: { error: expect.stringMatching(/^reason: /) } });
+    expect(await stored(team)).toEqual(before);
+  });
+
+  // Postgres can't store a NUL (#248).
+  const holdsNul = { status: 400, body: { error: `reason: ${NUL_MESSAGE}` } };
+
+  it.each([
+    ["an accept", { decision: "accept", reason: "a\0b", until: nextWeek() }],
+    ["a mark_false_positive", { decision: "mark_false_positive", reason: "a\0b" }],
+  ])(
+    "answers 400 naming the reason for %s whose reason holds a NUL, and writes nothing",
+    async (_name, body) => {
+      const { team, finding } = await teamWithFinding();
+      const before = await stored(team);
+
+      expect(await propose(team, finding.id, body)).toEqual(holdsNul);
+      expect(await stored(team)).toEqual(before);
+    },
+  );
+
+  it("answers 400 naming the reason for a reject reason holding a NUL, and writes nothing", async () => {
+    const { team, proposal } = await pendingProposal();
+    const before = await stored(team);
+
+    expect(await reject(team, proposal.id, { reason: "a\0b" })).toEqual(holdsNul);
     expect(await stored(team)).toEqual(before);
   });
 });
