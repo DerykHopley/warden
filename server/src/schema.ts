@@ -7,6 +7,7 @@ import type {
   Actor,
   Asset,
   AssetKind,
+  CatalogueId,
   Control,
   Evidence,
   HistoryCauseKind,
@@ -213,6 +214,19 @@ export interface Database {
     branch: string;
     opened_by: string;
     at: Generated<Date>;
+  };
+
+  /**
+   * A Catalogue a Team has set on or off (0017_team_catalogues), who set it (an Admin's Clerk user id) and when: one
+   * row per Team and Catalogue, replaced on each change. No row: off. Written only by the Vouch module's Team
+   * Catalogues store.
+   */
+  team_catalogues: {
+    team_id: string;
+    catalogue: CatalogueId;
+    turned_on: boolean;
+    set_by: string;
+    set_at: Generated<Date>;
   };
 
   /**

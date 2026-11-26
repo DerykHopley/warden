@@ -6,6 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { CatalogueId } from "@warden/contracts";
 import { parse } from "yaml";
 import { z } from "zod";
 
@@ -105,7 +106,7 @@ export function loadCatalogue(folder: string = CATALOGUE_FOLDER): Control[] {
 
 /** A published, versioned set of Controls, with the ones Vouch judges now. */
 export type Catalogue = {
-  id: string;
+  id: CatalogueId;
   name: string;
   /** The version's publication date, YYYY-MM-DD. */
   date: string;
