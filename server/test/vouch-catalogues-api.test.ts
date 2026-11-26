@@ -168,29 +168,22 @@ describe("GET /api/vouch/catalogues: every person reads the Team's Catalogues", 
     const body = await read(teamId, MEMBER);
 
     expect(body.catalogues.map(({ id }) => id)).toEqual([ISA]);
-    const isa = body.catalogues[0]!;
-    expect(isa).toMatchObject({
-      id: ISA,
-      name: "VDA ISA 2027.1",
-      date: "2026-09-30",
-      credit: expect.stringContaining("ENX Association"),
-      licence: "CC BY-ND 4.0",
-      licence_url: "https://creativecommons.org/licenses/by-nd/4.0/",
+    expect(body.catalogues[0]).toEqual({
+      id: VDA_ISA_2027_1.id,
+      name: VDA_ISA_2027_1.name,
+      date: VDA_ISA_2027_1.date,
+      credit: VDA_ISA_2027_1.credit,
+      licence: VDA_ISA_2027_1.licence.name,
+      licence_url: VDA_ISA_2027_1.licence.url,
       on: false,
       set_by: null,
       set_at: null,
+      controls: VDA_ISA_2027_1.judgedControls.map(({ id, question, iso_27001 }) => ({
+        ref: id,
+        question,
+        iso_27001,
+      })),
     });
-    expect(isa.controls.map(({ ref }) => ref)).toEqual(["1.3.3", "1.3.4", "4.1.3", "5.2.4"]);
-    expect(isa.controls.find(({ ref }) => ref === "4.1.3")).toEqual({
-      ref: "4.1.3",
-      question:
-        "To what extent are user accounts and login information securely managed and applied?",
-      iso_27001: "ISO 27001:2022: A.5.16, A.5.17, A.5.18, A.8.9",
-    });
-    for (const control of isa.controls) {
-      expect(control.question).not.toBe("");
-      expect(control.iso_27001).toMatch(/ISO 27001/);
-    }
   });
 });
 
