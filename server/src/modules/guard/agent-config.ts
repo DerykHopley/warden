@@ -16,6 +16,7 @@ import {
 } from "./default-pack.ts";
 import { isObject, readJsonObject } from "./json-config.ts";
 import type { RepoFile } from "./repo-reader.ts";
+import { summaryNames } from "./summary.ts";
 
 /**
  * A repo's agent-config check, made once per repo: `see` takes each of its files in turn, `unread` each file the
@@ -287,9 +288,6 @@ const BROAD_BASH = new RegExp(String.raw`^Bash(?:\((?:\*|:\*|\*\*|${COMMAND}(?::
 /** Whether an allow entry is a broad Bash allow (`BROAD_BASH`), so the scanner and a Fix PR's edit agree. */
 export const isBroadBashAllow = (rule: string): boolean => BROAD_BASH.test(rule);
 
-/** How many broad allows a summary names before "and N more". */
-const NAMED = 3;
-
 function blanketBashAllow(
   asset: Asset,
   path: string,
@@ -299,15 +297,14 @@ function blanketBashAllow(
   const [first] = broad;
   if (first === undefined) return undefined;
   const count = broad.length;
-  const named = broad.slice(0, NAMED).map(({ rule }) => rule);
-  const more = count > NAMED ? ` and ${count - NAMED} more` : "";
+  const named = summaryNames(broad.map(({ rule }) => rule));
   const allows = count === 1 ? "allow" : "allows";
   return observation(
     asset,
     BLANKET_BASH_ALLOW,
     path,
     first.line,
-    `${count} broad Bash ${allows} (${named.join(", ")}${more}) in ${path}, ${where(count, first.line)}`,
+    `${count} broad Bash ${allows} (${named}) in ${path}, ${where(count, first.line)}`,
   );
 }
 
