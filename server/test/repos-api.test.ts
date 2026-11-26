@@ -8,7 +8,12 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { guardRoutes } from "../src/modules/guard/routes.ts";
-import { createScans, QUEUED_SCAN_LIMIT_MINUTES, type Scans } from "../src/scans.ts";
+import {
+  createScans,
+  QUEUED_SCAN_LIMIT_MINUTES,
+  RUNNING_SCAN_LIMIT_MINUTES,
+  type Scans,
+} from "../src/scans.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
@@ -164,6 +169,28 @@ describe("GET /api/repos: each repo's last Scan (story 2)", () => {
     expect(stored.ended_at!.getTime()).toBe(
       stored.queued_at.getTime() + QUEUED_SCAN_LIMIT_MINUTES * 60_000,
     );
+  });
+
+  it("answers a Guard Scan of two repos started 151 minutes ago, whose Job died, as each repo's failed last_scan", async () => {
+    const team = await teamWithMember();
+    await linkRepos(repoAssets, team, [repoRef("web"), repoRef("api")]);
+    const { id } = await queueScan(scans, team, "guard", [repo("web"), repo("api")]);
+    const started = sql<Date>`now() - make_interval(mins => ${RUNNING_SCAN_LIMIT_MINUTES + 1})`;
+    await withTeam(team, (tx) =>
+      sql`update scan_requests
+          set state = 'running', started_at = ${started}, queued_at = ${started} - interval '1 minute'
+          where id = ${id}`.execute(tx),
+    );
+
+    const res = await readRepos(team);
+
+    const repos = ReposBody.parse(res.body).repos;
+    expect(repos.map((listed) => listed.asset.ref)).toEqual([repoRef("api"), repoRef("web")]);
+    for (const listed of repos) {
+      const last = ScanBody.parse(listed.last_scan);
+      expect(last).toMatchObject({ id, state: "failed" });
+      expect(last.ended_at).toEqual(expect.any(String));
+    }
   });
 
   it("answers last_scan: null for each repo when Guard's routes are built without scans", async () => {

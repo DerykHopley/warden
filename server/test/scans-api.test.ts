@@ -11,6 +11,7 @@ import { createRepoAssets, guardAssetCheck } from "../src/modules/guard/repo-ass
 import {
   createScans,
   QUEUED_SCAN_LIMIT_MINUTES,
+  RUNNING_SCAN_LIMIT_MINUTES,
   ScanJobStartUnknown,
   type AssetChecks,
   type ScanJobStarter,
@@ -612,5 +613,71 @@ describe("A Scan whose Job never started ends after QUEUED_SCAN_LIMIT_MINUTES (s
     expect(await row(teamB, staleB)).toMatchObject({ state: "failed" });
 
     expect(await row(teamA, staleA)).toMatchObject({ state: "queued", ended_at: null });
+  });
+});
+
+describe("A Scan whose Job died after starting ends after RUNNING_SCAN_LIMIT_MINUTES (story 2)", () => {
+  const LIMIT_MS = RUNNING_SCAN_LIMIT_MINUTES * 60_000;
+  /** A Scan its Job moved to running `started` minutes ago, queued a minute before that. */
+  const insertRunning = (team: string, started: number) =>
+    insertScan(team, { queued: started + 1, state: "running", startedAt: minutesAgo(started) });
+
+  it("reads a Scan started 151 minutes ago as failed with an end, stored ended when the limit ran out", async () => {
+    const team = await newTeam();
+    const { app } = scanApp();
+    const id = await insertRunning(team, RUNNING_SCAN_LIMIT_MINUTES + 1);
+
+    const res = await read(app, team, id);
+
+    expect(res.status).toBe(200);
+    const scan = ScanBody.parse(res.body);
+    expect(scan).toMatchObject({ id, state: "failed" });
+    expect(scan.ended_at).toEqual(expect.any(String));
+    const stored = await row(team, id);
+    expect(stored.state).toBe("failed");
+    // The mark `move` tells it apart by, so a Job that finishes later can't undo it.
+    expect(stored.ended_at!.getTime()).toBe(stored.started_at!.getTime() + LIMIT_MS);
+  });
+
+  it("leaves a Scan started 149 minutes ago and queued hours ago running, after a GET or a start", async () => {
+    const team = await newTeam();
+    const { app } = scanApp({ startScanJob: fakeStarter().start });
+    const id = await insertScan(team, {
+      queued: 240,
+      state: "running",
+      startedAt: minutesAgo(RUNNING_SCAN_LIMIT_MINUTES - 1),
+    });
+
+    expect(ScanBody.parse((await read(app, team, id)).body)).toMatchObject({
+      state: "running",
+      ended_at: null,
+    });
+    expect((await start(app, team)).status).toBe(202);
+
+    expect(await row(team, id)).toMatchObject({ state: "running", ended_at: null });
+  });
+
+  it("ends the Team's stale running Scans on a Lead's start", async () => {
+    const team = await newTeam();
+    const { app } = scanApp({ startScanJob: fakeStarter().start });
+    const id = await insertRunning(team, RUNNING_SCAN_LIMIT_MINUTES + 1);
+
+    expect((await start(app, team)).status).toBe(202);
+
+    const stored = await row(team, id);
+    expect(stored.state).toBe("failed");
+    expect(stored.ended_at!.getTime()).toBe(stored.started_at!.getTime() + LIMIT_MS);
+  });
+
+  it("never ends another Team's stale running Scan: Team B's start and GET leave Team A's running (story 15)", async () => {
+    const teamA = await newTeam();
+    const teamB = await newTeam();
+    const { app } = scanApp({ startScanJob: fakeStarter().start });
+    const staleA = await insertRunning(teamA, RUNNING_SCAN_LIMIT_MINUTES + 1);
+
+    expect((await start(app, teamB)).status).toBe(202);
+    expect((await read(app, teamB, staleA)).status).toBe(404);
+
+    expect(await row(teamA, staleA)).toMatchObject({ state: "running", ended_at: null });
   });
 });
