@@ -4,8 +4,8 @@
 import { render, screen } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ATTEMPT_KEY, type SignInAttempt } from "../src/github-setup.ts";
-import { GitHubCallbackPage } from "../src/GitHubCallback.tsx";
+import { ATTEMPT_KEY, WRITE_ATTEMPT_KEY, type SignInAttempt } from "../src/github-setup.ts";
+import { GitHubCallbackPage, WriteAppCallbackPage } from "../src/GitHubCallback.tsx";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { resetClerk } from "./fake-clerk.tsx";
 
@@ -243,5 +243,148 @@ describe("GitHubCallbackPage", () => {
     });
 
     await vi.waitFor(() => expect(props.onSessionEnded).toHaveBeenCalledOnce());
+  });
+});
+
+const WRITE_CALLBACK = "/setup/github/write/callback";
+const keepWrite = (attempt: SignInAttempt = ATTEMPT) =>
+  sessionStorage.setItem(WRITE_ATTEMPT_KEY, JSON.stringify(attempt));
+const granted = (status: 200 | 201) => () =>
+  json(status, {
+    installation_id: 42,
+    granted_by: "user_1",
+    granted_at: "2026-11-26T09:14:00.000Z",
+  });
+
+/** Opens the write app's callback at `search` (null: the address as it is), over the fake API. */
+function renderWriteCallback(search: string | null, routes: Routes = {}) {
+  if (search !== null) window.history.replaceState(null, "", `${WRITE_CALLBACK}${search}`);
+  serve({ grantWrite: granted(201), ...routes });
+  const props = {
+    getToken: vi.fn(async () => "session-token" as string | null),
+    me: { userId: "user_1", team: "org_a", role: "admin" as const, level: "quick" as const },
+    onSessionEnded: vi.fn(),
+    refreshMe: vi.fn(),
+    panel: { setContext: vi.fn(), open: vi.fn() },
+  };
+  const { unmount } = render(<WriteAppCallbackPage {...props} />);
+  return { ...props, unmount };
+}
+
+const grants = () => callsTo("/api/github/write-installations");
+const GRANTED = "Write access granted through installation 42.";
+
+describe("WriteAppCallbackPage (#224, story 5)", () => {
+  it.each([201, 200] as const)(
+    "on a %s, grants write access through the kept installation, posting once, with no query left",
+    async (status) => {
+      keepWrite();
+      renderWriteCallback("?code=the-code&state=the-state", { grantWrite: granted(status) });
+
+      expect(
+        screen.getByRole("heading", { level: 1, name: "Grant write access" }),
+      ).toBeInTheDocument();
+      expect(await screen.findByText(GRANTED)).toBeInTheDocument();
+      expect(backToSetup()).toHaveAttribute("href", "/setup");
+      expect(address()).toBe(WRITE_CALLBACK);
+      expect(grants()).toHaveLength(1);
+      expect(JSON.parse(String(grants()[0]![1]!.body))).toEqual({
+        installation_id: 42,
+        code: "the-code",
+        code_verifier: VERIFIER,
+      });
+      expect(links()).toEqual([]);
+    },
+  );
+
+  it.each([
+    [409, "This installation's permissions aren't the write app's"],
+    [403, "You need admin on every repo this installation reaches to grant write access"],
+  ])("shows a %s in the server's words, as an alert", async (status, words) => {
+    keepWrite();
+    renderWriteCallback("?code=the-code&state=the-state", {
+      grantWrite: () => json(status, { error: words }),
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(words);
+    expect(backToSetup()).toHaveAttribute("href", "/setup");
+  });
+
+  it.each([
+    [
+      "too many tries",
+      "?code=the-code&state=the-state",
+      () => json(429, { error: "too many" }, { "Retry-After": "120" }),
+      "Too many tries: try again in 2 min",
+    ],
+    [
+      "no answer",
+      "?code=the-code&state=the-state",
+      () => Promise.reject(new TypeError("Failed to fetch")),
+      "Warden didn't answer; write access may not have been granted.",
+    ],
+    [
+      "cancelled on GitHub",
+      "?error=access_denied&state=the-state",
+      granted(201),
+      "You cancelled the GitHub sign-in; nothing was granted.",
+    ],
+    [
+      "another GitHub error",
+      "?error=redirect_uri_mismatch&state=the-state",
+      granted(201),
+      "GitHub refused the sign-in (redirect_uri_mismatch); nothing was granted.",
+    ],
+  ])(
+    "words %s as the read callback does, with granted for linked",
+    async (_name, search, answer, words) => {
+      keepWrite();
+      renderWriteCallback(search, { grantWrite: answer });
+
+      expect(await screen.findByText(words)).toBeInTheDocument();
+      expect(backToSetup()).toHaveAttribute("href", "/setup");
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    },
+  );
+
+  it("with the read app's attempt kept, says the sign-in didn't start here and sends nothing", async () => {
+    keep();
+    renderWriteCallback("?code=the-code&state=the-state");
+
+    expect(
+      await screen.findByText("This GitHub sign-in didn't start here. Connect again from Setup."),
+    ).toBeInTheDocument();
+    expect(grants()).toEqual([]);
+    expect(links()).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem(ATTEMPT_KEY)!)).toEqual(ATTEMPT);
+  });
+
+  it("the read callback, with the write app's attempt kept, says the sign-in didn't start here and sends nothing", async () => {
+    keepWrite();
+    renderCallback("?code=the-code&state=the-state");
+
+    expect(
+      await screen.findByText("This GitHub sign-in didn't start here. Connect again from Setup."),
+    ).toBeInTheDocument();
+    expect(links()).toEqual([]);
+    expect(grants()).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem(WRITE_ATTEMPT_KEY)!)).toEqual(ATTEMPT);
+  });
+
+  it("when the session has ended, keeps the attempt and GitHub's answer, and grants once the person signs in again", async () => {
+    keepWrite();
+    const first = renderWriteCallback("?code=the-code&state=the-state", {
+      grantWrite: () => json(401, { error: "Session ended" }),
+    });
+    await vi.waitFor(() => expect(first.onSessionEnded).toHaveBeenCalledOnce());
+    expect(JSON.parse(sessionStorage.getItem(WRITE_ATTEMPT_KEY)!)).toEqual(ATTEMPT);
+    expect(sessionStorage.getItem(ATTEMPT_KEY)).toBeNull();
+    expect(address()).toBe(`${WRITE_CALLBACK}?code=the-code&state=the-state`);
+    first.unmount();
+
+    renderWriteCallback(null);
+
+    expect(await screen.findByText(GRANTED)).toBeInTheDocument();
+    expect(grants()).toHaveLength(2);
   });
 });

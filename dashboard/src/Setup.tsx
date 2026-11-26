@@ -1,7 +1,8 @@
 // The Setup page (Guard spec, stories 1 and 2): an Admin connects GitHub from here, anyone in the Team sees its Repo
 // Assets with each one's last Scan, and a Lead or an Admin starts a Scan of them. GitHub sends the Admin back from
 // installing the app to `/setup/github`, its Setup URL, which asks them to sign in with GitHub so Warden can link that
-// installation to the Team.
+// installation to the Team. An Admin grants write access the same way, with Warden's second GitHub app, the write app
+// (#224, story 5): its Setup URL is `/setup/github/write`, and everyone in the Team sees the grant.
 import { useOrganization } from "@clerk/react";
 import {
   assetKey,
@@ -17,13 +18,18 @@ import { dayAndTimeWords } from "./date-words.ts";
 import {
   fetchGitHubApp,
   fetchRepos,
+  fetchWriteGrants,
   installationIdFrom,
   installUrl,
+  READ_APP,
   scanRepos,
   startSignIn,
   tooManyTries,
+  WRITE_APP,
   type GitHubAppResult,
   type ReposResult,
+  type WardenApp,
+  type WriteGrantsResult,
 } from "./github-setup.ts";
 import { goTo } from "./navigate.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
@@ -31,10 +37,52 @@ import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 /** How long after each answer the repo list is read again while a listed Scan is queued or running. */
 const READ_AGAIN_MS = 5_000;
 const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
-const ADMIN_CONNECTS = "An Admin connects GitHub.";
-const NOT_SET_UP = "GitHub isn't set up on this Warden.";
 const CANT_START =
   "This browser couldn't start the GitHub sign-in. Allow this site to store data for this tab, and open Warden over https.";
+
+/** One GitHub app's Setup words: its section on Setup and its Connect page (its Setup URL on GitHub). */
+type AppWords = {
+  app: WardenApp;
+  /** The Connect page's h1. */
+  heading: string;
+  asking: string;
+  /** The app's 503: this Warden has no settings for it. */
+  notSetUp: string;
+  /** For a Lead or a Member on Setup, and for an Admin on the app's 403. */
+  adminDoes: string;
+  /** The Connect page for a Lead or a Member. */
+  onlyAdmin: string;
+  install: string;
+  noInstallation: string;
+  /** The Connect page's line above "Sign in with GitHub". */
+  through: (installationId: number, team: string) => string;
+};
+
+const READ_WORDS: AppWords = {
+  app: READ_APP,
+  heading: "Connect GitHub",
+  asking: "Asking Warden's server about GitHub…",
+  notSetUp: "GitHub isn't set up on this Warden.",
+  adminDoes: "An Admin connects GitHub.",
+  onlyAdmin: "Only an Admin links GitHub to the Team.",
+  install: "Install the GitHub app",
+  noInstallation: "GitHub didn't say which installation. Install the app again.",
+  through: (id, team) => `Link installation ${id} to ${team}`,
+};
+
+/** The write app (#224, story 5): the second GitHub app, which Fix PRs go through. */
+const WRITE_WORDS: AppWords = {
+  app: WRITE_APP,
+  heading: "Grant write access",
+  asking: "Asking Warden's server about the write app…",
+  // Slice 4 adds the write app's how-to beside this line.
+  notSetUp: "Fix PRs aren't set up on this Warden.",
+  adminDoes: "An Admin grants write access.",
+  onlyAdmin: "Only an Admin grants write access to the Team.",
+  install: "Install the write app",
+  noInstallation: "GitHub didn't say which installation. Install the write app again.",
+  through: (id, team) => `Grant write access through installation ${id} to ${team}`,
+};
 
 export function SetupPage(props: PageProps) {
   return (
@@ -42,11 +90,12 @@ export function SetupPage(props: PageProps) {
       <h1>Setup</h1>
       <section className="setup-section" aria-labelledby="setup-github">
         <h2 id="setup-github">GitHub</h2>
-        {props.me.role === "admin" ? (
-          <InstallLink {...props} />
-        ) : (
-          <p className="muted">{ADMIN_CONNECTS}</p>
-        )}
+        <AppSection {...props} words={READ_WORDS} />
+      </section>
+      <section className="setup-section" aria-labelledby="setup-write">
+        <h2 id="setup-write">Grant write access</h2>
+        <AppSection {...props} words={WRITE_WORDS} />
+        <WriteGrantList {...props} />
       </section>
       <section className="setup-section" aria-labelledby="setup-repos">
         <h2 id="setup-repos">Repos</h2>
@@ -56,9 +105,21 @@ export function SetupPage(props: PageProps) {
   );
 }
 
-/** The App's settings, asked for only by an Admin: a Lead or a Member never calls `/api/github/app`. */
-function useGitHubApp({ getToken, onSessionEnded, refreshMe }: PageProps) {
-  const ask = useCallback(() => fetchGitHubApp(getToken), [getToken]);
+type AppProps = PageProps & { words: AppWords };
+
+/** An Admin's install link; a Lead or a Member reads who does this instead. */
+function AppSection(props: AppProps) {
+  return props.me.role === "admin" ? (
+    <InstallLink {...props} />
+  ) : (
+    <p className="muted">{props.words.adminDoes}</p>
+  );
+}
+
+/** The app's settings, asked for only by an Admin: a Lead or a Member never calls the app's settings route. */
+function useGitHubApp({ getToken, onSessionEnded, refreshMe, words }: AppProps) {
+  const { app: wardenApp } = words;
+  const ask = useCallback(() => fetchGitHubApp(getToken, wardenApp), [getToken, wardenApp]);
   const app = useWardenCall<GitHubAppResult>(ask, onSessionEnded);
   // A 403: the person's Role changed since /api/me answered, so the shell asks again, once the page has rendered.
   const notAdmin = app.result !== "loading" && app.result.kind === "not-admin";
@@ -68,12 +129,11 @@ function useGitHubApp({ getToken, onSessionEnded, refreshMe }: PageProps) {
   return app;
 }
 
-/** What the App's answer shows in place of the install link or the sign-in button: waiting, and each refusal. */
-function AppNotReady({ app }: { app: ReturnType<typeof useGitHubApp> }) {
-  if (app.result === "loading")
-    return <p className="muted">Asking Warden's server about GitHub…</p>;
-  if (app.result.kind === "not-set-up") return <p className="muted">{NOT_SET_UP}</p>;
-  if (app.result.kind === "not-admin") return <p className="muted">{ADMIN_CONNECTS}</p>;
+/** What the app's answer shows in place of the install link or the sign-in button: waiting, and each refusal. */
+function AppNotReady({ app, words }: { app: ReturnType<typeof useGitHubApp>; words: AppWords }) {
+  if (app.result === "loading") return <p className="muted">{words.asking}</p>;
+  if (app.result.kind === "not-set-up") return <p className="muted">{words.notSetUp}</p>;
+  if (app.result.kind === "not-admin") return <p className="muted">{words.adminDoes}</p>;
   return (
     <>
       <CallRefused result={app.result} onRetry={app.retry} />
@@ -82,16 +142,46 @@ function AppNotReady({ app }: { app: ReturnType<typeof useGitHubApp> }) {
   );
 }
 
-function InstallLink(props: PageProps) {
+function InstallLink(props: AppProps) {
   const app = useGitHubApp(props);
   if (app.result !== "loading" && app.result.kind === "app") {
     return (
       <p className="setup-link">
-        <a href={installUrl(app.result.app.slug)}>Install the GitHub app</a>
+        <a href={installUrl(app.result.app.slug)}>{props.words.install}</a>
       </p>
     );
   }
-  return <AppNotReady app={app} />;
+  return <AppNotReady app={app} words={props.words} />;
+}
+
+/** The Team's write grants, shown to every Role; who granted each (a Clerk user id) isn't shown. */
+function WriteGrantList({ getToken, onSessionEnded }: PageProps) {
+  const ask = useCallback(() => fetchWriteGrants(getToken), [getToken]);
+  const grants = useWardenCall<WriteGrantsResult>(ask, onSessionEnded);
+  if (grants.result === "loading") {
+    return <p className="muted">Loading the Team's write access…</p>;
+  }
+  if (grants.result.kind !== "grants") {
+    return (
+      <>
+        <CallRefused result={grants.result} onRetry={grants.retry} />
+        <TeamRefused result={grants.result} />
+      </>
+    );
+  }
+  if (grants.result.grants.length === 0) {
+    return <p className="muted">No write access granted.</p>;
+  }
+  return (
+    <>
+      {grants.result.grants.map((grant) => (
+        <p key={grant.installation_id}>
+          Write access granted: installation {grant.installation_id},{" "}
+          {dayAndTimeWords(grant.granted_at)}
+        </p>
+      ))}
+    </>
+  );
 }
 
 /** A repo's last Scan, in the row beside its ref (story 2). */
@@ -227,21 +317,31 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   );
 }
 
-/** `/setup/github`: GitHub's Setup URL, which names the installation just made in `installation_id`. */
+/** `/setup/github`: the read app's Setup URL on GitHub, which names the installation just made in `installation_id`. */
 export function GitHubSetupPage(props: PageProps) {
+  return <ConnectPage {...props} words={READ_WORDS} />;
+}
+
+/** `/setup/github/write`: the write app's Setup URL on GitHub (#224, story 5), as `/setup/github` is the read app's. */
+export function WriteAppSetupPage(props: PageProps) {
+  return <ConnectPage {...props} words={WRITE_WORDS} />;
+}
+
+function ConnectPage(props: AppProps) {
   return (
     <>
-      <h1>Connect GitHub</h1>
+      <h1>{props.words.heading}</h1>
       {props.me.role === "admin" ? (
         <LinkInstallation {...props} />
       ) : (
-        <p className="muted">Only an Admin links GitHub to the Team.</p>
+        <p className="muted">{props.words.onlyAdmin}</p>
       )}
     </>
   );
 }
 
-function LinkInstallation(props: PageProps) {
+function LinkInstallation(props: AppProps) {
+  const { words } = props;
   const { organization } = useOrganization();
   const app = useGitHubApp(props);
   const [installationId] = useState(() =>
@@ -259,7 +359,7 @@ function LinkInstallation(props: PageProps) {
     setCantStart(false);
     let url: string;
     try {
-      url = await startSignIn(clientId, id);
+      url = await startSignIn(clientId, id, words.app);
     } catch {
       setLeaving(false);
       setCantStart(true);
@@ -272,23 +372,21 @@ function LinkInstallation(props: PageProps) {
     return (
       <>
         <p className="notice" role="alert">
-          GitHub didn't say which installation. Install the app again.
+          {words.noInstallation}
         </p>
         {ready !== null ? (
           <p className="setup-link">
-            <a href={installUrl(ready.slug)}>Install the GitHub app</a>
+            <a href={installUrl(ready.slug)}>{words.install}</a>
           </p>
         ) : (
-          <AppNotReady app={app} />
+          <AppNotReady app={app} words={words} />
         )}
       </>
     );
   }
   return (
     <>
-      <p>
-        Link installation {installationId} to {teamName}
-      </p>
+      <p>{words.through(installationId, teamName)}</p>
       {cantStart && (
         <p className="notice" role="alert">
           {CANT_START}
@@ -305,7 +403,7 @@ function LinkInstallation(props: PageProps) {
           Sign in with GitHub
         </button>
       ) : (
-        <AppNotReady app={app} />
+        <AppNotReady app={app} words={words} />
       )}
     </>
   );

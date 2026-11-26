@@ -1,15 +1,15 @@
 // The Setup page and GitHub's Setup URL (`/setup/github`), story 1: an Admin's install link, the Team's Repo Assets,
 // and the sign-in button for the installation GitHub names. Each page renders alone with spy props over the fake API.
-import { act, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MAX_SCAN_ASSETS, type Role, type ScanState } from "@warden/contracts";
 import { useCallback, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NOT_ANSWERING, TEAM_NOT_OPENED } from "../src/api.ts";
 import { dayAndTimeWords } from "../src/date-words.ts";
-import { ATTEMPT_KEY } from "../src/github-setup.ts";
+import { ATTEMPT_KEY, WRITE_ATTEMPT_KEY } from "../src/github-setup.ts";
 import { goTo } from "../src/navigate.ts";
-import { GitHubSetupPage, SetupPage } from "../src/Setup.tsx";
+import { GitHubSetupPage, SetupPage, WriteAppSetupPage } from "../src/Setup.tsx";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { clerk, resetClerk } from "./fake-clerk.tsx";
 
@@ -66,8 +66,14 @@ function props(role: Role) {
   };
 }
 
+/** The write app's routes Setup calls (#224, story 5), with no grant. */
+const WRITE_INSTALL_URL = "https://github.com/apps/warden-writer/installations/new";
+const writeApp = () => json(200, { slug: "warden-writer", client_id: "Iv23li-writer" });
+const noGrants = () => json(200, { installations: [] });
+const writeRoutes: Routes = { writeApp, writeGrant: noGrants };
+
 function renderSetup(role: Role, routes: Routes = {}) {
-  serve({ githubApp: app, repos: () => json(200, { repos: [] }), ...routes });
+  serve({ githubApp: app, repos: () => json(200, { repos: [] }), ...writeRoutes, ...routes });
   const given = props(role);
   const { unmount } = render(<SetupPage {...given} />);
   return { ...given, unmount };
@@ -155,6 +161,7 @@ describe("SetupPage", () => {
     serve({
       githubApp: () => json(403, { error: "Only an Admin can do this" }),
       repos: () => json(200, { repos: [] }),
+      ...writeRoutes,
     });
     const refreshMe = vi.fn();
     // The shell's refreshMe changes the shell's state, as AppShell's does; its other props stay the same objects
@@ -190,6 +197,127 @@ describe("SetupPage", () => {
     expect(
       await github().findByRole("link", { name: "Install the GitHub app" }),
     ).toBeInTheDocument();
+  });
+});
+
+describe("SetupPage: Grant write access (#224, story 5)", () => {
+  const write = () => within(screen.getByRole("region", { name: "Grant write access" }));
+  const GRANTED_AT = "2026-11-26T09:14:00.000Z";
+  const grant = (installationId: number) => ({
+    installation_id: installationId,
+    granted_by: "user_admin_secret_id",
+    granted_at: GRANTED_AT,
+  });
+
+  it("sits between GitHub and Repos, and shows an Admin the write app's install link", async () => {
+    renderSetup("admin");
+
+    expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual([
+      "GitHub",
+      "Grant write access",
+      "Repos",
+    ]);
+    expect(write().getByText("Asking Warden's server about the write app…")).toBeInTheDocument();
+    expect(await write().findByRole("link", { name: "Install the write app" })).toHaveAttribute(
+      "href",
+      WRITE_INSTALL_URL,
+    );
+  });
+
+  it("tells an Admin Fix PRs aren't set up on this Warden when the write app answers 503, with no link", async () => {
+    renderSetup("admin", {
+      writeApp: () => json(503, { error: "Fix PRs aren't set up on this Warden" }),
+    });
+
+    expect(await write().findByText("Fix PRs aren't set up on this Warden.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Install the write app" })).toBeNull();
+  });
+
+  it("when the write app answers 403, tells the Admin an Admin grants write access, and asks for /api/me again", async () => {
+    const { refreshMe } = renderSetup("admin", {
+      writeApp: () => json(403, { error: "Only an Admin can do this" }),
+    });
+
+    expect(await write().findByText("An Admin grants write access.")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Install the write app" })).toBeNull();
+    await vi.waitFor(() => expect(refreshMe).toHaveBeenCalledOnce());
+  });
+
+  it("shows the not-answering line with Retry when the write app answers 502, and the link after Retry", async () => {
+    let answer = () => json(502, { error: "GitHub didn't answer" });
+    renderSetup("admin", { writeApp: () => answer() });
+
+    expect(await write().findByText("Warden's server isn't answering")).toBeInTheDocument();
+    answer = writeApp;
+    await userEvent.click(write().getByRole("button", { name: "Retry" }));
+
+    expect(await write().findByRole("link", { name: "Install the write app" })).toBeInTheDocument();
+  });
+
+  it.each<Role>(["lead", "member"])(
+    "tells a %s an Admin grants write access, with no link and no call for the write app",
+    async (role) => {
+      renderSetup(role);
+
+      expect(write().getByText("An Admin grants write access.")).toBeInTheDocument();
+      await write().findByText("No write access granted.");
+      expect(screen.queryByRole("link", { name: "Install the write app" })).toBeNull();
+      expect(callsTo("/api/github/write-app")).toEqual([]);
+    },
+  );
+
+  it.each<Role>(["admin", "member"])(
+    "shows a %s the Team's grant: none, then one line per installation, without who granted it",
+    async (role) => {
+      renderSetup(role);
+      expect(write().getByText("Loading the Team's write access…")).toBeInTheDocument();
+      expect(await write().findByText("No write access granted.")).toBeInTheDocument();
+      cleanup();
+
+      renderSetup(role, { writeGrant: () => json(200, { installations: [grant(42), grant(77)] }) });
+
+      expect(
+        await write().findByText(
+          `Write access granted: installation 42, ${dayAndTimeWords(GRANTED_AT)}`,
+        ),
+      ).toBeInTheDocument();
+      expect(
+        write().getByText(`Write access granted: installation 77, ${dayAndTimeWords(GRANTED_AT)}`),
+      ).toBeInTheDocument();
+      expect(write().queryByText("No write access granted.")).toBeNull();
+      expect(screen.queryByText(/user_admin_secret_id/)).toBeNull();
+    },
+  );
+
+  it.each([
+    ["Team not opened", () => json(409, { error: "not opened" }), TEAM_NOT_OPENED],
+    [
+      "no Team",
+      () => json(403, { error: "no team" }),
+      "Choose a Team first, from the switcher above.",
+    ],
+    [
+      "too many attempts",
+      () => json(429, { error: "too many" }, { "Retry-After": "120" }),
+      "Too many sign-in attempts. Try again in 120 seconds.",
+    ],
+  ])("shows the grant's refusal when it can't be read: %s", async (_name, answer, words) => {
+    renderSetup("member", { writeGrant: answer });
+
+    expect(await write().findByText(words)).toBeInTheDocument();
+  });
+
+  it("shows the grant's not-answering line with Retry, and the grant after Retry", async () => {
+    let answer = (): Response => {
+      throw new TypeError("Failed to fetch");
+    };
+    renderSetup("member", { writeGrant: () => answer() });
+
+    expect(await write().findByText("Warden's server isn't answering")).toBeInTheDocument();
+    answer = noGrants;
+    await userEvent.click(write().getByRole("button", { name: "Retry" }));
+
+    expect(await write().findByText("No write access granted.")).toBeInTheDocument();
   });
 });
 
@@ -549,5 +677,108 @@ describe("GitHubSetupPage", () => {
 
     expect(await screen.findByText("GitHub isn't set up on this Warden.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
+  });
+});
+
+function renderWriteSetup(search: string, role: Role = "admin", routes: Routes = {}) {
+  window.history.replaceState(null, "", `/setup/github/write${search}`);
+  serve({ writeApp, ...routes });
+  const given = props(role);
+  render(<WriteAppSetupPage {...given} />);
+  return given;
+}
+
+describe("WriteAppSetupPage (#224, story 5)", () => {
+  it("asks an Admin to grant write access through GitHub's installation, and leaves for the write app's sign-in", async () => {
+    renderWriteSetup("?installation_id=42&setup_action=install");
+
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Grant write access" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("Grant write access through installation 42 to Acme"),
+    ).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: "Sign in with GitHub" }));
+
+    await vi.waitFor(() => expect(goTo).toHaveBeenCalledOnce());
+    const url = new URL(vi.mocked(goTo).mock.calls[0]![0]);
+    expect(`${url.origin}${url.pathname}`).toBe("https://github.com/login/oauth/authorize");
+    expect(url.searchParams.get("client_id")).toBe("Iv23li-writer");
+    expect(url.searchParams.get("redirect_uri")).toBe(
+      `${window.location.origin}/setup/github/write/callback`,
+    );
+    const kept = JSON.parse(sessionStorage.getItem(WRITE_ATTEMPT_KEY)!) as Record<string, unknown>;
+    expect(kept.installationId).toBe(42);
+    expect(url.searchParams.get("state")).toBe(kept.state);
+    expect(sessionStorage.getItem(ATTEMPT_KEY)).toBeNull();
+    expect(callsTo("/api/github/app")).toEqual([]);
+  });
+
+  it("when this browser can't keep the attempt, says so in an alert and gives the button back", async () => {
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("The storage is blocked", "SecurityError");
+    });
+    renderWriteSetup("?installation_id=42&setup_action=install");
+
+    const button = await screen.findByRole("button", { name: "Sign in with GitHub" });
+    await userEvent.click(button);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This browser couldn't start the GitHub sign-in. Allow this site to store data for this tab, and open Warden over https.",
+    );
+    expect(button).toBeEnabled();
+    expect(goTo).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no installation_id", "?setup_action=install"],
+    ["installation_id=0", "?installation_id=0&setup_action=install"],
+    ["installation_id=abc", "?installation_id=abc&setup_action=install"],
+  ])(
+    "with %s, tells an Admin GitHub didn't say which installation, with the write app's install link",
+    async (_name, search) => {
+      renderWriteSetup(search);
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "GitHub didn't say which installation. Install the write app again.",
+      );
+      expect(await screen.findByRole("link", { name: "Install the write app" })).toHaveAttribute(
+        "href",
+        WRITE_INSTALL_URL,
+      );
+      expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
+    },
+  );
+
+  it.each<Role>(["lead", "member"])(
+    "tells a %s only an Admin grants write access, with no button and no call",
+    (role) => {
+      renderWriteSetup("?installation_id=42&setup_action=install", role);
+
+      expect(
+        screen.getByText("Only an Admin grants write access to the Team."),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
+      expect(callsTo("/api/github/write-app")).toEqual([]);
+    },
+  );
+
+  it("tells an Admin Fix PRs aren't set up on this Warden when the write app answers 503, with no button", async () => {
+    renderWriteSetup("?installation_id=42", "admin", {
+      writeApp: () => json(503, { error: "Fix PRs aren't set up on this Warden" }),
+    });
+
+    expect(await screen.findByText("Fix PRs aren't set up on this Warden.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
+  });
+
+  it("on the write app's 403, tells the Admin an Admin grants write access and asks for /api/me again", async () => {
+    const { refreshMe } = renderWriteSetup("?installation_id=42", "admin", {
+      writeApp: () => json(403, { error: "Only an Admin can do this" }),
+    });
+
+    expect(await screen.findByText("An Admin grants write access.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
+    await vi.waitFor(() => expect(refreshMe).toHaveBeenCalledOnce());
   });
 });
