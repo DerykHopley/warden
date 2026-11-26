@@ -13,7 +13,7 @@ import {
   GitHubRefusedCode,
   GitHubUnavailable,
   type GitHub,
-  type GitHubRepo,
+  type UserRepo,
 } from "./github.ts";
 import { InstallationLinkedElsewhere } from "./repo-assets.ts";
 
@@ -95,14 +95,15 @@ export type Linking = {
   team: string;
   installationId: number;
   linkedBy: string;
-  repos: GitHubRepo[];
+  repos: UserRepo[];
 };
 
 /**
  * A handler linking an installation of one app to the session's Team. Without the app's client it answers 503 with
  * `notSetUp`; then a bad body 400, and a Team past LINKS_PER_HOUR links in an hour 429 with Retry-After, both before
  * GitHub is called. GitHub then confirms, with the person's own sign-in, that they reach the installation (403 when
- * they don't), and the App's token must hold what `permitted` allows (409 with `notPermitted`). `link` writes the
+ * they don't), and the App's token must hold what `permitted` allows (409 with `notPermitted`). With `mayLink`, the
+ * person must also pass its `check` of what they read in the installation (403 with its `refused`). `link` writes the
  * app's store; another Team's installation answers 409 with `linkedElsewhere`, and `answer` answers what `link`
  * wrote. A refused sign-in is 400, an installation the App can't reach 409, and GitHub not answering 502, logged with
  * the app, step and status only. Every refusal writes nothing, and neither token is kept. Each route builds its own,
@@ -114,6 +115,13 @@ export function gitHubLinkRoute<Linked>(options: {
   notSetUp: string;
   permitted: (permissions: Record<string, string>) => boolean;
   notPermitted: string;
+  mayLink?: {
+    check: (
+      linking: { installationId: number; repos: UserRepo[] },
+      github: GitHub,
+    ) => Promise<boolean>;
+    refused: string;
+  };
   linkedElsewhere: string;
   link: (linking: Linking) => Promise<Linked>;
   answer: (
@@ -149,6 +157,9 @@ export function gitHubLinkRoute<Linked>(options: {
       }
       if (!options.permitted(await github.installationPermissions(installationId))) {
         return c.json({ error: options.notPermitted }, 409);
+      }
+      if (options.mayLink && !(await options.mayLink.check({ installationId, repos }, github))) {
+        return c.json({ error: options.mayLink.refused }, 403);
       }
       linking = { team, installationId, linkedBy: c.get("session").userId, repos };
       linked = await options.link(linking);

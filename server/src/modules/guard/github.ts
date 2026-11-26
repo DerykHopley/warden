@@ -64,17 +64,27 @@ export class GitHubUnavailable extends Error {
 /** A repo as `RepoAssets.link` takes it: GitHub's `html_url` as its ref, GitHub's id as its githubId. */
 export type GitHubRepo = { ref: string; githubId: number };
 
+/** A repo the person reads in an installation, and whether GitHub says they're its admin. */
+export type UserRepo = GitHubRepo & { admin: boolean };
+
 export interface GitHub {
   /**
-   * The repos in the installation that the person whose `code` this is can read, through their user token; or
-   * undefined when the installation isn't one they can reach. The code is exchanged once, so one call does both. An id
-   * that isn't a positive integer is refused with a RangeError before any call.
+   * The repos in the installation that the person whose `code` this is can read, through their user token, each with
+   * whether they're its admin (false where GitHub doesn't say); or undefined when the installation isn't one they can
+   * reach. The code is exchanged once, so one call does both. An id that isn't a positive integer is refused with a
+   * RangeError before any call.
    */
   userInstallationRepos(
     code: string,
     codeVerifier: string,
     installationId: number,
-  ): Promise<GitHubRepo[] | undefined>;
+  ): Promise<UserRepo[] | undefined>;
+  /**
+   * How many repos the installation reaches, GitHub's count read through the installation's own token, so it counts
+   * the repos the person can't see too. Throws GitHubInstallationUnreachable when GitHub won't grant the token (403,
+   * 404). An id that isn't a positive integer is refused with a RangeError before any call.
+   */
+  installationRepoCount(installationId: number): Promise<number>;
   /**
    * The installation token's permissions as GitHub's answer granting it gives them (`{ contents: "read", … }`), or `{}`
    * when it names none; no repo is listed. Throws GitHubInstallationUnreachable when GitHub won't grant one (403, 404).
@@ -110,9 +120,18 @@ const AuthenticatedApp = z.object({ slug: z.string().min(1) });
 const Repositories = z
   .object({
     total_count: z.number().int(),
-    repositories: z.array(z.object({ id: z.number().int(), html_url: z.string() })),
+    repositories: z.array(
+      z.object({
+        id: z.number().int(),
+        html_url: z.string(),
+        // GitHub documents `admin` as a boolean in an optional `permissions`; any other shape is read as not admin.
+        permissions: z.object({ admin: z.boolean() }).optional().catch(undefined),
+      }),
+    ),
   })
   .transform(({ total_count, repositories }) => ({ total: total_count, items: repositories }));
+/** Only the count is read: the installation token's list of every repo the installation reaches. */
+const InstallationRepoCount = z.object({ total_count: z.number().int().nonnegative() });
 
 /**
  * The token answer's errors that are the person's: their code is bad, expired or reused (`bad_verification_code`),
@@ -169,9 +188,14 @@ function checkInstallationId(id: number) {
   }
 }
 
-const gitHubRepo = (repo: { id: number; html_url: string }): GitHubRepo => ({
+const userRepo = (repo: {
+  id: number;
+  html_url: string;
+  permissions?: { admin: boolean } | undefined;
+}): UserRepo => ({
   ref: repo.html_url,
   githubId: repo.id,
+  admin: repo.permissions?.admin === true,
 });
 
 export function createGitHub({
@@ -257,6 +281,20 @@ export function createGitHub({
     return read(UserToken, step, answer, { quiet: true }).access_token;
   }
 
+  /** GitHub's answer granting the App a token for the installation; 403 and 404 are GitHubInstallationUnreachable. */
+  async function installationToken(installationId: number) {
+    checkInstallationId(installationId);
+    const step = `GitHub's installation token for installation ${installationId}`;
+    const answer = await call(step, `${API}/app/installations/${installationId}/access_tokens`, {
+      method: "POST",
+      headers: apiHeaders(signAppJwt(clientId, key)),
+    });
+    if (answer.status === 403 || answer.status === 404) {
+      throw new GitHubInstallationUnreachable(installationId, answer.status);
+    }
+    return read(InstallationToken, step, answer);
+  }
+
   return {
     async userInstallationRepos(code, codeVerifier, installationId) {
       checkInstallationId(installationId);
@@ -274,21 +312,22 @@ export function createGitHub({
         token,
         Repositories,
       );
-      return repositories.map(gitHubRepo);
+      return repositories.map(userRepo);
     },
 
     async installationPermissions(installationId) {
-      checkInstallationId(installationId);
-      const step = `GitHub's installation token for installation ${installationId}`;
-      const answer = await call(step, `${API}/app/installations/${installationId}/access_tokens`, {
-        method: "POST",
-        headers: apiHeaders(signAppJwt(clientId, key)),
-      });
-      if (answer.status === 403 || answer.status === 404) {
-        throw new GitHubInstallationUnreachable(installationId, answer.status);
-      }
       // None named is `{}`, which the link refuses as not read-only (threat G1).
-      return read(InstallationToken, step, answer).permissions ?? {};
+      return (await installationToken(installationId)).permissions ?? {};
+    },
+
+    async installationRepoCount(installationId) {
+      const { token } = await installationToken(installationId);
+      const step = `GitHub's count of installation ${installationId}'s repositories`;
+      // One repo a page: only GitHub's count of them all is read. The token isn't kept.
+      const answer = await call(step, `${API}/installation/repositories?per_page=1`, {
+        headers: apiHeaders(token),
+      });
+      return read(InstallationRepoCount, step, answer).total_count;
     },
 
     async appSlug() {

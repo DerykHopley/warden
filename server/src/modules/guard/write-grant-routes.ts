@@ -1,8 +1,8 @@
 // The write grant's routes (#224, stories 5 and 15), mounted by the app through `moduleRoutes` beside Guard's (ADR
 // 0005). An Admin grants write access by linking an installation of Warden's write GitHub app, which Fix PRs go
 // through: checked as the read app's link is, against their own sign-in through the write app's OAuth, and refused
-// unless its token holds exactly the write app's three permissions. The Team is always the session's, never the
-// request's.
+// unless its token holds exactly the write app's three permissions, and unless the Admin is admin of every repo the
+// installation reaches. The Team is always the session's, never the request's.
 import type { WriteGrantBody, WriteGrantsBody } from "@warden/contracts";
 import type { MountRoutes } from "../../app.ts";
 import {
@@ -59,6 +59,16 @@ export function writeGrantRoutes(
     notSetUp: NOT_SET_UP,
     permitted: holdsWriteAppPermissions,
     notPermitted: "This installation's permissions aren't the write app's",
+    // The owner's answer A on #295: whoever installed the app on an account administers every repo it reaches, so the
+    // installer passes, and someone with push or pull on one repo, or who can't see some, never does. The count is
+    // the installation's own, so repos hidden from the person still count. An installation reaching none is refused.
+    mayLink: {
+      check: async ({ installationId, repos }, github) =>
+        repos.length > 0 &&
+        repos.every((repo) => repo.admin) &&
+        repos.length === (await github.installationRepoCount(installationId)),
+      refused: "You need admin on every repo this installation reaches to grant write access",
+    },
     linkedElsewhere: "This write installation is linked to another Team",
     async link({ team, installationId, linkedBy }) {
       // A grant the Team already holds answers 200, and the store writes no row for it. Two first links at once may

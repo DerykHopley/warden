@@ -69,15 +69,18 @@ const json = (body: unknown, status = 200) =>
 
 /**
  * A fake GitHub for one app (the write app by default) and one installation: the person reaches `reachable`
- * installations; the App's installation token answer gives `permissions`, or `tokenStatus` when it's an error; `GET
- * /app` answers `slug`. `failAt` names one endpoint that answers 500; `refuse` makes the token exchange refuse the code.
- * Every call is recorded.
+ * installations, and sees one repo in it for each of `repoAccess`, with that role on it; the installation reaches
+ * `installationRepos` repos, those the person sees by default. The App's installation token answer gives
+ * `permissions`, or `tokenStatus` when it's an error; `GET /app` answers `slug`. `failAt` names one endpoint that answers
+ * 500; `refuse` makes the token exchange refuse the code. Every call is recorded.
  */
 function fakeGitHub({
   installationId = 0,
   clientId = WRITE_CLIENT_ID,
   slug = WRITE_SLUG,
   reachable = [installationId],
+  repoAccess = ["admin"],
+  installationRepos = repoAccess.length,
   permissions = WRITE_APP,
   tokenStatus,
   refuse = false,
@@ -87,11 +90,14 @@ function fakeGitHub({
   clientId?: string;
   slug?: string;
   reachable?: number[];
+  repoAccess?: ("admin" | "push" | "pull")[];
+  installationRepos?: number;
   permissions?: Record<string, string>;
   tokenStatus?: 404;
   refuse?: boolean;
   failAt?: "installations";
 } = {}) {
+  const repo = (n: number) => ({ id: n, html_url: `https://github.com/acme/repo-${n}` });
   const calls: string[] = [];
   const fetch: Fetch = async (url, init) => {
     const { origin, pathname } = new URL(url);
@@ -110,13 +116,29 @@ function fakeGitHub({
           installations: reachable.map((id) => ({ id })),
         });
       case `GET ${api}/user/installations/${installationId}/repositories`:
+        // GitHub's permissions for the person on each repo they see.
         return json({
-          total_count: 1,
-          repositories: [{ id: 1, html_url: "https://github.com/acme/web" }],
+          total_count: repoAccess.length,
+          repositories: repoAccess.map((role, i) => ({
+            ...repo(i + 1),
+            permissions: {
+              admin: role === "admin",
+              maintain: role === "admin",
+              push: role !== "pull",
+              triage: role !== "pull",
+              pull: true,
+            },
+          })),
         });
       case `POST ${api}/app/installations/${installationId}/access_tokens`:
         if (tokenStatus !== undefined) return json({ message: "Not Found" }, tokenStatus);
         return json({ token: INSTALLATION_TOKEN, permissions }, 201);
+      case `GET ${api}/installation/repositories`:
+        // Asked one to a page: GitHub's count is of every repo the installation reaches.
+        return json({
+          total_count: installationRepos,
+          repositories: installationRepos > 0 ? [repo(1)] : [],
+        });
       case `GET ${api}/app`:
         return json({ id: 1, slug, name: "Warden" });
       default:
@@ -133,14 +155,19 @@ function fakeGitHub({
 }
 
 /**
- * The app with the write grant's routes, linking through the write app's `github` (none: the write app isn't set up);
- * with `readGitHub`, Guard's routes too, linking through the read app. Every log line it writes.
+ * The app with the write grant's routes, linking through the write app's `github` (none: the write app isn't set up)
+ * on `now`'s clock; with `readGitHub`, Guard's routes too, linking through the read app. Every log line it writes.
  */
-function writeApp(github?: GitHub, { readGitHub }: { readGitHub?: GitHub } = {}) {
+function writeApp(
+  github?: GitHub,
+  { now, readGitHub }: { now?: () => number; readGitHub?: GitHub } = {},
+) {
   const routeLines: string[] = [];
   const logger = createLogger((line) => routeLines.push(line));
   const routes = [
-    github ? writeGrantRoutes({ writeGrants, github, logger }) : writeGrantRoutes({ writeGrants }),
+    github
+      ? writeGrantRoutes({ writeGrants, github, logger, now })
+      : writeGrantRoutes({ writeGrants }),
   ];
   if (readGitHub) routes.push(guardRoutes({ repoAssets, github: readGitHub, logger }));
   const { app, lines } = testApp({ publicPem, withTeam, moduleRoutes: routes });
@@ -245,20 +272,70 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
     expect(await rowCount(team)).toBe(1);
   });
 
-  // Which tokens hold the write app's permissions is holdsWriteAppPermissions' unit test; here, one that doesn't.
-  it("answers 409 for an installation whose token holds more than the write app's permissions, and writes no row", async () => {
-    const team = await newTeam(withTeam);
-    const installationId = newInstallation();
-    const permissions = { ...WRITE_APP, workflows: "write" };
-    const { app } = writeApp(fakeGitHub({ installationId, permissions }).github);
+  // Which tokens hold the write app's permissions is holdsWriteAppPermissions' unit test; here, one with more and one
+  // with fewer, as the ticket names.
+  it.each([
+    ["more than", { ...WRITE_APP, workflows: "write" }],
+    ["fewer than", { contents: "write", metadata: "read" }],
+  ])(
+    "answers 409 for an installation whose token holds %s the write app's permissions, and writes no row",
+    async (_name, permissions) => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app } = writeApp(fakeGitHub({ installationId, permissions }).github);
 
-    const res = await link(app, team, installationId);
+      const res = await link(app, team, installationId);
 
-    expect(res).toMatchObject({
-      status: 409,
-      body: { error: "This installation's permissions aren't the write app's" },
+      expect(res).toMatchObject({
+        status: 409,
+        body: { error: "This installation's permissions aren't the write app's" },
+      });
+      expect(await rowCount(team)).toBe(0);
+    },
+  );
+
+  // The owner's answer A on #295: whoever installs a GitHub app on an account administers it, so the real installer
+  // passes, and a reader of one repo never does.
+  describe("only an Admin with admin on every repo the installation reaches grants write access", () => {
+    it("links when the Admin's sign-in has admin on every repo", async () => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app } = writeApp(
+        fakeGitHub({ installationId, repoAccess: ["admin", "admin", "admin"] }).github,
+      );
+
+      expect((await link(app, team, installationId)).status).toBe(201);
+      expect(await rowCount(team)).toBe(1);
     });
-    expect(await rowCount(team)).toBe(0);
+
+    it.each([
+      ["has only push on one repo", { repoAccess: ["admin", "push"] as const }],
+      ["has only pull on one repo", { repoAccess: ["pull", "admin"] as const }],
+      [
+        "sees fewer repos than the installation reaches",
+        { repoAccess: ["admin"] as const, installationRepos: 2 },
+      ],
+      [
+        "sees none, of an installation reaching none",
+        { repoAccess: [] as const, installationRepos: 0 },
+      ],
+    ])("answers 403, writing no row, when the Admin %s", async (_name, fake) => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app } = writeApp(
+        fakeGitHub({ installationId, ...fake, repoAccess: [...fake.repoAccess] }).github,
+      );
+
+      const res = await link(app, team, installationId);
+
+      expect(res).toMatchObject({
+        status: 403,
+        body: {
+          error: "You need admin on every repo this installation reaches to grant write access",
+        },
+      });
+      expect(await rowCount(team)).toBe(0);
+    });
   });
 
   it("answers 503 without the write app's settings, and writes no row", async () => {
@@ -401,18 +478,22 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
   );
 });
 
-// How long a slug is kept, and a GitHub that doesn't answer, are the shared handler's, proven on the read app's route
-// (github-app-api.test.ts); here, what is the write app's own.
+// A failed read not kept, and GitHub not answering, are the shared handler's, proven on the read app's route
+// (github-app-api.test.ts); here, what is the write app's own, with the hour the ticket names.
 describe("GET /api/github/write-app: the write app's Connect step", () => {
-  it("answers the write app's slug and client id, never the read app's, and keeps its own slug apart from the read app's", async () => {
+  it("answers the write app's slug and client id, never the read app's, keeping its own slug apart for an hour", async () => {
     const team = await newTeam(withTeam);
     const write = fakeGitHub();
     const read = fakeGitHub({ clientId: READ_CLIENT_ID, slug: READ_SLUG });
-    const { app } = writeApp(write.github, { readGitHub: read.github });
+    let now = Date.parse("2026-11-26T09:00:00Z");
+    const { app } = writeApp(write.github, { now: () => now, readGitHub: read.github });
 
     const readApp = await call(app, team, "/api/github/app");
     const first = await call(app, team, "/api/github/write-app");
-    const again = await call(app, team, "/api/github/write-app");
+    now += 3_600_000 - 1;
+    const withinTheHour = await call(app, team, "/api/github/write-app");
+    now += 1;
+    await call(app, team, "/api/github/write-app");
 
     expect(readApp.body).toEqual({ slug: READ_SLUG, client_id: READ_CLIENT_ID });
     expect(first.status).toBe(200);
@@ -420,8 +501,11 @@ describe("GET /api/github/write-app: the write app's Connect step", () => {
       slug: WRITE_SLUG,
       client_id: WRITE_CLIENT_ID,
     });
-    expect(again.body).toEqual(first.body);
-    expect(write.calls).toEqual(["GET https://api.github.com/app"]);
+    expect(withinTheHour.body).toEqual(first.body);
+    expect(write.calls).toEqual([
+      "GET https://api.github.com/app",
+      "GET https://api.github.com/app",
+    ]);
     expect(read.calls).toEqual(["GET https://api.github.com/app"]);
   });
 
@@ -479,6 +563,7 @@ describe("no secret in an answer or a log line", () => {
       "a token with more than the write app's permissions",
       { permissions: { ...WRITE_APP, workflows: "write" } },
     ],
+    ["an Admin with only push on a repo", { repoAccess: ["push" as const] }],
   ])(
     "holds no client secret, code, verifier or token, for %s",
     async (_name, fake, twice = false) => {
