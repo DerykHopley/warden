@@ -14,6 +14,7 @@ import {
   settingLocation,
 } from "./fixtures.ts";
 import { expectRefused } from "./refused.ts";
+import { AWS_KEY } from "./secret-fixtures.ts";
 
 describe("Finding", () => {
   it("parses a valid Finding of each Asset kind, each with its Location kind", () => {
@@ -271,12 +272,8 @@ describe("Evidence", () => {
   });
 
   it("has no field for a secret's value", () => {
-    expectRefused(
-      Evidence,
-      { summary: "x", secret: { ...secret, value: "AKIAABCDEFGHIJKLMNOP" } },
-      "value",
-    );
-    expectRefused(Evidence, { summary: "x", secret, value: "AKIAABCDEFGHIJKLMNOP" }, "value");
+    expectRefused(Evidence, { summary: "x", secret: { ...secret, value: AWS_KEY } }, "value");
+    expectRefused(Evidence, { summary: "x", secret, value: AWS_KEY }, "value");
   });
 
   it("refuses a mask that shows 5 or more characters, or hides none", () => {
