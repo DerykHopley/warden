@@ -11,14 +11,15 @@ export interface PackageRegistry {
   /**
    * The package's `latest` version on `registry`, or undefined when the registry doesn't hold it (a 404). A name that
    * isn't a valid package name there is refused with a RangeError before any call. Throws RegistryUnavailable for any
-   * other non-2xx answer, a timeout, a lost connection, and an answer with no version in the pinned shape.
+   * other non-2xx answer, a timeout, a lost connection, and an answer with no valid version; UnpinnableVersion for a
+   * valid version outside the pinned shape.
    */
   latestVersion(registry: PackageRegistryName, name: string): Promise<string | undefined>;
 }
 
 /**
  * A registry didn't answer a version: a non-2xx answer other than 404, a timeout, a lost connection, or an answer
- * without a version in the pinned shape. It names the registry and the status only (undefined when none came).
+ * without a valid version. It names the registry and the status only (undefined when none came).
  */
 export class RegistryUnavailable extends Error {
   override name = "RegistryUnavailable";
@@ -36,33 +37,62 @@ export class RegistryUnavailable extends Error {
   }
 }
 
+/**
+ * A registry's latest version is a valid version there, but not in the shape the scanner reads as pinned (a PyPI
+ * epoch `1!2.0` or local version `1.0+ubuntu.1`), so Warden can't write a package pinned at it. It names the registry
+ * only.
+ */
+export class UnpinnableVersion extends Error {
+  override name = "UnpinnableVersion";
+  readonly registry: PackageRegistryName;
+  constructor(registry: PackageRegistryName) {
+    super(`The ${registry} registry's latest version isn't in the pinned shape`);
+    this.registry = registry;
+  }
+}
+
 /** One part of an npm name: URL-safe, not starting with `.` or `_` (npm's `validate-npm-package-name`). */
 const NPM_PART = String.raw`[A-Za-z0-9~-][A-Za-z0-9._~-]*`;
 /** An npm package name, scoped or not, at most 214 characters. */
 const NPM_NAME = new RegExp(`^(?:@${NPM_PART}/)?${NPM_PART}$`);
 /** A PyPI project name (PEP 508's name, without extras or a version). */
 const PYPI_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
+/** Any version PEP 440 allows, in any of its spellings (its appendix's pattern). */
+const PEP_440 =
+  /^v?(?:\d+!)?\d+(?:\.\d+)*(?:[-_.]?(?:alpha|a|beta|b|preview|pre|c|rc)[-_.]?\d*)?(?:-\d+|[-_.]?(?:post|rev|r)[-_.]?\d*)?(?:[-_.]?dev[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
 
-/** Whether `name` is a valid package name on `registry`, so it can go into the registry's URL as it is. */
-export function isPackageName(registry: PackageRegistryName, name: string): boolean {
-  return registry === "npm" ? name.length <= 214 && NPM_NAME.test(name) : PYPI_NAME.test(name);
-}
-
-/** Where each registry answers a package's latest version, and where in its answer that version is. */
+/**
+ * Each registry: which names it holds, where it answers a package's latest version, where in its answer that version
+ * is, and which versions it allows at all.
+ */
 const REGISTRIES: Record<
   PackageRegistryName,
-  { url(name: string): string; version(body: unknown): unknown }
+  {
+    isName(name: string): boolean;
+    url(name: string): string;
+    version(body: unknown): unknown;
+    isVersion(version: string): boolean;
+  }
 > = {
   npm: {
+    isName: (name) => name.length <= 214 && NPM_NAME.test(name),
     // A scoped name's `/` is encoded, so the scope and name are one path part.
     url: (name) => `https://registry.npmjs.org/${name.replace("/", "%2F")}/latest`,
     version: (body) => (isObject(body) ? body.version : undefined),
+    // npm's versions are semver, which the pinned shape already covers.
+    isVersion: (version) => isPinnedVersion("npm", version),
   },
   pypi: {
+    isName: (name) => PYPI_NAME.test(name),
     url: (name) => `https://pypi.org/pypi/${name}/json`,
     version: (body) => (isObject(body) && isObject(body.info) ? body.info.version : undefined),
+    isVersion: (version) => PEP_440.test(version),
   },
 };
+
+/** Whether `name` is a valid package name on `registry`, so it can go into the registry's URL as it is. */
+export const isPackageName = (registry: PackageRegistryName, name: string): boolean =>
+  REGISTRIES[registry].isName(name);
 
 export function createPackageRegistry({
   fetch = globalThis.fetch,
@@ -76,7 +106,7 @@ export function createPackageRegistry({
       if (!isPackageName(registry, name)) {
         throw new RangeError(`not a valid ${registry} package name`);
       }
-      const { url, version } = REGISTRIES[registry];
+      const { url, version, isVersion } = REGISTRIES[registry];
       let answer;
       try {
         answer = await callJson(fetch, {
@@ -91,9 +121,10 @@ export function createPackageRegistry({
       }
       if (answer.status === 404) return undefined;
       const latest = answer.ok ? version(answer.body) : undefined;
-      if (typeof latest !== "string" || !isPinnedVersion(registry, latest)) {
+      if (typeof latest !== "string" || !isVersion(latest)) {
         throw new RegistryUnavailable(registry, answer.status);
       }
+      if (!isPinnedVersion(registry, latest)) throw new UnpinnableVersion(registry);
       return latest;
     },
   };

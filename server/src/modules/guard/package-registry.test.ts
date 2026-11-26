@@ -3,7 +3,11 @@
 // no version a registry sends gets past the scanner's pinned-version shape.
 import { describe, expect, it } from "vitest";
 import type { Fetch } from "../../http-call.ts";
-import { createPackageRegistry, RegistryUnavailable } from "./package-registry.ts";
+import {
+  createPackageRegistry,
+  RegistryUnavailable,
+  UnpinnableVersion,
+} from "./package-registry.ts";
 
 type Answer = (init: RequestInit) => Response | Promise<Response>;
 
@@ -47,10 +51,25 @@ describe("createPackageRegistry", () => {
     expect(urls).toEqual(["https://pypi.org/pypi/mcp-server-fetch/json"]);
   });
 
-  it.each(["npm", "pypi"] as const)("answers undefined for a 404 from %s", async (name) => {
+  it.each(["npm", "pypi"] as const)("answers undefined for a 404 from %s", async (registryName) => {
     const { registry } = fakeRegistry(() => json({ message: "Not Found" }, 404));
-    await expect(registry.latestVersion(name, "missing-pkg")).resolves.toBeUndefined();
+    await expect(registry.latestVersion(registryName, "missing-pkg")).resolves.toBeUndefined();
   });
+
+  it.each([
+    ["an epoch", "1!2.0"],
+    ["a local version", "1.0+ubuntu.1"],
+    ["a dash post-release", "1.0-1"],
+    ["a spelled-out pre-release", "1.0alpha1"],
+  ])(
+    "throws UnpinnableVersion for a valid PEP 440 version outside the pinned shape: %s",
+    async (_case, version) => {
+      const { registry } = fakeRegistry(() => json({ info: { version } }));
+      const call = registry.latestVersion("pypi", "some-pkg");
+      await expect(call).rejects.toBeInstanceOf(UnpinnableVersion);
+      await expect(call).rejects.toMatchObject({ registry: "pypi" });
+    },
+  );
 
   it.each([
     ["a 500", () => json({ message: "Server Error" }, 500)],
@@ -101,9 +120,12 @@ describe("createPackageRegistry", () => {
     ["pypi", "pkg?x=1"],
     ["pypi", "some pkg"],
     ["pypi", "pkg[extra]"],
-  ] as const)("refuses %s name %j with a RangeError before any call", async (name, pkg) => {
-    const { registry, urls } = fakeRegistry(() => json({ version: "1.0.0" }));
-    await expect(registry.latestVersion(name, pkg)).rejects.toBeInstanceOf(RangeError);
-    expect(urls).toHaveLength(0);
-  });
+  ] as const)(
+    "refuses %s name %j with a RangeError before any call",
+    async (registryName, name) => {
+      const { registry, urls } = fakeRegistry(() => json({ version: "1.0.0" }));
+      await expect(registry.latestVersion(registryName, name)).rejects.toBeInstanceOf(RangeError);
+      expect(urls).toHaveLength(0);
+    },
+  );
 });

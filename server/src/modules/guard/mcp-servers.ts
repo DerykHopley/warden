@@ -204,16 +204,22 @@ const NPM_PINNED = new RegExp(String.raw`^(?:@[^/@]+\/)?[^@]+@${NPM_VERSION}$`);
 /** A Python package at an exact version, `name==0.4.1` or `name@0.4.1`, pre-releases included. */
 const PYTHON_PINNED = new RegExp(`(?:==|@)${PYTHON_VERSION}$`);
 
+/** What the scanner reads as pinned for each registry's runners: a version on its own, and a package word. */
+const PINNED: Record<PackageRegistryName, { version: RegExp; word: RegExp }> = {
+  npm: { version: new RegExp(`^${NPM_VERSION}$`), word: NPM_PINNED },
+  pypi: { version: new RegExp(`^${PYTHON_VERSION}$`), word: PYTHON_PINNED },
+};
+
 /**
  * Whether a version a registry answers has the shape the scanner reads as pinned (`NPM_PINNED`'s or
  * `PYTHON_PINNED`'s version part), so a package written at it clears the Rule and no other text gets into a repo.
  */
 export const isPinnedVersion = (registry: PackageRegistryName, version: string): boolean =>
-  new RegExp(`^${registry === "npm" ? NPM_VERSION : PYTHON_VERSION}$`).test(version);
+  PINNED[registry].version.test(version);
 
 /** Whether a package word is one the scanner reads as pinned, for an npm or a Python runner. */
 export const isPinnedPackage = (registry: PackageRegistryName, word: string): boolean =>
-  (registry === "npm" ? NPM_PINNED : PYTHON_PINNED).test(word);
+  PINNED[registry].word.test(word);
 const DIGEST = /^sha256:[0-9a-f]{64}$/i;
 /** A local path (`./server`, `/opt/mcp`, `~/mcp`, `C:\mcp`): a local server, not a package. */
 const LOCAL_PATH = /^(?:[.~/\\]|[A-Za-z]:[\\/])/;
@@ -260,7 +266,7 @@ type Runner = { words: readonly string[]; options: Options; globals?: Options };
 /** One kind of runner: the runners that start it, the options that name what it starts, and when that is pinned. */
 type RunnerKind = {
   /** Where its packages come from: npm, PyPI, or a container registry. */
-  registry: PackageSource;
+  source: PackageSource;
   runners: readonly Runner[];
   /** Options whose value is the package (`-p x`, `--package=x`), given before it. */
   fromOptions: readonly string[];
@@ -269,7 +275,7 @@ type RunnerKind = {
 
 const RUNNER_KINDS: readonly RunnerKind[] = [
   {
-    registry: "npm",
+    source: "npm",
     runners: [
       { words: ["npx"], options: NPM },
       { words: ["bunx"], options: switchOptions(BUNX_SWITCHES) },
@@ -278,20 +284,20 @@ const RUNNER_KINDS: readonly RunnerKind[] = [
       { words: ["npm", "exec"], options: NPM },
     ],
     fromOptions: ["-p", "--package"],
-    pinned: (pkg) => NPM_PINNED.test(pkg),
+    pinned: (pkg) => isPinnedPackage("npm", pkg),
   },
   {
-    registry: "pypi",
+    source: "pypi",
     runners: [
       { words: ["uvx"], options: PYTHON },
       { words: ["uv", "tool", "run"], options: PYTHON },
       { words: ["pipx", "run"], options: PYTHON },
     ],
     fromOptions: ["--from", "--spec"],
-    pinned: (pkg) => PYTHON_PINNED.test(pkg),
+    pinned: (pkg) => isPinnedPackage("pypi", pkg),
   },
   {
-    registry: "container",
+    source: "container",
     runners: (
       [
         ["docker", DOCKER_SWITCHES],
@@ -432,7 +438,7 @@ function imagePinned(image: string): boolean {
 /** What a server's runner starts, as the scanner reads it, and where in the entry that is written. */
 export type ServerStart = {
   /** Where the runner's packages come from. */
-  registry: PackageSource;
+  source: PackageSource;
   /** The runner's words, `["uv", "tool", "run"]`. */
   runner: readonly string[];
   /** The package or image, as written: `pkg`, `pkg@latest`, `name[extra]>=1`, `ghcr.io/org/image`. */
@@ -457,7 +463,7 @@ export function serverStart(entry: unknown): ServerStart | undefined {
   if (typeof entry.type === "string" && entry.type !== "stdio") return undefined;
   const words = commandLine(entry.command, entry.args);
   const texts = words.map(({ text }) => text);
-  for (const { registry, runners, fromOptions, pinned } of RUNNER_KINDS) {
+  for (const { source, runners, fromOptions, pinned } of RUNNER_KINDS) {
     for (const runner of runners) {
       const after = argsAfterRunner(texts, runner);
       if (after === undefined) continue;
@@ -467,7 +473,7 @@ export function serverStart(entry: unknown): ServerStart | undefined {
       const target = word.text.slice(found.prefix.length);
       if (LOCAL_PATH.test(target)) return undefined;
       return {
-        registry,
+        source,
         runner: runner.words,
         target,
         at: word.at,

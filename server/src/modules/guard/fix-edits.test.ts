@@ -7,7 +7,11 @@ import { GITHUB_TOKEN, SLACK_TOKEN } from "../../../test/secret-fixtures.ts";
 import { agentConfigCheck } from "./agent-config.ts";
 import { fixedEdit, type FixedEdit } from "./fix-edits.ts";
 import { mcpServerObservations, type PackageRegistryName } from "./mcp-servers.ts";
-import { RegistryUnavailable, type PackageRegistry } from "./package-registry.ts";
+import {
+  RegistryUnavailable,
+  UnpinnableVersion,
+  type PackageRegistry,
+} from "./package-registry.ts";
 
 const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
 
@@ -20,16 +24,25 @@ const ENV_DENY = ["Read(./.env)", "Read(./.env.*)"];
 
 const file = (path: string): Location => ({ kind: "file", path });
 
+/** Unicode's line separator, which Markdown and some renderers break a line on. */
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+/** A C0 or C1 control character, or a Unicode line or paragraph separator. */
+const LINE_BREAKING = /[\p{Cc}\p{Zl}\p{Zp}]/u;
+
 /** JSON as the edit writes it: two-space indented, with a trailing newline. */
 const pretty = (value: unknown) => `${JSON.stringify(value, null, 2)}\n`;
 
-/** A fake registry: `versions` holds each `registry:name`'s latest; any other name isn't on its registry. */
-function fakeRegistry(versions: Record<string, string> = {}) {
+/**
+ * A fake registry: `versions` holds each `registry:name`'s latest, or the error its lookup throws; any other name isn't
+ * on its registry.
+ */
+function fakeRegistry(versions: Record<string, string | Error> = {}) {
   const asked: string[] = [];
   const registry: PackageRegistry = {
-    latestVersion(name: PackageRegistryName, pkg: string) {
-      asked.push(`${name}:${pkg}`);
-      return Promise.resolve(versions[`${name}:${pkg}`]);
+    latestVersion(registry: PackageRegistryName, name: string) {
+      asked.push(`${registry}:${name}`);
+      const latest = versions[`${registry}:${name}`];
+      return latest instanceof Error ? Promise.reject(latest) : Promise.resolve(latest);
     },
   };
   return { registry, asked };
@@ -218,8 +231,8 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
 
   it.each([
     [
-      "an npm range",
-      ["exec", "--package=some-pkg@^1", "--", "some-pkg"],
+      "npm exec --package=",
+      ["exec", "--package=some-pkg", "--", "some-pkg"],
       "npm",
       ["exec", "--package=some-pkg@1.2.3", "--", "some-pkg"],
     ],
@@ -240,9 +253,10 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
     [
       "uvx --from, extras kept",
       "uvx",
-      ["--from", "mypy[reports]>=1", "mypy"],
+      ["--from", "mypy[reports]", "mypy"],
       ["--from", "mypy[reports]==1.13.0", "mypy"],
     ],
+    ["uvx's @latest", "uvx", ["mypy@latest"], ["mypy@1.13.0"]],
     [
       "uv tool run --from=",
       "uv",
@@ -253,12 +267,68 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
     [
       "pipx run --spec",
       "pipx",
-      ["run", "--spec", "pycowsay>=0.0.0.1", "pycowsay"],
+      ["run", "--spec", "pycowsay", "pycowsay"],
       ["run", "--spec", "pycowsay==0.0.0.2", "pycowsay"],
     ],
   ])("pins %s in the spelling its docs give", async (_case, command, args, after) => {
     const result = edited(await fix({ s: { command, args } }));
     expect(JSON.parse(result.text)).toEqual({ mcpServers: { s: { command, args: after } } });
+  });
+
+  it.each([
+    ["an npm range", { command: "npx", args: ["-y", "@scope/pkg@^3"] }],
+    ["an npm dist-tag", { command: "npx some-pkg@next" }],
+    ["a Python specifier", { command: "uvx", args: ["--from", "mypy[reports]>=1", "mypy"] }],
+    ["a pipx specifier", { command: "pipx", args: ["run", "--spec", "pycowsay~=0.0", "pycowsay"] }],
+  ])(
+    "leaves a server naming %s as it is, since latest could be a downgrade, listed by key",
+    async (_case, server) => {
+      const servers = { ranged: server, scoped: { command: "npx", args: ["-y", "@scope/pkg"] } };
+      const { registry, asked } = fakeRegistry(versions);
+      const result = edited(await fix(servers, registry));
+      expect(JSON.parse(result.text)).toMatchObject({ mcpServers: { ranged: server } });
+      expect(result.body.join("\n")).toMatch(/`ranged`: names a version range or tag/);
+      expect(asked).toEqual(["npm:@scope/pkg"]);
+    },
+  );
+
+  it("leaves a package whose latest version Warden can't write as pinned, and pins the others", async () => {
+    const { registry } = fakeRegistry({
+      ...versions,
+      "pypi:epoch-pkg": new UnpinnableVersion("pypi"),
+    });
+    const servers = {
+      epoch: { command: "uvx", args: ["epoch-pkg"] },
+      scoped: { command: "npx", args: ["-y", "@scope/pkg"] },
+    };
+    const result = edited(await fix(servers, registry));
+    expect(JSON.parse(result.text)).toEqual({
+      mcpServers: {
+        epoch: { command: "uvx", args: ["epoch-pkg"] },
+        scoped: { command: "npx", args: ["-y", "@scope/pkg@1.2.3"] },
+      },
+    });
+    expect(result.body.join("\n")).toMatch(
+      /`epoch`: PyPI's latest version of `epoch-pkg` isn't one Warden can write as pinned/,
+    );
+  });
+
+  it("keeps each PR body line on one line, and a key's control characters visible, whatever a key holds", async () => {
+    const key = "x\n\n@victim [login](https://evil.example)";
+    const result = edited(
+      await fix({
+        [key]: { command: "npx", args: ["-y", "some-pkg"] },
+        [`d\r${LINE_SEPARATOR}\u0007`]: DOCKER,
+      }),
+    );
+    for (const line of result.body) {
+      expect(line).not.toMatch(LINE_BREAKING);
+    }
+    const body = result.body.join("\n");
+    expect(body).toContain(
+      "- `x\\u000a\\u000a@victim [login](https://evil.example)`: `some-pkg@1.2.3`",
+    );
+    expect(body).toContain("- `d\\u000d\\u2028\\u0007`: a container image gets no Fix PR");
   });
 
   it("leaves a docker run server and an already pinned one unchanged, and lists the container server by key", async () => {
@@ -295,7 +365,7 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
       scoped: { command: "npx", args: ["-y", "@scope/pkg"] },
       inline: { command: "npx some-pkg@latest" },
       fetch: { command: "uvx", args: ["mcp-server-fetch"] },
-      mypy: { command: "uvx", args: ["--from", "mypy[reports]>=1", "mypy"] },
+      mypy: { command: "uvx", args: ["--from", "mypy[reports]", "mypy"] },
       cow: { command: "pipx", args: ["run", "pycowsay"] },
       pinned: PINNED,
     };
@@ -350,12 +420,27 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
     [
       "a file whose only unpinned server is a container image",
       mcpJson({ github: DOCKER, pinned: PINNED }),
-      "no server",
+      "no server can be pinned: `github`: a container image gets no Fix PR",
     ],
     [
       "a file whose unpinned server its registry doesn't hold",
       mcpJson({ gone: { command: "npx", args: ["not-on-npm"] } }),
-      "no server",
+      "no server can be pinned: `gone`: npm doesn't hold `not-on-npm`",
+    ],
+    [
+      "a file whose unpinned server's package word can't be read",
+      mcpJson({ alias: { command: "npx", args: ["-y", "alias@npm:other-pkg"] } }),
+      "no server can be pinned: `alias`: not a package Warden can pin from npm",
+    ],
+    [
+      "a file whose unpinned server names a range",
+      mcpJson({ ranged: { command: "npx", args: ["-y", "some-pkg@^1"] } }),
+      "no server can be pinned: `ranged`: names a version range or tag",
+    ],
+    [
+      "a file whose servers can't be pinned for different reasons",
+      mcpJson({ github: DOCKER, gone: { command: "npx", args: ["not-on-npm"] } }),
+      "no server can be pinned: `github`: a container image gets no Fix PR; `gone`: npm doesn't hold `not-on-npm`",
     ],
     ["a file with no unpinned server", mcpJson({ pinned: PINNED }), "already fixed"],
     ["a missing file", undefined, "isn't on the default branch"],
@@ -363,6 +448,56 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
   ])("refuses %s", async (_case, text, reason) => {
     const result = await fixedEdit(MCP, file(PATH), text, fakeRegistry(versions).registry);
     expect(result).toEqual({ ok: false, reason: expect.stringContaining(reason) as string });
+  });
+});
+
+describe("fixedEdit never changes what its edit doesn't mean to", () => {
+  /** A file for each Rule that its edit changes, with `extra` as one more top-level member, written as it is. */
+  const files = (extra: string) =>
+    [
+      [READ_ENV, ".claude/settings.json", `{"permissions": {"allow": ["Read(*)"]}, ${extra}}`],
+      [BLANKET, ".claude/settings.json", `{"permissions": {"allow": ["Bash(*)"]}, ${extra}}`],
+      [
+        MCP,
+        ".mcp.json",
+        `{"mcpServers": {"s": {"command": "npx", "args": ["some-pkg"]}}, ${extra}}`,
+      ],
+    ] as const;
+  const registry = fakeRegistry({ "npm:some-pkg": "1.2.3" }).registry;
+
+  it.each([
+    ["a number past 2^53", `"cleanupPeriodDays": 12345678901234567890`],
+    ["a number past a double's range", `"x": 1e400`],
+    ["minus zero", `"x": [-0]`],
+    ["a number JSON would write another way", `"x": {"y": 1.50}`],
+  ])("refuses a file holding %s", async (_case, extra) => {
+    for (const [rule, path, text] of files(extra)) {
+      const result = await fixedEdit(rule, file(path), text, registry);
+      expect(result).toEqual({
+        ok: false,
+        reason: `${path} holds a number that rewriting it as JSON would change; Warden never changes what its edit doesn't mean to`,
+      });
+    }
+  });
+
+  it.each([
+    ["an integer-like key after another", `"env": {"NODE_ENV": "test", "10": "x"}`],
+    ["a repeated key", `"model": "opus", "model": "sonnet"`],
+  ])("refuses a file holding %s", async (_case, extra) => {
+    for (const [rule, path, text] of files(extra)) {
+      const result = await fixedEdit(rule, file(path), text, registry);
+      expect(result).toEqual({
+        ok: false,
+        reason: `${path}'s keys would move or be dropped when it's rewritten as JSON; Warden never changes what its edit doesn't mean to`,
+      });
+    }
+  });
+
+  it("edits a file whose numbers, keys and strings JSON writes back the same", async () => {
+    const extra = `"n": [0, -3, 0.5, 30, 1.25e-7], "env": {"0": "first", "1": "next", "A": "\\u0041\\/"}`;
+    for (const [rule, path, text] of files(extra)) {
+      edited(await fixedEdit(rule, file(path), text, registry));
+    }
   });
 });
 
