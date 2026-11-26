@@ -12,7 +12,7 @@ import {
 import { askAboutTeam, type GetToken } from "./api.ts";
 import { AskWardenPanel, usePanelState } from "./AskWardenPanel.tsx";
 import { FindingsPage } from "./Findings.tsx";
-import { GitHubCallbackPage } from "./GitHubCallback.tsx";
+import { GitHubCallbackPage, WriteAppCallbackPage } from "./GitHubCallback.tsx";
 import { landingPage } from "./landing.ts";
 import { fetchMe, type MeResult } from "./me.ts";
 import { OverviewPage } from "./Overview.tsx";
@@ -20,7 +20,7 @@ import type { PagePanel, PanelContext } from "./panel.ts";
 import { PeoplePage } from "./People.tsx";
 import { ProductsPage } from "./Products.tsx";
 import { ROLE_WORDS } from "./roles.ts";
-import { GitHubSetupPage, SetupPage } from "./Setup.tsx";
+import { GitHubSetupPage, SetupPage, WriteAppSetupPage } from "./Setup.tsx";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 export function App() {
@@ -140,7 +140,12 @@ const PAGES: (Page & { alsoAt?: Record<string, ComponentType<PageProps>> })[] = 
     path: "/setup",
     label: "Setup",
     Page: SetupPage,
-    alsoAt: { "/setup/github": GitHubSetupPage, "/setup/github/callback": GitHubCallbackPage },
+    alsoAt: {
+      "/setup/github": GitHubSetupPage,
+      "/setup/github/callback": GitHubCallbackPage,
+      "/setup/github/write": WriteAppSetupPage,
+      "/setup/github/write/callback": WriteAppCallbackPage,
+    },
   },
 ];
 

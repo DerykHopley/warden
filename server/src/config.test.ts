@@ -23,6 +23,13 @@ const env = {
   PGDATABASE: "warden",
 };
 
+/** The write GitHub app's three settings, all set. */
+const githubWrite = {
+  GITHUB_WRITE_APP_CLIENT_ID: "Iv23li-write-client-id-value",
+  GITHUB_WRITE_APP_CLIENT_SECRET: "write-client-secret-value",
+  GITHUB_WRITE_APP_PRIVATE_KEY: appKey,
+};
+
 /** The ConfigError `run` throws. */
 function configError(run: () => unknown): ConfigError {
   try {
@@ -221,6 +228,76 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("the write GitHub app's settings", () => {
+    it("reads all three into githubWrite, apart from the read app's", () => {
+      const config = loadConfig({ ...env, ...githubWrite });
+      expect(config.githubWrite).toEqual({
+        clientId: "Iv23li-write-client-id-value",
+        clientSecret: "write-client-secret-value",
+        privateKey: appKey,
+      });
+      expect(config.github).toBeUndefined();
+    });
+
+    it("leaves githubWrite undefined when none is set", () => {
+      expect(loadConfig(env).githubWrite).toBeUndefined();
+    });
+
+    it.each([
+      [
+        "only the client id",
+        { GITHUB_WRITE_APP_CLIENT_ID: githubWrite.GITHUB_WRITE_APP_CLIENT_ID },
+        ["GITHUB_WRITE_APP_CLIENT_SECRET", "GITHUB_WRITE_APP_PRIVATE_KEY"],
+      ],
+      [
+        "the id and secret, the key empty",
+        { ...githubWrite, GITHUB_WRITE_APP_PRIVATE_KEY: "" },
+        ["GITHUB_WRITE_APP_PRIVATE_KEY"],
+      ],
+      [
+        "only the secret and key",
+        {
+          GITHUB_WRITE_APP_CLIENT_SECRET: githubWrite.GITHUB_WRITE_APP_CLIENT_SECRET,
+          GITHUB_WRITE_APP_PRIVATE_KEY: appKey,
+        },
+        ["GITHUB_WRITE_APP_CLIENT_ID"],
+      ],
+    ])("with %s, names each missing one and no value", (_name, some, missing) => {
+      const error = configError(() => loadConfig({ ...env, ...some }));
+      expect(error.variables).toEqual(missing);
+      for (const value of Object.values(some).filter((value) => value !== "")) {
+        expect(error.message).not.toContain(value);
+      }
+      expect(error.message).not.toContain("BEGIN");
+    });
+
+    // The read app's cases above cover each kind of bad key; this one shows the write app's key is checked the same way.
+    it("refuses a private key that isn't RSA, naming only it and no value", () => {
+      const error = configError(() =>
+        loadConfig({ ...env, ...githubWrite, GITHUB_WRITE_APP_PRIVATE_KEY: ecKey }),
+      );
+      expect(error.variables).toEqual(["GITHUB_WRITE_APP_PRIVATE_KEY"]);
+      expect(error.message).not.toContain("BEGIN");
+      expect(error.message).not.toContain(githubWrite.GITHUB_WRITE_APP_CLIENT_SECRET);
+    });
+
+    it("names a missing write-app variable along with the read app's missing ones", () => {
+      const error = configError(() =>
+        loadConfig({
+          ...env,
+          GITHUB_APP_CLIENT_ID: "Iv23li-client-id-value",
+          GITHUB_WRITE_APP_CLIENT_ID: githubWrite.GITHUB_WRITE_APP_CLIENT_ID,
+        }),
+      );
+      expect(error.variables).toEqual([
+        "GITHUB_APP_CLIENT_SECRET",
+        "GITHUB_APP_PRIVATE_KEY",
+        "GITHUB_WRITE_APP_CLIENT_SECRET",
+        "GITHUB_WRITE_APP_PRIVATE_KEY",
+      ]);
+    });
+  });
+
   it.each([
     ["a path", "https://warden.example/app"],
     ["no scheme", "warden.example"],
@@ -256,6 +333,31 @@ describe("gitHubReaderSettings (the Scan Job's)", () => {
     expect(
       gitHubReaderSettings({ GITHUB_APP_CLIENT_SECRET: "client-secret-value" }),
     ).toBeUndefined();
+  });
+
+  // A Scan only reads (G4): the write app's settings never reach the Scan Job's GitHub client.
+  describe("the write app's settings", () => {
+    it("answers undefined when only they are set", () => {
+      expect(gitHubReaderSettings(githubWrite)).toBeUndefined();
+    });
+
+    it("are ignored when the read app's are set too", () => {
+      const { privateKey: otherKey } = generateKeyPairSync("rsa", {
+        modulusLength: 2048,
+        privateKeyEncoding: { type: "pkcs1", format: "pem" },
+        publicKeyEncoding: { type: "spki", format: "pem" },
+      });
+      expect(
+        gitHubReaderSettings({ ...reader, ...githubWrite, GITHUB_WRITE_APP_PRIVATE_KEY: otherKey }),
+      ).toEqual({ clientId: reader.GITHUB_APP_CLIENT_ID, privateKey: appKey });
+    });
+
+    it("don't fill in a read-app variable that's missing", () => {
+      const error = configError(() =>
+        gitHubReaderSettings({ GITHUB_APP_CLIENT_ID: reader.GITHUB_APP_CLIENT_ID, ...githubWrite }),
+      );
+      expect(error.variables).toEqual(["GITHUB_APP_PRIVATE_KEY"]);
+    });
   });
 
   it.each([

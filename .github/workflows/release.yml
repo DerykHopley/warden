@@ -100,4 +100,6 @@ jobs:
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
           # The GitHub app's client id (#151): the deploy fails naming it while it's unset.
           WARDEN_GITHUB_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_APP_CLIENT_ID }}
+          # The write app's client id (#334): optional; unset, the release runs with Fix PRs off.
+          WARDEN_GITHUB_WRITE_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_WRITE_APP_CLIENT_ID }}
         run: scripts/cloud-run-deploy.sh "$IMAGE" release

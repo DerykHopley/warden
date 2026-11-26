@@ -75,7 +75,7 @@ export function isClaudeCodePath(path: string): boolean {
 }
 
 /** A Claude Code settings file: `.claude/settings.json` or `.claude/settings.local.json` in any folder. */
-function isClaudeSettingsFile(path: string): boolean {
+export function isClaudeSettingsFile(path: string): boolean {
   return /(?:^|\/)\.claude\/settings(?:\.local)?\.json$/.test(path);
 }
 
@@ -256,6 +256,9 @@ const COMMAND = `${BY_PATH}(?:(?:${RUNS_CODE.join("|")}) -c|${READS_OR_RUNS.join
  */
 const BROAD_BASH = new RegExp(String.raw`^Bash(?:\((?:\*|:\*|\*\*|${COMMAND}(?::\*| \*|\*))\))?$`);
 
+/** Whether an allow entry is a broad Bash allow (`BROAD_BASH`), so the scanner and a Fix PR's edit agree. */
+export const isBroadBashAllow = (rule: string): boolean => BROAD_BASH.test(rule);
+
 /** How many broad allows a summary names before "and N more". */
 const NAMED = 3;
 
@@ -264,7 +267,7 @@ function blanketBashAllow(
   path: string,
   settings: ClaudeSettings | undefined,
 ): Observation | undefined {
-  const broad = (settings?.allow ?? []).filter(({ rule }) => BROAD_BASH.test(rule));
+  const broad = (settings?.allow ?? []).filter(({ rule }) => isBroadBashAllow(rule));
   const [first] = broad;
   if (first === undefined) return undefined;
   const count = broad.length;

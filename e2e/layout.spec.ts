@@ -6,7 +6,7 @@
 // Every page, opened directly at each width and scheme, scrolls nothing sideways: Products in Cedar (its Products
 // stay out of Acme's Findings counts), Setup as Ada, the rest as Grace in Acme.
 import type { Locator, Page } from "@playwright/test";
-import { expectRings, expectTargets } from "./a11y.ts";
+import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
 import { cedarCveFinding, openCveCard } from "./cedar-cve.ts";
 import {
   ACME,
@@ -29,16 +29,6 @@ const WIDTHS = [390, 1024, 1600] as const;
 const SCHEMES = ["light", "dark"] as const;
 
 signInEachTest(GRACE);
-
-/** Fails unless the page is no wider than the window, so nothing scrolls sideways; returns the window's width. */
-async function expectNoSidewaysScroll(page: Page) {
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
-  return clientWidth;
-}
 
 test.beforeAll(async () => {
   await ensureProduct(CEDAR, CHAT_ASSISTANT);
@@ -421,17 +411,25 @@ test("at 1600px: five cards sit in one row, and the content stays within 1480px,
   expect(Math.abs(main!.x - right)).toBeLessThanOrEqual(1);
 });
 
-// Setup and its two GitHub pages, as an Admin sees them: the App's settings, the Team's repos with their last Scans
-// (one ref long enough to wrap) and a refused Scan now are faked in the browser, and the callback page, opened with no
-// sign-in kept, shows its refusal.
+// Setup and its GitHub pages, the read app's and the write app's (#224, story 5), as an Admin sees them: both apps'
+// settings, the Team's write grant, the Team's repos with their last Scans (one ref long enough to wrap) and a refused
+// Scan now are faked in the browser, and each callback page, opened with no sign-in kept, shows its refusal.
 const SETUP_PAGES: { path: string; ready: (page: Page) => Locator }[] = [
-  { path: "/setup", ready: (page) => page.getByRole("link", { name: "Install the GitHub app" }) },
+  { path: "/setup", ready: (page) => page.getByRole("link", { name: "Install the write app" }) },
   {
     path: "/setup/github?installation_id=42&setup_action=install",
     ready: (page) => page.getByRole("button", { name: "Sign in with GitHub" }),
   },
   {
     path: "/setup/github/callback?code=the-code&state=the-state",
+    ready: (page) => page.getByRole("link", { name: "Back to Setup" }),
+  },
+  {
+    path: "/setup/github/write?installation_id=42&setup_action=install",
+    ready: (page) => page.getByRole("button", { name: "Sign in with GitHub" }),
+  },
+  {
+    path: "/setup/github/write/callback?code=the-code&state=the-state",
     ready: (page) => page.getByRole("link", { name: "Back to Setup" }),
   },
 ];
@@ -445,6 +443,22 @@ for (const { path, ready } of SETUP_PAGES) {
         await signIn(ADA);
         await page.route("**/api/github/app", (route) =>
           route.fulfill({ json: { slug: "warden-reader", client_id: "Iv23li-e2e-client" } }),
+        );
+        await page.route("**/api/github/write-app", (route) =>
+          route.fulfill({ json: { slug: "warden-writer", client_id: "Iv23li-e2e-writer" } }),
+        );
+        await page.route("**/api/github/write-grant", (route) =>
+          route.fulfill({
+            json: {
+              installations: [
+                {
+                  installation_id: 77,
+                  granted_by: "user_ada",
+                  granted_at: "2026-11-26T09:14:00.000Z",
+                },
+              ],
+            },
+          }),
         );
         // Until Scan now is clicked, the long ref's last Scan failed and the other was never scanned; after it, the
         // long ref's is running.
@@ -470,10 +484,17 @@ for (const { path, ready } of SETUP_PAGES) {
           await expect(page.locator(".repo-list li")).toHaveCount(2);
           await expect(page.getByText(/^Failed, /)).toBeVisible();
           await expect(page.getByText("Never scanned")).toBeVisible();
+          await expect(page.getByRole("link", { name: "Install the GitHub app" })).toBeVisible();
+          await expect(page.getByText(/^Write access granted: installation 77, /)).toBeVisible();
+          // The write app answers here, so its how-to starts closed: open it, so its URLs are measured too.
+          await page.getByText("How to set up the write app").click();
+          await expect(
+            page.getByRole("heading", { name: "Register the app on GitHub" }),
+          ).toBeVisible();
         }
 
         await expectNoSidewaysScroll(page);
-        const targets = await page.locator("main.page").locator("a, button").all();
+        const targets = await page.locator("main.page").locator("a, button, summary").all();
         expect(targets.length).toBeGreaterThan(0);
         await expectTargets(targets);
         await expectRings(page, targets);

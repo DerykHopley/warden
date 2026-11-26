@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { GitHubAppBody, LinkedInstallationBody, ReposBody } from "../src/index.ts";
+import {
+  FindingFixPrBody,
+  FixPrBody,
+  GitHubAppBody,
+  LinkedInstallationBody,
+  ReposBody,
+  WriteGrantBody,
+  WriteGrantsBody,
+} from "../src/index.ts";
 import { expectRefused } from "./refused.ts";
 
 const web = {
@@ -76,5 +84,74 @@ describe("GitHubAppBody", () => {
     ["a field outside the two", { ...app, secret: "x" }, "secret"],
   ])("refuses %s", (_name, body, field) => {
     expectRefused(GitHubAppBody, body, field);
+  });
+});
+
+const grant = {
+  installation_id: 42,
+  granted_by: "user_admin",
+  granted_at: "2026-11-26T09:00:00.000Z",
+};
+
+describe("WriteGrantBody", () => {
+  it("accepts the installation, who granted it and when", () => {
+    expect(WriteGrantBody.parse(grant)).toEqual(grant);
+  });
+
+  it.each([
+    ["an unknown key", { ...grant, token: "ghs_x" }, "token"],
+    ["an installation id of 0", { ...grant, installation_id: 0 }, "installation_id"],
+  ])("refuses %s", (_name, body, field) => {
+    expectRefused(WriteGrantBody, body, field);
+  });
+});
+
+describe("WriteGrantsBody", () => {
+  it.each([
+    ["a Team's grants", { installations: [grant] }],
+    ["none, for a Team with no grant", { installations: [] }],
+  ])("accepts %s", (_name, body) => {
+    expect(WriteGrantsBody.parse(body)).toEqual(body);
+  });
+
+  it("refuses an unknown key", () => {
+    expectRefused(WriteGrantsBody, { installations: [], repos: [] }, "repos");
+  });
+});
+
+const fixPr = {
+  url: "https://github.com/acme/web/pull/7",
+  number: 7,
+  branch: "warden/fix-0b6f1e9c-2d1f-4c55-9a3e-7f1d2c3b4a5e",
+  opened_by: "user_member",
+  opened_at: "2026-11-26T09:00:00.000Z",
+};
+
+describe("FixPrBody", () => {
+  it("accepts a Fix PR's URL, number, branch, who opened it and when", () => {
+    expect(FixPrBody.parse(fixPr)).toEqual(fixPr);
+  });
+
+  it.each([
+    ["an unknown key", { ...fixPr, token: "ghs_x" }, "token"],
+    ["a number of 0", { ...fixPr, number: 0 }, "number"],
+    ["a URL off GitHub", { ...fixPr, url: "https://evil.example/acme/web/pull/7" }, "url"],
+    ["a GitHub URL over http", { ...fixPr, url: "http://github.com/acme/web/pull/7" }, "url"],
+    ["an empty opener", { ...fixPr, opened_by: "" }, "opened_by"],
+  ])("refuses %s", (_name, body, field) => {
+    expectRefused(FixPrBody, body, field);
+  });
+});
+
+describe("FindingFixPrBody", () => {
+  it.each([
+    ["a fixable Finding with a Fix PR", { fixable: true, fix_pr: fixPr }],
+    ["a Finding with none", { fixable: false, fix_pr: null }],
+  ])("accepts %s", (_name, body) => {
+    expect(FindingFixPrBody.parse(body)).toEqual(body);
+  });
+
+  it("refuses an unknown key", () => {
+    expectRefused(FindingFixPrBody, { fixable: true, fix_pr: null, branch: "x" }, "branch");
   });
 });

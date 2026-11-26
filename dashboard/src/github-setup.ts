@@ -1,12 +1,16 @@
-// Connecting GitHub (Guard spec, story 1): the calls the Setup pages make, GitHub's install and sign-in links, and
-// the sign-in attempt the browser keeps between leaving for GitHub and coming back. GitHub's sign-in uses PKCE
+// Connecting GitHub (Guard spec, story 1) and granting write access (#224, story 5): the calls the Setup pages make,
+// GitHub's install and sign-in links for each app, and the sign-in attempt the browser keeps between leaving for GitHub
+// and coming back. GitHub's sign-in uses PKCE
 // (RFC 7636): a fresh verifier per attempt, sent to GitHub only as its SHA-256 challenge, and to Warden with the code.
 import {
   GitHubAppBody,
   LinkedInstallationBody,
   ReposBody,
   ScanBody,
+  WriteGrantBody,
+  WriteGrantsBody,
   type Asset,
+  type LinkInstallationBody,
   type ListedRepoBody,
   type StartScanBody,
 } from "@warden/contracts";
@@ -15,24 +19,58 @@ import { callWarden, parsed, serverError, type GetToken, type Refused } from "./
 /** 403 and 409 on a Team's call, read as every page reads them. */
 type TeamRefusal = { kind: "no-team" } | { kind: "team-not-opened" };
 
+/** Where the read app's sign-in attempt is kept: `sessionStorage`, this tab's only, gone when it closes. */
+export const ATTEMPT_KEY = "warden.githubSignIn";
+/** Where the write app's attempt is kept, apart from the read app's, so neither's sign-in is taken as the other's. */
+export const WRITE_ATTEMPT_KEY = "warden.githubWriteSignIn";
+
+/**
+ * One of Warden's two GitHub apps, as the dashboard reaches it: the read app links Repo Assets (story 1), and the write
+ * app grants the write access Fix PRs go through (#224, story 5). Each has its own settings route, callback page,
+ * kept attempt, and the h1 its Connect and callback pages share.
+ */
+export type WardenApp = {
+  settingsPath: string;
+  callbackPath: string;
+  attemptKey: string;
+  heading: string;
+};
+
+export const READ_APP: WardenApp = {
+  settingsPath: "/api/github/app",
+  callbackPath: "/setup/github/callback",
+  attemptKey: ATTEMPT_KEY,
+  heading: "Connect GitHub",
+};
+
+export const WRITE_APP: WardenApp = {
+  settingsPath: "/api/github/write-app",
+  callbackPath: "/setup/github/write/callback",
+  attemptKey: WRITE_ATTEMPT_KEY,
+  heading: "Grant write access",
+};
+
 export type GitHubAppResult =
   | { kind: "app"; app: GitHubAppBody }
-  /** 503: this Warden has no GitHub app settings. */
+  /** 503: this Warden has no settings for the app. */
   | { kind: "not-set-up" }
   /** 403: the person isn't an Admin (any more), or has no Team. */
   | { kind: "not-admin" }
   | { kind: "team-not-opened" }
   | Refused;
 
-/** `GET /api/github/app`; a 502 (GitHub didn't answer) is not answering, as no answer is. */
-export async function fetchGitHubApp(getToken: GetToken): Promise<GitHubAppResult> {
-  const res = await callWarden(getToken, "/api/github/app");
+/**
+ * `GET /api/github/app`, or the write app's `GET /api/github/write-app`; a 502 (GitHub didn't answer) is not
+ * answering, as no answer is.
+ */
+export async function fetchGitHubApp(getToken: GetToken, app: WardenApp): Promise<GitHubAppResult> {
+  const res = await callWarden(getToken, app.settingsPath);
   if (!(res instanceof Response)) return res;
   if (res.status === 503) return { kind: "not-set-up" };
   if (res.status === 403) return { kind: "not-admin" };
   if (res.status === 409) return { kind: "team-not-opened" };
-  const app = await parsed(res, GitHubAppBody);
-  return app === undefined ? { kind: "not-answering" } : { kind: "app", app };
+  const body = await parsed(res, GitHubAppBody);
+  return body === undefined ? { kind: "not-answering" } : { kind: "app", app: body };
 }
 
 export type ReposResult = { kind: "repos"; repos: ListedRepoBody[] } | TeamRefusal | Refused;
@@ -59,7 +97,7 @@ const SAID = new Set([400, 403, 409, 502, 503]);
 /** `POST /api/github/installations`: links the installation with GitHub's `code` and the attempt's verifier. */
 export async function linkInstallation(
   getToken: GetToken,
-  body: { installation_id: number; code: string; code_verifier: string },
+  body: LinkInstallationBody,
 ): Promise<LinkResult> {
   const res = await callWarden(getToken, "/api/github/installations", { method: "POST", body });
   if (!(res instanceof Response)) return res;
@@ -74,6 +112,47 @@ export async function linkInstallation(
         installationId: linked.installation_id,
         repoCount: linked.repos.length,
       };
+}
+
+export type WriteGrantsResult =
+  { kind: "grants"; grants: WriteGrantBody[] } | TeamRefusal | Refused;
+
+/** `GET /api/github/write-grant`: the Team's write grants, read by anyone in it (#224, story 5). */
+export async function fetchWriteGrants(getToken: GetToken): Promise<WriteGrantsResult> {
+  const res = await callWarden(getToken, "/api/github/write-grant");
+  if (!(res instanceof Response)) return res;
+  if (res.status === 403) return { kind: "no-team" };
+  if (res.status === 409) return { kind: "team-not-opened" };
+  const body = await parsed(res, WriteGrantsBody);
+  return body === undefined
+    ? { kind: "not-answering" }
+    : { kind: "grants", grants: body.installations };
+}
+
+export type GrantResult =
+  /** 201 for a new grant, 200 for one the Team already held. */
+  | { kind: "granted"; installationId: number }
+  /** 400, 403, 409, 502 or 503: nothing was granted, in the server's words. */
+  | { kind: "refused"; words: string }
+  | Refused;
+
+/** `POST /api/github/write-installations`: grants write access through the installation, as `linkInstallation` links. */
+export async function grantWriteAccess(
+  getToken: GetToken,
+  body: LinkInstallationBody,
+): Promise<GrantResult> {
+  const res = await callWarden(getToken, "/api/github/write-installations", {
+    method: "POST",
+    body,
+  });
+  if (!(res instanceof Response)) return res;
+  if (SAID.has(res.status)) {
+    return { kind: "refused", words: (await serverError(res)) ?? "Nothing was granted." };
+  }
+  const grant = await parsed(res, WriteGrantBody);
+  return grant === undefined
+    ? { kind: "not-answering" }
+    : { kind: "granted", installationId: grant.installation_id };
 }
 
 export type ScanStartResult =
@@ -112,18 +191,26 @@ export async function scanRepos(getToken: GetToken, assets: Asset[]): Promise<Sc
   return { kind: "not-answering" };
 }
 
-/** The App's install page on GitHub; GitHub sends the Admin back to the App's Setup URL, `/setup/github`. */
+/**
+ * An app's install page on GitHub; GitHub sends the Admin back to the app's Setup URL, `/setup/github` for the read
+ * app and `/setup/github/write` for the write app.
+ */
 export const installUrl = (slug: string) =>
   `https://github.com/apps/${encodeURIComponent(slug)}/installations/new`;
 
 /**
- * GitHub's sign-in for the App, with PKCE (S256). Its `redirect_uri` is this page's own origin plus
- * `/setup/github/callback`, so a sign-in started on an owner preview comes back to the preview, where this tab's
- * attempt is kept (#275). GitHub accepts it only when it's one of the App's registered callback URLs; otherwise it
- * refuses with `redirect_uri_mismatch`. GitHub's docs don't say where a GitHub App's refusal lands: on GitHub, or
- * on one of the App's registered callback pages (the live dashboard's or a preview's), which shows the code.
+ * GitHub's sign-in for an app, with PKCE (S256). Its `redirect_uri` is this page's own origin plus the app's callback
+ * path, so a sign-in started on an owner preview comes back to the preview, where this tab's attempt is kept (#275).
+ * GitHub accepts it only when it's one of the app's registered callback URLs; otherwise it refuses with
+ * `redirect_uri_mismatch`. GitHub's docs don't say where a GitHub App's refusal lands: on GitHub, or on one of the
+ * app's registered callback pages (the live dashboard's or a preview's), which shows the code.
  */
-export function signInUrl(clientId: string, state: string, codeChallenge: string): string {
+export function signInUrl(
+  clientId: string,
+  state: string,
+  codeChallenge: string,
+  app: WardenApp,
+): string {
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", clientId);
   url.searchParams.set("state", state);
@@ -131,7 +218,7 @@ export function signInUrl(clientId: string, state: string, codeChallenge: string
   url.searchParams.set("code_challenge_method", "S256");
   url.searchParams.set(
     "redirect_uri",
-    new URL("/setup/github/callback", window.location.origin).toString(),
+    new URL(app.callbackPath, window.location.origin).toString(),
   );
   return url.toString();
 }
@@ -161,22 +248,29 @@ export async function challengeOf(verifier: string): Promise<string> {
 /** One GitHub sign-in, kept in this tab between leaving for GitHub and coming back. */
 export type SignInAttempt = { state: string; verifier: string; installationId: number };
 
-/** Where the attempt is kept: `sessionStorage`, this tab's only, gone when it closes. */
-export const ATTEMPT_KEY = "warden.githubSignIn";
-
-/** Starts an attempt for `installationId`: keeps a fresh verifier and state, and answers GitHub's sign-in URL. */
-export async function startSignIn(clientId: string, installationId: number): Promise<string> {
+/**
+ * Starts an attempt for `installationId` with `app`: keeps a fresh verifier and state under the app's key, and answers
+ * GitHub's sign-in URL.
+ */
+export async function startSignIn(
+  clientId: string,
+  installationId: number,
+  app: WardenApp,
+): Promise<string> {
   const attempt: SignInAttempt = { state: randomToken(), verifier: randomToken(), installationId };
-  sessionStorage.setItem(ATTEMPT_KEY, JSON.stringify(attempt));
-  return signInUrl(clientId, attempt.state, await challengeOf(attempt.verifier));
+  sessionStorage.setItem(app.attemptKey, JSON.stringify(attempt));
+  return signInUrl(clientId, attempt.state, await challengeOf(attempt.verifier), app);
 }
 
-/** The kept attempt, removed as it's read: GitHub's code works once, so an attempt is used once. */
-export function takeAttempt(): SignInAttempt | undefined {
+/**
+ * The app's kept attempt, removed as it's read: GitHub's code works once, so an attempt is used once. The other app's
+ * attempt is never read.
+ */
+export function takeAttempt(app: WardenApp): SignInAttempt | undefined {
   let stored: string | null;
   try {
-    stored = sessionStorage.getItem(ATTEMPT_KEY);
-    sessionStorage.removeItem(ATTEMPT_KEY);
+    stored = sessionStorage.getItem(app.attemptKey);
+    sessionStorage.removeItem(app.attemptKey);
   } catch {
     return undefined;
   }
@@ -200,9 +294,9 @@ export function takeAttempt(): SignInAttempt | undefined {
  * Keeps a taken attempt again, for an attempt whose code never reached Warden (the session had ended), so the callback
  * can link with it once the person signs in again. Storage that refuses it leaves Connect again from Setup.
  */
-export function putBackAttempt(attempt: SignInAttempt): void {
+export function putBackAttempt(attempt: SignInAttempt, app: WardenApp): void {
   try {
-    sessionStorage.setItem(ATTEMPT_KEY, JSON.stringify(attempt));
+    sessionStorage.setItem(app.attemptKey, JSON.stringify(attempt));
   } catch {
     // Nothing kept: the callback says the sign-in didn't start here.
   }

@@ -146,10 +146,16 @@ describe("the landing page by Role", () => {
     ["/setup", "Setup"],
     ["/setup/github", "Connect GitHub"],
     ["/setup/github/callback", "Connect GitHub"],
+    ["/setup/github/write", "Grant write access"],
+    ["/setup/github/write/callback", "Grant write access"],
   ])("at %s, shows the %s page with the header's Setup link current", async (path, heading) => {
     window.history.replaceState(null, "", path);
     clerk.auth.orgId = "org_a";
-    serve({ me: () => me("org_a", "member"), repos: () => json(200, { repos: [] }) });
+    serve({
+      me: () => me("org_a", "member"),
+      repos: () => json(200, { repos: [] }),
+      writeGrant: () => json(200, { installations: [] }),
+    });
     render(<App />);
 
     expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeInTheDocument();

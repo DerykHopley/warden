@@ -1,0 +1,610 @@
+// Stories 5 and 15 at the API (#224): an Admin grants write access by linking an installation of Warden's write GitHub
+// app (`POST /api/github/write-installations`), checked against their own sign-in through the write app's OAuth, and
+// only a token holding exactly the write app's three permissions is linked. Any person in the Team reads the grant
+// (`GET /api/github/write-grant`); another Team never sees it or takes its installation. Through the real app with the
+// write grant's routes, the real GitHub client and the real store, GitHub faked at `fetch` (spec decision 11), on the
+// suite's shared database, each case with Teams and installation ids of its own.
+import { GitHubAppBody, WriteGrantBody, WriteGrantsBody } from "@warden/contracts";
+import type { CryptoKey } from "jose";
+import type pg from "pg";
+import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
+import type { Fetch } from "../src/http-call.ts";
+import { createLogger } from "../src/log.ts";
+import { createGitHub, type GitHub } from "../src/modules/guard/github.ts";
+import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
+import { guardRoutes } from "../src/modules/guard/routes.ts";
+import { writeGrantRoutes } from "../src/modules/guard/write-grant-routes.ts";
+import { createWriteGrants, type WriteGrants } from "../src/modules/guard/write-grants.ts";
+import { createWithTeam, type WithTeam } from "../src/with-team.ts";
+import { poolAs } from "./databases.ts";
+import {
+  activeOrganization,
+  ADMIN,
+  gitHubAppKey,
+  logEntries,
+  newInstallation,
+  newTeam,
+  sessionToken,
+  testApp,
+  testKey,
+} from "./helpers.ts";
+
+let key: CryptoKey;
+let publicPem: string;
+let pool: pg.Pool;
+let withTeam: WithTeam;
+let writeGrants: WriteGrants;
+let repoAssets: RepoAssets;
+
+beforeAll(async () => {
+  ({ privateKey: key, publicPem } = await testKey());
+  pool = poolAs("warden_app", inject("testDatabase"));
+  withTeam = createWithTeam(pool);
+  writeGrants = createWriteGrants({ withTeam });
+  repoAssets = createRepoAssets({ withTeam });
+});
+
+afterAll(async () => {
+  await pool.end();
+});
+
+const CLIENT_SECRET = "the-write-client-secret-value";
+const CODE = "the-write-code-value";
+const VERIFIER = "the-write-code-verifier-value-that-is-long-enough-for-pkce";
+const USER_TOKEN = "ghu_the-write-user-token";
+const INSTALLATION_TOKEN = "ghs_the-write-installation-token";
+const SECRETS = [CLIENT_SECRET, CODE, VERIFIER, USER_TOKEN, INSTALLATION_TOKEN];
+
+const WRITE_CLIENT_ID = "Iv23li-the-write-client-id";
+const WRITE_SLUG = "warden-writer";
+const READ_CLIENT_ID = "Iv23li-the-read-client-id";
+const READ_SLUG = "warden-reader";
+const WRITE_APP = { contents: "write", pull_requests: "write", metadata: "read" };
+
+const LEAD = "user_lead";
+const MEMBER = "user_member";
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+
+/**
+ * A fake GitHub for one app (the write app by default) and one installation: the person reaches `reachable`
+ * installations, and sees one repo in it for each of `repoAccess`, with that role on it; the installation reaches
+ * `installationRepos` repos, those the person sees by default. The repos the person sees are numbered 1, 2, … unless
+ * `repoIds` names each one's id, so a list can name one repo twice. The App's installation token answer gives
+ * `permissions`, or `tokenStatus` when it's an error; `GET /app` answers `slug`. `failAt` names one endpoint that answers
+ * 500; `refuse` makes the token exchange refuse the code. Every call is recorded.
+ */
+function fakeGitHub({
+  installationId = 0,
+  clientId = WRITE_CLIENT_ID,
+  slug = WRITE_SLUG,
+  reachable = [installationId],
+  repoAccess = ["admin"],
+  repoIds = repoAccess.map((_role, i) => i + 1),
+  installationRepos = repoAccess.length,
+  permissions = WRITE_APP,
+  tokenStatus,
+  refuse = false,
+  failAt,
+}: {
+  installationId?: number;
+  clientId?: string;
+  slug?: string;
+  reachable?: number[];
+  repoAccess?: ("admin" | "push" | "pull")[];
+  repoIds?: number[];
+  installationRepos?: number;
+  permissions?: Record<string, string>;
+  tokenStatus?: 404;
+  refuse?: boolean;
+  failAt?: "installations";
+} = {}) {
+  const repo = (n: number) => ({ id: n, html_url: `https://github.com/acme/repo-${n}` });
+  const calls: string[] = [];
+  const fetch: Fetch = async (url, init) => {
+    const { origin, pathname } = new URL(url);
+    const route = `${init.method ?? "GET"} ${origin}${pathname}`;
+    calls.push(route);
+    const api = "https://api.github.com";
+    switch (route) {
+      case "POST https://github.com/login/oauth/access_token":
+        return refuse
+          ? json({ error: "bad_verification_code" })
+          : json({ access_token: USER_TOKEN, token_type: "bearer" });
+      case `GET ${api}/user/installations`:
+        if (failAt === "installations") return json({ message: "Server Error" }, 500);
+        return json({
+          total_count: reachable.length,
+          installations: reachable.map((id) => ({ id })),
+        });
+      case `GET ${api}/user/installations/${installationId}/repositories`:
+        // GitHub's permissions for the person on each repo they see.
+        return json({
+          total_count: repoAccess.length,
+          repositories: repoAccess.map((role, i) => ({
+            ...repo(repoIds[i] ?? i + 1),
+            permissions: {
+              admin: role === "admin",
+              maintain: role === "admin",
+              push: role !== "pull",
+              triage: role !== "pull",
+              pull: true,
+            },
+          })),
+        });
+      case `POST ${api}/app/installations/${installationId}/access_tokens`:
+        if (tokenStatus !== undefined) return json({ message: "Not Found" }, tokenStatus);
+        return json({ token: INSTALLATION_TOKEN, permissions }, 201);
+      case `GET ${api}/installation/repositories`:
+        // Asked one to a page: GitHub's count is of every repo the installation reaches.
+        return json({
+          total_count: installationRepos,
+          repositories: installationRepos > 0 ? [repo(1)] : [],
+        });
+      case `GET ${api}/app`:
+        return json({ id: 1, slug, name: "Warden" });
+      default:
+        throw new Error(`unexpected call to ${route}`);
+    }
+  };
+  const github = createGitHub({
+    clientId,
+    clientSecret: CLIENT_SECRET,
+    privateKey: gitHubAppKey(),
+    fetch,
+  });
+  return { github, calls };
+}
+
+/**
+ * The app with the write grant's routes, linking through the write app's `github` (none: the write app isn't set up)
+ * on `now`'s clock; with `readGitHub`, Guard's routes too, linking through the read app. Every log line it writes.
+ */
+function writeApp(
+  github?: GitHub,
+  { now, readGitHub }: { now?: () => number; readGitHub?: GitHub } = {},
+) {
+  const routeLines: string[] = [];
+  const logger = createLogger((line) => routeLines.push(line));
+  const routes = [
+    github
+      ? writeGrantRoutes({ writeGrants, github, logger, now })
+      : writeGrantRoutes({ writeGrants }),
+  ];
+  if (readGitHub) routes.push(guardRoutes({ repoAssets, github: readGitHub, logger }));
+  const { app, lines } = testApp({ publicPem, withTeam, moduleRoutes: routes });
+  return { app, logLines: () => [...lines, ...routeLines] };
+}
+
+type App = ReturnType<typeof writeApp>["app"];
+
+async function call(
+  app: App,
+  team: string,
+  path: string,
+  { as = ADMIN, body }: { as?: string; body?: unknown } = {},
+) {
+  const token = await sessionToken(key, as, 60, activeOrganization(team));
+  const res = await app.request(
+    path,
+    body === undefined
+      ? { headers: { Authorization: `Bearer ${token}` } }
+      : {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+  );
+  const text = await res.text();
+  return { status: res.status, headers: res.headers, text, body: JSON.parse(text) as unknown };
+}
+
+const linkBody = (installationId: number) => ({
+  installation_id: installationId,
+  code: CODE,
+  code_verifier: VERIFIER,
+});
+
+const link = (app: App, team: string, installationId: number, as = ADMIN) =>
+  call(app, team, "/api/github/write-installations", { as, body: linkBody(installationId) });
+
+async function grantsOf(app: App, team: string, as = ADMIN) {
+  const res = await call(app, team, "/api/github/write-grant", { as });
+  expect(res.status).toBe(200);
+  return WriteGrantsBody.parse(res.body).installations;
+}
+
+/** How many `github_write_grants` rows the Team has, read as that Team. */
+const rowCount = (team: string) =>
+  withTeam(team, async (tx) => {
+    const { count } = await tx
+      .selectFrom("github_write_grants")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .executeTakeFirstOrThrow();
+    return Number(count);
+  });
+
+const teamOfThree = () =>
+  newTeam(withTeam, [
+    [ADMIN, "admin"],
+    [LEAD, "lead"],
+    [MEMBER, "member"],
+  ]);
+
+describe("POST /api/github/write-installations: an Admin grants write access (story 5)", () => {
+  it("answers 201 with the grant, and GET /api/github/write-grant then lists it where it listed none", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app } = writeApp(fakeGitHub({ installationId }).github);
+    expect(await grantsOf(app, team)).toEqual([]);
+
+    const res = await link(app, team, installationId);
+
+    expect(res.status).toBe(201);
+    const grant = WriteGrantBody.parse(res.body);
+    expect(grant).toEqual({
+      installation_id: installationId,
+      granted_by: ADMIN,
+      granted_at: expect.any(String),
+    });
+    expect(await grantsOf(app, team)).toEqual([grant]);
+    expect(await rowCount(team)).toBe(1);
+  });
+
+  it("adds no Repo Asset to the Team", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app } = writeApp(fakeGitHub({ installationId }).github);
+
+    expect((await link(app, team, installationId)).status).toBe(201);
+
+    expect(await repoAssets.list(team)).toEqual([]);
+  });
+
+  it("answers 200 with the same grant for an installation the Team already holds, and writes no row", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app } = writeApp(fakeGitHub({ installationId }).github);
+    const first = await link(app, team, installationId);
+
+    const again = await link(app, team, installationId);
+
+    expect(first.status).toBe(201);
+    expect(again).toMatchObject({ status: 200, body: first.body });
+    expect(await rowCount(team)).toBe(1);
+  });
+
+  // Which tokens hold the write app's permissions is holdsWriteAppPermissions' unit test; here, one with more and one
+  // with fewer, as the ticket names.
+  it.each([
+    ["more than", { ...WRITE_APP, workflows: "write" }],
+    ["fewer than", { contents: "write", metadata: "read" }],
+  ])(
+    "answers 409 for an installation whose token holds %s the write app's permissions, and writes no row",
+    async (_name, permissions) => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app } = writeApp(fakeGitHub({ installationId, permissions }).github);
+
+      const res = await link(app, team, installationId);
+
+      expect(res).toMatchObject({
+        status: 409,
+        body: { error: "This installation's permissions aren't the write app's" },
+      });
+      expect(await rowCount(team)).toBe(0);
+    },
+  );
+
+  // The owner's answer A on #295: whoever installs a GitHub app on an account administers it, so the real installer
+  // passes, and a reader of one repo never does.
+  describe("only an Admin with admin on every repo the installation reaches grants write access", () => {
+    it("links when the Admin's sign-in has admin on every repo", async () => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app } = writeApp(
+        fakeGitHub({ installationId, repoAccess: ["admin", "admin", "admin"] }).github,
+      );
+
+      expect((await link(app, team, installationId)).status).toBe(201);
+      expect(await rowCount(team)).toBe(1);
+    });
+
+    it.each([
+      ["has only push on one repo", { repoAccess: ["admin", "push"] as const }],
+      ["has only pull on one repo", { repoAccess: ["pull", "admin"] as const }],
+      [
+        "sees fewer repos than the installation reaches",
+        { repoAccess: ["admin"] as const, installationRepos: 2 },
+      ],
+      [
+        "sees one admin repo listed twice, of an installation reaching two (#309)",
+        { repoAccess: ["admin", "admin"] as const, repoIds: [1, 1], installationRepos: 2 },
+      ],
+      [
+        "sees none, of an installation reaching none",
+        { repoAccess: [] as const, installationRepos: 0 },
+      ],
+    ])("answers 403, writing no row, when the Admin %s", async (_name, fake) => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app } = writeApp(
+        fakeGitHub({ installationId, ...fake, repoAccess: [...fake.repoAccess] }).github,
+      );
+
+      const res = await link(app, team, installationId);
+
+      expect(res).toMatchObject({
+        status: 403,
+        body: {
+          error: "You need admin on every repo this installation reaches to grant write access",
+        },
+      });
+      expect(await rowCount(team)).toBe(0);
+    });
+  });
+
+  it("answers 503 without the write app's settings, and writes no row", async () => {
+    const team = await newTeam(withTeam);
+    const { app } = writeApp();
+
+    const res = await link(app, team, newInstallation());
+
+    expect(res).toMatchObject({
+      status: 503,
+      body: { error: "Fix PRs aren't set up on this Warden" },
+    });
+    expect(await rowCount(team)).toBe(0);
+  });
+
+  it("answers 400 naming the field for a bad body, without calling GitHub", async () => {
+    const team = await newTeam(withTeam);
+    const { github, calls } = fakeGitHub();
+    const { app } = writeApp(github);
+
+    const res = await call(app, team, "/api/github/write-installations", {
+      body: { ...linkBody(newInstallation()), installation_id: 0 },
+    });
+
+    expect(res.status).toBe(400);
+    expect((res.body as { error: string }).error).toMatch(/^installation_id: /);
+    expect(calls).toEqual([]);
+    expect(await rowCount(team)).toBe(0);
+  });
+
+  it.each([
+    ["a code GitHub refuses", { refuse: true }, 400, "GitHub refused the sign-in; connect again"],
+    [
+      "an installation the person can't reach",
+      { reachable: [] },
+      403,
+      "You can't reach this installation on GitHub",
+    ],
+    [
+      "an installation the app can't reach",
+      { tokenStatus: 404 as const },
+      409,
+      "The app can't reach this installation on GitHub; nothing was linked",
+    ],
+    [
+      "GitHub answering 500",
+      { failAt: "installations" as const },
+      502,
+      "GitHub didn't answer; nothing was linked",
+    ],
+  ])("answers %s %i, and writes no row", async (_name, fake, status, error) => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app } = writeApp(fakeGitHub({ installationId, ...fake }).github);
+
+    const res = await link(app, team, installationId);
+
+    expect(res).toMatchObject({ status, body: { error } });
+    expect(await rowCount(team)).toBe(0);
+  });
+
+  it("logs the step and status only when GitHub answers 500", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app, logLines } = writeApp(
+      fakeGitHub({ installationId, failAt: "installations" }).github,
+    );
+
+    await link(app, team, installationId);
+
+    const entry = logEntries(logLines().join("\n")).find((e) => e.step !== undefined);
+    expect(entry).toMatchObject({
+      severity: "ERROR",
+      team,
+      app: "write",
+      step: "GitHub's list of the user's installations",
+      status: 500,
+    });
+    expect(JSON.stringify(entry)).not.toContain("Server Error");
+  });
+
+  it("answers a Team's 11th link in an hour 429 with Retry-After, without calling GitHub, and writes no row", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { github, calls } = fakeGitHub({ installationId, refuse: true });
+    const { app } = writeApp(github);
+    for (let i = 0; i < 10; i++) {
+      expect((await link(app, team, installationId)).status).toBe(400);
+    }
+    const callsBefore = calls.length;
+
+    const res = await link(app, team, installationId);
+
+    expect(res).toMatchObject({
+      status: 429,
+      body: { error: "A Team links at most 10 times an hour" },
+    });
+    expect(Number(res.headers.get("Retry-After"))).toBeGreaterThan(0);
+    expect(calls).toHaveLength(callsBefore);
+    expect(await rowCount(team)).toBe(0);
+  });
+
+  it("counts the write app's links apart from the read app's: a Team at the read app's limit still links a write installation", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app } = writeApp(fakeGitHub({ installationId }).github, {
+      readGitHub: fakeGitHub({ clientId: READ_CLIENT_ID, refuse: true }).github,
+    });
+    const readLink = () =>
+      call(app, team, "/api/github/installations", { body: linkBody(newInstallation()) });
+    for (let i = 0; i < 10; i++) expect((await readLink()).status).toBe(400);
+    expect((await readLink()).status).toBe(429);
+
+    expect((await link(app, team, installationId)).status).toBe(201);
+  });
+
+  it.each([
+    ["a Lead", LEAD],
+    ["a Member", MEMBER],
+  ])(
+    "answers %s 403 on both Admin routes without calling GitHub, and 200 on the grant",
+    async (_name, person) => {
+      const team = await teamOfThree();
+      const installationId = newInstallation();
+      const { github, calls } = fakeGitHub({ installationId });
+      const { app } = writeApp(github);
+      const granted = await writeGrants.grant(team, { installationId, grantedBy: ADMIN });
+
+      expect((await link(app, team, installationId, person)).status).toBe(403);
+      expect((await call(app, team, "/api/github/write-app", { as: person })).status).toBe(403);
+      expect(calls).toEqual([]);
+      expect(await grantsOf(app, team, person)).toEqual([
+        {
+          installation_id: installationId,
+          granted_by: ADMIN,
+          granted_at: granted.grantedAt.toISOString(),
+        },
+      ]);
+    },
+  );
+});
+
+// A failed read not kept, and GitHub not answering, are the shared handler's, proven on the read app's route
+// (github-app-api.test.ts); here, what is the write app's own, with the hour the ticket names.
+describe("GET /api/github/write-app: the write app's Connect step", () => {
+  it("answers the write app's slug and client id, never the read app's, keeping its own slug apart for an hour", async () => {
+    const team = await newTeam(withTeam);
+    const write = fakeGitHub();
+    const read = fakeGitHub({ clientId: READ_CLIENT_ID, slug: READ_SLUG });
+    let now = Date.parse("2026-11-26T09:00:00Z");
+    const { app } = writeApp(write.github, { now: () => now, readGitHub: read.github });
+
+    const readApp = await call(app, team, "/api/github/app");
+    const first = await call(app, team, "/api/github/write-app");
+    now += 3_600_000 - 1;
+    const withinTheHour = await call(app, team, "/api/github/write-app");
+    now += 1;
+    await call(app, team, "/api/github/write-app");
+
+    expect(readApp.body).toEqual({ slug: READ_SLUG, client_id: READ_CLIENT_ID });
+    expect(first.status).toBe(200);
+    expect(GitHubAppBody.parse(first.body)).toEqual({
+      slug: WRITE_SLUG,
+      client_id: WRITE_CLIENT_ID,
+    });
+    expect(withinTheHour.body).toEqual(first.body);
+    expect(write.calls).toEqual([
+      "GET https://api.github.com/app",
+      "GET https://api.github.com/app",
+    ]);
+    expect(read.calls).toEqual(["GET https://api.github.com/app"]);
+  });
+
+  it("answers 503 without the write app's settings", async () => {
+    const team = await newTeam(withTeam);
+    const { app } = writeApp();
+
+    expect(await call(app, team, "/api/github/write-app")).toMatchObject({
+      status: 503,
+      body: { error: "Fix PRs aren't set up on this Warden" },
+    });
+  });
+});
+
+describe("GET /api/github/write-grant", () => {
+  it("answers { installations: [] } without the write app's settings", async () => {
+    const team = await newTeam(withTeam);
+    const { app } = writeApp();
+
+    expect(await grantsOf(app, team)).toEqual([]);
+  });
+});
+
+describe("another Team never sees or takes the write grant (story 15)", () => {
+  it("lists Team B none while Team A holds a grant, and answers Team B's link of Team A's installation 409, writing nothing", async () => {
+    const teamA = await newTeam(withTeam);
+    const teamB = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app } = writeApp(fakeGitHub({ installationId }).github);
+    const granted = await link(app, teamA, installationId);
+    expect(granted.status).toBe(201);
+
+    expect(await grantsOf(app, teamB)).toEqual([]);
+    const res = await link(app, teamB, installationId);
+
+    expect(res).toMatchObject({
+      status: 409,
+      body: { error: "This write installation is linked to another Team" },
+    });
+    expect(await rowCount(teamB)).toBe(0);
+    expect(await grantsOf(app, teamB)).toEqual([]);
+    expect(await grantsOf(app, teamA)).toEqual([granted.body]);
+  });
+});
+
+describe("no secret in an answer or a log line", () => {
+  it.each([
+    ["a successful link", {}],
+    ["a second link of a held grant", {}, true],
+    ["a refused code", { refuse: true }],
+    ["an installation the person can't reach", { reachable: [] }],
+    ["an installation the app can't reach", { tokenStatus: 404 as const }],
+    ["GitHub answering 500", { failAt: "installations" as const }],
+    [
+      "a token with more than the write app's permissions",
+      { permissions: { ...WRITE_APP, workflows: "write" } },
+    ],
+    ["an Admin with only push on a repo", { repoAccess: ["push" as const] }],
+  ])(
+    "holds no client secret, code, verifier or token, for %s",
+    async (_name, fake, twice = false) => {
+      const team = await newTeam(withTeam);
+      const installationId = newInstallation();
+      const { app, logLines } = writeApp(fakeGitHub({ installationId, ...fake }).github);
+
+      const answers = [await link(app, team, installationId)];
+      if (twice) answers.push(await link(app, team, installationId));
+
+      const log = logLines().join("\n");
+      expect(log).not.toBe("");
+      for (const secret of SECRETS) {
+        expect(log).not.toContain(secret);
+        for (const answer of answers) expect(answer.text).not.toContain(secret);
+      }
+    },
+  );
+
+  it("holds none for a link of another Team's installation, nor for the 429", async () => {
+    const teamA = await newTeam(withTeam);
+    const teamB = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { app, logLines } = writeApp(fakeGitHub({ installationId }).github);
+    await link(app, teamA, installationId);
+
+    const answers = [];
+    for (let i = 0; i < 11; i++) answers.push(await link(app, teamB, installationId));
+
+    expect(answers.map((answer) => answer.status)).toEqual([...Array(10).fill(409), 429]);
+    const log = logLines().join("\n");
+    for (const secret of SECRETS) {
+      expect(log).not.toContain(secret);
+      for (const answer of answers) expect(answer.text).not.toContain(secret);
+    }
+  });
+});

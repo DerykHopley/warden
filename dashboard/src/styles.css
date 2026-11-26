@@ -176,8 +176,10 @@ button:focus-visible,
 .level-line a:focus-visible,
 .setup-line a:focus-visible,
 .setup-link a:focus-visible,
+.how-to summary:focus-visible,
 .repo-urls a:focus-visible,
 .patch-links a:focus-visible,
+.fix-pr-link a:focus-visible,
 .panel-divider:focus-visible,
 .chat-input:focus-visible,
 .field textarea:focus-visible,
@@ -955,6 +957,60 @@ button[aria-busy="true"],
   margin: 0 0 16px;
 }
 
+/* The write app's how-to (#224, story 16): a disclosure on --surface, as the repo list's box. Its summary is a 44px-high
+   target with the focus ring; each URL, path and variable name wraps rather than pushing the page sideways. */
+.how-to {
+  margin: 0 0 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.how-to summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  font-weight: 600;
+  border-radius: var(--radius);
+  cursor: pointer;
+  list-style: none;
+}
+
+/* The disclosure's marker, drawn by hand: a flex summary loses the browser's own in some browsers. */
+.how-to summary::-webkit-details-marker {
+  display: none;
+}
+
+.how-to summary::before {
+  content: "▸";
+  color: var(--muted);
+}
+
+.how-to[open] summary::before {
+  content: "▾";
+}
+
+.how-to ol {
+  margin: 0;
+  padding: 0 16px 16px 40px;
+}
+
+.how-to h3 {
+  margin: 16px 0 8px;
+  font-size: 1rem;
+}
+
+.how-to p,
+.how-to ul {
+  margin: 0 0 8px;
+}
+
+.how-to code {
+  overflow-wrap: anywhere;
+}
+
 /* One repo per row, by ref, with its last Scan beside it (under it when narrow); a long ref wraps rather than pushing
    the page sideways. */
 .repo-list {
@@ -1406,8 +1462,45 @@ button[aria-busy="true"],
   color: var(--accent);
 }
 
-/* "Couldn't load Proposals" (.proposals-failed) and "Couldn't load the CVE assessment." (.patch-failed), each with
-   Retry beside it. */
+/* A Guard Finding's Fix PR, between the card's fields and its decisions, set like the Patch section above. */
+.fix-pr-section {
+  margin-right: 8px;
+}
+
+.fix-pr-section h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.fix-pr-section > p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* The link, a 44px target with the focus ring, and who opened it on the line under it. */
+.fix-pr-link a {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--accent);
+}
+
+.fix-pr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* The section's own done or refused line sits under its button, apart from the card's. */
+.fix-pr-section > .card-line {
+  margin-top: 8px;
+}
+
+/* "Couldn't load Proposals" (.proposals-failed), "Couldn't load the CVE assessment." (.patch-failed) and "Couldn't
+   load the Fix PR." (.fix-pr-failed), each with Retry beside it. */
+.fix-pr-section > p.fix-pr-failed,
 .patch-failed,
 .proposals-failed {
   display: flex;

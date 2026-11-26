@@ -30,6 +30,9 @@ export type RunKind = Exclude<HistoryCauseKind, "person" | "job">;
 /** Who caused a Finding's history row: the contracts' list, which 0006_proposals's check matches. */
 export type HistoryActorKind = HistoryCauseKind;
 
+/** What a write-grant row records: the write app granted on an installation, or the grant gone (slice 2 writes it). */
+export type WriteGrantEvent = "granted" | "revoked";
+
 /** How a Role history row came about: the Team's first visit, an invited person's first visit, or a Role change. */
 export type RoleChange = "created_team" | "joined" | "changed";
 
@@ -171,6 +174,45 @@ export interface Database {
     installation_id: ColumnType<string, number, never>;
     linked_by: string;
     linked_at: ColumnType<Date, Date | undefined, Date>;
+  };
+
+  /**
+   * The Team that holds a write-app installation (0015_github_write_grants): one row per installation, written on its
+   * first grant and never changed, so an installation's grants belong to one Team. Ids are bigint, read back as strings.
+   */
+  github_write_installations: {
+    installation_id: ColumnType<string, number, never>;
+    team_id: ColumnType<string, string, never>;
+  };
+
+  /**
+   * A Team's write grant, one row per event (0015_github_write_grants): a `granted` or `revoked` of the write app on
+   * an installation, who caused it (a Clerk user id) and when. Append-only: rows are only ever inserted. Written only by
+   * the Guard module's write-grants store; the newest row per installation says whether the grant holds.
+   */
+  github_write_grants: {
+    team_id: string;
+    id: Generated<string>;
+    installation_id: ColumnType<string, number, never>;
+    event: WriteGrantEvent;
+    caused_by: string;
+    at: Generated<Date>;
+  };
+
+  /**
+   * A Fix PR opened for a Finding (0016_fix_prs): its URL, number and branch, who opened it (a Clerk user id) and when.
+   * Append-only: rows are only ever inserted, one per PR. Written only by the Guard module's Fix PRs store; the newest
+   * row per Finding is the one the store answers.
+   */
+  fix_prs: {
+    team_id: string;
+    id: Generated<string>;
+    finding_id: string;
+    url: string;
+    number: number;
+    branch: string;
+    opened_by: string;
+    at: Generated<Date>;
   };
 
   /**

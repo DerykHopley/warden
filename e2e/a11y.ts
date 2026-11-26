@@ -1,5 +1,6 @@
 // docs/design.md's Accessibility floor as the browser tests check it, shared by each spec that needs it: a visible
-// focus ring when the keyboard reaches a control, and touch targets at least 44 by 44px.
+// focus ring when the keyboard reaches a control, touch targets at least 44 by 44px, and a page that never scrolls
+// sideways (its Layout section).
 import type { Locator, Page } from "@playwright/test";
 import { expect } from "./session.ts";
 
@@ -22,6 +23,16 @@ export async function expectRings(page: Page, targets: Locator[]) {
     expect(style, await target.evaluate((el) => el.outerHTML.slice(0, 80))).toBe("solid");
     expect(width).toBeGreaterThanOrEqual(2);
   }
+}
+
+/** Fails unless the page is no wider than the window, so nothing scrolls sideways; returns the window's width. */
+export async function expectNoSidewaysScroll(page: Page) {
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  return clientWidth;
 }
 
 /** Fails unless each of `targets` is at least 44 by 44px. */

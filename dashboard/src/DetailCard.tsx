@@ -19,7 +19,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { tryAgainIn, type GetToken } from "./api.ts";
+import { sentence, tryAgainIn, type GetToken } from "./api.ts";
 import { dayAndTimeWords, dayWords } from "./date-words.ts";
 import {
   approveProposal,
@@ -44,6 +44,7 @@ import {
   UNCONFIRMED_FIX,
 } from "./finding-words.ts";
 import { shortId } from "./findings.ts";
+import { FixPrSection } from "./FixPrSection.tsx";
 import { PatchSection } from "./PatchSection.tsx";
 import { personName, type ClerkUser } from "./person-name.ts";
 import type { ProposalsResult } from "./proposals.ts";
@@ -111,9 +112,6 @@ const REFUSED = {
   notAnswering: "Warden's server isn't answering. Your reason is kept: try again.",
   untilPassed: "Reopens on must be a later day. Pick tomorrow or later.",
 };
-
-/** The server's words as one sentence: ending with a full stop, once. */
-const sentence = (words: string) => `${words.trim().replace(/[.!?]$/, "")}.`;
 
 /** What a form holds while it's open: kept as typed after a refusal. */
 type Draft = { reason: string; until: string; candidate: string | null };
@@ -206,21 +204,20 @@ export function DetailCard(props: {
     const card = cardRef.current;
     focusNext.current = null;
     if (card === null) return;
+    // The card's own line, never the Fix PR section's, which keeps its own focus.
+    const cardLineElement = () => card.querySelector<HTMLElement>(":scope > .card-line");
     // Focus that sat in a form which went away would fall to <body>: it goes to the line, or the first button left.
     if (closedAway !== refocused.current) {
       refocused.current = closedAway;
       const active = document.activeElement;
       if (target === null && (active === null || active === document.body)) {
-        (
-          card.querySelector<HTMLElement>(".card-line") ??
-          card.querySelector<HTMLElement>("[data-opener]")
-        )?.focus();
+        (cardLineElement() ?? card.querySelector<HTMLElement>("[data-opener]"))?.focus();
       }
     }
     if (target === null) return;
     const element =
       target === "line"
-        ? card.querySelector<HTMLElement>(".card-line")
+        ? cardLineElement()
         : target === "reason"
           ? card.querySelector<HTMLElement>(".decision-form textarea")
           : [...card.querySelectorAll<HTMLElement>("[data-opener]")].find(
@@ -532,6 +529,20 @@ export function DetailCard(props: {
           key={`${finding.status} ${finding.accepted_until ?? ""}`}
           finding={finding}
           getToken={getToken}
+          onSessionEnded={props.onSessionEnded}
+        />
+      )}
+      {finding.module === "guard" && (
+        // Not keyed by the Status, as the Patch section is: a 409's refusal must outlast the Status change it caused.
+        // The section asks again on a new Status itself, and drops its other lines.
+        <FixPrSection
+          finding={finding}
+          role={role}
+          userId={props.userId}
+          clerkUsers={props.clerkUsers}
+          getToken={getToken}
+          onFindingChanged={props.onFindingChanged}
+          onFindingGone={props.onFindingGone}
           onSessionEnded={props.onSessionEnded}
         />
       )}

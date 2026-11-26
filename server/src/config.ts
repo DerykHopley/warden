@@ -60,19 +60,44 @@ const Env = z.object({
 /** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
 const appPrivateKey = required.refine(isRsaPrivateKey, { message: "isn't an RSA private key" });
 
-/** The read-only GitHub App's settings, read only when one of them is set: they come together or not at all. */
-const GitHubApp = z
-  .object({
-    /** The App's client id: the JWT's issuer, as GitHub recommends, and the user flow's client. */
-    GITHUB_APP_CLIENT_ID: required,
-    GITHUB_APP_CLIENT_SECRET: required,
-    GITHUB_APP_PRIVATE_KEY: appPrivateKey,
-  })
-  .transform((app) => ({
-    clientId: app.GITHUB_APP_CLIENT_ID,
-    clientSecret: app.GITHUB_APP_CLIENT_SECRET,
-    privateKey: app.GITHUB_APP_PRIVATE_KEY,
-  }));
+/** A GitHub App's settings, checked. The client id is the JWT's issuer, as GitHub recommends, and the user flow's client. */
+const GitHubApp = z.object({
+  clientId: required,
+  clientSecret: required,
+  privateKey: appPrivateKey,
+});
+
+/**
+ * One GitHub App's settings from its three variables, `<prefix>_CLIENT_ID`, `<prefix>_CLIENT_SECRET` and
+ * `<prefix>_PRIVATE_KEY`, read only when one of them is in `present`: they come together or not at all. Answers the
+ * settings (undefined with none set), or the variables that are missing or malformed, never their values.
+ */
+function readGitHubApp(
+  present: Record<string, string | undefined>,
+  prefix: "GITHUB_APP" | "GITHUB_WRITE_APP",
+): { settings: GitHubAppSettings | undefined; invalid: string[] } {
+  const variables = {
+    clientId: `${prefix}_CLIENT_ID`,
+    clientSecret: `${prefix}_CLIENT_SECRET`,
+    privateKey: `${prefix}_PRIVATE_KEY`,
+  } satisfies Record<keyof GitHubAppSettings, string>;
+  if (!Object.values(variables).some((name) => name in present)) {
+    return { settings: undefined, invalid: [] };
+  }
+  const parsed = GitHubApp.safeParse({
+    clientId: present[variables.clientId],
+    clientSecret: present[variables.clientSecret],
+    privateKey: present[variables.privateKey],
+  });
+  if (parsed.success) return { settings: parsed.data, invalid: [] };
+  const failed = new Set(parsed.error.issues.map((issue) => issue.path[0]));
+  return {
+    settings: undefined,
+    invalid: Object.entries(variables).flatMap(([setting, name]) =>
+      failed.has(setting) ? [name] : [],
+    ),
+  };
+}
 
 /** Whether Node can read `pem` as an RSA private key, which RS256 signs with. */
 function isRsaPrivateKey(pem: string): boolean {
@@ -82,12 +107,6 @@ function isRsaPrivateKey(pem: string): boolean {
     return false;
   }
 }
-
-const GITHUB_VARIABLES = [
-  "GITHUB_APP_CLIENT_ID",
-  "GITHUB_APP_CLIENT_SECRET",
-  "GITHUB_APP_PRIVATE_KEY",
-] as const;
 
 /** `https://host[:port]` and nothing more: what a token's `azp` holds. */
 function isOrigin(value: string): boolean {
@@ -115,8 +134,13 @@ export type Config = {
     authorizedParties: string[];
   };
   /** The read-only GitHub App, which a Team's repos are linked through; unset, none can be linked. */
-  github: { clientId: string; clientSecret: string; privateKey: string } | undefined;
+  github: GitHubAppSettings | undefined;
+  /** The write GitHub App, which Fix PRs go through with a Team's write grant; unset, none can be opened. */
+  githubWrite: GitHubAppSettings | undefined;
 };
+
+/** A GitHub App's settings: its client id and secret, and the private key it signs its JWTs with. */
+export type GitHubAppSettings = { clientId: string; clientSecret: string; privateKey: string };
 
 /** A variable is missing or malformed. Its message names the variables, never their values. */
 export class ConfigError extends Error {
@@ -132,14 +156,15 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   // An empty value counts as unset: `.envrc` exports "" when a keyring entry is missing.
   const present = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== ""));
   const parsed = Env.safeParse(present);
-  // One of the App's settings without the others links nothing, and is a mistake to say at start, with the rest.
-  const github = GITHUB_VARIABLES.some((name) => name in present)
-    ? GitHubApp.safeParse(present)
-    : undefined;
-  if (!parsed.success || github?.success === false) {
-    const issues = [...(parsed.error?.issues ?? []), ...(github?.error?.issues ?? [])];
-    throw new ConfigError([...new Set(issues.map((issue) => String(issue.path[0])))]);
-  }
+  // One of an App's settings without the others links nothing, and is a mistake to say at start, with the rest.
+  const github = readGitHubApp(present, "GITHUB_APP");
+  const githubWrite = readGitHubApp(present, "GITHUB_WRITE_APP");
+  const invalid = [
+    ...(parsed.error?.issues ?? []).map((issue) => String(issue.path[0])),
+    ...github.invalid,
+    ...githubWrite.invalid,
+  ];
+  if (!parsed.success || invalid.length > 0) throw new ConfigError([...new Set(invalid)]);
   const { data } = parsed;
   const behindCloudRun = data.K_SERVICE !== undefined;
   // On Cloud Run the origins must be named: a default there would be the local one, and refuse every real token.
@@ -156,7 +181,8 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       frontendApiHost: data.VITE_CLERK_PUBLISHABLE_KEY,
       authorizedParties: data.CLERK_AUTHORIZED_PARTIES ?? [LOCAL_DASHBOARD_ORIGIN],
     },
-    github: github?.data,
+    github: github.settings,
+    githubWrite: githubWrite.settings,
   };
 }
 

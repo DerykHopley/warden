@@ -325,6 +325,7 @@ describe("POST /api/github/installations: an Admin links an installation (storie
     expect(entries).toContainEqual(
       expect.objectContaining({
         severity: "ERROR",
+        app: "read",
         step: "GitHub's list of the user's installations",
         status: 500,
       }),

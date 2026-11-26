@@ -58,3 +58,44 @@ export const LinkedInstallationBody = z.strictObject({
   scan: ScanBody.nullable(),
 });
 export type LinkedInstallationBody = z.infer<typeof LinkedInstallationBody>;
+
+/**
+ * A Team's write grant (#224, story 5): an installation of Warden's write GitHub app, which Fix PRs go through, who
+ * granted it (a Clerk user id) and when. `POST /api/github/write-installations` (Admin only) answers one: 201 for a new
+ * grant, 200 for one the Team already held. Its body is a `LinkInstallationBody` from the write app's sign-in. The
+ * write app's own `GET /api/github/write-app` answers a `GitHubAppBody`.
+ */
+export const WriteGrantBody = z.strictObject({
+  installation_id: InstallationId,
+  granted_by: z.string().min(1),
+  granted_at: DateTime,
+});
+export type WriteGrantBody = z.infer<typeof WriteGrantBody>;
+
+/** `GET /api/github/write-grant` (any person in the Team): its write grants, `{ installations: [] }` for none. */
+export const WriteGrantsBody = z.strictObject({ installations: z.array(WriteGrantBody) });
+export type WriteGrantsBody = z.infer<typeof WriteGrantsBody>;
+
+/**
+ * A Fix PR the write app opened for a Finding (#224, story 6): GitHub's URL for it and its number, its branch, who
+ * opened it (a Clerk user id) and when. `POST /api/guard/findings/:id/fix-pr` (any person in the Team) answers one:
+ * 201 for a PR it opened, 200 for the Finding's PR that's still open. No body is sent.
+ */
+export const FixPrBody = z.strictObject({
+  url: z.url({ protocol: /^https$/, hostname: /^github\.com$/ }),
+  number: z.number().int().positive(),
+  branch: z.string().min(1),
+  opened_by: z.string().min(1),
+  opened_at: DateTime,
+});
+export type FixPrBody = z.infer<typeof FixPrBody>;
+
+/**
+ * `GET /api/guard/findings/:id/fix-pr` (any person in the Team): whether the Finding's Rule and Location can get a Fix
+ * PR, and its newest Fix PR, or `null` when it has none.
+ */
+export const FindingFixPrBody = z.strictObject({
+  fixable: z.boolean(),
+  fix_pr: FixPrBody.nullable(),
+});
+export type FindingFixPrBody = z.infer<typeof FindingFixPrBody>;
