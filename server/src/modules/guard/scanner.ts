@@ -2,13 +2,15 @@
 // what the Default Pack's Rules find in its files. A repo it can't read fails the whole Scan, so nothing is reconciled:
 // a partial Scan would mark the unread repo's Findings Fixed. A file whose path a Finding's Location can't hold (too
 // long, a `\`, a drive letter) is skipped rather than failing the Scan. A file the reader couldn't read as text (too
-// large, binary, not UTF-8) is reported unread, so its Findings stay as they are. The whole-repo Rules answer once a
+// large, binary, not UTF-8) is reported unread, so its Findings stay as they are, though its path still counts for the
+// other-AI-tool Rule, which reads paths only. The whole-repo Rules answer once a
 // repo's files are all read; with a root settings file unread, their Findings stay as they are too. The log gets counts
 // only, never a path, a file's text or a match.
 import { assetKey, Location, type Observation } from "@warden/contracts";
 import type { Logger } from "../../log.ts";
 import type { Scanner } from "../../scans.ts";
 import { agentConfigCheck, WHOLE_REPO_PATH } from "./agent-config.ts";
+import { aiToolCheck } from "./ai-tools.ts";
 import { DEFAULT_PACK_RULE_IDS } from "./default-pack.ts";
 import { mcpServerObservations } from "./mcp-servers.ts";
 import type { RepoAssets } from "./repo-assets.ts";
@@ -55,6 +57,7 @@ export function guardScanner({
           }
         };
         const agentConfig = agentConfigCheck(asset);
+        const aiTools = aiToolCheck(asset);
         for await (const file of reader.readRepo(repo.installationId, {
           ref: repo.ref,
           githubId: repo.githubId,
@@ -64,6 +67,8 @@ export function guardScanner({
             skipped += 1;
             continue;
           }
+          // Its path alone shows another AI tool, so a file read or unread counts the same.
+          aiTools.see(file.path);
           if (!("text" in file)) {
             // Its text is unknown, so the Findings in it stay as they are rather than being marked Fixed.
             recorder.unread(asset, file.path);
@@ -81,6 +86,7 @@ export function guardScanner({
         // With a root settings file unread, the whole-repo Findings, all at the root settings file, stay as they are.
         if (wholeRepo === undefined) recorder.unread(asset, WHOLE_REPO_PATH);
         else saw(wholeRepo);
+        saw(aiTools.end());
         logger.info("guard scan: repo read", {
           team,
           repo: asset.ref,

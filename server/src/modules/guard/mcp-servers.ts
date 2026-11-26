@@ -9,6 +9,7 @@ import { valueLines } from "./agent-config.ts";
 import { MCP_SERVER_UNPINNED, packRule } from "./default-pack.ts";
 import { isObject, readJsonObject } from "./json-config.ts";
 import type { RepoFile } from "./repo-reader.ts";
+import { summaryNames } from "./summary.ts";
 
 /** A project's MCP config: `.mcp.json` in any folder. */
 const MCP_FILE = /(?:^|\/)\.mcp\.json$/;
@@ -193,11 +194,6 @@ const PYTHON_PINNED = /(?:==|@)\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\
 const DIGEST = /^sha256:[0-9a-f]{64}$/i;
 /** A local path (`./server`, `/opt/mcp`, `~/mcp`, `C:\mcp`): a local server, not a package. */
 const LOCAL_PATH = /^(?:[.~/\\]|[A-Za-z]:[\\/])/;
-
-/** The most characters of a server's key a summary shows, so a made-up long key can't outgrow the evidence. */
-const SUMMARY_KEY_MAX = 64;
-/** The most unpinned servers a summary names by key before counting the rest. */
-const SUMMARY_KEYS_MAX = 3;
 
 /** How a command reads its options. */
 type Options = {
@@ -404,10 +400,6 @@ function runsUnpinned(entry: unknown): boolean {
   return false;
 }
 
-/** A server's key as a summary shows it: cut to `SUMMARY_KEY_MAX` characters. */
-const summaryKey = (key: string) =>
-  key.length > SUMMARY_KEY_MAX ? `${key.slice(0, SUMMARY_KEY_MAX - 1)}…` : key;
-
 /**
  * What one file's MCP servers come to: none, or one Observation for all its unpinned servers, as a file's secrets
  * share one. Its line is the first unpinned server's key; its summary counts them, names up to three by key and ends
@@ -425,8 +417,6 @@ export function mcpServerObservations(asset: Asset, { path, text: raw }: RepoFil
   const line = valueLines(read.text, 2).get(JSON.stringify(["mcpServers", first])) ?? 1;
   const rule = packRule(MCP_SERVER_UNPINNED);
   const count = servers.length;
-  const named = servers.slice(0, SUMMARY_KEYS_MAX).map(summaryKey).join(", ");
-  const more = count > SUMMARY_KEYS_MAX ? ` and ${count - SUMMARY_KEYS_MAX} more` : "";
   const where = count === 1 ? `on line ${line}` : `first on line ${line}`;
   return [
     {
@@ -436,7 +426,7 @@ export function mcpServerObservations(asset: Asset, { path, text: raw }: RepoFil
       severity: rule.severity,
       title: rule.title,
       evidence: {
-        summary: `${count} ${count === 1 ? "MCP server" : "MCP servers"} without a pinned version (${named}${more}) in ${path}, ${where}. To fix: ${rule.fix}`,
+        summary: `${count} ${count === 1 ? "MCP server" : "MCP servers"} without a pinned version (${summaryNames(servers)}) in ${path}, ${where}. To fix: ${rule.fix}`,
       },
     },
   ];

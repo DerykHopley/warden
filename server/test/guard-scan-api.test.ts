@@ -503,6 +503,39 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     ]);
   });
 
+  it("opens a Finding for another AI tool's config, with its fix, then marks it Fixed once removed (stories 3, 4)", async () => {
+    const team = await newTeam();
+    const cursorRules: RepoFile = { path: ".cursorrules", text: "Always use tabs.\n" };
+    let current: RepoFile[] = [guarded, cursorRules];
+    const guard = guardApp(readerOf(() => files(current)()));
+    await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
+
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+
+    const tool = packRule("guard/unapproved-ai-tool");
+    const opened = await listFindings(guard, team);
+    expect(opened).toEqual([
+      expect.objectContaining({
+        asset: repo,
+        rule_id: tool.ruleId,
+        status: "open",
+        severity: "medium",
+        title: tool.title,
+        location: { kind: "file", path: ".cursorrules" },
+        evidence: {
+          summary: `Cursor config in 1 path (.cursorrules). Claude Code is the only approved AI tool. To fix: ${tool.fix}`,
+        },
+      }),
+    ]);
+
+    current = [guarded];
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+
+    expect(await listFindings(guard, team)).toEqual([
+      expect.objectContaining({ id: opened[0]!.id, rule_id: tool.ruleId, status: "fixed" }),
+    ]);
+  });
+
   it("keeps the whole-repo Findings Open when a root settings file is unread, rather than marking them Fixed on a guess", async () => {
     const team = await newTeam();
     const claudeMd: RepoFile = { path: "CLAUDE.md", text: "# Guarded\n" };

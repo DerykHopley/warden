@@ -7,7 +7,7 @@ import { DEFAULT_PACK, DEFAULT_PACK_RULE_IDS, packRule, SECRET_IN_REPO } from ".
 import { guardScanner } from "./scanner.ts";
 
 describe("the Default Pack", () => {
-  it("holds the two secret Rules, the two per-file agent-config Rules, the two whole-repo ones and the MCP server Rule, in the spec's order", () => {
+  it("holds the two secret Rules, the two per-file agent-config Rules, the two whole-repo ones, the MCP server Rule and the other-AI-tool Rule, in the spec's order", () => {
     expect(DEFAULT_PACK.map((rule) => rule.ruleId)).toEqual([
       "guard/secret-in-repo",
       "guard/secret-in-agent-settings",
@@ -16,7 +16,17 @@ describe("the Default Pack", () => {
       "guard/agent-can-read-env",
       "guard/no-runtime-guard",
       "guard/mcp-server-unpinned",
+      "guard/unapproved-ai-tool",
     ]);
+  });
+
+  it("gives the other-AI-tool Rule its Severity, title and fix", () => {
+    expect(packRule("guard/unapproved-ai-tool")).toEqual({
+      ruleId: "guard/unapproved-ai-tool",
+      severity: "medium",
+      title: "Another AI tool's config is in the repo",
+      fix: "Remove the tool's config, or accept the Finding if your Team approves the tool.",
+    });
   });
 
   it("gives the MCP server Rule its Severity, title and fix", () => {
