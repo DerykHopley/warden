@@ -116,22 +116,29 @@ export function patchMount(
 }
 
 /**
- * Resolves once a transaction is waiting for `team`'s Findings lock (the one reconcile and decisions take), read
- * through `probe`'s view of `pg_locks`.
+ * Resolves once a transaction is waiting for the advisory lock `pg_advisory_xact_lock(hashtextextended(key, 0))`
+ * takes, read through `probe`'s view of `pg_locks`. `what` names the lock in the error when none is queued.
  */
-export async function queuedBehindFindingsLock(probe: pg.Pool, team: string): Promise<void> {
+export async function queuedBehindLock(probe: pg.Pool, key: string, what: string): Promise<void> {
   for (let tries = 0; tries < 100; tries++) {
     const { rows } = await probe.query<{ waiting: number }>(
       `select count(*)::int as waiting from pg_locks
         where locktype = 'advisory' and not granted and objsubid = 1
           and ((classid::bigint << 32) | objid::bigint) = hashtextextended($1, 0)`,
-      [team],
+      [key],
     );
     if (rows[0]!.waiting > 0) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
-  throw new Error("nothing queued behind the Team's Findings lock");
+  throw new Error(`nothing queued behind ${what}`);
 }
+
+/**
+ * Resolves once a transaction is waiting for `team`'s Findings lock (the one reconcile and decisions take), read
+ * through `probe`'s view of `pg_locks`.
+ */
+export const queuedBehindFindingsLock = (probe: pg.Pool, team: string) =>
+  queuedBehindLock(probe, team, "the Team's Findings lock");
 
 export const FRONTEND_API_HOST = "warden-test.clerk.accounts.dev";
 

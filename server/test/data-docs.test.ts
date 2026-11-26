@@ -34,6 +34,12 @@ describe("docs/data.md", () => {
     }
   });
 
+  it("has a Fix PRs row naming its table and what a Fix PR holds", () => {
+    const fixPrs = row("Cloud SQL: Fix PRs");
+    expect(fixPrs).toContain("`fix_prs`");
+    for (const held of ["URL", "number", "branch", "Clerk user id"]) expect(fixPrs).toContain(held);
+  });
+
   it("names the npm and PyPI registries, and that only a package's name is sent", () => {
     const registries = /^- \*\*npm and PyPI:\*\*[\s\S]*?(?=^- )/m.exec(leaves)?.[0] ?? "";
     for (const said of [
