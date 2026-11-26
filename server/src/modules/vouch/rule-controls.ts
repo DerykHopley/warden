@@ -1,6 +1,6 @@
 // Which Controls of VDA ISA 2027.1 each Rule gives evidence for (spec #341: the map replaces the original Vouch's
 // recorded Patch document, ADR 0003). The Finding's `control` field stays unset; Vouch reads a Finding's Rule and looks
-// it up here. Rule ids are named as strings: Vouch imports neither Guard nor Patch (ADR 0005), and a test checks each
+// it up here. Rule ids are named as strings: Vouch imports only `findings` and `scans` (spec #341), and a test checks each
 // one against the Rules in code.
 //
 // Finalised against the Rules in code at 693d63b. Left out until code produces them: `patch/end-of-life` (1.3.4) and
