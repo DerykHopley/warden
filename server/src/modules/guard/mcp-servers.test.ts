@@ -4,6 +4,7 @@
 import { type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import { AWS_KEY, GITHUB_TOKEN } from "../../../test/secret-fixtures.ts";
+import { lineWith } from "../../../test/text-lines.ts";
 import { packRule } from "./default-pack.ts";
 import { mcpServerObservations } from "./mcp-servers.ts";
 
@@ -20,10 +21,6 @@ const REMOTE = { type: "http", url: "https://example.com/mcp" };
 /** A `.mcp.json`'s text, pretty-printed as `claude mcp add --scope project` writes it. */
 const mcpJson = (servers: Record<string, unknown>) =>
   `${JSON.stringify({ mcpServers: servers }, null, 2)}\n`;
-
-/** The line (from 1) of `text` the first `needle` is on. */
-const lineWith = (text: string, needle: string) =>
-  text.split("\n").findIndex((line) => line.includes(needle)) + 1;
 
 const observe = (path: string, text: string) => mcpServerObservations(repo, { path, text });
 
@@ -64,6 +61,37 @@ describe("guard/mcp-server-unpinned", () => {
       ["run", "-v", "/data:/data:1", "--name", "mcp", "server"],
     ],
     ["podman run ghcr.io/x/server", "podman", ["run", "ghcr.io/x/server"]],
+    // A runner is known by its command's last path segment, without a Windows `.cmd` or `.exe` ending.
+    [
+      "/opt/homebrew/bin/npx -y some-mcp-server",
+      "/opt/homebrew/bin/npx",
+      ["-y", "some-mcp-server"],
+    ],
+    ["npx.cmd -y some-mcp-server", "npx.cmd", ["-y", "some-mcp-server"]],
+    ["npx.CMD -y some-mcp-server", "npx.CMD", ["-y", "some-mcp-server"]],
+    [
+      "C:\\Program Files\\nodejs\\npx.cmd -y some-mcp-server",
+      "C:\\Program Files\\nodejs\\npx.cmd",
+      ["-y", "some-mcp-server"],
+    ],
+    ["uvx.exe some-server", "uvx.exe", ["some-server"]],
+    [
+      "C:\\Windows\\System32\\cmd.exe /c npx -y some-mcp-server",
+      "C:\\Windows\\System32\\cmd.exe",
+      ["/c", "npx", "-y", "some-mcp-server"],
+    ],
+    // A Python runner's option values aren't the package.
+    [
+      "uvx --with httpx==0.27.0 mcp-server-fetch",
+      "uvx",
+      ["--with", "httpx==0.27.0", "mcp-server-fetch"],
+    ],
+    // A container runtime's option values aren't the image.
+    [
+      "docker run -i --rm --add-host host.docker.internal:host-gateway mcp/github",
+      "docker",
+      ["run", "-i", "--rm", "--add-host", "host.docker.internal:host-gateway", "mcp/github"],
+    ],
   ])("reports %s at .mcp.json and the server key's line", (_name, command, args) => {
     const text = mcpJson({ remote: REMOTE, unpinned: server(command, args) });
 
@@ -117,6 +145,43 @@ describe("guard/mcp-server-unpinned", () => {
     ["a binary by path", server("./bin/mcp-server")],
     ["a runner with no package", server("npx", ["-y"])],
     ["docker run with no image", server("docker", ["run", "-i", "--rm"])],
+    // `-p` / `--package` and `--from` / `--spec` after the package are the server's own args.
+    ["npx -y mcp-proxy@2.1.0 -p 8080", server("npx", ["-y", "mcp-proxy@2.1.0", "-p", "8080"])],
+    ["npx mcp-proxy@2.1.0 --package=x", server("npx", ["mcp-proxy@2.1.0", "--package=x"])],
+    ["uvx some-server==0.4.1 --from x", server("uvx", ["some-server==0.4.1", "--from", "x"])],
+    // A runner's option values aren't the package or the image.
+    [
+      "uvx --with httpx mcp-server-fetch==1.0.0",
+      server("uvx", ["--with", "httpx", "mcp-server-fetch==1.0.0"]),
+    ],
+    ["uvx -p 3.12 some-server==0.4.1", server("uvx", ["-p", "3.12", "some-server==0.4.1"])],
+    [
+      "uvx --index-url https://example.com/simple some-server==0.4.1",
+      server("uvx", ["--index-url", "https://example.com/simple", "some-server==0.4.1"]),
+    ],
+    [
+      "uvx -c constraints.txt some-server==0.4.1",
+      server("uvx", ["-c", "constraints.txt", "some-server==0.4.1"]),
+    ],
+    [
+      "pipx run --python python3.12 some-server==0.4.1",
+      server("pipx", ["run", "--python", "python3.12", "some-server==0.4.1"]),
+    ],
+    [
+      "docker run -l a=b -h mcp -m 512m --cap-add NET_ADMIN --pull always mcp/github:1.0",
+      server("docker", [
+        ...["run", "-l", "a=b", "-h", "mcp", "-m", "512m", "--cap-add", "NET_ADMIN"],
+        ...["--pull", "always", "mcp/github:1.0"],
+      ]),
+    ],
+    // A package argument that is a path is a local server, not a package.
+    ["npx ./server", server("npx", ["./server"])],
+    ["npx -y /opt/mcp/server", server("npx", ["-y", "/opt/mcp/server"])],
+    ["npx ~/mcp/server", server("npx", ["~/mcp/server"])],
+    ["npx C:\\mcp\\server", server("npx", ["C:\\mcp\\server"])],
+    ["npx -p ../server some-bin", server("npx", ["-p", "../server", "some-bin"])],
+    ["uvx ./local-server", server("uvx", ["./local-server"])],
+    ["uvx --from ./local-server some-bin", server("uvx", ["--from", "./local-server", "some-bin"])],
   ])("gives nothing for %s", (_name, entry) => {
     expect(observe(".mcp.json", mcpJson({ remote: REMOTE, pinned: entry }))).toEqual([]);
   });

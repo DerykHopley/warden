@@ -1,6 +1,6 @@
 // The Default Pack (GLOSSARY: Pack), as data: the Rules a Guard Scan checks at Quick, each with its Severity, the
 // title a Finding shows, and a one-line fix. The fix goes in the evidence summary, as a new Finding field would change
-// the Finding format. Slice 5b adds the last Rule.
+// the Finding format.
 import type { RuleId, Severity } from "@warden/contracts";
 
 export type PackRule = {

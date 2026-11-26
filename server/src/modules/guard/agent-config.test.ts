@@ -6,6 +6,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { Observation, type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
+import { lineWith } from "../../../test/text-lines.ts";
 import { agentConfigCheck } from "./agent-config.ts";
 import { packRule } from "./default-pack.ts";
 import type { RepoFile } from "./repo-reader.ts";
@@ -36,10 +37,6 @@ const NO_GUARD = "guard/no-runtime-guard";
 const hooks = (event: string, command: string) => ({
   hooks: { [event]: [{ matcher: "*", hooks: [{ type: "command", command }] }] },
 });
-
-/** The line (from 1) of `text` the first `needle` is on. */
-const lineWith = (text: string, needle: string) =>
-  text.split("\n").findIndex((line) => line.includes(needle)) + 1;
 
 /** A repo's whole-repo Observations: each file seen, each path reported unread, then the end pass. */
 function endOf(files: RepoFile[], unread: string[] = []) {
