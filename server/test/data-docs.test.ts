@@ -24,6 +24,16 @@ describe("docs/data.md", () => {
     for (const held of ["name", "Repo URLs", "dependencies"]) expect(products).toContain(held);
   });
 
+  it("has a write-grants row naming its tables, and the keyring row names the write app's services", () => {
+    const grants = row("Cloud SQL: GitHub write grants");
+    expect(grants).toContain("`github_write_grants`");
+    expect(grants).toContain("`github_write_installations`");
+    const keyring = row("The local keyring (development only)");
+    for (const service of ["client-id", "client-secret", "private-key"]) {
+      expect(keyring).toContain(`\`warden-github-write-app-${service}\``);
+    }
+  });
+
   it("says Warden makes no outside call for CVE data", () => {
     expect(leaves).toMatch(/no outside call for CVE data/);
     for (const source of ["NVD", "CISA KEV", "EPSS", "OSV"]) expect(leaves).toContain(source);
