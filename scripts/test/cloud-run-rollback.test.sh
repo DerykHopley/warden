@@ -10,6 +10,8 @@ rollback="$root/scripts/cloud-run-rollback.sh"
 project=test-project
 connection="$project:europe-west1:test-db"
 registry="europe-west1-docker.pkg.dev/$project/warden/warden"
+# The GitHub app's client id (public), as the repository variable WARDEN_GITHUB_APP_CLIENT_ID holds it.
+github_client_id=Iv23liExampleClientId
 service_url=https://warden-123456789012.europe-west1.run.app
 rollback_url=https://rollback---warden-123456789012.europe-west1.run.app
 
@@ -60,6 +62,7 @@ JSON
 # A stub gcloud: records each call, one per line. The service's traffic is all on FAKE_SERVING (or split 50/50 with
 # the placeholder, with FAKE_SPLIT=1), and FAKE_PREVIOUS, when set, is the revision tagged previous. With
 # FAKE_SERVING_LATER set, every describe after the first reports that revision serving: a release moved the traffic.
+# FAKE_SCAN=fail makes updating the Scan Job fail.
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
@@ -81,6 +84,12 @@ case "$*" in
     echo "{\"metadata\":{\"name\":\"warden\"},\"status\":{\"url\":\"https://warden-123456789012.europe-west1.run.app\",\"traffic\":[$traffic]}}"
     ;;
   "run revisions list "*) cat "$dir/revisions.json" ;;
+  "run jobs update warden-scan "*)
+    if [[ ${FAKE_SCAN-} == fail ]]; then
+      echo "ERROR: (gcloud.run.jobs.update) PERMISSION_DENIED" >&2
+      exit 1
+    fi
+    ;;
 esac
 exit 0
 FAKE
@@ -97,13 +106,14 @@ FAKE
 chmod +x "$scratch/gcloud" "$scratch/curl"
 
 # run_rollback <health> <serving revision> [VAR=value...] -- [arguments]: the script with only the stubs, /usr/bin
-# and /bin on PATH, GCP_PROJECT_ID and CLOUD_SQL_CONNECTION plus any variable given (VAR= unsets one), and
-# aaaaaaa-10-1 tagged previous unless FAKE_PREVIOUS says otherwise; no wait between health tries. Its output (stdout
-# and stderr) is in $out, its exit code in $code, the stubs' calls in $calls.
+# and /bin on PATH, GCP_PROJECT_ID, CLOUD_SQL_CONNECTION and WARDEN_GITHUB_APP_CLIENT_ID plus any variable given
+# (VAR= unsets one), and aaaaaaa-10-1 tagged previous unless FAKE_PREVIOUS says otherwise; no wait between health
+# tries. Its output (stdout and stderr) is in $out, its exit code in $code, the stubs' calls in $calls.
 run_rollback() {
   local health=$1 serving=$2
   shift 2
-  local vars=(GCP_PROJECT_ID="$project" CLOUD_SQL_CONNECTION="$connection" FAKE_PREVIOUS=warden-rel-aaaaaaa-10-1)
+  local vars=(GCP_PROJECT_ID="$project" CLOUD_SQL_CONNECTION="$connection"
+    WARDEN_GITHUB_APP_CLIENT_ID="$github_client_id" FAKE_PREVIOUS=warden-rel-aaaaaaa-10-1)
   while [[ $1 != -- ]]; do
     vars+=("$1")
     shift
@@ -179,8 +189,21 @@ WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
   "$(sed 's/:[^:]*$//' <<<"$job_secrets")"
 assert_equal "each of the daily Job's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$job_secrets" || true)"
+# The Scan Job's configuration comes from update_scan_job, which the deploy test checks in full; here, only what a
+# rollback adds: the target's image, when, and the rollback's own WARDEN_GITHUB_APP_CLIENT_ID passed on to it.
+(($(line_no "gcloud run jobs update warden-daily-expiry ") < $(line_no "gcloud run jobs update warden-scan "))) ||
+  fail "the Scan Job moves before the daily Job does"
+(($(line_no "gcloud run jobs update warden-scan ") < $(line_no "curl -sS -o /dev/null -w %{http_code} --max-time 10 $service_url"))) ||
+  fail "the service's health check runs before the Scan Job moves"
+pass "the Scan Job moves after the daily Job, before the service's health check"
+scan=$(call_of "gcloud run jobs update warden-scan ")
+assert_equal "the Scan Job runs aaaaaaa-10-1's image by digest" "$registry@sha256:aaaa" "$(flag image "$scan")"
+assert_line "the Scan Job gets the rollback's GitHub app client id" "GITHUB_APP_CLIENT_ID=$github_client_id" \
+  "$(gcloud_dict "$(flag set-env-vars "$scan")")"
 assert_no_match "no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
 assert_line "it says where traffic went" "warden-rel-aaaaaaa-10-1" "$out"
+assert_line "its last line names the daily Job" "warden-daily-expiry" "$(tail -1 <<<"$out")"
+assert_line "its last line names the Scan Job" "warden-scan" "$(tail -1 <<<"$out")"
 
 # --- A named revision (an incident): the same checks, on that one ---
 run_rollback 200 warden-rel-ccccccc-12-1 -- warden-rel-bbbbbbb-11-1
@@ -191,6 +214,17 @@ assert_equal "a rollback to bbbbbbb-11-1 by name: all traffic goes to it" "warde
   "$(flag to-revisions "$(call_of "gcloud run services update-traffic warden --to-revisions=")")"
 assert_equal "a rollback to bbbbbbb-11-1 by name: the daily Job runs its digest" "$registry@sha256:bbbb" \
   "$(flag image "$(call_of "gcloud run jobs update warden-daily-expiry ")")"
+assert_equal "a rollback to bbbbbbb-11-1 by name: the Scan Job runs its digest" "$registry@sha256:bbbb" \
+  "$(flag image "$(call_of "gcloud run jobs update warden-scan ")")"
+
+# --- The Scan Job's update fails: traffic and the daily Job have moved, and the run names warden-scan ---
+run_rollback 200 warden-rel-ccccccc-12-1 FAKE_SCAN=fail --
+assert_equal "with the Scan Job's update failing: exit 1" 1 "$code"
+assert_line "with the Scan Job's update failing: names the Job" "warden-scan" "$out"
+assert_line "with the Scan Job's update failing: traffic had moved" "--to-revisions=warden-rel-aaaaaaa-10-1=100" \
+  "$calls"
+assert_line "with the Scan Job's update failing: the daily Job had moved" "gcloud run jobs update warden-daily-expiry " \
+  "$calls"
 
 # --- The target fails its health check on the rollback tag: traffic stays ---
 run_rollback 200 warden-rel-ccccccc-12-1 FAKE_TAG_HEALTH=503 -- warden-rel-bbbbbbb-11-1
@@ -198,6 +232,7 @@ assert_equal "with the rollback tag answering 503: exit 1" 1 "$code"
 assert_line "with the rollback tag answering 503: says traffic is unchanged" "traffic is unchanged" "$out"
 assert_no_match "with the rollback tag answering 503: no traffic moves" '--to-revisions' "$calls"
 assert_no_match "with the rollback tag answering 503: the daily Job isn't touched" 'warden-daily-expiry' "$calls"
+assert_no_match "with the rollback tag answering 503: the Scan Job isn't touched" 'warden-scan' "$calls"
 
 # --- A release moves the traffic while the rollback checks its target: the rollback stops before moving it ---
 run_rollback 200 warden-rel-ccccccc-12-1 FAKE_SERVING_LATER=warden-rel-ddddddd-13-1 --
@@ -268,5 +303,6 @@ bad_input "a revision name with a space" "usage:" -- "warden rel"
 bad_input "a ROLLBACK_FROM that isn't a revision name" "usage:" "ROLLBACK_FROM=--to-latest" --
 bad_input "an unset GCP_PROJECT_ID" "GCP_PROJECT_ID" GCP_PROJECT_ID= --
 bad_input "an unset CLOUD_SQL_CONNECTION" "CLOUD_SQL_CONNECTION" CLOUD_SQL_CONNECTION= --
+bad_input "an unset WARDEN_GITHUB_APP_CLIENT_ID" "WARDEN_GITHUB_APP_CLIENT_ID" WARDEN_GITHUB_APP_CLIENT_ID= --
 
 echo "cloud-run-rollback: all passed"

@@ -194,7 +194,7 @@ describe("the detail card's Finding", () => {
   it("shows a secret's type, path, line and mask, and no other evidence field", () => {
     const { card } = show(
       finding(ID, {
-        rule_id: "guard/committed-secret",
+        rule_id: "guard/secret-in-repo",
         evidence: {
           summary: "A Stripe key sits in .env",
           secret: { type: "Stripe secret key", path: ".env", line: 3, mask: "sk_live_****9f2c" },

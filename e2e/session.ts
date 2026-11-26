@@ -75,6 +75,15 @@ export const CEDAR = {
 export type Team = typeof ACME;
 
 /**
+ * Cedar's two Repo Assets, linked by the global setup with a Guard Scan of both queued 2 hours ago that never started:
+ * the server's first read of them ends it as failed (story 2).
+ */
+export const CEDAR_REPOS = [
+  "https://github.com/cedar/chat-assistant",
+  "https://github.com/cedar/chat-infra",
+];
+
+/**
  * Cedar's Product, with two Repo URLs and two dependencies: one with a version and internet-facing, one without either.
  * Each spec that needs it creates it (`ensureProduct`), so none depends on another's running first.
  */

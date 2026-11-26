@@ -350,6 +350,17 @@ describe("PUT /api/team/members/:userId/role", () => {
     expect(calls).toEqual([]);
   });
 
+  it("answers 404 for a user id holding a NUL, as for one not in the Team, and never calls Clerk (#129)", async () => {
+    const { team, put, calls } = await teamWith([["user_admin", "admin"]]);
+
+    expect(await put("user_admin", "a%00b", { role: "admin" })).toEqual({
+      status: 404,
+      body: { error: "No such member" },
+    });
+    expect((await stored(team)).history).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it.each([
     ["a role outside the three", { role: "owner" }],
     ["a body that isn't JSON", "role=admin"],

@@ -1,0 +1,48 @@
+// A Team's hook settings (Guard spec, story 7), as the API answers them to the Team's Admin: its hook token, its
+// Privacy tier and the managed-settings block. The token is answered once, when issued; reading the settings answers
+// only when it was issued. The Team comes from the session, never the request, and isn't answered.
+import { z } from "zod";
+import { DateTime } from "./finding.ts";
+
+/**
+ * How much of an Agent session's content the hook sends (GLOSSARY "Privacy tier"), lowest first. A Team that never
+ * set one is at `details`.
+ */
+export const PrivacyTier = z.enum(["metadata", "details", "content"]);
+export type PrivacyTier = z.infer<typeof PrivacyTier>;
+
+/** `PUT /api/hook/privacy-tier`'s body: the Team's new Privacy tier. The answer is `HookSettingsBody`. */
+export const PrivacyTierBody = z.strictObject({ privacy_tier: PrivacyTier });
+export type PrivacyTierBody = z.infer<typeof PrivacyTierBody>;
+
+/**
+ * The managed-settings block an Admin pastes into Claude Code to turn the hook on. Its shape is Claude Code's (its
+ * hooks reference), which the server's unit test checks, so here it is any JSON object.
+ */
+const ManagedSettings = z.record(z.string(), z.unknown());
+
+/**
+ * `GET /api/hook`: the Team's current hook token's issue time (`token: null` before the first), when the token
+ * before it stops working (null when none still works), the Team's Privacy tier, and the managed-settings block at
+ * that tier, with a placeholder in the token's place. Never a token or its hash.
+ */
+export const HookSettingsBody = z.strictObject({
+  token: z.strictObject({ issued_at: DateTime }).nullable(),
+  previous_valid_until: DateTime.nullable(),
+  privacy_tier: PrivacyTier,
+  managed_settings: ManagedSettings,
+});
+export type HookSettingsBody = z.infer<typeof HookSettingsBody>;
+
+/**
+ * `POST /api/hook/token` (201): the Team's new hook token, shown this once, when it was issued, when the token it
+ * replaced stops working, 24 h after (null for the Team's first), and the managed-settings block with the new token
+ * in it, at the Team's Privacy tier.
+ */
+export const HookTokenBody = z.strictObject({
+  token: z.string().min(1),
+  issued_at: DateTime,
+  previous_valid_until: DateTime.nullable(),
+  managed_settings: ManagedSettings,
+});
+export type HookTokenBody = z.infer<typeof HookTokenBody>;

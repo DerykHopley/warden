@@ -44,6 +44,7 @@ import {
   type MoveRule,
   type ReconcileOutcome,
   type TransactionLimits,
+  type UnreadPath,
 } from "./reconcile.ts";
 import { fromRow, isoDateTime, loadFinding } from "./rows.ts";
 
@@ -93,13 +94,25 @@ export type DecisionMethod<C extends DecisionCall> = (
   input: DecisionInput<C> & { actor: Actor },
 ) => Promise<Finding>;
 
-/** What a module's scan callback gets: `saw` reports one Observation. */
+/** What a module's scan callback gets: `saw` reports one Observation, `unread` one file it couldn't read. */
 export interface ScanRecorder {
   /** Parses the Observation, and throws at once for one outside the Scan's Assets and Rules, or one seen twice. */
   saw(observation: Observation): void;
+  /**
+   * A file on `asset` whose text the module couldn't read (too large, binary, not UTF-8): the Scan neither sees nor
+   * marks Fixed the Findings located in it. Throws at once for an Asset outside the Scan.
+   */
+  unread(asset: Asset, path: string): void;
 }
 
 export interface ScanCoverage {
+  /**
+   * The Scan's id and when it started: the queued Scan's, so a retried Scan Job execution reconciles under the same
+   * pair and changes nothing (ADR 0009); reconcile refuses an id it already applied with another start. A fresh id
+   * and the time `scan` is called when not given.
+   */
+  id?: string;
+  started_at?: string;
   team: string;
   module: Module;
   /** The Assets the Scan covers. */
@@ -205,22 +218,36 @@ export interface Findings {
 }
 
 /**
- * The Scan `work` describes: a new id, started now, holding each Observation the callback `saw`. Not parsed yet: the
- * caller parses it before it writes.
+ * The Scan `work` describes, under the coverage's id and start (a new id, started now, when not given), holding each
+ * Observation the callback `saw`, and the files it couldn't read. Not parsed yet: the caller parses it before it
+ * writes.
  */
 async function recordScan(
-  { team, module, assets, rules }: ScanCoverage,
+  {
+    id = randomUUID(),
+    started_at = new Date().toISOString(),
+    team,
+    module,
+    assets,
+    rules,
+  }: ScanCoverage,
   work: (scan: ScanRecorder) => Promise<void>,
-): Promise<Scan> {
-  const id = randomUUID();
-  const started_at = new Date().toISOString();
+): Promise<{ scan: Scan; unread: UnreadPath[] }> {
   const covered = new Set(assets.map(assetKey));
   const coveredRules = new Set<string>(rules);
   const observations: Observation[] = [];
   const reported = new Map<string, number>();
+  const unread: UnreadPath[] = [];
   let open = true;
 
   const recorder: ScanRecorder = {
+    unread(asset, path) {
+      if (!open) throw new Error("unread: this Scan has ended");
+      if (!covered.has(assetKey(asset))) {
+        throw new Error(`unread: the Asset ${assetKey(asset)} isn't one this Scan covers`);
+      }
+      unread.push({ asset, path });
+    },
     saw(value) {
       if (!open) throw new Error("saw: this Scan has ended");
       const observation = Observation.parse(value);
@@ -248,7 +275,7 @@ async function recordScan(
     // Returned or thrown, the Scan has ended: a recorder kept past it refuses what it's handed.
     open = false;
   }
-  return { id, team, module, started_at, assets, rules, observations };
+  return { scan: { id, team, module, started_at, assets, rules, observations }, unread };
 }
 
 export function createFindings({
@@ -259,17 +286,17 @@ export function createFindings({
   /** Each module's "may have moved" rule. A module without one never gets an Unconfirmed fix. */
   moveRules: Partial<Record<Module, MoveRule>>;
 }): Findings {
-  /** One parsed Scan, in the caller's Team transaction. */
-  const applyScan = (tx: Transaction<Database>, scan: Scan) =>
+  /** One parsed Scan, in the caller's Team transaction, with the files it couldn't read. */
+  const applyScan = (tx: Transaction<Database>, scan: Scan, unread: readonly UnreadPath[] = []) =>
     applyRun(
       tx,
-      { ...scan, kind: "scan", covered: { assets: scan.assets, rules: scan.rules } },
+      { ...scan, kind: "scan", covered: { assets: scan.assets, rules: scan.rules }, unread },
       moveRules[scan.module],
     );
 
-  const reconcile = async (value: Scan) => {
+  const reconcile = async (value: Scan, unread: readonly UnreadPath[] = []) => {
     const scan = Scan.parse(value);
-    return withTeam(scan.team, (tx) => applyScan(tx, scan));
+    return withTeam(scan.team, (tx) => applyScan(tx, scan, unread));
   };
 
   /**
@@ -285,7 +312,7 @@ export function createFindings({
     };
 
   return {
-    reconcile,
+    reconcile: (scan) => reconcile(scan),
 
     accept: decision("accept"),
     markFalsePositive: decision("markFalsePositive"),
@@ -326,16 +353,16 @@ export function createFindings({
     },
 
     async scan(coverage, work) {
-      const scan = await recordScan(coverage, work);
-      return reconcile(scan);
+      const { scan, unread } = await recordScan(coverage, work);
+      return reconcile(scan, unread);
     },
 
     async scanLocked(coverage, work, limits) {
       return withTeam(coverage.team, async (tx) => {
         if (limits !== undefined) await setTransactionLimits(tx, limits);
         await lockTeamFindings(tx, coverage.team);
-        const scan = Scan.parse(await recordScan(coverage, (recorder) => work(recorder, tx)));
-        return applyScan(tx, scan);
+        const { scan, unread } = await recordScan(coverage, (recorder) => work(recorder, tx));
+        return applyScan(tx, Scan.parse(scan), unread);
       });
     },
 

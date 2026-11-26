@@ -10,6 +10,7 @@ import {
   createFindings,
   FindingNotFound,
   type Findings,
+  type ScanCoverage,
   type ScanRecorder,
 } from "../src/findings/index.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
@@ -130,6 +131,27 @@ describe("findings.scan: the call a module writes", () => {
     });
   });
 
+  // ADR 0009: a retried Scan Job execution reconciles under the queued Scan's id and first start, so it changes nothing.
+  it("reconciles under the coverage's id and start when given them, and a fresh id otherwise", async () => {
+    const team = await newTeam();
+    const id = `scan-${randomUUID()}`;
+    const started_at = "2026-11-25T09:00:00.000Z";
+    const coverage: ScanCoverage = { team, module: "guard", assets: [app], rules: [ENV] };
+    const saw = async (scan: ScanRecorder) => scan.saw(observation());
+
+    const first = await findings.scan({ ...coverage, id, started_at }, saw);
+    const again = await findings.scan({ ...coverage, id, started_at }, saw);
+    await findings.scan(coverage, saw);
+
+    const scans = (await stored(team)).scans;
+    expect(scans).toHaveLength(2);
+    expect(scans.find((scan) => scan.id === id)?.started_at).toEqual(new Date(started_at));
+    expect(scans.find((scan) => scan.id !== id)?.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(first.opened).toHaveLength(1);
+    expect(again).toMatchObject({ alreadyApplied: true, opened: [] });
+    expect((await findings.list(team))[0]!.first_seen_scan).toBe(id);
+  });
+
   it("throws at once on an Asset or a Rule the Scan doesn't cover", async () => {
     const team = await newTeam();
     const thrown: unknown[] = [];
@@ -207,6 +229,40 @@ describe("findings.scan: the call a module writes", () => {
     expect(await stored(team)).toEqual(before);
     expect(await findings.list(team)).toEqual(listBefore);
     expect(await findings.history(team, listBefore[0]!.id)).toEqual(historyBefore);
+  });
+
+  it("leaves the Findings in a file the module couldn't read as they are, and marks the rest it didn't see Fixed", async () => {
+    const team = await newTeam();
+    const elsewhere = { kind: "file", path: "src/other.json", line: 1 } as const;
+    await findings.reconcile(
+      scanOf(team, { observations: [observation(), observation({ location: elsewhere })] }),
+    );
+    const before = await findings.list(team);
+    let outside: unknown;
+
+    const outcome = await findings.scan(
+      { team, module: "guard", assets: [app], rules: [ENV] },
+      async (scan) => {
+        scan.unread(app, ".claude/settings.json");
+        try {
+          scan.unread(api, "src/other.json");
+        } catch (error) {
+          outside = error;
+        }
+      },
+    );
+
+    const kept = before.find(
+      (finding) =>
+        finding.location.kind === "file" && finding.location.path === ".claude/settings.json",
+    )!;
+    const gone = before.find((finding) => finding.id !== kept.id)!;
+    expect(outcome).toMatchObject({ seen: [], fixed: [gone.id] });
+    expect(await findings.list(team)).toEqual(
+      expect.arrayContaining([kept, expect.objectContaining({ id: gone.id, status: "fixed" })]),
+    );
+    expect(await findings.history(team, kept.id)).toHaveLength(1);
+    expect(String(outside)).toMatch(/Asset .*api.* isn't one this Scan covers/);
   });
 
   it("refuses a saw after the callback rejected", async () => {

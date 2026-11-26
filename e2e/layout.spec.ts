@@ -4,11 +4,13 @@
 // a row; from 1100px five sit in a row; content stays within about 1480px, centred.
 //
 // Every page, opened directly at each width and scheme, scrolls nothing sideways: Products in Cedar (its Products
-// stay out of Acme's Findings counts), the rest as Grace in Acme.
+// stay out of Acme's Findings counts), Setup as Ada, the rest as Grace in Acme.
 import type { Locator, Page } from "@playwright/test";
+import { expectRings, expectTargets } from "./a11y.ts";
 import { cedarCveFinding, openCveCard } from "./cedar-cve.ts";
 import {
   ACME,
+  ADA,
   CEDAR,
   CHAT_ASSISTANT,
   ensureProduct,
@@ -368,7 +370,7 @@ test("at 390px, a title holding a 60-character word with no break in it still do
   await expectNoSidewaysScroll(page);
 });
 
-// The header's width depends on the fonts the machine has: the four page links fitted with this machine's Noto Sans and
+// The header's width depends on the fonts the machine has: four page links fitted with this machine's Noto Sans and
 // scrolled 9px sideways with the CI runner's DejaVu Sans (#141). Wider letters stand in for a wider font, so this test
 // fails on any machine while the header can't wrap.
 test("at 390px with the header's text a tenth of an em wider per letter, the header wraps instead of scrolling sideways, and each page link stays 44 by 44px", async ({
@@ -378,7 +380,7 @@ test("at 390px with the header's text a tenth of an em wider per letter, the hea
   await page.addStyleTag({ content: ".app-header { letter-spacing: 0.1em; }" });
   const clientWidth = await expectNoSidewaysScroll(page);
   const links = page.getByRole("navigation", { name: "Pages" }).getByRole("link");
-  await expect(links).toHaveCount(4);
+  await expect(links).toHaveCount(5);
   for (const box of await links.evaluateAll((all) => all.map((a) => a.getBoundingClientRect()))) {
     expect(box.width).toBeGreaterThanOrEqual(44);
     expect(box.height).toBeGreaterThanOrEqual(44);
@@ -418,3 +420,98 @@ test("at 1600px: five cards sit in one row, and the content stays within 1480px,
   const right = 1600 - (main!.x + main!.width);
   expect(Math.abs(main!.x - right)).toBeLessThanOrEqual(1);
 });
+
+// Setup and its two GitHub pages, as an Admin sees them: the App's settings, the Team's repos with their last Scans
+// (one ref long enough to wrap) and a refused Scan now are faked in the browser, and the callback page, opened with no
+// sign-in kept, shows its refusal.
+const SETUP_PAGES: { path: string; ready: (page: Page) => Locator }[] = [
+  { path: "/setup", ready: (page) => page.getByRole("link", { name: "Install the GitHub app" }) },
+  {
+    path: "/setup/github?installation_id=42&setup_action=install",
+    ready: (page) => page.getByRole("button", { name: "Sign in with GitHub" }),
+  },
+  {
+    path: "/setup/github/callback?code=the-code&state=the-state",
+    ready: (page) => page.getByRole("link", { name: "Back to Setup" }),
+  },
+];
+
+for (const { path, ready } of SETUP_PAGES) {
+  for (const width of WIDTHS) {
+    test(
+      `${path} at ${width}px: nothing scrolls sideways, and its links and buttons are 44px targets with a focus ring`,
+      SIGNS_IN_ITSELF,
+      async ({ page, signIn }) => {
+        await signIn(ADA);
+        await page.route("**/api/github/app", (route) =>
+          route.fulfill({ json: { slug: "warden-reader", client_id: "Iv23li-e2e-client" } }),
+        );
+        // Until Scan now is clicked, the long ref's last Scan failed and the other was never scanned; after it, the
+        // long ref's is running.
+        let started = false;
+        await page.route("**/api/repos", (route) =>
+          route.fulfill({
+            json: {
+              repos: [
+                listedRepo(`acme/${"long-repo-name".repeat(6)}`, started ? "running" : "failed"),
+                listedRepo("acme/web", null),
+              ],
+            },
+          }),
+        );
+        await page.route("**/api/scans", (route) => {
+          started = true;
+          return route.fulfill({ status: 502, json: { error: "The Scan couldn't be started" } });
+        });
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(path);
+        await expect(ready(page)).toBeVisible();
+        if (path === "/setup") {
+          await expect(page.locator(".repo-list li")).toHaveCount(2);
+          await expect(page.getByText(/^Failed, /)).toBeVisible();
+          await expect(page.getByText("Never scanned")).toBeVisible();
+        }
+
+        await expectNoSidewaysScroll(page);
+        const targets = await page.locator("main.page").locator("a, button").all();
+        expect(targets.length).toBeGreaterThan(0);
+        await expectTargets(targets);
+        await expectRings(page, targets);
+
+        if (path === "/setup") {
+          // The refusal line, and the button beside "A Scan is under way.", at this width too. Their words and the
+          // button's state are Setup.test.tsx's.
+          const scanNow = page.getByRole("button", { name: "Scan now" });
+          await scanNow.click();
+          await expect(page.getByRole("alert")).toBeVisible();
+          await expect(page.getByText("A Scan is under way.")).toBeVisible();
+          await expectNoSidewaysScroll(page);
+          await expectTargets([scanNow]);
+        }
+      },
+    );
+  }
+}
+
+/** One of `GET /api/repos`'s repos, with its last Scan in `state` (null: never scanned). */
+function listedRepo(name: string, state: "running" | "failed" | null) {
+  const ref = `https://github.com/${name}`;
+  return {
+    asset: { kind: "repo", ref },
+    installation_id: 42,
+    listed_at: "2026-11-25T09:00:00.000Z",
+    last_scan:
+      state === null
+        ? null
+        : {
+            id: "0b6f1e9c-2d1f-4c55-9a3e-7f1d2c3b4a5e",
+            module: "guard",
+            state,
+            assets: [{ kind: "repo", ref }],
+            rules: ["guard/secret-in-repo"],
+            queued_at: "2026-11-25T09:00:00.000Z",
+            started_at: "2026-11-25T09:00:20.000Z",
+            ended_at: state === "failed" ? "2026-11-25T09:14:00.000Z" : null,
+          },
+  };
+}

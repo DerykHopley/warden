@@ -40,9 +40,22 @@ interface RunFields {
   observations: readonly Observation[];
 }
 
-/** A Scan, with what it covered, or a Spot run, which covers nothing and so never marks a Finding Fixed. */
+/** One file on a covered Asset whose text the Scan couldn't read. */
+export interface UnreadPath {
+  asset: Asset;
+  path: string;
+}
+
+/**
+ * A Scan, with what it covered and the files it couldn't read, whose Findings it neither sees nor marks Fixed; or a
+ * Spot run, which covers nothing and so never marks a Finding Fixed.
+ */
 export type Run =
-  | (RunFields & { kind: "scan"; covered: { assets: readonly Asset[]; rules: readonly RuleId[] } })
+  | (RunFields & {
+      kind: "scan";
+      covered: { assets: readonly Asset[]; rules: readonly RuleId[] };
+      unread?: readonly UnreadPath[];
+    })
   | (RunFields & { kind: "spot_run" });
 
 /** Rows per insert or update statement: well under Postgres's 65,535 parameters for every table here. */
@@ -52,6 +65,9 @@ const runName = (run: Run) => `${run.kind === "scan" ? "Scan" : "Spot run"} ${ru
 
 /** One Asset and Rule pair, as one string. */
 const pairKey = (asset: Asset, rule: string) => JSON.stringify([asset.kind, asset.ref, rule]);
+
+/** One file on one Asset, as one string. */
+const unreadKey = (asset: Asset, path: string) => JSON.stringify([asset.kind, asset.ref, path]);
 
 interface Change {
   before: Finding | null;
@@ -231,12 +247,18 @@ export async function applyRun(
 
   if (run.kind === "scan") {
     const covered = new Set(coveredPairs.map(({ asset, rule }) => pairKey(asset, rule)));
+    // What a file the Scan couldn't read holds now is unknown: its Findings stay as they are.
+    const unread = new Set((run.unread ?? []).map(({ asset, path }) => unreadKey(asset, path)));
+    const inUnreadFile = (finding: Finding) =>
+      finding.location.kind === "file" &&
+      unread.has(unreadKey(finding.asset, finding.location.path));
     const unseen = existing.filter(
       (finding) =>
         !seenIds.has(finding.id) &&
         (finding.status === "open" || finding.status === "accepted") &&
         covered.has(pairKey(finding.asset, finding.rule_id)) &&
-        notSuperseded(finding.asset, finding.rule_id),
+        notSuperseded(finding.asset, finding.rule_id) &&
+        !inUnreadFile(finding),
     );
     // A Finding last seen by a run that started after this Scan is newer news than this Scan's not seeing it.
     const seenLater = await runsStartedAfter(

@@ -9,6 +9,7 @@ import {
   ProposeBody,
   ReasonBody,
   RoleChangeBody,
+  StartScanBody,
   type Actor,
   type Finding,
   type FindingsBody,
@@ -19,6 +20,7 @@ import {
   type OverviewBody,
   type Proposal,
   type ProposalsBody,
+  type ScanBody,
   type TeamMember,
   type Role,
 } from "@warden/contracts";
@@ -36,7 +38,17 @@ import {
 } from "./findings/index.ts";
 import { teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
-import type { Members, TeamMemberRow } from "./members.ts";
+import type { Members, RoleChanged, TeamMemberRow } from "./members.ts";
+import { idParam, pathId } from "./path-id.ts";
+import { refusedBody } from "./refused-body.ts";
+import {
+  SCANS_PER_HOUR,
+  startScan,
+  type AssetChecks,
+  type ScanJobStarter,
+  type Scanners,
+  type Scans,
+} from "./scans.ts";
 import { securityHeaders } from "./security-headers.ts";
 import { clientAddress, createSignInLimit } from "./sign-in-limit.ts";
 
@@ -47,6 +59,19 @@ export type AppDeps = {
   members: Members;
   /** The Findings module, with each module's move rule, through withTeam on the server's pool. */
   findings: Findings;
+  /** Queued Scans, through withTeam on the server's pool. */
+  scans: Scans;
+  /** Each module's scanner, as the start-up file wires them: a start names its Rules, and a module without one is 400. */
+  scanners: Scanners;
+  /** Each module's check of a start's Assets, as the start-up file wires them: a start one refuses is 400. */
+  assetChecks: AssetChecks;
+  /** Starts the Scan Job for a queued Scan; without one (none wired here), a start answers 503. */
+  startScanJob?: ScanJobStarter;
+  /**
+   * Each module's own routes (ADR 0005: this file imports no module), as the start-up file wires them: mounted after
+   * the built-in routes, before `mount` and the API's 404.
+   */
+  moduleRoutes: MountRoutes[];
   /** Config's `behindCloudRun`: there the client's address is the last X-Forwarded-For entry; elsewhere the socket's. */
   behindCloudRun: boolean;
   checkHealth: () => Promise<HealthBody>;
@@ -82,13 +107,6 @@ const ROLE_TOO_LOW = "Your Role can't do this";
 
 function memberBody(member: TeamMemberRow): TeamMember {
   return { userId: member.userId, role: member.role, joinedAt: member.joinedAt.toISOString() };
-}
-
-/** A body a schema refused, as one line: each issue's field and message. */
-function refusedBody(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
-    .join("; ");
 }
 
 export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
@@ -220,12 +238,16 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
     const team = c.get("team");
     const userId = c.req.param("userId");
-    const result = await deps.members.changeRole({
-      team,
-      userId,
-      role: parsed.data.role,
-      actorId: c.get("session").userId,
-    });
+    // An id that can be no stored one is no member, before Postgres or Clerk sees it.
+    const result: RoleChanged =
+      pathId(userId) === undefined
+        ? { kind: "no_such_member" }
+        : await deps.members.changeRole({
+            team,
+            userId,
+            role: parsed.data.role,
+            actorId: c.get("session").userId,
+          });
     switch (result.kind) {
       case "changed":
       case "unchanged":
@@ -271,14 +293,17 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
 
   /**
    * One POST route that changes a Finding or a Proposal (story 4): `requireRole(role)`, the body parsed with its
-   * contracts schema (none: no body is read), the Team and the person taken from the session, never the request. Each
-   * refusal answers through findingRefusal; success answers `status` with what `act` returns.
+   * contracts schema (none: no body is read), the path's id read as the path names it (a Finding's or a Proposal's,
+   * `idParam`), the Team and the person taken from the session, never the request. Each refusal answers through
+   * findingRefusal; success answers `status` with what `act` returns.
    */
   function findingsRoute<Body extends object, Answer>(
-    path: string,
+    path: `/api/${"findings" | "proposals"}/:id/${string}`,
     { role, schema, status = 200 }: { role: Role; schema?: z.ZodType<Body>; status?: 200 | 201 },
     act: (team: string, id: string, body: Body, actor: Actor) => Promise<Answer>,
   ) {
+    // The path says whose id it holds, so the 404 for an id that can be none can't disagree with it.
+    const missing = path.startsWith("/api/proposals/") ? ProposalNotFound : FindingNotFound;
     app.post(path, requireRole(role), async (c) => {
       let body = {} as Body;
       if (schema) {
@@ -288,7 +313,7 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
         body = parsed.data;
       }
       try {
-        const answer = await act(c.get("team"), c.req.param("id")!, body, sessionActor(c));
+        const answer = await act(c.get("team"), idParam(c, missing), body, sessionActor(c));
         return c.json(answer, status);
       } catch (error) {
         return findingRefusal(c, error);
@@ -370,13 +395,62 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
   // Any person in the Team reads a Finding's history, oldest first.
   app.get("/api/findings/:id/history", requireRole("member"), async (c) => {
     try {
-      const history = await findings.history(c.get("team"), c.req.param("id"));
+      const history = await findings.history(c.get("team"), idParam(c, FindingNotFound));
       return c.json({ history } satisfies HistoryBody);
     } catch (error) {
       return findingRefusal(c, error);
     }
   });
 
+  // A Lead starts a Scan (story 2, ADR 0009): queued under the session's Team, as the session's person, with the
+  // module's scanner's Rules, then the Scan Job is started with only the Scan's id and Team. A Team's 11th start in an
+  // hour writes nothing and starts nothing.
+  app.post("/api/scans", requireRole("lead"), async (c) => {
+    // A body that isn't JSON parses as undefined, which the schema refuses.
+    const parsed = StartScanBody.safeParse(await c.req.json().catch(() => undefined));
+    if (!parsed.success) return c.json({ error: refusedBody(parsed.error) }, 400);
+    const { module, assets } = parsed.data;
+    const scanner = deps.scanners[module];
+    if (scanner === undefined) {
+      return c.json(
+        { error: `module: ${module} has no scanner here, so it can't be scanned` },
+        400,
+      );
+    }
+    if (deps.startScanJob === undefined) return c.json({ error: "Scans aren't set up here" }, 503);
+    const team = c.get("team");
+    // Only the Team's own Assets, such as Guard's Repo Assets (story 15): another Team's are refused like any other,
+    // in the module's own words.
+    const refused = await deps.assetChecks[module]?.(team, assets);
+    if (refused !== undefined) return c.json({ error: refused }, 400);
+
+    const outcome = await startScan(
+      { scans: deps.scans, startScanJob: deps.startScanJob, logger },
+      team,
+      { module, assets, rules: [...scanner.rules], requestedBy: c.get("session").userId },
+    );
+    switch (outcome.kind) {
+      case "rate_limited":
+        c.header("Retry-After", String(outcome.retryAfterSeconds));
+        return c.json({ error: `A Team starts at most ${SCANS_PER_HOUR} Scans an hour` }, 429);
+      case "start_failed":
+        return c.json({ error: "The Scan couldn't be started" }, 502);
+      case "started":
+      case "start_unknown":
+        // An unknown start leaves the Scan queued: the Lead follows it rather than start another.
+        return c.json(outcome.scan satisfies ScanBody, 202);
+    }
+  });
+
+  // Any person in the Team reads one of its Scans, to follow its state. An id that can be no stored one is no Scan.
+  app.get("/api/scans/:id", requireRole("member"), async (c) => {
+    const id = pathId(c.req.param("id"));
+    const scan = id === undefined ? undefined : await deps.scans.get(c.get("team"), id);
+    if (scan === undefined) return c.json({ error: "No such Scan" }, 404);
+    return c.json(scan satisfies ScanBody);
+  });
+
+  for (const mountModule of deps.moduleRoutes) mountModule(app, requireRole);
   mount?.(app, requireRole);
 
   app.all("/api/*", (c) => c.json({ error: "Not found" }, 404));

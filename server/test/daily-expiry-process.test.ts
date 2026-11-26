@@ -18,7 +18,7 @@ import {
 } from "./databases.ts";
 import { seedPatchFinding, seedProduct } from "./helpers.ts";
 import { closedPort } from "./ports.ts";
-import { logEntries } from "./server-process.ts";
+import { logEntries } from "./helpers.ts";
 
 const TEAMS = ["org_job_a", "org_job_b"];
 const [TEAM_A, TEAM_B] = TEAMS as [string, string];

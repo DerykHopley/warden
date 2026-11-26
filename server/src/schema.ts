@@ -5,6 +5,7 @@
 import type { ColumnType, Generated, JSONColumnType } from "kysely";
 import type {
   Actor,
+  Asset,
   AssetKind,
   Control,
   Evidence,
@@ -14,6 +15,7 @@ import type {
   ProposalDecision,
   ProposalState,
   Role,
+  ScanState,
   Severity,
   Status,
   Usage,
@@ -141,6 +143,46 @@ export interface Database {
      * Proposal at a time (0007_one_pending_proposal). Only that migration sets it; never in an answer.
      */
     duplicate_of: ColumnType<string | null, never, never>;
+  };
+
+  /**
+   * A queued Scan (0010_scan_requests): what a Lead asked to scan and where its Scan Job is. Written only by the Scans
+   * module. Each time is set by the database; a failed Scan stores no message.
+   */
+  scan_requests: {
+    team_id: string;
+    id: string;
+    module: Module;
+    assets: Json<Asset[]>;
+    rules: string[];
+    state: ColumnType<ScanState, ScanState | undefined, ScanState>;
+    requested_by: string;
+    queued_at: ColumnType<Date, Date | undefined, never>;
+    started_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
+    ended_at: ColumnType<Date | null, Date | null | undefined, Date | null>;
+  };
+
+  /**
+   * A GitHub installation a Team linked (0011_repo_assets): one Team per installation id. Written only by the Guard
+   * module's Repo Assets store. Ids are bigint, which pg reads back as a string.
+   */
+  github_installations: {
+    team_id: string;
+    installation_id: ColumnType<string, number, never>;
+    linked_by: string;
+    linked_at: ColumnType<Date, Date | undefined, Date>;
+  };
+
+  /**
+   * A repo an installation lists, as one of the Team's Repo Assets (0011_repo_assets): one row per installation that
+   * lists it, keyed by (team_id, installation_id, ref) since 0012_repo_assets_per_installation.
+   */
+  repo_assets: {
+    team_id: string;
+    ref: string;
+    github_id: ColumnType<string, number, number>;
+    installation_id: ColumnType<string, number, number>;
+    listed_at: ColumnType<Date, Date | undefined, Date>;
   };
 
   /** What a Team ships (0008_products): written and read only by the Patch module. A name is unique in a Team, any case. */

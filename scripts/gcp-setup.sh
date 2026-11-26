@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # Sets up Warden's Google Cloud project, once: the APIs, the Docker repositories, the database's backups and network,
 # log retention and Secret Manager's audit logs, one password secret per database role, the database roles
-# themselves, two sets of service accounts (live, with the daily Job's, and owner previews), GitHub's deploy
-# identities, the two public services, the preview migration job, and the daily expiry Job with the Cloud Scheduler
-# job that starts it. Safe to run again: it creates only what's missing, and sets each setting to the value below
-# whatever it was. README.md's "Setting up Google Cloud" says what it makes, and why.
+# themselves, two sets of service accounts (live, with the daily Job's and the Scan Job's, and owner previews),
+# GitHub's deploy identities, the two public services, the preview migration job, the daily expiry Job with the Cloud
+# Scheduler job that starts it, and the Scan Jobs (warden-scan, and warden-scan-preview for owner previews), which the
+# service starts for a Lead's Scan. Safe to run again: it creates only what's missing, and sets each setting to the
+# value below whatever it was. README.md's "Setting up Google Cloud" says what it makes, and why.
 #
 # Usage: [DRY_RUN=1] scripts/gcp-setup.sh <project-id> <instance>
 #        DRY_RUN=1 prints each command instead of running it, needs no credentials, and assumes nothing exists yet.
@@ -29,6 +30,10 @@ readonly PREVIEW_JOB=warden-migrate-preview
 # The daily expiry Job and the Cloud Scheduler job that starts it share this name (ADR 0009). After the 03:00 backup.
 readonly DAILY_JOB=warden-daily-expiry
 readonly DAILY_SCHEDULE="0 4 * * *"
+# The Scan Job (ADR 0009): the service starts one execution per Scan, with the Scan's id and Team as its override.
+readonly SCAN_JOB=warden-scan
+# An owner preview's Scan Job (#275): the same, on the preview database, as warden-preview-scan.
+readonly PREVIEW_SCAN_JOB=warden-scan-preview
 readonly SERVICE_IMAGE=us-docker.pkg.dev/cloudrun/container/hello
 readonly JOB_IMAGE=us-docker.pkg.dev/cloudrun/container/job:latest
 readonly POOL=github
@@ -339,7 +344,9 @@ preflight() {
   # What the owner makes by hand, checked before any change.
   exists gcloud sql instances describe "$instance" --project="$project" ||
     missing+=("Cloud SQL instance $instance")
-  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key; do
+  # The GitHub app's two (#132's steps) are made by hand too: the live service reads them.
+  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
+    warden-github-app-client-secret warden-github-app-private-key; do
     exists gcloud secrets describe "$secret" --project="$project" || missing+=("secret $secret")
   done
   if [[ -n ${missing[*]+set} ]]; then
@@ -443,7 +450,7 @@ print_roles() {
 # run_roles <project> <instance> <set> <database> <app secret> <migrate secret> [admin secret]: the roles script for
 # one set, on its own database, as postgres, through the proxy. Each password goes from Secret Manager into this one
 # process's environment only (a prefix assignment, not an argument). Without an admin secret, the admin role gets no
-# password (the preview set: no preview Job runs, so it can't log in). A failure stops the script with the roles
+# password (the preview set: no preview Job runs as it, so it can't log in). A failure stops the script with the roles
 # script's exit code; its own error, which holds no password, is above. When postgres's login is refused (28P01), it
 # also says how to reset that password from warden-db-password.
 run_roles() {
@@ -497,9 +504,11 @@ main() {
   local migrate_sa="warden-migrate@$project.iam.gserviceaccount.com"
   local deploy_sa="warden-deploy@$project.iam.gserviceaccount.com"
   local daily_sa="warden-daily@$project.iam.gserviceaccount.com"
+  local scan_sa="warden-scan@$project.iam.gserviceaccount.com"
   local preview_run_sa="warden-preview-run@$project.iam.gserviceaccount.com"
   local preview_migrate_sa="warden-preview-migrate@$project.iam.gserviceaccount.com"
   local preview_deploy_sa="warden-preview-deploy@$project.iam.gserviceaccount.com"
+  local preview_scan_sa="warden-preview-scan@$project.iam.gserviceaccount.com"
   local scheduler_sa="warden-scheduler@$project.iam.gserviceaccount.com"
 
   step "1. APIs"
@@ -566,7 +575,7 @@ main() {
   done
   note "Each secret's replication: each should be user-managed, in $REGION only"
   for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-    ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
+    warden-github-app-client-secret warden-github-app-private-key ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
     run gcloud secrets describe "$secret" --format='yaml(name,replication)' --project="$project"
   done
 
@@ -592,39 +601,50 @@ main() {
   local account
   # warden-scheduler (Cloud Scheduler) gets no project role and reads no secret: its one binding is on the daily Job,
   # in step 9.
-  for account in warden-run warden-migrate warden-deploy warden-daily warden-preview-run warden-preview-migrate \
-    warden-preview-deploy warden-scheduler; do
+  for account in warden-run warden-migrate warden-deploy warden-daily warden-scan warden-preview-run \
+    warden-preview-migrate warden-preview-deploy warden-preview-scan warden-scheduler; do
     if ! exists gcloud iam service-accounts describe "$account@$project.iam.gserviceaccount.com" \
       --project="$project"; then
       run_quota_retrying gcloud iam service-accounts create "$account" --display-name="Warden: $account" \
         --project="$project"
     fi
   done
-  for account in "$run_sa" "$migrate_sa" "$daily_sa" "$preview_run_sa" "$preview_migrate_sa"; do
+  for account in "$run_sa" "$migrate_sa" "$daily_sa" "$scan_sa" "$preview_run_sa" "$preview_migrate_sa" \
+    "$preview_scan_sa"; do
     run_retrying gcloud projects add-iam-policy-binding "$project" --member="serviceAccount:$account" \
       --role=roles/cloudsql.client --condition=None
   done
   grant_secrets "$project" "$run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-app-password
+  # The GitHub app's client secret and private key: the live service reads both (#151). The Scan Job reads the private
+  # key alone (below). A preview shares the live read-only app (#275), so its accounts get the same two.
+  grant_secrets "$project" "$run_sa" warden-github-app-client-secret warden-github-app-private-key
   grant_secrets "$project" "$migrate_sa" warden-db-app-password warden-db-migrate-password
   # warden-daily (the daily Job, ADR 0009): the only account that reads the admin password, so the server can't.
   grant_secrets "$project" "$daily_sa" warden-db-app-password warden-db-admin-password
+  # warden-scan (the Scan Job, ADR 0009): the app password, and the GitHub app's private key to read a Team's repos
+  # (#188). It works inside one Team and lists none, so it never needs the admin password; and it never gets the
+  # GitHub app's client secret, so it can't sign anyone in to GitHub.
+  grant_secrets "$project" "$scan_sa" warden-db-app-password warden-github-app-private-key
   grant_secrets "$project" "$preview_run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-preview-app-password
+  grant_secrets "$project" "$preview_run_sa" warden-github-app-client-secret warden-github-app-private-key
   grant_secrets "$project" "$preview_migrate_sa" warden-db-preview-migrate-password
+  # warden-preview-scan (the preview Scan Job, #275): warden-scan's twin, with the preview app password.
+  grant_secrets "$project" "$preview_scan_sa" warden-db-preview-app-password warden-github-app-private-key
   # warden-deploy (main): Cloud Run on the project, the warden repository, the live accounts (a release updates the
-  # daily Job, which runs as warden-daily).
+  # daily Job and the Scan Job, which run as warden-daily and warden-scan).
   run_retrying gcloud projects add-iam-policy-binding "$project" --member="serviceAccount:$deploy_sa" \
     --role=roles/run.developer --condition=None
   run_retrying gcloud artifacts repositories add-iam-policy-binding "$REPOSITORY" --location="$REGION" \
     --member="serviceAccount:$deploy_sa" --role=roles/artifactregistry.writer --project="$project"
-  for account in "$run_sa" "$migrate_sa" "$daily_sa"; do
+  for account in "$run_sa" "$migrate_sa" "$daily_sa" "$scan_sa"; do
     run_retrying gcloud iam service-accounts add-iam-policy-binding "$account" \
       --member="serviceAccount:$deploy_sa" --role=roles/iam.serviceAccountUser --project="$project"
   done
   # warden-preview-deploy (preview/*): the warden-preview repository and the preview accounts only; its Cloud Run
-  # roles are on the preview service and job, in step 9, once they exist.
+  # roles are on the preview service and jobs, in step 9, once they exist.
   run_retrying gcloud artifacts repositories add-iam-policy-binding "$PREVIEW_REPOSITORY" --location="$REGION" \
     --member="serviceAccount:$preview_deploy_sa" --role=roles/artifactregistry.writer --project="$project"
-  for account in "$preview_run_sa" "$preview_migrate_sa"; do
+  for account in "$preview_run_sa" "$preview_migrate_sa" "$preview_scan_sa"; do
     run_retrying gcloud iam service-accounts add-iam-policy-binding "$account" \
       --member="serviceAccount:$preview_deploy_sa" --role=roles/iam.serviceAccountUser --project="$project"
   done
@@ -665,9 +685,9 @@ main() {
     --member="principalSet://iam.googleapis.com/$pool_name/attribute.deploy/$GITHUB_REPO_ID:preview" \
     --project="$project"
 
-  step "9. The services, the preview migration job, and the daily Job with its Cloud Scheduler trigger"
+  step "9. The services, the preview migration job, the daily Job with its Cloud Scheduler trigger, and the Scan Jobs"
   # Made here because the deploy accounts can't set IAM policy, so they can't make a service public or let Scheduler
-  # start a Job, and warden-preview-deploy's Cloud Run roles are on the preview service and job themselves. Sign-in is
+  # start a Job, and warden-preview-deploy's Cloud Run roles are on the preview service and jobs themselves. Sign-in is
   # Clerk's job.
   ensure_service "$project" "$SERVICE" "$run_sa" 2
   ensure_service "$project" "$PREVIEW_SERVICE" "$preview_run_sa" 1
@@ -689,6 +709,19 @@ main() {
     --time-zone=Etc/UTC \
     --uri="https://run.googleapis.com/v2/projects/$project/locations/$REGION/jobs/$DAILY_JOB:run" \
     --http-method=POST --oauth-service-account-email="$scheduler_sa" --project="$project"
+  # The Scan Job (ADR 0009): a release gives it Warden's image and settings. The service starts each execution with
+  # the Scan's id and Team as an env override, which run.invoker can't pass: warden-run gets
+  # run.jobsExecutorWithOverrides on this Job only.
+  ensure_job "$project" "$SCAN_JOB" "$scan_sa"
+  run_retrying gcloud run jobs add-iam-policy-binding "$SCAN_JOB" --region="$REGION" \
+    --member="serviceAccount:$run_sa" --role=roles/run.jobsExecutorWithOverrides --project="$project"
+  # The preview Scan Job (#275): a preview deploy gives it the preview's image and settings, so warden-preview-deploy
+  # gets run.developer on it; the preview service starts its executions as warden-preview-run.
+  ensure_job "$project" "$PREVIEW_SCAN_JOB" "$preview_scan_sa"
+  run_retrying gcloud run jobs add-iam-policy-binding "$PREVIEW_SCAN_JOB" --region="$REGION" \
+    --member="serviceAccount:$preview_run_sa" --role=roles/run.jobsExecutorWithOverrides --project="$project"
+  run_retrying gcloud run jobs add-iam-policy-binding "$PREVIEW_SCAN_JOB" --region="$REGION" \
+    --member="serviceAccount:$preview_deploy_sa" --role=roles/run.developer --project="$project"
 
   step "The database's network"
   note "Why the public IP stays: a private IP needs a VPC network, private services access and Direct VPC egress,"
@@ -706,6 +739,10 @@ main() {
   # Public by design; read from the keyring when the line is pasted.
   # shellcheck disable=SC2016 # printed for the owner to run, not expanded here
   printf '%s\n' 'gh variable set VITE_CLERK_PUBLISHABLE_KEY --body "$(secret-tool lookup service warden-clerk-publishable)" --repo '"$GITHUB_REPO"
+  # The GitHub app's client id: public too, and from the keyring the same way. GitHub refuses a variable name that
+  # starts with GITHUB_, so a release reads it as WARDEN_GITHUB_APP_CLIENT_ID.
+  # shellcheck disable=SC2016 # printed for the owner to run, not expanded here
+  printf '%s\n' 'gh variable set WARDEN_GITHUB_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-app-client-id)" --repo '"$GITHUB_REPO"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

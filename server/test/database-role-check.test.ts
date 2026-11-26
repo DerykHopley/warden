@@ -8,9 +8,9 @@ import type pg from "pg";
 import { checkDatabaseRole, createPool, guardDatabaseRole } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
 import { createTestDatabase, testName } from "./databases.ts";
-import { testPublishableKey } from "./helpers.ts";
+import { logEntries, testPublishableKey } from "./helpers.ts";
 import { closedPort, gatedProxy } from "./ports.ts";
-import { logEntries, pgConnection, startServer, waitForListening } from "./server-process.ts";
+import { pgConnection, startServer, waitForListening } from "./server-process.ts";
 
 const database = inject("testDatabase");
 const silent = createLogger(() => {});

@@ -4,13 +4,19 @@
 // no snapshot use a database of their own. Some run the script as its own process.
 import { randomUUID } from "node:crypto";
 import type { Finding, Product } from "@warden/contracts";
-import { DEMO_OBSERVATIONS, DEMO_PRODUCT, demoRuns } from "@warden/contracts/demo";
+import {
+  DEMO_OBSERVATIONS,
+  DEMO_OUTCOME,
+  DEMO_PRODUCT,
+  demoRuns,
+  type DemoKey,
+} from "@warden/contracts/demo";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { runDailyExpiry } from "../src/daily-expiry.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createProducts, type Products } from "../src/modules/patch/products.ts";
-import { onProduct, seedDemo, seedRefusal } from "../src/seed.ts";
+import { demoFindingsIn, onProduct, seedDemo, seedRefusal } from "../src/seed.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
@@ -57,6 +63,35 @@ async function stateOf(team: string) {
     scans: await withTeam(team, (tx) => tx.selectFrom("scans").selectAll().orderBy("id").execute()),
   };
 }
+
+/** The Team's demo Finding `name`, found by today's demo data, as the seed finds it. */
+async function demoFinding(team: string, name: DemoKey): Promise<Finding> {
+  const finding = demoFindingsIn(await findings.list(team))[name];
+  if (finding === undefined) throw new Error(`no ${name} demo Finding`);
+  return finding;
+}
+
+/** Gives the Team's secret Finding the Rule id and fingerprint a seed before 7cfe35b wrote. */
+async function asSeededBeforeRename(team: string) {
+  const { id } = await demoFinding(team, "secret");
+  await withTeam(team, (tx) =>
+    tx
+      .updateTable("findings")
+      .set({
+        rule_id: "guard/committed-secret",
+        fingerprint: "guard/committed-secret|file:config/payments.ts",
+      })
+      .where("id", "=", id)
+      .execute(),
+  );
+  return id;
+}
+
+/** Each of `list`, with its history: what a rerun must leave as it was. */
+const withHistories = (team: string, list: readonly Finding[]) =>
+  Promise.all(list.map(async (f) => ({ finding: f, history: await findings.history(team, f.id) })));
+
+const lead = { kind: "person", id: "user_admin" } as const;
 
 /** Expects the Team's Products to be the demo Product alone, and returns it. */
 async function expectOneDemoProduct(team: string): Promise<Product> {
@@ -157,6 +192,12 @@ describe("seedDemo", () => {
       "repo",
     ]);
     expect(list.filter((f) => f.unconfirmed_fix !== null)).toHaveLength(1);
+    // The committed secret names the Default Pack's Rule, which both seeded Guard Scans cover, so it stays Open.
+    expect(open.filter((f) => f.rule_id === "guard/secret-in-repo")).toHaveLength(1);
+    const atSecret = list.filter(
+      (f) => f.location.kind === "file" && f.location.path === "config/payments.ts",
+    );
+    expect(atSecret.map((f) => f.rule_id)).toEqual(["guard/secret-in-repo"]);
   });
 
   it("then creates the demo Product and runs its Patch Scan, opening CVE Findings on it from the snapshot", async () => {
@@ -259,17 +300,16 @@ describe("seedDemo", () => {
     const team = await teamWith([["user_admin", "admin"]]);
     await seedDemo({ pool, team, now: NOW });
     const { id } = await expectOneDemoProduct(team);
-    const actor = { kind: "person", id: "user_admin" } as const;
     const cves = (await findings.list(team)).filter((f) => onProduct(f, id));
     for (const [i, finding] of cves.entries()) {
       if (i % 2 === 0) {
         await findings.accept(team, finding.id, {
-          actor,
+          actor: lead,
           reason: "Not reachable here",
           until: "2027-01-01T00:00:00Z",
         });
       } else {
-        await findings.markFalsePositive(team, finding.id, { actor, reason: "Not ours" });
+        await findings.markFalsePositive(team, finding.id, { actor: lead, reason: "Not ours" });
       }
     }
     const before = await stateOf(team);
@@ -360,6 +400,151 @@ describe("seedDemo", () => {
     expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("already_seeded");
   });
 
+  it("on a rerun, a Team whose secret Finding has the old Rule id is already seeded, and nothing changes", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW });
+    await asSeededBeforeRename(team);
+    const before = await stateOf(team);
+
+    expect(await seedDemo({ pool, team, now: NOW })).toEqual({
+      kind: "already_seeded",
+      findings: before.findings.length,
+    });
+    expect(await stateOf(team)).toEqual(before);
+  });
+
+  it("on a rerun, adds the demo Product to a Team seeded without it whose secret Finding has the old Rule id", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW, withProduct: false });
+    const secret = await asSeededBeforeRename(team);
+    const [before] = await withHistories(
+      team,
+      (await findings.list(team)).filter((f) => f.id === secret),
+    );
+
+    const result = await seedDemo({ pool, team, now: NOW });
+
+    expect(result).toEqual({ kind: "seeded", findings: (await findings.list(team)).length });
+    const { id } = await expectOneDemoProduct(team);
+    const cves = (await findings.list(team)).filter((f) => onProduct(f, id));
+    expect(cves.filter((f) => f.status === "open").length).toBeGreaterThan(0);
+    const [after] = await withHistories(
+      team,
+      (await findings.list(team)).filter((f) => f.id === secret),
+    );
+    expect(after).toEqual(before);
+    expect(after?.finding.rule_id).toBe("guard/committed-secret");
+  });
+
+  it("on a rerun, adds the demo Product to a Team seeded without it whose Lead has Accepted demo Findings (#209)", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW, withProduct: false });
+    for (const name of ["envLocal", "minimist"] as const) {
+      await findings.accept(team, (await demoFinding(team, name)).id, {
+        actor: lead,
+        reason: "Not reachable here",
+        until: "2027-01-01T00:00:00Z",
+      });
+    }
+    const before = await withHistories(team, await findings.list(team));
+
+    const result = await seedDemo({ pool, team, now: NOW });
+
+    expect(result).toEqual({ kind: "seeded", findings: (await findings.list(team)).length });
+    const { id } = await expectOneDemoProduct(team);
+    expect((await findings.list(team)).some((f) => onProduct(f, id))).toBe(true);
+    expect(await withHistories(team, await demoFindingsOf(team))).toEqual(before);
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("already_seeded");
+  });
+
+  it("on a rerun, a Team whose Lead has decided demo Findings since the seed is already seeded, and nothing changes", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW });
+    await findings.reopen(team, (await demoFinding(team, "axios")).id, {
+      actor: lead,
+      reason: "Upgrading after all",
+    });
+    await findings.markFalsePositive(team, (await demoFinding(team, "disk")).id, {
+      actor: lead,
+      reason: "A test machine",
+    });
+    await findings.confirmFix(team, (await demoFinding(team, "envSettings")).id, {
+      actor: lead,
+      reason: "Really fixed",
+    });
+    const before = await stateOf(team);
+
+    expect(await seedDemo({ pool, team, now: NOW })).toEqual({
+      kind: "already_seeded",
+      findings: before.findings.length,
+    });
+    expect(await stateOf(team)).toEqual(before);
+  });
+
+  it("on a rerun after the daily Job reopened the seed's expired acceptance, the Team is already seeded", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW });
+
+    const code = await runDailyExpiry({
+      withAdmin: (work) => withTeam(team, work),
+      findings,
+      steps: [patchRefresh(withTeam)],
+      logger: createLogger(() => {}),
+      now: new Date(NOW.getTime() + 91 * 24 * 3600_000),
+    });
+
+    expect(code).toBe(0);
+    expect((await demoFinding(team, "axios")).status).toBe("open");
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("already_seeded");
+  });
+
+  it("on a rerun, every demo run applied but not the seed's two decisions doesn't match, writing nothing", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    const { scans, spotRun } = demoRuns(team, NOW);
+    for (const scan of scans) await findings.reconcile(scan);
+    await findings.report(spotRun);
+    const before = await stateOf(team);
+
+    const result = await seedDemo({ pool, team, now: NOW });
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      problems: [
+        "push: the seed's decision (false_positive) is missing",
+        "axios: the seed's decision (accepted) is missing",
+      ],
+    });
+    expect(await stateOf(team)).toEqual(before);
+  });
+
+  it("on a rerun, the seed's two decisions made on other demo Findings don't match, writing nothing", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    const { scans, spotRun } = demoRuns(team, NOW);
+    for (const scan of scans) await findings.reconcile(scan);
+    await findings.report(spotRun);
+    await findings.markFalsePositive(team, (await demoFinding(team, "disk")).id, {
+      actor: lead,
+      reason: DEMO_OUTCOME.push.decidedReason!,
+    });
+    await findings.accept(team, (await demoFinding(team, "minimist")).id, {
+      actor: lead,
+      reason: DEMO_OUTCOME.axios.decidedReason!,
+      until: "2027-01-01T00:00:00Z",
+    });
+    const before = await stateOf(team);
+
+    const result = await seedDemo({ pool, team, now: NOW });
+
+    expect(result).toEqual({
+      kind: "mismatch",
+      problems: [
+        "push: the seed's decision (false_positive) is missing",
+        "axios: the seed's decision (accepted) is missing",
+      ],
+    });
+    expect(await stateOf(team)).toEqual(before);
+  });
+
   it("refuses a Team that has Findings of its own, writing nothing", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
     const { scans } = demoRuns(team, NOW);
@@ -400,7 +585,9 @@ describe("seedDemo", () => {
     const result = await seedDemo({ pool, team, now: NOW });
 
     expect(result.kind).toBe("mismatch");
-    expect(result.kind === "mismatch" && result.problems).toContain("lodash: missing (want open)");
+    expect(result.kind === "mismatch" && result.problems).toContain(
+      "only 1 of the 5 demo runs applied",
+    );
   });
 
   it("refuses a Team Warden doesn't have, and one with no Admin or Lead, writing nothing", async () => {
@@ -431,6 +618,24 @@ describe("pnpm seed", () => {
     expect(output).toContain(`"message":"demo Findings and demo Product seeded"`);
     expect(code).toBe(0);
     expect(await demoFindingsOf(team)).toHaveLength(DEMO_COUNT);
+  });
+
+  it("adds the demo Product to a Team seeded without it, its secret under the old Rule id and envLocal Accepted", async () => {
+    // The preview's case: warden_preview was seeded before 7cfe35b and before the demo Product, then decided.
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW, withProduct: false });
+    await asSeededBeforeRename(team);
+    await findings.accept(team, (await demoFinding(team, "envLocal")).id, {
+      actor: lead,
+      reason: "Not reachable here",
+      until: "2027-01-01T00:00:00Z",
+    });
+
+    const { code, output } = await runInServer(["node", "src/seed.ts", team], env());
+
+    expect(output).toContain(`"message":"demo Findings and demo Product seeded"`);
+    expect(code).toBe(0);
+    await expectOneDemoProduct(team);
   });
 
   it("exits 1 for a Team with Products of its own, saying so", async () => {

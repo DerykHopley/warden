@@ -12,6 +12,8 @@ connection="$project:europe-west1:test-db"
 image="europe-west1-docker.pkg.dev/$project/warden-preview/warden:abc1234def5678"
 release_image="europe-west1-docker.pkg.dev/$project/warden/warden:abc1234def5678"
 publishable=pk_test_Y2ktcGxhY2Vob2xkZXIuY2xlcmsuYWNjb3VudHMuZGV2JA
+# The GitHub app's client id (public), as the repository variable WARDEN_GITHUB_APP_CLIENT_ID holds it.
+github_client_id=Iv23liExampleClientId0
 # The stub reports two URLs for each service <s>: the deterministic one, https://<s>-123456789012.europe-west1.run.app
 # (status.url), and the older hash one, https://<s>-abcdefghij-ew.a.run.app (in the run.googleapis.com/urls
 # annotation).
@@ -69,9 +71,13 @@ rel_of() { printf 'warden-rel-%s-9-1' "${1:0:7}"; }
 # A stub gcloud: records each call, one per line, and answers as FAKE_MIGRATION says (ok, or fail: the job's
 # execution fails the way `gcloud run jobs execute --wait` reports it). FAKE_DESCRIBE=fail makes reading the service
 # fail, as when the deploy account can't; FAKE_DESCRIBE=nourl describes a service with no URL at all (no status.url,
-# no annotation), as before its first revision is ready. FAKE_DAILY=fail makes updating the daily Job fail. The
-# service's traffic is all on FAKE_SERVING (default: a release revision, <service>-rel-0000000-11-1, of a commit
-# that isn't in the checkout), and FAKE_PREVIOUS, when set, is the revision tagged previous.
+# no annotation), as before its first revision is ready; FAKE_DESCRIBE=hashfirst gives the hash URL as status.url and
+# the deterministic one second. FAKE_DAILY=fail makes updating the daily Job fail, and FAKE_SCAN=fail updating the
+# Scan Job; FAKE_SCAN=missing makes describing the Scan Job fail, as before the setup script makes it.
+# FAKE_PREVIEW_SCAN does the same for the preview Scan Job, warden-scan-preview. FAKE_REVISION=fail makes deploying a
+# revision fail. The service's traffic is all on FAKE_SERVING (default: a release revision,
+# <service>-rel-0000000-11-1, of a commit that isn't in the checkout), and FAKE_PREVIOUS, when set, is the revision
+# tagged previous.
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
@@ -91,13 +97,21 @@ case "$*" in
     esac
     new="https://$service-123456789012.europe-west1.run.app"
     old="https://$service-abcdefghij-ew.a.run.app"
+    # The annotation is a JSON list inside a JSON string, so its quotes are escaped.
+    if [[ ${FAKE_DESCRIBE-} == hashfirst ]]; then
+      first=$old
+      urls="[\\\"$old\\\",\\\"$new\\\"]"
+    else
+      first=$new
+      urls="[\\\"$new\\\",\\\"$old\\\"]"
+    fi
     traffic="{\"revisionName\":\"${FAKE_SERVING:-$service-rel-0000000-11-1}\",\"percent\":100}"
     if [[ -n ${FAKE_PREVIOUS-} ]]; then
       traffic+=",{\"revisionName\":\"$FAKE_PREVIOUS\",\"tag\":\"previous\"}"
     fi
     cat <<JSON
-{"metadata":{"name":"$service","annotations":{"run.googleapis.com/urls":"[\"$new\",\"$old\"]"}},
- "status":{"url":"$new","traffic":[$traffic]}}
+{"metadata":{"name":"$service","annotations":{"run.googleapis.com/urls":"$urls"}},
+ "status":{"url":"$first","traffic":[$traffic]}}
 JSON
     ;;
   "run jobs execute "*)
@@ -109,6 +123,38 @@ JSON
   "run jobs update warden-daily-expiry "*)
     if [[ ${FAKE_DAILY-} == fail ]]; then
       echo "ERROR: (gcloud.run.jobs.update) PERMISSION_DENIED" >&2
+      exit 1
+    fi
+    ;;
+  "run jobs update warden-scan "*)
+    if [[ ${FAKE_SCAN-} == fail ]]; then
+      echo "ERROR: (gcloud.run.jobs.update) PERMISSION_DENIED" >&2
+      exit 1
+    fi
+    ;;
+  "run jobs describe warden-scan "*)
+    if [[ ${FAKE_SCAN-} == missing ]]; then
+      echo "ERROR: (gcloud.run.jobs.describe) Cannot find job [warden-scan]." >&2
+      exit 1
+    fi
+    echo '{"metadata":{"name":"warden-scan"}}'
+    ;;
+  "run jobs update warden-scan-preview "*)
+    if [[ ${FAKE_PREVIEW_SCAN-} == fail ]]; then
+      echo "ERROR: (gcloud.run.jobs.update) PERMISSION_DENIED" >&2
+      exit 1
+    fi
+    ;;
+  "run jobs describe warden-scan-preview "*)
+    if [[ ${FAKE_PREVIEW_SCAN-} == missing ]]; then
+      echo "ERROR: (gcloud.run.jobs.describe) Cannot find job [warden-scan-preview]." >&2
+      exit 1
+    fi
+    echo '{"metadata":{"name":"warden-scan-preview"}}'
+    ;;
+  "run deploy "*)
+    if [[ ${FAKE_REVISION-} == fail ]]; then
+      echo "ERROR: (gcloud.run.deploy) Revision failed to become ready." >&2
       exit 1
     fi
     ;;
@@ -131,7 +177,7 @@ run_deploy() {
   local health=$1 migration=$2
   shift 2
   local vars=(GCP_PROJECT_ID="$project" CLOUD_SQL_CONNECTION="$connection" VITE_CLERK_PUBLISHABLE_KEY="$publishable"
-    GITHUB_SHA="$c3" GITHUB_RUN_NUMBER=12 GITHUB_RUN_ATTEMPT=1)
+    WARDEN_GITHUB_APP_CLIENT_ID="$github_client_id" GITHUB_SHA="$c3" GITHUB_RUN_NUMBER=12 GITHUB_RUN_ATTEMPT=1)
   while [[ $1 != -- ]]; do
     vars+=("$1")
     shift
@@ -175,6 +221,34 @@ gcloud_dict() {
     value=${BASH_REMATCH[2]}
   fi
   awk -v RS="$delim" '{ sub(/\n$/, ""); print }' <<<"$value"
+}
+# assert_scan_job <what> <call> <image> <account> <database> <user> <password secret>: that recorded update sets the
+# Scan Job's whole configuration afresh: <image>, `node server/src/scan-job.ts` as <account>, the Cloud SQL instance,
+# one retry, an hour a task, <database> as <user> with the GitHub app's client id, and two pinned secrets: the
+# password and the GitHub app's private key. Never the app's client secret, which signs people in.
+assert_scan_job() {
+  local what=$1 call=$2 image=$3 account=$4 database=$5 user=$6 password=$7 secrets
+  assert_equal "$what runs the image" "$image" "$(flag image "$call")"
+  assert_equal "$what runs as $account" "$account@$project.iam.gserviceaccount.com" \
+    "$(flag service-account "$call")"
+  assert_equal "$what runs node server/src/scan-job.ts" "node server/src/scan-job.ts" \
+    "$(flag command "$call") $(flag args "$call")"
+  assert_equal "$what has the Cloud SQL instance attached" "$connection" "$(flag set-cloudsql-instances "$call")"
+  assert_equal "$what retries once" 1 "$(flag max-retries "$call")"
+  assert_equal "$what's task may take an hour" 3600s "$(flag task-timeout "$call")"
+  assert_equal "$what's plain values: as $user on $database, and the GitHub app's client id" \
+    "PGHOST=/cloudsql/$connection
+PGUSER=$user
+PGDATABASE=$database
+GITHUB_APP_CLIENT_ID=$github_client_id" \
+    "$(gcloud_dict "$(flag set-env-vars "$call")")"
+  secrets=$(gcloud_dict "$(flag set-secrets "$call")")
+  assert_equal "$what's two secrets: $password and the GitHub app's private key" \
+    "PGPASSWORD=$password
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
+    "$(sed 's/:[^:]*$//' <<<"$secrets")"
+  assert_equal "each of $what's secrets is pinned to a version number" "" \
+    "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$secrets" || true)"
 }
 
 # --- A preview named demo, everything answering well ---
@@ -222,18 +296,23 @@ assert_equal "the revision has the Cloud SQL instance attached" "$connection" \
   "$(flag set-cloudsql-instances "$service_deploy")"
 assert_no_match "no call uses an --update- flag" ' --update-' "$calls"
 
-assert_equal "the revision's plain values, CLERK_AUTHORIZED_PARTIES the tag's two URLs comma-separated and intact" \
+assert_equal "the revision's plain values, CLERK_AUTHORIZED_PARTIES the tag's two URLs comma-separated and intact, the preview Scan Job's name and the GitHub app's client id" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_preview_app
 PGDATABASE=warden_preview
 VITE_CLERK_PUBLISHABLE_KEY=$publishable
-CLERK_AUTHORIZED_PARTIES=https://demo---warden-preview-123456789012.europe-west1.run.app,https://demo---warden-preview-abcdefghij-ew.a.run.app" \
+CLERK_AUTHORIZED_PARTIES=https://demo---warden-preview-123456789012.europe-west1.run.app,https://demo---warden-preview-abcdefghij-ew.a.run.app
+WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan-preview
+GITHUB_APP_CLIENT_ID=$github_client_id" \
   "$(gcloud_dict "$(flag set-env-vars "$service_deploy")")"
 service_secrets=$(gcloud_dict "$(flag set-secrets "$service_deploy")")
-assert_equal "the revision's secrets: the preview app password and the two Clerk keys" \
+# A preview shares the live read-only GitHub app (#275): the same two secrets as a release's revision.
+assert_equal "the revision's secrets: the preview app password, the two Clerk keys and the GitHub app's two" \
   "PGPASSWORD=warden-db-preview-app-password
 CLERK_SECRET_KEY=warden-clerk-secret
-CLERK_JWT_KEY=warden-clerk-jwt-key" \
+CLERK_JWT_KEY=warden-clerk-jwt-key
+GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
   "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
 assert_equal "each of the revision's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
@@ -242,11 +321,69 @@ assert_line "the health gate calls /api/health on the tag's URL" \
   "https://demo---warden-preview-123456789012.europe-west1.run.app/api/health" "$(grep '^curl ' <<<"$calls")"
 assert_line "after a 200, the script prints the tagged URL" \
   "https://demo---warden-preview-123456789012.europe-west1.run.app" "$out"
+
+(($(line_no "gcloud run jobs describe warden-scan-preview ") < $(line_no "gcloud run jobs deploy warden-migrate-preview "))) ||
+  fail "the migration runs before the preview Scan Job is found"
+pass "the preview Scan Job is found before anything is migrated or deployed"
+# Before the revision, whose tagged URL starts Scans as soon as it's up (decided on #275).
+(($(line_no "gcloud run jobs execute warden-migrate-preview ") < $(line_no "gcloud run jobs update warden-scan-preview "))) ||
+  fail "the preview Scan Job is updated before the migration ends"
+(($(line_no "gcloud run jobs update warden-scan-preview ") < $(line_no "gcloud run deploy warden-preview "))) ||
+  fail "the revision is deployed before the preview Scan Job is updated"
+pass "the preview Scan Job is updated after the migration, before the revision is deployed"
+assert_scan_job "the preview Scan Job" "$(call_of "gcloud run jobs update warden-scan-preview ")" "$image" \
+  warden-preview-scan warden_preview warden_preview_app warden-db-preview-app-password
+
 assert_no_match "no call moves traffic" 'update-traffic' "$calls"
 assert_no_match "no call names the warden service" '^gcloud .* warden( |$)' "$calls"
-assert_no_match "no call names a live account" '(^|[^-])warden-(run|migrate|deploy|daily|scheduler)@' "$calls"
+assert_no_match "no call names a live account" '(^|[^-])warden-(run|migrate|deploy|daily|scan|scheduler)@' "$calls"
 assert_no_match "no call names the daily Job" 'warden-daily-expiry' "$calls"
+assert_no_match "no call names the live Scan Job" 'warden-scan($|[^-])' "$calls"
+assert_no_match "no call names the live migration job" 'warden-migrate( |$)' "$calls"
 assert_no_match "no call names a live database secret" 'warden-db-(app|migrate|admin)-password' "$calls"
+
+# --- A preview with no preview Scan Job yet (the setup script not rerun): nothing is migrated or deployed ---
+run_deploy 200 ok FAKE_PREVIEW_SCAN=missing -- "$image" preview demo
+assert_equal "preview, with no preview Scan Job: exit 1" 1 "$code"
+assert_line "preview, with no preview Scan Job: names the Job" "warden-scan-preview" "$out"
+assert_line "preview, with no preview Scan Job: says to rerun the setup script" "rerun scripts/gcp-setup.sh" "$out"
+assert_no_match "preview, with no preview Scan Job: nothing is migrated, deployed or updated" \
+  '^gcloud run (jobs (deploy|execute|update)|deploy) ' "$calls"
+
+# --- A preview whose Scan Job update fails: the run names warden-scan-preview, and no revision is deployed ---
+run_deploy 200 ok FAKE_PREVIEW_SCAN=fail -- "$image" preview demo
+assert_equal "preview, with the preview Scan Job's update failing: exit 1" 1 "$code"
+assert_line "preview, with the preview Scan Job's update failing: names the Job" "warden-scan-preview" "$out"
+assert_no_match "preview, with the preview Scan Job's update failing: no revision is deployed" \
+  '^gcloud run deploy ' "$calls"
+
+# --- A service whose status.url is the hash URL: the run still prints the deterministic tagged URL to open ---
+run_deploy 200 ok FAKE_DESCRIBE=hashfirst -- "$image" preview demo
+assert_equal "preview, with the hash URL first: exit 0" 0 "$code"
+assert_line "preview, with the hash URL first: prints the deterministic tagged URL" \
+  "https://demo---warden-preview-123456789012.europe-west1.run.app" "$out"
+
+# --- update_scan_job refuses a mode it doesn't know, or a preview without its names, before any gcloud call ---
+# scan_job_call <arguments...>: update_scan_job, from the library alone, with the stubs first on PATH; its output in
+# $out, its exit code in $code, the stubs' calls in $calls.
+scan_job_call() {
+  : >"$scratch/calls"
+  set +e
+  out=$(env -i HOME="$scratch" PATH="$scratch:/usr/bin:/bin" GCP_PROJECT_ID="$project" \
+    CLOUD_SQL_CONNECTION="$connection" WARDEN_GITHUB_APP_CLIENT_ID="$github_client_id" bash -c \
+    'set -euo pipefail; PROGRAM=test; USAGE=usage; source "$0"; update_scan_job "$@"' \
+    "$root/scripts/lib/cloud-run.sh" "$@" 2>&1)
+  code=$?
+  set -e
+  calls=$(cat "$scratch/calls")
+}
+scan_job_call "$image" staging
+assert_equal "update_scan_job with the mode staging: exit 1" 1 "$code"
+assert_line "update_scan_job with the mode staging: names it" "staging" "$out"
+assert_equal "update_scan_job with the mode staging: no gcloud call" "" "$calls"
+scan_job_call "$image" preview
+assert_equal "update_scan_job preview with no names: exit 1" 1 "$code"
+assert_equal "update_scan_job preview with no names: no gcloud call" "" "$calls"
 
 # --- The longest name a tag may have (20 characters) is taken ---
 run_deploy 200 ok -- "$image" preview a234567890123456789z
@@ -258,6 +395,20 @@ assert_equal "with the tag's URL answering 503: exit 1" 1 "$code"
 assert_line "with the tag's URL answering 503: says the health check failed" "/api/health" "$out"
 (($(grep -c '^curl ' <<<"$calls") > 1)) || fail "the health gate didn't retry"
 pass "the health gate retries before giving up"
+
+# --- A preview that fails after its Scan Job took the image: the run says warden-scan-preview runs it now ---
+# No 200 from the health gate.
+run_deploy 503 ok HEALTH_ATTEMPTS=1 -- "$image" preview demo
+assert_equal "preview, with no 200 from the health gate: exit 1" 1 "$code"
+assert_line "preview, with no 200 from the health gate: names the Scan Job" "warden-scan-preview" "$out"
+assert_line "preview, with no 200 from the health gate: says to push a working preview" "push a working preview" "$out"
+# The revision's deploy fails.
+run_deploy 200 ok FAKE_REVISION=fail -- "$image" preview demo
+assert_equal "preview, with the revision's deploy failing: exit 1" 1 "$code"
+assert_line "preview, with the revision's deploy failing: names the Scan Job" "warden-scan-preview" "$out"
+assert_line "preview, with the revision's deploy failing: says to push a working preview" "push a working preview" \
+  "$out"
+assert_no_match "preview, with the revision's deploy failing: the health gate isn't called" '^curl ' "$calls"
 
 # --- The migration job fails ---
 run_deploy 200 fail -- "$image" preview demo
@@ -326,19 +477,27 @@ assert_equal "release: the revision has the Cloud SQL instance attached" "$conne
   "$(flag set-cloudsql-instances "$service_deploy")"
 assert_no_match "release: neither the job nor the revision deploy uses an --update- flag" ' --update-' \
   "$job_deploy"$'\n'"$service_deploy"
-assert_equal "release: the revision's plain values, CLERK_AUTHORIZED_PARTIES the service's two URLs comma-separated and intact" \
+assert_equal "release: the revision's plain values, CLERK_AUTHORIZED_PARTIES the service's two URLs comma-separated and intact, the Scan Job's name and the GitHub app's client id" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_app
 PGDATABASE=warden
 VITE_CLERK_PUBLISHABLE_KEY=$publishable
-CLERK_AUTHORIZED_PARTIES=https://warden-123456789012.europe-west1.run.app,https://warden-abcdefghij-ew.a.run.app" \
+CLERK_AUTHORIZED_PARTIES=https://warden-123456789012.europe-west1.run.app,https://warden-abcdefghij-ew.a.run.app
+WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan
+GITHUB_APP_CLIENT_ID=$github_client_id" \
   "$(gcloud_dict "$(flag set-env-vars "$service_deploy")")"
 service_secrets=$(gcloud_dict "$(flag set-secrets "$service_deploy")")
-assert_equal "release: the revision's secrets: the app password and the two Clerk keys" \
+assert_equal "release: the revision's secrets: the app password, the two Clerk keys and the GitHub app's two" \
   "PGPASSWORD=warden-db-app-password
 CLERK_SECRET_KEY=warden-clerk-secret
-CLERK_JWT_KEY=warden-clerk-jwt-key" \
+CLERK_JWT_KEY=warden-clerk-jwt-key
+GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
   "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
+assert_equal "release: the GitHub app's secrets are pinned at version 1, as #132 makes them" \
+  "GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret:1
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key:1" \
+  "$(grep '^GITHUB_APP_' <<<"$service_secrets")"
 assert_equal "release: each of the revision's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
 
@@ -379,11 +538,23 @@ WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
 assert_equal "release: each of the daily Job's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$daily_secrets" || true)"
 
+(($(line_no "gcloud run jobs describe warden-scan ") < $(line_no "gcloud run jobs deploy warden-migrate "))) ||
+  fail "release: the migration runs before the Scan Job is found"
+pass "release: the Scan Job is found before anything is migrated or deployed"
+scan=$(call_of "gcloud run jobs update warden-scan ")
+(($(line_no "curl ") < $(line_no "gcloud run jobs update warden-scan "))) ||
+  fail "release: the Scan Job is updated before the health gate answers"
+(($(line_no "gcloud run jobs update warden-scan ") < $(line_no "gcloud run services update-traffic"))) ||
+  fail "release: traffic moves before the Scan Job is updated"
+pass "release: the Scan Job is updated after the health gate, before traffic moves"
+assert_scan_job "release: the Scan Job" "$scan" "$release_image" warden-scan warden warden_app warden-db-app-password
+
 assert_no_match "release: no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
-assert_no_match "release: no call names a preview service, job or account" 'warden-preview|warden-migrate-preview' \
-  "$calls"
+assert_no_match "release: no call names a preview service, job or account" \
+  'warden-preview|warden-(migrate|scan)-preview' "$calls"
 assert_line "release: after the traffic move, the script prints the service's URL" \
   "https://warden-123456789012.europe-west1.run.app" "$out"
+assert_line "release: the last line names the Scan Job" "warden-scan" "$(tail -1 <<<"$out")"
 
 # --- The first release, from Google's placeholder: no release to tag previous ---
 run_deploy 200 ok FAKE_SERVING=warden-00001-xyz -- "$release_image" release
@@ -421,6 +592,13 @@ assert_no_match "c2, with c2 serving: nothing is migrated, deployed or moved" \
   '^gcloud run (jobs (deploy|execute)|deploy|services update-traffic) ' "$calls"
 assert_equal "c2, with c2 serving: the daily Job is set to the release's image" "$release_image" \
   "$(flag image "$(call_of "gcloud run jobs update warden-daily-expiry ")")"
+assert_equal "c2, with c2 serving: the Scan Job is set to the release's image" "$release_image" \
+  "$(flag image "$(call_of "gcloud run jobs update warden-scan ")")"
+assert_line "c2, with c2 serving: says both Jobs were set" "warden-scan" "$out"
+# The same re-run, with the Scan Job's update failing: exit 1, naming it.
+run_deploy 200 ok GITHUB_SHA="$c2" FAKE_SERVING="$(rel_of "$c2")" FAKE_SCAN=fail -- "$release_image" release
+assert_equal "c2, with c2 serving and the Scan Job's update failing: exit 1" 1 "$code"
+assert_line "c2, with c2 serving and the Scan Job's update failing: names the Job" "warden-scan" "$out"
 # A commit that isn't on main stops before anything changes.
 run_deploy 200 ok GITHUB_SHA="$side" FAKE_SERVING="$(rel_of "$c1")" -- "$release_image" release
 assert_equal "a commit not on main: exit 1" 1 "$code"
@@ -432,6 +610,14 @@ run_deploy 503 ok -- "$release_image" release
 assert_equal "release, with the candidate answering 503: exit 1" 1 "$code"
 assert_no_match "release, with the candidate answering 503: no traffic moves" 'update-traffic' "$calls"
 assert_no_match "release, with the candidate answering 503: the daily Job isn't touched" 'warden-daily-expiry' "$calls"
+assert_no_match "release, with the candidate answering 503: the Scan Job isn't touched" 'jobs update warden-scan' "$calls"
+# One try: the run says the revision gets no traffic, and nothing about a Scan Job taking the image.
+run_deploy 503 ok HEALTH_ATTEMPTS=1 -- "$release_image" release
+assert_equal "release, with no 200 from one try: exit 1" 1 "$code"
+assert_line "release, with no 200 from one try: says the revision gets no traffic" "the revision gets no traffic" "$out"
+assert_no_match "release, with no 200 from one try: no Scan Job is updated" '^gcloud run jobs update warden-scan' \
+  "$calls"
+assert_no_match "release, with no 200 from one try: doesn't say to push a preview" 'push a working preview' "$out"
 
 # --- A release whose migration fails ---
 run_deploy 200 fail -- "$release_image" release
@@ -445,6 +631,23 @@ assert_equal "release, with the daily Job's update failing: exit 1" 1 "$code"
 assert_line "release, with the daily Job's update failing: traffic had moved" \
   "gcloud run services update-traffic warden " "$calls"
 assert_line "release, with the daily Job's update failing: names the Job" "warden-daily-expiry" "$out"
+
+# --- A release whose Scan Job update fails: traffic stays, and the run names warden-scan ---
+run_deploy 200 ok FAKE_SCAN=fail -- "$release_image" release
+assert_equal "release, with the Scan Job's update failing: exit 1" 1 "$code"
+assert_line "release, with the Scan Job's update failing: names the Job" "warden-scan" "$out"
+assert_line "release, with the Scan Job's update failing: says traffic didn't move" "no traffic moved" "$out"
+assert_no_match "release, with the Scan Job's update failing: no traffic moves" 'update-traffic' "$calls"
+assert_no_match "release, with the Scan Job's update failing: the daily Job isn't touched" 'warden-daily-expiry' \
+  "$calls"
+
+# --- A release with no Scan Job yet (the setup script not rerun): nothing is migrated, deployed or moved ---
+run_deploy 200 ok FAKE_SCAN=missing -- "$release_image" release
+assert_equal "release, with no Scan Job: exit 1" 1 "$code"
+assert_line "release, with no Scan Job: names the Job" "warden-scan" "$out"
+assert_line "release, with no Scan Job: says what makes it" "scripts/gcp-setup.sh" "$out"
+assert_no_match "release, with no Scan Job: nothing is migrated, deployed, moved or updated" \
+  '^gcloud run (jobs (deploy|execute|update)|deploy|services update-traffic) ' "$calls"
 
 # --- A secret with no pinned version stops the deploy before the gcloud call that would name it ---
 # without_pin <secret>: a copy of the script and its library, whose version table has no row for that secret.
@@ -497,5 +700,10 @@ bad_input "an unset GCP_PROJECT_ID" "GCP_PROJECT_ID" GCP_PROJECT_ID= -- "$image"
 bad_input "an unset VITE_CLERK_PUBLISHABLE_KEY" "VITE_CLERK_PUBLISHABLE_KEY" VITE_CLERK_PUBLISHABLE_KEY= -- \
   "$image" preview demo
 bad_input "an unset GITHUB_SHA" "GITHUB_SHA" GITHUB_SHA= -- "$image" preview demo
+bad_input "a release with an unset WARDEN_GITHUB_APP_CLIENT_ID" "set WARDEN_GITHUB_APP_CLIENT_ID" \
+  WARDEN_GITHUB_APP_CLIENT_ID= -- "$release_image" release
+# A preview's revision and Scan Job read the GitHub app too (#275).
+bad_input "a preview with an unset WARDEN_GITHUB_APP_CLIENT_ID" "set WARDEN_GITHUB_APP_CLIENT_ID" \
+  WARDEN_GITHUB_APP_CLIENT_ID= -- "$image" preview demo
 
 echo "cloud-run-deploy: all passed"

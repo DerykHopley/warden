@@ -18,6 +18,12 @@ export type Routes = {
   findings?: () => Answer;
   proposals?: () => Answer;
   overview?: () => Answer;
+  githubApp?: () => Answer;
+  repos?: () => Answer;
+  /** POST /api/github/installations, with the parsed body. */
+  linkInstallation?: (body: unknown) => Answer;
+  /** POST /api/scans, with the parsed body. */
+  startScan?: (body: unknown) => Answer;
   products?: () => Answer;
   /** GET /api/patch/frameworks. */
   frameworks?: () => Answer;
@@ -53,6 +59,16 @@ export function serve(routes: Routes) {
     if (url === "/api/findings" && method === "GET" && routes.findings) return routes.findings();
     if (url === "/api/proposals" && method === "GET" && routes.proposals) return routes.proposals();
     if (url === "/api/overview" && method === "GET" && routes.overview) return routes.overview();
+    if (url === "/api/github/app" && method === "GET" && routes.githubApp) {
+      return routes.githubApp();
+    }
+    if (url === "/api/repos" && method === "GET" && routes.repos) return routes.repos();
+    if (url === "/api/github/installations" && method === "POST" && routes.linkInstallation) {
+      return routes.linkInstallation(sentBody(init));
+    }
+    if (url === "/api/scans" && method === "POST" && routes.startScan) {
+      return routes.startScan(sentBody(init));
+    }
     if (url === "/api/products" && method === "GET" && routes.products) return routes.products();
     if (url === "/api/patch/frameworks" && method === "GET" && routes.frameworks) {
       return routes.frameworks();

@@ -11,7 +11,8 @@
     "expire": "PGUSER=warden_app node src/daily-expiry.ts",
     "seed": "PGUSER=warden_app node src/seed.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "eval:rules": "vitest run --reporter=default test/rules-eval.test.ts"
   },
   "dependencies": {
     "@clerk/backend": "^3.32.0",

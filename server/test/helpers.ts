@@ -1,5 +1,5 @@
 // Test seams: a key pair standing in for a Clerk instance, and an app wired as production wires it.
-import { randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomInt, randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,12 +7,15 @@ import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
 import type pg from "pg";
 import {
   fingerprint,
+  type Asset,
   type Finding,
   type HealthBody,
+  type Module,
   type ProductInput,
   type Role,
 } from "@warden/contracts";
 import type { Hono } from "hono";
+import { sql } from "kysely";
 import { createApp, type AppEnv, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import {
@@ -24,7 +27,9 @@ import {
 import { toRow } from "../src/findings/rows.ts";
 import { createLogger, type Logger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
+import type { HookTables } from "../src/modules/guard/hook-settings.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
+import type { RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { createPatchAssessment } from "../src/modules/patch/assessment.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
@@ -32,6 +37,13 @@ import { createPatchRefresh, type PatchRefresh } from "../src/modules/patch/refr
 import { patchRoutes } from "../src/modules/patch/routes.ts";
 import { createSaveLimit, type SaveLimit } from "../src/modules/patch/save-limit.ts";
 import { createPatchScan, PATCH_RULE, type PatchScan } from "../src/modules/patch/scan.ts";
+import {
+  createScans,
+  type AssetChecks,
+  type ScanJobStarter,
+  type Scanners,
+  type Scans,
+} from "../src/scans.ts";
 import type { WithTeam } from "../src/with-team.ts";
 
 /** Each module's move rule, as the start-up file wires them. */
@@ -135,6 +147,21 @@ export async function testKey() {
   return { privateKey, publicPem: await exportSPKI(publicKey) };
 }
 
+let appKey: string | undefined;
+
+/**
+ * A GitHub App's private key as GitHub downloads it: a 2048-bit RSA PKCS#1 PEM, `BEGIN RSA PRIVATE KEY`. Made once per
+ * test file, on first use, since an RSA key takes a moment to generate.
+ */
+export function gitHubAppKey(): string {
+  appKey ??= generateKeyPairSync("rsa", {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: "pkcs1", format: "pem" },
+    publicKeyEncoding: { type: "spki", format: "pem" },
+  }).privateKey;
+  return appKey;
+}
+
 /** A v2 session token's active Organization claim, as Clerk writes it: `rol` without the `org:` prefix. */
 export function activeOrganization(id: string, role: "admin" | "member" = "member") {
   return { v: 2, o: { id, rol: role, slg: "test-team" } };
@@ -189,14 +216,78 @@ export async function seedTeam(
   });
 }
 
-/** A new Team of its own, with these people in it at these Roles: its id. */
+/** The Admin `newTeam` seeds by default, who links the installations `linkRepos` records. */
+export const ADMIN = "user_admin";
+
+/** A Team with an id no other case uses and these people in it (its Admin by default), written through `withTeam`. */
 export async function newTeam(
   withTeam: WithTeam,
-  people: [userId: string, role: Role][],
-): Promise<string> {
-  const id = `org_${randomUUID()}`;
-  await seedTeam(withTeam, id, people);
-  return id;
+  people: [userId: string, role: Role][] = [[ADMIN, "admin"]],
+) {
+  const team = `org_${randomUUID()}`;
+  await seedTeam(withTeam, team, people);
+  return team;
+}
+
+/** The Team's hook_tokens rows, oldest first, read as that Team. */
+export const hookTokenRows = (withTeam: WithTeam, team: string) =>
+  withTeam(team, (tx) =>
+    tx.$extendTables<HookTables>().selectFrom("hook_tokens").selectAll().orderBy("id").execute(),
+  );
+
+/** The time `minutes` minutes before now. */
+export const minutesAgo = (minutes: number) => new Date(Date.now() - minutes * 60_000);
+
+/** A GitHub repo's ref, as GitHub's `html_url` names it. */
+export const repoRef = (name: string) => `https://github.com/example/${name}`;
+
+/** An installation id no other case uses: GitHub's are positive integers. */
+export const newInstallation = () => randomInt(1, 2 ** 47);
+
+/** Links a new installation listing `refs` to the Team, and answers its id. */
+export async function linkRepos(
+  repoAssets: RepoAssets,
+  team: string,
+  refs: string[],
+  linkedBy = ADMIN,
+) {
+  const installationId = newInstallation();
+  await repoAssets.link(team, {
+    installationId,
+    linkedBy,
+    repos: refs.map((ref, i) => ({ ref, githubId: i + 1 })),
+  });
+  return installationId;
+}
+
+/** Queues a Scan of `module` over `assets` for the Team, as its Admin's start does, and answers the stored Scan. */
+export async function queueScan(scans: Scans, team: string, module: Module, assets: Asset[]) {
+  const outcome = await scans.queue(team, {
+    module,
+    assets,
+    rules: ["guard/secret-in-repo"],
+    requestedBy: ADMIN,
+  });
+  if (outcome.kind !== "queued") throw new Error("the test's Scan was rate limited");
+  return outcome.scan;
+}
+
+/**
+ * Sets the Team's Scan `id` back to running since `minutes` minutes ago, queued a minute before that, as if its Job
+ * moved it to running then and died. The schema keeps `queued_at` unwritable, so the row is set back in SQL.
+ */
+export async function setRunningSince(
+  withTeam: WithTeam,
+  team: string,
+  id: string,
+  minutes: number,
+) {
+  const started = minutesAgo(minutes);
+  await withTeam(team, (tx) =>
+    sql`update scan_requests set state = 'running', started_at = ${started},
+          queued_at = ${started}::timestamptz - interval '1 minute'
+        where id = ${id}`.execute(tx),
+  );
 }
 
 /**
@@ -321,6 +412,13 @@ const noFindings: Findings = {
   expireAcceptances: noDatabase,
 };
 
+const noScans: Scans = {
+  queue: noDatabase,
+  get: noDatabase,
+  lastFor: noDatabase,
+  move: noDatabase,
+};
+
 /** A Clerk seam for a test that doesn't look at Clerk: every call is refused (a Role change answers 502; a join logs it). */
 const noClerk: ClerkOrganizations = {
   setMembershipRole: () =>
@@ -342,6 +440,16 @@ export function testApp(options: {
   /** How long the members module waits for Clerk; short in a test of Clerk not answering. */
   clerkTimeoutMs?: number;
   mount?: MountRoutes;
+  /** Each module's scanner for `POST /api/scans`; none by default, as index.ts wires them in this slice. */
+  scanners?: Scanners;
+  /** The Scan Job starter; none by default, so a start answers 503. */
+  startScanJob?: ScanJobStarter;
+  /** The queued Scans, in place of the real ones on `withTeam`. */
+  scans?: Scans;
+  /** Each module's routes, such as Guard's; none by default. */
+  moduleRoutes?: MountRoutes[];
+  /** Each module's check of a start's Assets; none by default, so any Assets the body's shape allows are queued. */
+  assetChecks?: AssetChecks;
 }) {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
@@ -364,6 +472,12 @@ export function testApp(options: {
       findings: options.withTeam
         ? createFindings({ withTeam: options.withTeam, moveRules: MOVE_RULES })
         : noFindings,
+      scans:
+        options.scans ?? (options.withTeam ? createScans({ withTeam: options.withTeam }) : noScans),
+      scanners: options.scanners ?? {},
+      startScanJob: options.startScanJob,
+      moduleRoutes: options.moduleRoutes ?? [],
+      assetChecks: options.assetChecks ?? {},
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),
       frontendApiHost: FRONTEND_API_HOST,
@@ -372,6 +486,25 @@ export function testApp(options: {
     options.mount,
   );
   return { app, lines };
+}
+
+/** The log lines in `output` (a process's output, or a logger's lines joined), parsed. */
+export function logEntries(output: string): Record<string, unknown>[] {
+  return output
+    .trim()
+    .split("\n")
+    .filter((line) => line.startsWith("{"))
+    .map((line) => JSON.parse(line));
+}
+
+/** The error `promise` rejects with; a promise that resolves fails the test. */
+export async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("the promise resolved");
 }
 
 /** What `promise` was refused with: its class's name and its words (undefined when it resolved). */

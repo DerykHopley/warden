@@ -11,14 +11,20 @@ import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } f
 import { createFindings } from "./findings/index.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
-import { guardMoveRule } from "./modules/guard/move-rule.ts";
+import { createGitHub } from "./modules/guard/github.ts";
+import { hookRoutes } from "./modules/guard/hook-routes.ts";
+import { createHookSettings } from "./modules/guard/hook-settings.ts";
+import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
+import { guardRoutes } from "./modules/guard/routes.ts";
 import { createPatchAssessment } from "./modules/patch/assessment.ts";
-import { patchMoveRule } from "./modules/patch/move-rule.ts";
 import { createProducts } from "./modules/patch/products.ts";
 import { patchRoutes } from "./modules/patch/routes.ts";
 import { createSaveLimit } from "./modules/patch/save-limit.ts";
 import { createPatchScan } from "./modules/patch/scan.ts";
+import { scanJobStarterFor } from "./scan-job-starters.ts";
+import { createScans } from "./scans.ts";
 import { createShutdown } from "./shutdown.ts";
+import { MOVE_RULES, scanners } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
 const logger = createLogger();
@@ -79,11 +85,14 @@ pool.query("select 1").catch((error: unknown) => {
 // Clerk's Backend API, with the secret key: a Warden Admin is Clerk's org:admin too (ADR 0008).
 const clerk = createClerkClient({ secretKey: config.clerk.secretKey });
 const withTeam = createWithTeam(pool);
-// ADR 0005: the modules come in here, the one shared file that may import them.
-const findings = createFindings({
-  withTeam,
-  moveRules: { guard: guardMoveRule, patch: patchMoveRule },
-});
+const repoAssets = createRepoAssets({ withTeam });
+const hookSettings = createHookSettings({ withTeam });
+const scans = createScans({ withTeam });
+// The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503). A Lead's
+// start and the first Scan after a link both start it.
+const startScanJob = scanJobStarterFor(config, { logger });
+// ADR 0005: the modules come in here, through the wiring the Scan Job and the demo seed share.
+const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
 const appDeps: AppDeps = {
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
@@ -93,23 +102,37 @@ const appDeps: AppDeps = {
     logger,
   }),
   findings,
+  scans,
+  // The Job's own list, so a start names the Rules the Job will run; the server reads no repo, so no RepoReader.
+  scanners: scanners({ withTeam, logger }),
+  // A Guard Scan names only the Team's Repo Assets.
+  assetChecks: { guard: guardAssetCheck(repoAssets) },
+  // Each module's routes, behind the app's middleware (ADR 0005). Linking a GitHub installation needs the GitHub app's
+  // settings; without them its route answers 503. A link starts the first Scan of its repos. Saving a Product runs its
+  // Patch Scan into Findings, so each Team may save 30 times a minute (createSaveLimit's defaults), counted in this
+  // instance's memory.
+  moduleRoutes: [
+    guardRoutes(
+      config.github
+        ? { repoAssets, scans, startScanJob, github: createGitHub(config.github), logger }
+        : { repoAssets, scans, startScanJob },
+    ),
+    hookRoutes({ hookSettings }),
+    patchRoutes({
+      products: createProducts({ withTeam }),
+      scan: createPatchScan({ findings, logger }),
+      assessment: createPatchAssessment({ findings, withTeam }),
+      logger,
+      saveLimit: createSaveLimit(),
+    }),
+  ],
+  startScanJob,
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),
   frontendApiHost: config.clerk.frontendApiHost,
   dashboardDir: existsSync(`${dashboardDir}/index.html`) ? dashboardDir : undefined,
 };
-// Each module's routes, behind the app's middleware (ADR 0005). Saving a Product runs its Patch Scan into Findings,
-// so each Team may save 30 times a minute (createSaveLimit's defaults), counted in this instance's memory.
-const app = createApp(
-  appDeps,
-  patchRoutes({
-    products: createProducts({ withTeam }),
-    scan: createPatchScan({ findings, logger }),
-    assessment: createPatchAssessment({ findings, withTeam }),
-    logger,
-    saveLimit: createSaveLimit(),
-  }),
-);
+const app = createApp(appDeps);
 
 const server = serve({ fetch: app.fetch, port: config.port }, ({ port }) => {
   logger.info("listening", { port });

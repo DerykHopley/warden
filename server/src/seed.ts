@@ -14,6 +14,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   fingerprint,
   problemKeyOf,
+  type Asset,
   type Finding,
   type Location,
   type Observation,
@@ -31,18 +32,20 @@ import {
 import { sql } from "kysely";
 import type pg from "pg";
 import { createPool, guardDatabaseRole } from "./database.ts";
-import { createFindings } from "./findings/index.ts";
+import { createFindings, type HistoryEntry } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
-import { guardMoveRule } from "./modules/guard/move-rule.ts";
-import { patchMoveRule } from "./modules/patch/move-rule.ts";
 import { createProducts } from "./modules/patch/products.ts";
 import { createPatchScan, PATCH_RULE } from "./modules/patch/scan.ts";
+import { MOVE_RULES } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
 export type SeedResult =
   /** `findings` counts every Finding of the Team: the demo ones and the demo Product's CVE Findings. */
   | { kind: "seeded"; findings: number }
-  /** Every demo run was already applied, and the Team is as the seed leaves it: nothing was written. */
+  /**
+   * Every demo run and the seed's decisions were already applied, and (with the Product) the demo Product is as the
+   * seed leaves it: nothing was written. The demo Findings count as they are, whatever has been decided on them since.
+   */
   | { kind: "already_seeded"; findings: number }
   /** Warden has no such Team: its Admin hasn't opened Warden in it yet. */
   | { kind: "no_team" }
@@ -54,7 +57,10 @@ export type SeedResult =
   | { kind: "no_cve_snapshot" }
   /** Not yet seeded, the Team has Products of its own: nothing was written, and none of them changed. */
   | { kind: "other_products"; products: number }
-  /** The demo Findings or the demo Product aren't as the seed leaves them (a seed cut short, or changed since). */
+  /**
+   * The seed didn't finish, or the Team holds more than it wrote: demo runs not all applied, the seed's decisions
+   * missing, a Finding the seed didn't write, or a demo Product not as `DEMO_PRODUCT`. Nothing was written.
+   */
   | { kind: "mismatch"; problems: string[] };
 
 /** The hosts that are this machine: the compose database, or a local socket when PGHOST is unset. */
@@ -90,8 +96,8 @@ const keyOf = (observation: Observation) =>
     fingerprint(observation.rule_id, observation.location as Location),
   );
 
-/** Each demo Finding in `list`, by its demo name. */
-function demoFindingsIn(list: readonly Finding[]): Partial<Record<DemoKey, Finding>> {
+/** Each demo Finding in `list`, by its demo name, found by today's demo data. */
+export function demoFindingsIn(list: readonly Finding[]): Partial<Record<DemoKey, Finding>> {
   const byProblem = new Map(list.map((f) => [problemKeyOf(f.asset, f.fingerprint), f]));
   return Object.fromEntries(
     (Object.entries(DEMO_OBSERVATIONS) as [DemoKey, Observation][]).flatMap(([name, o]) => {
@@ -101,31 +107,46 @@ function demoFindingsIn(list: readonly Finding[]): Partial<Record<DemoKey, Findi
   );
 }
 
-/** How `list` differs from what the seed leaves, one line per difference; empty when it matches. */
-function differences(list: readonly Finding[]): string[] {
-  const found = demoFindingsIn(list);
-  const problems: string[] = [];
-  for (const [name, want] of Object.entries(DEMO_OUTCOME) as [
-    DemoKey,
-    (typeof DEMO_OUTCOME)[DemoKey],
-  ][]) {
-    const finding = found[name];
-    if (finding === undefined) {
-      problems.push(`${name}: missing (want ${want.status})`);
-      continue;
-    }
-    if (finding.status !== want.status) {
-      problems.push(`${name}: ${finding.status} (want ${want.status})`);
-    }
-    const movedTo = want.unconfirmedFixTo && found[want.unconfirmedFixTo]?.id;
-    const candidates = finding.unconfirmed_fix?.candidates ?? [];
-    if (movedTo ? !candidates.includes(movedTo) : candidates.length > 0) {
-      problems.push(`${name}: Unconfirmed fix ${JSON.stringify(candidates)}`);
-    }
-  }
-  const extra = list.length - Object.keys(found).length;
-  if (extra > 0) problems.push(`${extra} Finding(s) the seed didn't write`);
-  return problems;
+/**
+ * Whether `finding` is one of the demo Findings: a demo run first saw it. Not found by today's demo data, so one stored
+ * under an older demo Rule id (and its fingerprint) is still the seed's own.
+ */
+const isDemoFinding = (finding: Finding) =>
+  (DEMO_RUN_IDS as readonly string[]).includes(finding.first_seen_scan);
+
+/**
+ * Where a problem sits, its Rule id left out: its Asset and its Fingerprint's place. A demo Finding stored under an
+ * older demo Rule id is still at its demo Observation's place.
+ */
+const placeOf = (asset: Asset, location: Location) =>
+  problemKeyOf(asset, fingerprint("", location));
+
+/**
+ * The seed's named decisions (each with a `Demo seed:` reason): one line for each that no demo Finding at its demo
+ * Observation's place holds in its history. Found by place, not by today's fingerprint, so a decision still counts
+ * after its Finding's demo Rule id is renamed.
+ */
+function missingDecisions(
+  demo: readonly { finding: Finding; history: readonly HistoryEntry[] }[],
+): string[] {
+  return (Object.entries(DEMO_OUTCOME) as [DemoKey, (typeof DEMO_OUTCOME)[DemoKey]][]).flatMap(
+    ([name, want]) => {
+      if (want.decidedReason === undefined) return [];
+      const o = DEMO_OBSERVATIONS[name];
+      const place = placeOf(o.asset, o.location as Location);
+      const made = demo.some(
+        ({ finding, history }) =>
+          placeOf(finding.asset, finding.location) === place &&
+          history.some(
+            (entry) =>
+              entry.cause.kind === "person" &&
+              entry.status_after === want.status &&
+              entry.reason === want.decidedReason,
+          ),
+      );
+      return made ? [] : [`${name}: the seed's decision (${want.status}) is missing`];
+    },
+  );
 }
 
 /** The Team's demo Product, by its name: a first seed with the Product refuses a Team that already has one, so it's
@@ -160,12 +181,14 @@ function productProblems(product: Product, list: readonly Finding[]): string[] {
 /**
  * Seeds `team` with the demo Findings, then (`withProduct`, the default) the demo Product and its Patch Scan, as of
  * `now`, through connections from `pool` (warden_app). One seed runs per Team at a time: a second waits for the first,
- * then finds the Team seeded. A Team is seeded when every demo run id is applied, its demo Findings are as the seed
- * leaves them, and (`withProduct`) its demo Product is as `DEMO_PRODUCT` with a CVE Finding; the Findings on the demo
- * Product's Asset are the seed's own. A Team seeded without the demo Product (`withProduct` false, or a Product step
- * cut short) gets it on a rerun with it. One with Findings of its own, or (`withProduct`, not yet seeded) Products of
- * its own, is left as it is; so is every Team when the CVE snapshot the Product's Scan needs isn't loaded. `logger`
- * takes the Scan's log lines.
+ * then finds the Team seeded. A Team is seeded when every demo run id is applied, the seed's two decisions are in the
+ * history of the demo Findings they name, every other Finding is on the demo Product's Asset, and (`withProduct`) its
+ * demo Product is as `DEMO_PRODUCT` with a CVE Finding. The demo Findings (the ones a demo run first saw) are taken as
+ * they are: their Statuses, decisions and Rule ids since the seed aren't compared with today's demo data, and a rerun
+ * never changes them. A Team seeded without the demo Product (`withProduct` false, or a Product step cut short) gets
+ * it on a rerun with it. One with Findings of its own, or (`withProduct`, not yet seeded) Products of its own, is left
+ * as it is; so is every Team when the CVE snapshot the Product's Scan needs isn't loaded. `logger` takes the Scan's
+ * log lines.
  */
 export async function seedDemo({
   pool,
@@ -182,20 +205,33 @@ export async function seedDemo({
 }): Promise<SeedResult> {
   const withTeam = createWithTeam(pool);
   // Every module's move rule, as the server wires them: the demo's Unconfirmed fix comes from Guard's.
-  const findings = createFindings({
-    withTeam,
-    moveRules: { guard: guardMoveRule, patch: patchMoveRule },
-  });
+  const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
   const products = createProducts({ withTeam });
 
   /**
-   * The Team's Findings, its demo Product if it has one, and how the Team differs from what the seed leaves. A missing
-   * demo Product isn't one of the problems: the caller decides whether the seed still has to create it.
+   * The Team's Findings, its demo Product if it has one, and how the Team differs from what the seed leaves, given
+   * `runsApplied` of the demo runs applied. The demo Findings are taken as they are now: a Lead's decisions, the daily
+   * Job's and a rename of a demo Rule id since the seed are no problem. The problems: demo runs not all applied; with
+   * them all, the seed's two decisions missing from the history of the demo Findings they name (a seed cut short
+   * before them); any Finding neither a demo one nor on the demo Product's Asset; and (`withProduct`) a demo Product
+   * not as the seed leaves it. A missing demo Product isn't one: the caller decides whether the seed still has to
+   * create it.
    */
-  async function check() {
+  async function check(runsApplied: number) {
     const list = await findings.list(team);
     const demo = demoProductIn(await products.list(team));
-    const problems = differences(list.filter((f) => !onProduct(f, demo?.id)));
+    const problems: string[] = [];
+    if (runsApplied < DEMO_RUN_IDS.length) {
+      problems.push(`only ${runsApplied} of the ${DEMO_RUN_IDS.length} demo runs applied`);
+    } else {
+      const demoFindings: { finding: Finding; history: HistoryEntry[] }[] = [];
+      for (const finding of list.filter(isDemoFinding)) {
+        demoFindings.push({ finding, history: await findings.history(team, finding.id) });
+      }
+      problems.push(...missingDecisions(demoFindings));
+    }
+    const extra = list.filter((f) => !isDemoFinding(f) && !onProduct(f, demo?.id)).length;
+    if (extra > 0) problems.push(`${extra} Finding(s) the seed didn't write`);
     if (withProduct && demo !== undefined) problems.push(...productProblems(demo, list));
     return { list, demo, problems };
   }
@@ -242,8 +278,8 @@ export async function seedDemo({
         .select("id")
         .where("id", "in", [...DEMO_RUN_IDS])
         .execute(),
-      // Only counted before a seed: once a demo run is applied, check() names every Finding the seed didn't write,
-      // and the Findings on the demo Product's Asset (its Scan's ids are random) are the seed's own.
+      // Only counted before a seed: once a demo run is applied, check() names every Finding the seed didn't write:
+      // neither first seen by a demo run nor on the demo Product's Asset (its Scan's ids are random).
       others: await tx
         .selectFrom("findings")
         .select(sql<string>`count(*)`.as("count"))
@@ -259,12 +295,7 @@ export async function seedDemo({
     if (found.lead === undefined) return { kind: "no_lead" };
 
     if (found.runs.length > 0) {
-      const { list, demo, problems } = await check();
-      if (found.runs.length < DEMO_RUN_IDS.length) {
-        problems.unshift(
-          `only ${found.runs.length} of the ${DEMO_RUN_IDS.length} demo runs applied`,
-        );
-      }
+      const { list, demo, problems } = await check(found.runs.length);
       if (problems.length > 0) return { kind: "mismatch", problems };
       if (!withProduct || demo !== undefined) {
         return { kind: "already_seeded", findings: list.length };
@@ -289,7 +320,8 @@ export async function seedDemo({
       await createPatchScan({ findings, logger }).scanProduct(team, { id });
     }
 
-    const { list, demo, problems } = await check();
+    // Every demo run is applied by now: this run applied them, or found them all applied.
+    const { list, demo, problems } = await check(DEMO_RUN_IDS.length);
     if (withProduct && demo === undefined) {
       problems.push(`demo Product: missing (no Product named ${DEMO_PRODUCT.name})`);
     }

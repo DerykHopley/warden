@@ -315,6 +315,39 @@ describe("Team B and Team A's Finding", () => {
   });
 });
 
+describe("a Finding id holding a NUL (#129)", () => {
+  it.each(["%00", "a%00b"])(
+    "a Member reading %s's history gets 404 No such Finding",
+    async (id) => {
+      const { team } = await teamWithFinding();
+
+      expect(await history(team, id, MEMBER)).toEqual({
+        status: 404,
+        body: { error: "No such Finding" },
+      });
+    },
+  );
+
+  const noSuchFinding = { status: 404, body: { error: "No such Finding" } };
+  // The Role check comes first: a Member gets the same 403 whatever the id.
+  const roleTooLow = { status: 403, body: { error: "Your Role can't do this" } };
+
+  it.each<[string, string, Record<string, unknown>, { status: number; body: unknown }]>([
+    ["accept", LEAD, { reason: "r", until: nextWeek() }, noSuchFinding],
+    ["false-positive", LEAD, { reason: "r" }, noSuchFinding],
+    ["confirm-fix", LEAD, { reason: "r" }, noSuchFinding],
+    ["mark-moved", LEAD, { reason: "r", candidate: "f-any" }, noSuchFinding],
+    ["reopen", LEAD, { reason: "r" }, noSuchFinding],
+    ["accept", MEMBER, { reason: "r", until: nextWeek() }, roleTooLow],
+  ])("%s on a%00b as %s, with a valid body, writes nothing", async (route, as, body, answer) => {
+    const { team } = await teamWithFinding();
+    const before = await stored(team);
+
+    expect(await post(`/api/findings/a%00b/${route}`, team, body, as)).toEqual(answer);
+    expect(await stored(team)).toEqual(before);
+  });
+});
+
 /** Resolves once a transaction is waiting for `team`'s Findings lock (the one reconcile and decisions take). */
 async function queuedBehindFindingsLock(team: string) {
   for (let tries = 0; tries < 100; tries++) {
