@@ -39,6 +39,8 @@ const READ_AGAIN_MS = 5_000;
 const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
 /** The write app's Setup URL's path, `WriteAppSetupPage`'s route. */
 const WRITE_SETUP_PATH = "/setup/github/write";
+/** The Connect page's button, which the write app's how-to names too. */
+const SIGN_IN = "Sign in with GitHub";
 const CANT_START =
   "This browser couldn't start the GitHub sign-in. Allow this site to store data for this tab, and open Warden over https.";
 
@@ -107,8 +109,11 @@ type AppProps = PageProps & { words: AppWords };
 /** An app's how-to for an Admin, under the install link: told whether this Warden has no settings for the app. */
 type HowTo = (props: { notSetUp: boolean }) => ReactNode;
 
+/** An app's section on Setup: its words, and its how-to when it has one. */
+type AppSectionProps = AppProps & { HowTo?: HowTo };
+
 /** An Admin's install link, and the app's how-to when it has one; a Lead or a Member reads who does this instead. */
-function AppSection(props: AppProps & { HowTo?: HowTo }) {
+function AppSection(props: AppSectionProps) {
   return props.me.role === "admin" ? (
     <InstallLink {...props} />
   ) : (
@@ -142,7 +147,7 @@ function AppNotReady({ app, words }: { app: ReturnType<typeof useGitHubApp>; wor
   );
 }
 
-function InstallLink({ HowTo, ...props }: AppProps & { HowTo?: HowTo }) {
+function InstallLink({ HowTo, ...props }: AppSectionProps) {
   const app = useGitHubApp(props);
   const answered = app.result === "loading" ? null : app.result;
   return (
@@ -241,7 +246,7 @@ function WriteAppHowTo({ notSetUp }: { notSetUp: boolean }) {
           <p>
             Choose "{WRITE_WORDS.install}" above, and install it on the account or organization
             whose repos should get Fix PRs. GitHub sends you to the Grant write access page. Choose
-            "Sign in with GitHub" there. Setup then lists the grant under this section.
+            "{SIGN_IN}" there. Setup then lists the grant under this section.
           </p>
         </li>
       </ol>
@@ -495,7 +500,7 @@ function LinkInstallation(props: AppProps) {
           aria-busy={leaving}
           onClick={() => void signIn(ready.client_id, installationId)}
         >
-          Sign in with GitHub
+          {SIGN_IN}
         </button>
       ) : (
         <AppNotReady app={app} words={words} />

@@ -142,16 +142,18 @@ Warden." and shows an Admin these steps, open, under "How to set up the write ap
    - No account or organization permissions, and no Workflows. A Fix PR only edits `.claude/settings.json` or a
      `.mcp.json` file, never `.github/workflows/`. Warden refuses to link an installation that holds any other
      permission, or lacks one of these three.
-   - Then generate a client secret and a private key (GitHub downloads the key as a `.pem`).
+   - Then generate a client secret and a private key. GitHub downloads the key as a `.pem` file named
+     `<app-slug>.<YYYY-MM-DD>.private-key.pem`.
 2. **Give Warden the keys.** The server reads `GITHUB_WRITE_APP_CLIENT_ID`, `GITHUB_WRITE_APP_CLIENT_SECRET` and
    `GITHUB_WRITE_APP_PRIVATE_KEY` (the `.pem` as downloaded), all three or none: with only some, it stops at start-up
    naming the missing or malformed ones. Then restart the server: it reads them when it starts.
-   - Locally, the committed `.envrc` reads them from the keyring. Store each once, then `direnv reload`:
+   - Locally, the committed `.envrc` reads them from the keyring. Store each once, then `direnv reload`. The last
+     command reads the key from the `.pem` GitHub downloaded: replace the placeholder path with that file's.
 
      ```sh
      secret-tool store --label "Warden GitHub write app client id" service warden-github-write-app-client-id
      secret-tool store --label "Warden GitHub write app client secret" service warden-github-write-app-client-secret
-     secret-tool store --label "Warden GitHub write app private key" service warden-github-write-app-private-key < write-app.pem
+     secret-tool store --label "Warden GitHub write app private key" service warden-github-write-app-private-key < path/to/<app-slug>.<YYYY-MM-DD>.private-key.pem
      ```
 
    - On Cloud Run, the client secret and the private key live in Secret Manager as

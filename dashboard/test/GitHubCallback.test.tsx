@@ -362,22 +362,15 @@ describe("WriteAppCallbackPage (#224, story 5)", () => {
     },
   );
 
-  it.each([
-    ["no kept attempt", "?code=the-code&state=the-state", false],
-    ["no code", "?state=the-state", true],
-    ["no state", "?code=the-code", true],
-    ["a state that doesn't match", "?code=the-code&state=another-state", true],
-  ])(
-    "with %s, says the sign-in didn't start here in its own words and sends nothing",
-    async (_name, search, kept) => {
-      if (kept) keepWrite();
-      renderWriteCallback(search);
+  // The read callback's tests cover the other ways a sign-in didn't start here (no kept attempt, no code, no state).
+  it("with a state that doesn't match, says the sign-in didn't start here in its own words and sends nothing", async () => {
+    keepWrite();
+    renderWriteCallback("?code=the-code&state=another-state");
 
-      expect(await screen.findByRole("alert")).toHaveTextContent(NOT_STARTED_HERE);
-      expect(backToSetup()).toHaveAttribute("href", "/setup");
-      expect(grants()).toEqual([]);
-    },
-  );
+    expect(await screen.findByRole("alert")).toHaveTextContent(NOT_STARTED_HERE);
+    expect(backToSetup()).toHaveAttribute("href", "/setup");
+    expect(grants()).toEqual([]);
+  });
 
   it("with the read app's attempt kept, says the sign-in didn't start here and sends nothing", async () => {
     keep();

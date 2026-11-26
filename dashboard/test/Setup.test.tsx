@@ -255,13 +255,14 @@ describe("SetupPage: Grant write access (#224, story 5)", () => {
   });
 
   it.each<Role>(["lead", "member"])(
-    "tells a %s an Admin grants write access, with no link and no call for the write app",
+    "tells a %s an Admin grants write access, with no link, no how-to (story 16) and no call for the write app",
     async (role) => {
       renderSetup(role);
 
       expect(write().getByText("An Admin grants write access.")).toBeInTheDocument();
       await write().findByText("No write access granted.");
       expect(screen.queryByRole("link", { name: "Install the write app" })).toBeNull();
+      expect(screen.queryByText("How to set up the write app")).toBeNull();
       expect(callsTo("/api/github/write-app")).toEqual([]);
     },
   );
@@ -381,18 +382,6 @@ describe("SetupPage: the write app's how-to (#224, story 16)", () => {
     expect(summary()).toBeInTheDocument();
     expect(howTo()).not.toHaveAttribute("open");
   });
-
-  it.each<Role>(["lead", "member"])(
-    "gives a %s no how-to, and no call for the write app",
-    async (role) => {
-      renderSetup(role);
-
-      await write().findByText("No write access granted.");
-      expect(screen.queryByText(HOW_TO)).toBeNull();
-      expect(write().getByText("An Admin grants write access.")).toBeInTheDocument();
-      expect(callsTo("/api/github/write-app")).toEqual([]);
-    },
-  );
 
   it("step 1 names this page's own URLs, the three permissions with why, and nothing more", async () => {
     renderSetup("admin", { writeApp: notSetUp });
