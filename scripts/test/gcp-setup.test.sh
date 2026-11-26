@@ -74,6 +74,25 @@ bindings_to() {
   }' | sort
 }
 
+# The write app's two secrets (#334): only the two services read them, so Fix PRs open from the service alone. No
+# Scan Job reads either: Scans stay read-only.
+write_secrets="warden-github-write-app-client-secret warden-github-write-app-private-key"
+# assert_write_secrets_services_only <label> <text>: in the text (a dry run's output, or a real run's recorded calls),
+# each write-app secret is granted to warden-run and warden-preview-run, and to no other account.
+assert_write_secrets_services_only() {
+  local secret account
+  for secret in $write_secrets; do
+    assert_equal "$1: only warden-run and warden-preview-run are granted $secret" \
+      "--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
+      "$(grep -F "add-iam-policy-binding $secret " <<<"$2" | grep -o -- '--member=[^ ]*' | sort)"
+    for account in warden-scan warden-preview-scan; do
+      assert_no_line "$1: $account isn't granted $secret" \
+        "add-iam-policy-binding $secret --member=serviceAccount:$account@" "$2"
+    done
+  done
+}
+
 assert_equal "warden-run gets Cloud SQL client, seven secrets and the Scan Job's executor with overrides, nothing else" \
   "projects $project roles/cloudsql.client
 run warden-scan roles/run.jobsExecutorWithOverrides
@@ -85,21 +104,10 @@ secrets warden-github-app-private-key roles/secretmanager.secretAccessor
 secrets warden-github-write-app-client-secret roles/secretmanager.secretAccessor
 secrets warden-github-write-app-private-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-run)"
-# The write app's two secrets (#334): only the two services read them, so Fix PRs open from the service alone. No
-# Scan Job reads either: Scans stay read-only.
-write_secrets="warden-github-write-app-client-secret warden-github-write-app-private-key"
-for secret in $write_secrets; do
-  assert_equal "only warden-run and warden-preview-run read $secret" \
-    "--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com
---member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
-    "$(grep -F "add-iam-policy-binding $secret " <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
-  for account in warden-scan warden-preview-scan; do
-    assert_no_line "$account doesn't read $secret" \
-      "add-iam-policy-binding $secret --member=serviceAccount:$account@" "$output"
-  done
-done
-assert_line "a dry run prints the write app's grants under a note that they need both its secrets" \
-  "# when both of the write app's secrets exist"
+assert_write_secrets_services_only "a dry run" "$output"
+assert_equal "a dry run prints the write app's steps under one note that they need both its secrets" \
+  "# DRY_RUN: the write app's replication, grants and variable line below print as they would when both of the write app's secrets exist" \
+  "$(grep -F "when both of the write app's secrets exist" <<<"$output")"
 # The GitHub app's two secrets (#151, #188): each service reads both; each Scan Job reads the private key alone, so
 # it can read repos but never sign anyone in. A preview shares the live read-only app (#275).
 assert_equal "only warden-run and warden-preview-run read warden-github-app-client-secret" \
@@ -595,16 +603,9 @@ changes() { grep -vE '^auth |describe|get-iam-policy|versions access' <<<"$calls
 # assert_write_app <label>: a real run with both of the write app's secrets granted them to the two services only,
 # printed their replication, and printed the write app's variable line.
 assert_write_app() {
-  local secret account
+  local secret
+  assert_write_secrets_services_only "$1" "$calls"
   for secret in $write_secrets; do
-    assert_equal "$1: only warden-run and warden-preview-run are granted $secret" \
-      "--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com
---member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
-      "$(grep -F "secrets add-iam-policy-binding $secret " <<<"$calls" | grep -o -- '--member=[^ ]*' | sort)"
-    for account in warden-scan warden-preview-scan; do
-      assert_no_line "$1: $account isn't granted $secret" \
-        "add-iam-policy-binding $secret --member=serviceAccount:$account@" "$calls"
-    done
     assert_line "$1: $secret's replication is printed" \
       "secrets describe $secret --format=yaml(name,replication) --project=$project" "$calls"
   done

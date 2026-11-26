@@ -51,8 +51,6 @@ readonly GENERATED_SECRETS
 # The write app is both or neither: preflight stops on one alone.
 WRITE_APP_SECRETS=(warden-github-write-app-client-secret warden-github-write-app-private-key)
 readonly WRITE_APP_SECRETS
-# Whether preflight found both of the write app's secrets (yes) or neither (no); a dry run prints its steps as if yes.
-WRITE_APP=no
 # The repository this script is in: the roles step runs its server/src/roles.ts.
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readonly ROOT
@@ -198,14 +196,12 @@ query() {
 note() { printf '# %s\n' "$*"; }
 step() { printf '\n# == %s\n' "$*"; }
 
-# Whether to grant, describe and print what the write app needs: in a real run, when preflight found both of its
-# secrets; a dry run prints it, under a note saying so.
-write_app() {
-  if dry_run; then
-    note "when both of the write app's secrets exist"
-    return 0
-  fi
-  [[ $WRITE_APP == yes ]]
+# Whether both of the write app's secrets exist in <project>. Preflight has already stopped a run with one alone.
+write_app_present() {
+  local secret
+  for secret in ${WRITE_APP_SECRETS[@]+"${WRITE_APP_SECRETS[@]}"}; do
+    exists gcloud secrets describe "$secret" --project="$1" || return 1
+  done
 }
 
 # 32 random bytes as 64 hex characters: printable ASCII, as createRoles requires.
@@ -369,11 +365,9 @@ preflight() {
   for secret in ${WRITE_APP_SECRETS[@]+"${WRITE_APP_SECRETS[@]}"}; do
     exists gcloud secrets describe "$secret" --project="$project" || write_missing+=("$secret")
   done
-  case ${#write_missing[@]} in
-    0) WRITE_APP=yes ;;
-    "${#WRITE_APP_SECRETS[@]}") WRITE_APP=no ;;
-    *) missing+=("secret ${write_missing[0]} (the write app needs both its secrets, or neither)") ;;
-  esac
+  if [[ ${#write_missing[@]} -eq 1 ]]; then
+    missing+=("secret ${write_missing[0]} (the write app needs both its secrets, or neither)")
+  fi
   if [[ -n ${missing[*]+set} ]]; then
     echo "gcp-setup: make these first (README.md, \"Setting up Google Cloud\"); nothing was changed:" >&2
     printf '  %s\n' ${missing[@]+"${missing[@]}"} >&2
@@ -522,6 +516,16 @@ main() {
   trap 'exit 130' INT
   trap 'exit 143' TERM
   preflight "$project" "$instance"
+  # Whether to describe, grant and print what the write app needs (#334): when both of its secrets exist; a dry run,
+  # which assumes nothing exists, prints them all under one note.
+  local write_app=no
+  if dry_run; then
+    note "DRY_RUN: the write app's replication, grants and variable line below print as they would" \
+      "when both of the write app's secrets exist"
+    write_app=yes
+  elif write_app_present "$project"; then
+    write_app=yes
+  fi
   # A missing flag fails instead of waiting at a prompt.
   export CLOUDSDK_CORE_DISABLE_PROMPTS=1
 
@@ -603,7 +607,7 @@ main() {
     warden-github-app-client-secret warden-github-app-private-key ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
     run gcloud secrets describe "$secret" --format='yaml(name,replication)' --project="$project"
   done
-  if write_app; then
+  if [[ $write_app == yes ]]; then
     for secret in ${WRITE_APP_SECRETS[@]+"${WRITE_APP_SECRETS[@]}"}; do
       run gcloud secrets describe "$secret" --format='yaml(name,replication)' --project="$project"
     done
@@ -662,7 +666,7 @@ main() {
   grant_secrets "$project" "$preview_scan_sa" warden-db-preview-app-password warden-github-app-private-key
   # The write app's two (#334): the two services only, which open Fix PRs; a preview shares the live write app
   # (#224). Never a Scan Job, so Scans stay read-only.
-  if write_app; then
+  if [[ $write_app == yes ]]; then
     grant_secrets "$project" "$run_sa" ${WRITE_APP_SECRETS[@]+"${WRITE_APP_SECRETS[@]}"}
     grant_secrets "$project" "$preview_run_sa" ${WRITE_APP_SECRETS[@]+"${WRITE_APP_SECRETS[@]}"}
   fi
@@ -780,7 +784,7 @@ main() {
   # shellcheck disable=SC2016 # printed for the owner to run, not expanded here
   printf '%s\n' 'gh variable set WARDEN_GITHUB_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-app-client-id)" --repo '"$GITHUB_REPO"
   # The write app's client id, the same way; a deploy passes the write app on only when it's set.
-  if write_app; then
+  if [[ $write_app == yes ]]; then
     # shellcheck disable=SC2016 # printed for the owner to run, not expanded here
     printf '%s\n' 'gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-write-app-client-id)" --repo '"$GITHUB_REPO"
   else

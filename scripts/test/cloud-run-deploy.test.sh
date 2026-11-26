@@ -584,8 +584,6 @@ GITHUB_WRITE_APP_PRIVATE_KEY=warden-github-write-app-private-key:1" \
     "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
   scan=$(call_of "gcloud run jobs update $scan_job ")
   assert_scan_job "$mode with the write app: the Scan Job" "$scan" "${args[0]}" "${scan_names[@]}"
-  assert_no_match "$mode with the write app: the Scan Job gets no write-app value" 'GITHUB_WRITE_APP|write-app' \
-    "$scan"
   assert_no_match "$mode with the write app: no job (migration, Scan or daily) gets a write-app value" \
     'GITHUB_WRITE_APP|write-app' "$(grep -F 'gcloud run jobs ' <<<"$calls")"
 
