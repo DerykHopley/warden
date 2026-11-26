@@ -14,6 +14,14 @@ import { summaryNames } from "./summary.ts";
 /** A project's MCP config: `.mcp.json` in any folder. */
 const MCP_FILE = /(?:^|\/)\.mcp\.json$/;
 
+/** Whether `path` is a project's MCP config, a `.mcp.json` in any folder. */
+export const isMcpConfigPath = (path: string): boolean => MCP_FILE.test(path);
+
+/** The package registries a Fix PR can pin a server's package from. */
+export type PackageRegistryName = "npm" | "pypi";
+/** Where a runner's packages come from: a package registry, or a container image's. */
+type PackageSource = PackageRegistryName | "container";
+
 /** `uv tool run` / `uvx` and `pipx run` options whose value, given as a separate argument, comes before the package. */
 const PYTHON_VALUE_OPTIONS = new Set([
   // uv tool run
@@ -187,10 +195,25 @@ const PODMAN_SWITCHES = new Set([
   "--help",
 ]);
 
+/** An npm exact version, `1.2.3` or `1.2.3-beta.1+build`: no tag and no range. */
+const NPM_VERSION = String.raw`\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?`;
+/** A Python exact version, `0.4.1`, pre-releases included. */
+const PYTHON_VERSION = String.raw`\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?`;
 /** A package at an exact version, `name@1.2.3` or `@scope/name@1.2.3-beta.1`: no tag and no range. */
-const NPM_PINNED = /^(?:@[^/@]+\/)?[^@]+@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const NPM_PINNED = new RegExp(String.raw`^(?:@[^/@]+\/)?[^@]+@${NPM_VERSION}$`);
 /** A Python package at an exact version, `name==0.4.1` or `name@0.4.1`, pre-releases included. */
-const PYTHON_PINNED = /(?:==|@)\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?$/;
+const PYTHON_PINNED = new RegExp(`(?:==|@)${PYTHON_VERSION}$`);
+
+/**
+ * Whether a version a registry answers has the shape the scanner reads as pinned (`NPM_PINNED`'s or
+ * `PYTHON_PINNED`'s version part), so a package written at it clears the Rule and no other text gets into a repo.
+ */
+export const isPinnedVersion = (registry: PackageRegistryName, version: string): boolean =>
+  new RegExp(`^${registry === "npm" ? NPM_VERSION : PYTHON_VERSION}$`).test(version);
+
+/** Whether a package word is one the scanner reads as pinned, for an npm or a Python runner. */
+export const isPinnedPackage = (registry: PackageRegistryName, word: string): boolean =>
+  (registry === "npm" ? NPM_PINNED : PYTHON_PINNED).test(word);
 const DIGEST = /^sha256:[0-9a-f]{64}$/i;
 /** A local path (`./server`, `/opt/mcp`, `~/mcp`, `C:\mcp`): a local server, not a package. */
 const LOCAL_PATH = /^(?:[.~/\\]|[A-Za-z]:[\\/])/;
@@ -236,6 +259,8 @@ type Runner = { words: readonly string[]; options: Options; globals?: Options };
 
 /** One kind of runner: the runners that start it, the options that name what it starts, and when that is pinned. */
 type RunnerKind = {
+  /** Where its packages come from: npm, PyPI, or a container registry. */
+  registry: PackageSource;
   runners: readonly Runner[];
   /** Options whose value is the package (`-p x`, `--package=x`), given before it. */
   fromOptions: readonly string[];
@@ -244,6 +269,7 @@ type RunnerKind = {
 
 const RUNNER_KINDS: readonly RunnerKind[] = [
   {
+    registry: "npm",
     runners: [
       { words: ["npx"], options: NPM },
       { words: ["bunx"], options: switchOptions(BUNX_SWITCHES) },
@@ -255,6 +281,7 @@ const RUNNER_KINDS: readonly RunnerKind[] = [
     pinned: (pkg) => NPM_PINNED.test(pkg),
   },
   {
+    registry: "pypi",
     runners: [
       { words: ["uvx"], options: PYTHON },
       { words: ["uv", "tool", "run"], options: PYTHON },
@@ -264,6 +291,7 @@ const RUNNER_KINDS: readonly RunnerKind[] = [
     pinned: (pkg) => PYTHON_PINNED.test(pkg),
   },
   {
+    registry: "container",
     runners: (
       [
         ["docker", DOCKER_SWITCHES],
@@ -296,19 +324,35 @@ const isCmd = (command: string | undefined) =>
   command !== undefined && commandName(command).toLowerCase() === "cmd";
 
 /**
+ * Where a command-line word sits in a server's entry: an `args` entry by its index, or a span of `command`'s text
+ * (from `start`, up to `end`).
+ */
+export type WordAt =
+  { field: "args"; index: number } | { field: "command"; start: number; end: number };
+
+/** One word of a server's command line, and where it sits. */
+type Word = { text: string; at: WordAt };
+
+/**
  * A server's command line as words: its `command`, then its string `args`, read after a leading `cmd /c`. The command
  * is one word when the whole of it names a runner or `cmd`, as a path with a space does (`C:\Program
  * Files\nodejs\npx.cmd`); otherwise it is split on white space (`npx -y some-mcp-server`).
  */
-function commandLine(command: string, args: unknown): string[] {
+function commandLine(command: string, args: unknown): Word[] {
   const whole = command.trim();
-  const words = [
+  const start = command.indexOf(whole);
+  const words: Word[] = [
     ...(RUNNER_COMMANDS.has(commandName(whole)) || isCmd(whole)
-      ? [whole]
-      : whole.split(/\s+/).filter((word) => word !== "")),
-    ...(Array.isArray(args) ? args : []).filter((arg): arg is string => typeof arg === "string"),
+      ? [{ text: whole, at: { field: "command", start, end: start + whole.length } } as const]
+      : [...command.matchAll(/\S+/g)].map(({ 0: text, index }) => ({
+          text,
+          at: { field: "command", start: index, end: index + text.length } as const,
+        }))),
+    ...(Array.isArray(args) ? args : []).flatMap((arg: unknown, index) =>
+      typeof arg === "string" ? [{ text: arg, at: { field: "args", index } as const }] : [],
+    ),
   ];
-  return isCmd(words[0]) && /^\/c$/i.test(words[1] ?? "") ? words.slice(2) : words;
+  return isCmd(words[0]?.text) && /^\/c$/i.test(words[1]?.text ?? "") ? words.slice(2) : words;
 }
 
 /**
@@ -336,10 +380,10 @@ function afterOptions(words: readonly string[], i: number, options: Options): nu
 }
 
 /**
- * The words after `runner` when `words` start with it: its command by `commandName`, then each subcommand word
- * exactly, with the command's own options allowed before each.
+ * Where the words after `runner` start when `words` start with it: its command by `commandName`, then each subcommand
+ * word exactly, with the command's own options allowed before each.
  */
-function argsAfterRunner(words: readonly string[], runner: Runner): string[] | undefined {
+function argsAfterRunner(words: readonly string[], runner: Runner): number | undefined {
   const [command, ...subcommand] = runner.words;
   if (words[0] === undefined || commandName(words[0]) !== command) return undefined;
   let at = 1;
@@ -348,25 +392,30 @@ function argsAfterRunner(words: readonly string[], runner: Runner): string[] | u
     if (words[at] !== word) return undefined;
     at += 1;
   }
-  return words.slice(at);
+  return at;
 }
 
 /**
- * What a runner starts: the value of one of `fromOptions` (`-p x`, `--package=x`) given before the first argument, else
- * that first argument: the word after `--`, or a word that isn't an option or an option's value. What comes after it
- * is the server's own.
+ * What a runner starts, as the index of the word in `rest` that holds it and the text before it there: the value of
+ * one of `fromOptions` (`-p x`, `--package=x`, where `--package=` comes before it) given before the first argument,
+ * else that first argument: the word after `--`, or a word that isn't an option or an option's value. What comes
+ * after it is the server's own. `positional` is whether it is that first argument rather than an option's value.
  */
 function runnerTarget(
   rest: readonly string[],
   fromOptions: readonly string[],
   options: Options,
-): string | undefined {
+): { index: number; prefix: string; positional: boolean } | undefined {
   for (let i = 0; i < rest.length; i += optionWidth(rest, i, options)) {
     const word = rest[i]!;
-    if (word === "--" || fromOptions.includes(word)) return rest[i + 1];
+    if (word === "--" || fromOptions.includes(word)) {
+      return i + 1 < rest.length
+        ? { index: i + 1, prefix: "", positional: word === "--" }
+        : undefined;
+    }
     const from = fromOptions.find((name) => name.startsWith("--") && word.startsWith(`${name}=`));
-    if (from !== undefined) return word.slice(from.length + 1);
-    if (!word.startsWith("-")) return word;
+    if (from !== undefined) return { index: i, prefix: `${from}=`, positional: false };
+    if (!word.startsWith("-")) return { index: i, prefix: "", positional: true };
   }
   return undefined;
 }
@@ -380,25 +429,59 @@ function imagePinned(image: string): boolean {
   return tag !== "" && tag !== "latest";
 }
 
+/** What a server's runner starts, as the scanner reads it, and where in the entry that is written. */
+export type ServerStart = {
+  /** Where the runner's packages come from. */
+  registry: PackageSource;
+  /** The runner's words, `["uv", "tool", "run"]`. */
+  runner: readonly string[];
+  /** The package or image, as written: `pkg`, `pkg@latest`, `name[extra]>=1`, `ghcr.io/org/image`. */
+  target: string;
+  /** The word holding it, which is `prefix` then `target`. */
+  at: WordAt;
+  /** The text before the target in its word: `--from=` in `--from=pkg`, else empty. */
+  prefix: string;
+  /** Whether the target is the runner's first argument, not an option's value (`--from pkg`). */
+  positional: boolean;
+  /** Whether the scanner reads it as pinned. */
+  pinned: boolean;
+};
+
 /**
- * Whether a server is started from a package or an image without a pinned version. A server with no package or image,
- * one given a local path, and one not started by a runner aren't.
+ * What a server is started from, when a runner starts a package or an image: undefined for a remote server, one with
+ * no package or image, one given a local path, and one not started by a runner.
  */
-function runsUnpinned(entry: unknown): boolean {
-  if (!isObject(entry) || typeof entry.command !== "string") return false;
+export function serverStart(entry: unknown): ServerStart | undefined {
+  if (!isObject(entry) || typeof entry.command !== "string") return undefined;
   // Claude Code reads an entry with a `type` other than stdio as a remote server, whatever else it holds.
-  if (typeof entry.type === "string" && entry.type !== "stdio") return false;
+  if (typeof entry.type === "string" && entry.type !== "stdio") return undefined;
   const words = commandLine(entry.command, entry.args);
-  for (const { runners, fromOptions, pinned } of RUNNER_KINDS) {
+  const texts = words.map(({ text }) => text);
+  for (const { registry, runners, fromOptions, pinned } of RUNNER_KINDS) {
     for (const runner of runners) {
-      const rest = argsAfterRunner(words, runner);
-      if (rest === undefined) continue;
-      const started = runnerTarget(rest, fromOptions, runner.options);
-      return started !== undefined && !LOCAL_PATH.test(started) && !pinned(started);
+      const after = argsAfterRunner(texts, runner);
+      if (after === undefined) continue;
+      const found = runnerTarget(texts.slice(after), fromOptions, runner.options);
+      if (found === undefined) return undefined;
+      const word = words[after + found.index]!;
+      const target = word.text.slice(found.prefix.length);
+      if (LOCAL_PATH.test(target)) return undefined;
+      return {
+        registry,
+        runner: runner.words,
+        target,
+        at: word.at,
+        prefix: found.prefix,
+        positional: found.positional,
+        pinned: pinned(target),
+      };
     }
   }
-  return false;
+  return undefined;
 }
+
+/** Whether a server is started from a package or an image without a pinned version. */
+const runsUnpinned = (entry: unknown): boolean => serverStart(entry)?.pinned === false;
 
 /**
  * What one file's MCP servers come to: none, or one Observation for all its unpinned servers, as a file's secrets

@@ -34,6 +34,19 @@ describe("docs/data.md", () => {
     }
   });
 
+  it("names the npm and PyPI registries, and that only a package's name is sent", () => {
+    const registries = /^- \*\*npm and PyPI:\*\*[\s\S]*?(?=^- )/m.exec(leaves)?.[0] ?? "";
+    for (const said of [
+      "registry.npmjs.org",
+      "pypi.org",
+      "package's name",
+      "guard/mcp-server-unpinned",
+    ]) {
+      expect(registries).toContain(said);
+    }
+    expect(registries).toMatch(/no key, no repo name and no Team/);
+  });
+
   it("says Warden makes no outside call for CVE data", () => {
     expect(leaves).toMatch(/no outside call for CVE data/);
     for (const source of ["NVD", "CISA KEV", "EPSS", "OSV"]) expect(leaves).toContain(source);
