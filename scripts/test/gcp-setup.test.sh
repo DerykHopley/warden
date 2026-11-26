@@ -83,18 +83,23 @@ secrets warden-db-app-password roles/secretmanager.secretAccessor
 secrets warden-github-app-client-secret roles/secretmanager.secretAccessor
 secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-run)"
-# The GitHub app's two secrets (#151, #188): the live service reads both; the Scan Job reads the private key alone, so
-# it can read repos but never sign anyone in. The preview accounts get them in a later slice.
-assert_equal "only warden-run reads warden-github-app-client-secret" \
-  "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
-  "$(grep -F "add-iam-policy-binding warden-github-app-client-secret " <<<"$output" | grep -o -- '--member=[^ ]*')"
-assert_equal "only warden-run and warden-scan read warden-github-app-private-key" \
-  "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com
+# The GitHub app's two secrets (#151, #188): each service reads both; each Scan Job reads the private key alone, so
+# it can read repos but never sign anyone in. A preview shares the live read-only app (#275).
+assert_equal "only warden-run and warden-preview-run read warden-github-app-client-secret" \
+  "--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
+  "$(grep -F "add-iam-policy-binding warden-github-app-client-secret " <<<"$output" | grep -o -- '--member=[^ ]*' |
+    sort)"
+assert_equal "only the two services and the two Scan Jobs' accounts read warden-github-app-private-key" \
+  "--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com
 --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com" \
   "$(grep -F "add-iam-policy-binding warden-github-app-private-key " <<<"$output" | grep -o -- '--member=[^ ]*' |
     sort)"
-assert_equal "warden-run's executor with overrides is on the warden-scan job and no other" \
-  "gcloud run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides --project=$project" \
+assert_equal "executor with overrides: warden-run on warden-scan and warden-preview-run on warden-scan-preview, no other" \
+  "gcloud run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides --project=$project
+gcloud run jobs add-iam-policy-binding warden-scan-preview --region=europe-west1 --member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides --project=$project" \
   "$(grep -F 'roles/run.jobsExecutorWithOverrides' <<<"$output")"
 
 # The Scan Job (ADR 0009): it lists no Teams, so it reads the app password, never the admin one; and the GitHub app's
@@ -139,12 +144,38 @@ assert_equal "only warden-daily reads the admin password" \
   "--member=serviceAccount:warden-daily@$project.iam.gserviceaccount.com" \
   "$(grep -F 'add-iam-policy-binding warden-db-admin-password' <<<"$output" | grep -o -- '--member=[^ ]*')"
 
-assert_equal "warden-preview-run gets Cloud SQL client, the preview app password and the two Clerk secrets, nothing else" \
+assert_equal "warden-preview-run gets Cloud SQL client, the preview app password, the Clerk and GitHub app secrets and the preview Scan Job's executor with overrides, nothing else" \
   "projects $project roles/cloudsql.client
+run warden-scan-preview roles/run.jobsExecutorWithOverrides
 secrets warden-clerk-jwt-key roles/secretmanager.secretAccessor
 secrets warden-clerk-secret roles/secretmanager.secretAccessor
-secrets warden-db-preview-app-password roles/secretmanager.secretAccessor" \
+secrets warden-db-preview-app-password roles/secretmanager.secretAccessor
+secrets warden-github-app-client-secret roles/secretmanager.secretAccessor
+secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-preview-run)"
+
+# The preview Scan Job (#275): the live one's twin on the preview database, as its own account.
+assert_equal "warden-preview-scan gets Cloud SQL client, the preview app password and the GitHub app's private key, nothing else" \
+  "projects $project roles/cloudsql.client
+secrets warden-db-preview-app-password roles/secretmanager.secretAccessor
+secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
+  "$(bindings_to warden-preview-scan)"
+assert_line "it makes the warden-preview-scan service account" \
+  "gcloud iam service-accounts create warden-preview-scan '--display-name=Warden: warden-preview-scan' --project=$project"
+preview_scan_job="gcloud run jobs create warden-scan-preview --image=us-docker.pkg.dev/cloudrun/container/job:latest --region=europe-west1 --service-account=warden-preview-scan@$project.iam.gserviceaccount.com --project=$project"
+assert_line "the preview Scan Job runs as warden-preview-scan, with Google's placeholder job image, in europe-west1" \
+  "$preview_scan_job"
+preview_scan_job_line=$(line_of "$preview_scan_job")
+preview_scan_binding_line=$(grep -nF 'add-iam-policy-binding warden-scan-preview ' <<<"$output" | head -1 | cut -d: -f1)
+[[ $preview_scan_job_line -lt $preview_scan_binding_line ]] || fail "the preview Scan Job's binding is printed before the Job"
+pass "the preview Scan Job's bindings are printed after the Job"
+assert_equal "the preview Scan Job's only members are warden-preview-run and warden-preview-deploy" \
+  "--member=serviceAccount:warden-preview-deploy@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com" \
+  "$(grep -F 'add-iam-policy-binding warden-scan-preview ' <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
+assert_equal "the live Scan Job's only member is warden-run" \
+  "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
+  "$(grep -F 'add-iam-policy-binding warden-scan ' <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
 
 assert_equal "warden-preview-migrate gets Cloud SQL client and the preview migrate password, nothing else" \
   "projects $project roles/cloudsql.client
@@ -156,8 +187,10 @@ assert_equal "warden-preview-deploy gets run.developer on the preview service an
   "artifacts warden-preview roles/artifactregistry.writer
 iam warden-preview-migrate@$project.iam.gserviceaccount.com roles/iam.serviceAccountUser
 iam warden-preview-run@$project.iam.gserviceaccount.com roles/iam.serviceAccountUser
+iam warden-preview-scan@$project.iam.gserviceaccount.com roles/iam.serviceAccountUser
 run warden-migrate-preview roles/run.developer
-run warden-preview roles/run.developer" \
+run warden-preview roles/run.developer
+run warden-scan-preview roles/run.developer" \
   "$(bindings_to warden-preview-deploy)"
 assert_line "warden-preview-deploy's run.developer is on the warden-preview service" \
   "gcloud run services add-iam-policy-binding warden-preview --region=europe-west1 --member=serviceAccount:warden-preview-deploy@$project.iam.gserviceaccount.com --role=roles/run.developer"
@@ -165,8 +198,8 @@ assert_line "warden-preview-deploy's run.developer is on the warden-migrate-prev
   "gcloud run jobs add-iam-policy-binding warden-migrate-preview --region=europe-west1 --member=serviceAccount:warden-preview-deploy@$project.iam.gserviceaccount.com --role=roles/run.developer"
 
 assert_no_line "no service account gets the postgres password" "add-iam-policy-binding warden-db-password"
-for account in warden-run warden-migrate; do
-  assert_no_line "$account gets no preview secret" "preview" "$(bindings_to "$account")"
+for account in warden-run warden-migrate warden-deploy warden-daily warden-scan; do
+  assert_no_line "$account gets nothing preview" "preview" "$(bindings_to "$account")"
 done
 
 assert_line "the repository binding is on the warden repository in europe-west1" \
@@ -362,6 +395,7 @@ done
 #   fresh         the instance and the six hand-made secrets only, as on a first run
 #   rerun         everything, with point-in-time recovery on
 #   before-scan   as rerun, but without the warden-scan account and Job (the owner's rerun for the Scan Job, #115)
+#   before-preview-scan  as rerun, but without the warden-preview-scan account and warden-scan-preview Job (#275)
 #   unprepared    neither the instance nor warden-clerk-jwt-key
 #   no-github-app as fresh, but without the GitHub app's two secrets (#132 not done yet)
 #   denied      every secret refuses with PERMISSION_DENIED
@@ -383,7 +417,7 @@ case "$*" in
     [[ $FAKE_STATE == no-adc ]] && { echo "ERROR: (gcloud.auth.application-default.print-access-token) no credentials" >&2; exit 1; }
     echo fake-token ;;
   "sql instances describe"*pointInTimeRecoveryEnabled*)
-    if [[ $FAKE_STATE == rerun || $FAKE_STATE == before-scan ]]; then echo True; else echo False; fi ;;
+    if [[ $FAKE_STATE == rerun || $FAKE_STATE == before-* ]]; then echo True; else echo False; fi ;;
   "projects describe"*) echo 123456789 ;;
   "projects get-iam-policy"*) echo '{"bindings":[{"role":"roles/owner","members":["user:a@example.com"]}],"etag":"BwX="}' ;;
   "projects set-iam-policy"*) cp "$4" "$dir/policy" ;;
@@ -410,7 +444,7 @@ case "$*" in
   *describe*--format=*) echo "name: $3" ;;
   "secrets describe"*)
     [[ $FAKE_STATE == denied ]] && not_found secrets.describe "PERMISSION_DENIED: Permission denied on secret $3."
-    [[ $FAKE_STATE == rerun || $FAKE_STATE == before-scan ]] && exit 0
+    [[ $FAKE_STATE == rerun || $FAKE_STATE == before-* ]] && exit 0
     case "$3" in
       warden-db-password | warden-clerk-secret | warden-clerk-publishable) exit 0 ;;
       warden-clerk-jwt-key) [[ $FAKE_STATE != unprepared ]] && exit 0 ;;
@@ -426,7 +460,12 @@ case "$*" in
       not_found iam.service-accounts.describe "NOT_FOUND: Unknown service account" ;;&
   "run jobs describe warden-scan "*)
     [[ $FAKE_STATE == before-scan ]] && not_found run.jobs.describe "Cannot find job [$4]." ;;&
-  *describe*) [[ $FAKE_STATE == rerun || $FAKE_STATE == before-scan ]] && exit 0 ;;&
+  "iam service-accounts describe warden-preview-scan@"*)
+    [[ $FAKE_STATE == before-preview-scan ]] &&
+      not_found iam.service-accounts.describe "NOT_FOUND: Unknown service account" ;;&
+  "run jobs describe warden-scan-preview "*)
+    [[ $FAKE_STATE == before-preview-scan ]] && not_found run.jobs.describe "Cannot find job [$4]." ;;&
+  *describe*) [[ $FAKE_STATE == rerun || $FAKE_STATE == before-* ]] && exit 0 ;;&
   "sql databases describe"*) not_found sql.databases.describe "HTTPError 404: Not Found" ;;
   "run services describe"*) not_found run.services.describe "Cannot find service [$4]" ;;
   "run jobs describe"*) not_found run.jobs.describe "Cannot find job [$4]." ;;
@@ -739,6 +778,8 @@ assert_line "a first run makes the service" "run deploy warden " "$calls"
 assert_line "a first run makes the preview service" "run deploy warden-preview " "$calls"
 assert_line "a first run makes the preview migration job" "run jobs create warden-migrate-preview " "$calls"
 assert_line "a first run makes the daily Job" "run jobs create warden-daily-expiry " "$calls"
+assert_line "a first run makes the Scan Job" "run jobs create warden-scan " "$calls"
+assert_line "a first run makes the preview Scan Job" "run jobs create warden-scan-preview " "$calls"
 assert_line "a first run makes the daily Job's Scheduler job" "scheduler jobs create http warden-daily-expiry " "$calls"
 
 # An empty DRY_RUN is a real run too.
@@ -855,6 +896,27 @@ for binding in \
   "iam service-accounts add-iam-policy-binding warden-scan@$project.iam.gserviceaccount.com --member=serviceAccount:warden-deploy@$project.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser" \
   "run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides"; do
   assert_line "a rerun before the Scan Job binds: ${binding%% --member*} ${binding##*--role=}" "$binding" "$calls"
+done
+
+# The owner's rerun for the preview Scan Job (#275): everything else exists, so it makes the warden-preview-scan account
+# and the warden-scan-preview Job, and nothing else, and binds them.
+real_run before-preview-scan before-preview-scan
+[[ $code == 0 ]] || fail "a rerun before the preview Scan Job failed: $out"
+pass "a rerun before the preview Scan Job ends"
+assert_equal "a rerun before the preview Scan Job makes the warden-preview-scan account and warden-scan-preview Job, and nothing else" \
+  "iam service-accounts create warden-preview-scan --display-name=Warden: warden-preview-scan --project=$project
+run jobs create warden-scan-preview --image=us-docker.pkg.dev/cloudrun/container/job:latest --region=europe-west1 --service-account=warden-preview-scan@$project.iam.gserviceaccount.com --project=$project" \
+  "$(grep -E ' create |create-oidc|^run deploy |--enable-point-in-time-recovery' <<<"$calls")"
+for binding in \
+  "projects add-iam-policy-binding $project --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/cloudsql.client" \
+  "secrets add-iam-policy-binding warden-db-preview-app-password --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-github-app-private-key --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-github-app-client-secret --member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-github-app-private-key --member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "iam service-accounts add-iam-policy-binding warden-preview-scan@$project.iam.gserviceaccount.com --member=serviceAccount:warden-preview-deploy@$project.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser" \
+  "run jobs add-iam-policy-binding warden-scan-preview --region=europe-west1 --member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides" \
+  "run jobs add-iam-policy-binding warden-scan-preview --region=europe-west1 --member=serviceAccount:warden-preview-deploy@$project.iam.gserviceaccount.com --role=roles/run.developer"; do
+  assert_line "a rerun before the preview Scan Job binds: ${binding%% --member*} ${binding##*--role=}" "$binding" "$calls"
 done
 
 # with_secret_reads_logged: the policy edit itself, on policies with and without audit configs.

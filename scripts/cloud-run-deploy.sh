@@ -1,23 +1,26 @@
 #!/usr/bin/env bash
 # Deploys one Warden image to Cloud Run, in three steps: migrate the database and load Patch's CVE snapshot with a
 # Cloud Run job, deploy a revision with the whole configuration set afresh, and wait for its /api/health to answer
-# 200. A release first checks that the Scan Job is there; after the health gate it gives the Scan Job the image, moves
-# all of the service's traffic to the revision, and gives the daily Job the image. README.md's "Owner previews" and
-# "Releasing" say when each runs and what it shows.
+# 200. Each mode first checks that its Scan Job is there, and after the health gate gives that Job the image; a release
+# then moves all of the service's traffic to the revision, and gives the daily Job the image. README.md's "Owner
+# previews" and "Releasing" say when each runs and what it shows.
 #
 # Usage: scripts/cloud-run-deploy.sh <image> preview <name>
 #        scripts/cloud-run-deploy.sh <image> release
 #        preview <name>: the warden-preview service, a revision tagged <name> that gets no traffic, on the
-#        warden_preview database, as the preview accounts only. <name> is a Cloud Run tag: 1 to 20 lowercase letters,
-#        digits and hyphens, starting with a letter and not ending in a hyphen (20 keeps the revision name short).
+#        warden_preview database, as the preview accounts only; after its health gate, the preview Scan Job
+#        warden-scan-preview's image (every preview shares the one Job, so it runs the last preview's image). <name>
+#        is a Cloud Run tag: 1 to 20 lowercase letters, digits and hyphens, starting with a letter and not ending in a
+#        hyphen (20 keeps the revision name short).
 #        release: the warden service, a revision tagged candidate on the warden database, as the live accounts only;
-#        after its health gate, the Scan Job warden-scan's image (the revision names the Job in WARDEN_SCAN_JOB; a
-#        preview has no Scan Job), then 100% of traffic by revision name (the release it replaces tagged previous, for
-#        a rollback), then the daily Job warden-daily-expiry's image. Run in a checkout with main's whole history: it
-#        releases only a commit on main that is newer than the serving release's (release_order).
-# Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>) and VITE_CLERK_PUBLISHABLE_KEY (public),
-#        all required; WARDEN_GITHUB_APP_CLIENT_ID (the read-only GitHub app's client id, public), required for a
-#        release and not read by a preview; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT
+#        after its health gate, the Scan Job warden-scan's image, then 100% of traffic by revision name (the release
+#        it replaces tagged previous, for a rollback), then the daily Job warden-daily-expiry's image. Run in a
+#        checkout with main's whole history: it releases only a commit on main that is newer than the serving
+#        release's (release_order).
+#        Each mode's revision names its Scan Job in WARDEN_SCAN_JOB.
+# Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>), VITE_CLERK_PUBLISHABLE_KEY (public) and
+#        WARDEN_GITHUB_APP_CLIENT_ID (the read-only GitHub app's client id, public; a preview shares the live app),
+#        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT
 #        (default 1), which GitHub Actions sets, name the revision. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health gate.
 # Needs: gcloud signed in as an account that may deploy the mode's job and service and act as its accounts; curl; jq;
 #        git, for a release.
@@ -30,8 +33,9 @@ readonly NAME_RULE="1 to 20 lowercase letters, digits and hyphens, starting with
 # shellcheck source-path=SCRIPTDIR source=lib/cloud-run.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-run.sh"
 
-# One table of names per mode: the service and its account, the migration job and its account, the database, its
-# role set and roles, the two password secrets, the revision suffix's start, and which of the service's URLs a Clerk
+# One table of names per mode: the service and its account, the migration job and its account, the Scan Job, the
+# database, its role set and roles, the two password secrets, the revision suffix's start, and which of the service's
+# URLs a Clerk
 # session token may be made for (PARTIES_FROM: the tag's, for a preview reached only there; the service's own, for a
 # release that takes the traffic).
 names_for() {
@@ -41,6 +45,7 @@ names_for() {
       RUN_ACCOUNT=warden-preview-run
       JOB=warden-migrate-preview
       MIGRATE_ACCOUNT=warden-preview-migrate
+      MODE_SCAN_JOB=$PREVIEW_SCAN_JOB
       DATABASE=warden_preview
       DATABASE_ROLES=preview
       APP_USER=warden_preview_app
@@ -55,6 +60,7 @@ names_for() {
       RUN_ACCOUNT=warden-run
       JOB=warden-migrate
       MIGRATE_ACCOUNT=warden-migrate
+      MODE_SCAN_JOB=$SCAN_JOB
       DATABASE=warden
       DATABASE_ROLES=live
       APP_USER=warden_app
@@ -68,7 +74,7 @@ names_for() {
 }
 readonly CLERK_SECRET=warden-clerk-secret
 readonly CLERK_JWT_SECRET=warden-clerk-jwt-key
-# The read-only GitHub app's (#132): a release's revision only, until previews get theirs.
+# The read-only GitHub app's (#132), which a preview shares (#275).
 readonly GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
 readonly GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key
 # The migration job's one execution: the migrations, then Patch's CVE snapshot (README.md's "CVE data"). A failure in
@@ -99,17 +105,14 @@ deploy_revision() {
   password=$(pinned "$APP_PASSWORD_SECRET") || exit 1
   clerk_secret=$(pinned "$CLERK_SECRET") || exit 1
   clerk_jwt=$(pinned "$CLERK_JWT_SECRET") || exit 1
+  github_secret=$(pinned "$GITHUB_APP_CLIENT_SECRET") || exit 1
+  github_key=$(pinned "$GITHUB_APP_PRIVATE_KEY") || exit 1
+  # The revision starts Scans on its mode's Scan Job, and links GitHub installations with the read-only app.
   env=("PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "PGUSER=$APP_USER" "PGDATABASE=$DATABASE"
-    "VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY" "CLERK_AUTHORIZED_PARTIES=$parties")
-  secrets=("PGPASSWORD=$password" "CLERK_SECRET_KEY=$clerk_secret" "CLERK_JWT_KEY=$clerk_jwt")
-  # A release's revision starts Scans on the Scan Job, and links GitHub installations with the read-only app; a
-  # preview's has neither, so its "Scan now" and its link route answer 503.
-  if [[ $SERVICE == warden ]]; then
-    github_secret=$(pinned "$GITHUB_APP_CLIENT_SECRET") || exit 1
-    github_key=$(pinned "$GITHUB_APP_PRIVATE_KEY") || exit 1
-    env+=("WARDEN_SCAN_JOB=$(scan_job_name)" "GITHUB_APP_CLIENT_ID=$WARDEN_GITHUB_APP_CLIENT_ID")
-    secrets+=("GITHUB_APP_CLIENT_SECRET=$github_secret" "GITHUB_APP_PRIVATE_KEY=$github_key")
-  fi
+    "VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY" "CLERK_AUTHORIZED_PARTIES=$parties"
+    "WARDEN_SCAN_JOB=$(scan_job_name "$MODE_SCAN_JOB")" "GITHUB_APP_CLIENT_ID=$WARDEN_GITHUB_APP_CLIENT_ID")
+  secrets=("PGPASSWORD=$password" "CLERK_SECRET_KEY=$clerk_secret" "CLERK_JWT_KEY=$clerk_jwt"
+    "GITHUB_APP_CLIENT_SECRET=$github_secret" "GITHUB_APP_PRIVATE_KEY=$github_key")
   gcloud run deploy "$SERVICE" \
     --image="$IMAGE" \
     --region="$REGION" \
@@ -184,9 +187,8 @@ main() {
       ;;
     *) usage_error "the mode must be preview or release, not '$mode'" ;;
   esac
-  local var required=(GCP_PROJECT_ID CLOUD_SQL_CONNECTION VITE_CLERK_PUBLISHABLE_KEY GITHUB_SHA GITHUB_RUN_NUMBER)
-  # Only a release's revision gets the GitHub app; a preview doesn't read its client id.
-  if [[ $mode == release ]]; then required+=(WARDEN_GITHUB_APP_CLIENT_ID); fi
+  local var required=(GCP_PROJECT_ID CLOUD_SQL_CONNECTION VITE_CLERK_PUBLISHABLE_KEY WARDEN_GITHUB_APP_CLIENT_ID
+    GITHUB_SHA GITHUB_RUN_NUMBER)
   for var in "${required[@]}"; do
     [[ -n ${!var:-} ]] || usage_error "set $var"
   done
@@ -229,18 +231,18 @@ main() {
     esac
   fi
 
-  # The revision names the Scan Job, so a release stops before changing anything when the Job isn't there.
-  if [[ $mode == release ]]; then
-    gcloud run jobs describe "$SCAN_JOB" --region="$REGION" --project="$GCP_PROJECT_ID" >/dev/null ||
-      fail "the Scan Job $SCAN_JOB isn't there: rerun scripts/gcp-setup.sh. Nothing was migrated or deployed"
-  fi
+  # The revision names its Scan Job, so the run stops before changing anything when the Job isn't there.
+  gcloud run jobs describe "$MODE_SCAN_JOB" --region="$REGION" --project="$GCP_PROJECT_ID" >/dev/null ||
+    fail "the Scan Job $MODE_SCAN_JOB isn't there: rerun scripts/gcp-setup.sh. Nothing was migrated or deployed"
 
   migrate
   deploy_revision "$parties"
   wait_for_health "${tagged[0]}" || fail "the revision gets no traffic"
 
   if [[ $mode == preview ]]; then
-    say "Preview \`$TAG\` is up, with no traffic: ${tagged[0]}"
+    update_scan_job "$IMAGE" preview ||
+      fail "preview \`$TAG\` is up at ${tagged[0]}, but updating the Scan Job $PREVIEW_SCAN_JOB failed; its Scans run an older image. Push to the branch again"
+    say "Preview \`$TAG\` is up, with no traffic: ${tagged[0]}. $PREVIEW_SCAN_JOB runs its image."
     return 0
   fi
   update_scan_job "$IMAGE" ||

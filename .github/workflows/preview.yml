@@ -19,7 +19,7 @@ jobs:
       configured: ${{ steps.check.outputs.configured }}
     steps:
       - uses: actions/checkout@v7
-      # Before anything is built: the name must be a Cloud Run tag, and the five variables the deploy reads set.
+      # Before anything is built: the name must be a Cloud Run tag, and the six variables the deploy reads set.
       # Without GCP_PROJECT_ID or GCP_PREVIEW_DEPLOY_SA it prints a notice naming what's missing and the run stays
       # green, deploying nothing; with those two but another missing, it fails naming each.
       - name: preview/<name> must be a Cloud Run tag; the deploy's variables must be set
@@ -30,6 +30,7 @@ jobs:
           GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
           CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          WARDEN_GITHUB_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_APP_CLIENT_ID }}
         run: scripts/preview-check.sh "$GITHUB_REF_NAME"
 
   # Outside the preview lock, with no Google credentials: the image goes to the deploy job as an artifact.
@@ -99,5 +100,6 @@ jobs:
           GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
           CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
+          WARDEN_GITHUB_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_APP_CLIENT_ID }}
           PREVIEW_NAME: ${{ needs.check.outputs.name }}
         run: scripts/cloud-run-deploy.sh "$IMAGE" preview "$PREVIEW_NAME"

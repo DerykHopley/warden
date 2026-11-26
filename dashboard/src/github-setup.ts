@@ -117,8 +117,10 @@ export const installUrl = (slug: string) =>
   `https://github.com/apps/${encodeURIComponent(slug)}/installations/new`;
 
 /**
- * GitHub's sign-in for the App, with PKCE (S256). No `redirect_uri`: GitHub uses the App's registered callback URL,
- * `/setup/github/callback`.
+ * GitHub's sign-in for the App, with PKCE (S256). Its `redirect_uri` is this page's own origin plus
+ * `/setup/github/callback`, so a sign-in started on an owner preview comes back to the preview, where this tab's
+ * attempt is kept (#275). GitHub accepts it only when it's one of the App's registered callback URLs; otherwise it
+ * refuses with `redirect_uri_mismatch`, which the callback page shows.
  */
 export function signInUrl(clientId: string, state: string, codeChallenge: string): string {
   const url = new URL("https://github.com/login/oauth/authorize");
@@ -126,6 +128,10 @@ export function signInUrl(clientId: string, state: string, codeChallenge: string
   url.searchParams.set("state", state);
   url.searchParams.set("code_challenge", codeChallenge);
   url.searchParams.set("code_challenge_method", "S256");
+  url.searchParams.set(
+    "redirect_uri",
+    new URL("/setup/github/callback", window.location.origin).toString(),
+  );
   return url.toString();
 }
 

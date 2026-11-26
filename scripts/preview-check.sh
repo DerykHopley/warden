@@ -3,7 +3,7 @@
 # repository variables the deploy reads set?
 #
 # Usage: scripts/preview-check.sh <branch>     (preview/<name>, as GitHub's github.ref_name gives it)
-# Env:   GITHUB_OUTPUT (GitHub Actions sets it), and the five repository variables below.
+# Env:   GITHUB_OUTPUT (GitHub Actions sets it), and the six repository variables below.
 #
 # - A name that isn't 1 to 20 lowercase letters, digits and hyphens, starting with a letter and not ending in a
 #   hyphen: an error naming the rule, exit 1. scripts/cloud-run-deploy.sh holds the name to the same rule.
@@ -16,7 +16,8 @@
 set -euo pipefail
 
 readonly NAME_RULE="1 to 20 lowercase letters, digits and hyphens, starting with a letter and not ending in a hyphen"
-readonly VARIABLES=(GCP_PROJECT_ID GCP_PREVIEW_DEPLOY_SA GCP_WIF_PROVIDER CLOUD_SQL_CONNECTION VITE_CLERK_PUBLISHABLE_KEY)
+readonly VARIABLES=(GCP_PROJECT_ID GCP_PREVIEW_DEPLOY_SA GCP_WIF_PROVIDER CLOUD_SQL_CONNECTION VITE_CLERK_PUBLISHABLE_KEY
+  WARDEN_GITHUB_APP_CLIENT_ID)
 
 name=${1#preview/}
 if [[ ! $name =~ ^[a-z]([a-z0-9-]{0,18}[a-z0-9])?$ ]]; then

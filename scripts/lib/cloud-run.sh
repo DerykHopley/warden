@@ -16,6 +16,9 @@ readonly DAILY_ACCOUNT=warden-daily
 # The Scan Job (ADR 0009): the service starts one execution per Scan, naming it by WARDEN_SCAN_JOB.
 readonly SCAN_JOB=warden-scan
 readonly SCAN_ACCOUNT=warden-scan
+# An owner preview's Scan Job (#275), shared by every preview: it runs the image of the last preview deployed.
+readonly PREVIEW_SCAN_JOB=warden-scan-preview
+readonly PREVIEW_SCAN_ACCOUNT=warden-preview-scan
 
 # Secret Manager versions the deploys read, one per secret: the only place a version number lives. gcp-setup.sh makes
 # each generated password as version 1; check a hand-made secret's with `gcloud secrets versions list <secret>`.
@@ -104,13 +107,13 @@ wait_for_health() {
   return 1
 }
 
-# <job> <image> <account> <script> <secrets> [KEY=VALUE...] [--flag...]: the Job runs <image> as <account>,
-# `node <script>` on the warden database as warden_app, with one retry, the secrets <secrets> (a dict), any further
-# plain value given and any flag given (each starts with --). Its whole configuration is set afresh from here: the same
-# on a release and a rollback. Returns gcloud's status.
+# <job> <image> <account> <script> <database> <user> <secrets> [KEY=VALUE...] [--flag...]: the Job runs <image> as
+# <account>, `node <script>` on <database> as <user>, with one retry, the secrets <secrets> (a dict), any further plain
+# value given and any flag given (each starts with --). Its whole configuration is set afresh from here: the same on a
+# release and a rollback. Returns gcloud's status.
 update_job() {
-  local job=$1 image=$2 account=$3 script=$4 secrets=$5 env=()
-  shift 5
+  local job=$1 image=$2 account=$3 script=$4 database=$5 user=$6 secrets=$7 env=()
+  shift 7
   while (($#)) && [[ $1 != --* ]]; do
     env+=("$1")
     shift
@@ -124,7 +127,7 @@ update_job() {
     --args="$script" \
     --max-retries=1 \
     "$@" \
-    --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" PGUSER=warden_app PGDATABASE=warden "${env[@]}")" \
+    --set-env-vars="$(dict "PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "PGUSER=$user" "PGDATABASE=$database" "${env[@]}")" \
     --set-secrets="$secrets" \
     --project="$GCP_PROJECT_ID"
 }
@@ -135,24 +138,30 @@ update_daily_job() {
   local app_password admin_password
   app_password=$(pinned warden-db-app-password) || exit 1
   admin_password=$(pinned warden-db-admin-password) || exit 1
-  update_job "$DAILY_JOB" "$1" "$DAILY_ACCOUNT" server/src/daily-expiry.ts \
+  update_job "$DAILY_JOB" "$1" "$DAILY_ACCOUNT" server/src/daily-expiry.ts warden warden_app \
     "$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")"
 }
 
-# The Scan Job's resource name, as the live revision's WARDEN_SCAN_JOB holds it.
-scan_job_name() { echo "projects/$GCP_PROJECT_ID/locations/$REGION/jobs/$SCAN_JOB"; }
+# [job]: a Scan Job's resource name (the live one's by default), as a revision's WARDEN_SCAN_JOB holds it.
+scan_job_name() { echo "projects/$GCP_PROJECT_ID/locations/$REGION/jobs/${1:-$SCAN_JOB}"; }
 
-# <image>: the Scan Job (ADR 0009) runs that image, for up to an hour a task. Each execution's override holds only a
-# Scan id and a Team; the Job works inside that Team, as warden_app, so it gets the app password, never the admin
+# <image> [preview]: the Scan Job (ADR 0009) runs that image, for up to an hour a task. Each execution's override holds
+# only a Scan id and a Team; the Job works inside that Team, as warden_app, so it gets the app password, never the admin
 # password or a Clerk key. It reads the Team's repos as the GitHub app (#168): the client id
 # (WARDEN_GITHUB_APP_CLIENT_ID, which each caller requires) and the private key, never the client secret, so it can't
-# sign anyone in to GitHub. Returns gcloud's status.
+# sign anyone in to GitHub. With `preview`, the preview Scan Job (#275) instead: the same, as warden-preview-scan, on
+# warden_preview as warden_preview_app. Returns gcloud's status.
 update_scan_job() {
   # Read here, not inside the $(...) below, so an unset one stops the script (set -u) rather than only the subshell.
   local client_id=$WARDEN_GITHUB_APP_CLIENT_ID app_password github_key
-  app_password=$(pinned warden-db-app-password) || exit 1
+  local job=$SCAN_JOB account=$SCAN_ACCOUNT database=warden user=warden_app password_secret=warden-db-app-password
+  if [[ ${2-} == preview ]]; then
+    job=$PREVIEW_SCAN_JOB account=$PREVIEW_SCAN_ACCOUNT database=warden_preview user=warden_preview_app
+    password_secret=warden-db-preview-app-password
+  fi
+  app_password=$(pinned "$password_secret") || exit 1
   github_key=$(pinned warden-github-app-private-key) || exit 1
-  update_job "$SCAN_JOB" "$1" "$SCAN_ACCOUNT" server/src/scan-job.ts \
+  update_job "$job" "$1" "$account" server/src/scan-job.ts "$database" "$user" \
     "$(dict "PGPASSWORD=$app_password" "GITHUB_APP_PRIVATE_KEY=$github_key")" "GITHUB_APP_CLIENT_ID=$client_id" \
     --task-timeout=3600s
 }
