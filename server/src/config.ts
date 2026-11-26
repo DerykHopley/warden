@@ -74,6 +74,19 @@ const GitHubApp = z
     privateKey: app.GITHUB_APP_PRIVATE_KEY,
   }));
 
+/** The write GitHub app's settings, which Fix PRs go through: all three or none, as the read app's. */
+const GitHubWriteApp = z
+  .object({
+    GITHUB_WRITE_APP_CLIENT_ID: required,
+    GITHUB_WRITE_APP_CLIENT_SECRET: required,
+    GITHUB_WRITE_APP_PRIVATE_KEY: appPrivateKey,
+  })
+  .transform((app) => ({
+    clientId: app.GITHUB_WRITE_APP_CLIENT_ID,
+    clientSecret: app.GITHUB_WRITE_APP_CLIENT_SECRET,
+    privateKey: app.GITHUB_WRITE_APP_PRIVATE_KEY,
+  }));
+
 /** Whether Node can read `pem` as an RSA private key, which RS256 signs with. */
 function isRsaPrivateKey(pem: string): boolean {
   try {
@@ -87,6 +100,12 @@ const GITHUB_VARIABLES = [
   "GITHUB_APP_CLIENT_ID",
   "GITHUB_APP_CLIENT_SECRET",
   "GITHUB_APP_PRIVATE_KEY",
+] as const;
+
+const GITHUB_WRITE_VARIABLES = [
+  "GITHUB_WRITE_APP_CLIENT_ID",
+  "GITHUB_WRITE_APP_CLIENT_SECRET",
+  "GITHUB_WRITE_APP_PRIVATE_KEY",
 ] as const;
 
 /** `https://host[:port]` and nothing more: what a token's `azp` holds. */
@@ -115,8 +134,13 @@ export type Config = {
     authorizedParties: string[];
   };
   /** The read-only GitHub App, which a Team's repos are linked through; unset, none can be linked. */
-  github: { clientId: string; clientSecret: string; privateKey: string } | undefined;
+  github: GitHubAppSettings | undefined;
+  /** The write GitHub App, which Fix PRs go through with a Team's write grant; unset, none can be opened. */
+  githubWrite: GitHubAppSettings | undefined;
 };
+
+/** A GitHub App's settings: its client id and secret, and the private key it signs its JWTs with. */
+export type GitHubAppSettings = { clientId: string; clientSecret: string; privateKey: string };
 
 /** A variable is missing or malformed. Its message names the variables, never their values. */
 export class ConfigError extends Error {
@@ -132,12 +156,19 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   // An empty value counts as unset: `.envrc` exports "" when a keyring entry is missing.
   const present = Object.fromEntries(Object.entries(env).filter(([, value]) => value !== ""));
   const parsed = Env.safeParse(present);
-  // One of the App's settings without the others links nothing, and is a mistake to say at start, with the rest.
+  // One of an App's settings without the others links nothing, and is a mistake to say at start, with the rest.
   const github = GITHUB_VARIABLES.some((name) => name in present)
     ? GitHubApp.safeParse(present)
     : undefined;
-  if (!parsed.success || github?.success === false) {
-    const issues = [...(parsed.error?.issues ?? []), ...(github?.error?.issues ?? [])];
+  const githubWrite = GITHUB_WRITE_VARIABLES.some((name) => name in present)
+    ? GitHubWriteApp.safeParse(present)
+    : undefined;
+  if (!parsed.success || github?.success === false || githubWrite?.success === false) {
+    const issues = [
+      ...(parsed.error?.issues ?? []),
+      ...(github?.error?.issues ?? []),
+      ...(githubWrite?.error?.issues ?? []),
+    ];
     throw new ConfigError([...new Set(issues.map((issue) => String(issue.path[0])))]);
   }
   const { data } = parsed;
@@ -157,6 +188,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
       authorizedParties: data.CLERK_AUTHORIZED_PARTIES ?? [LOCAL_DASHBOARD_ORIGIN],
     },
     github: github?.data,
+    githubWrite: githubWrite?.data,
   };
 }
 
