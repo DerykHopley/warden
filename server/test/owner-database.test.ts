@@ -35,8 +35,14 @@ describe("refuseOwnerDatabase", () => {
     ).not.toThrow();
   });
 
-  it("lets port 54329 through in CI", () => {
-    expect(() => refuseOwnerDatabase("54329", "pnpm e2e", { CI: "true" })).not.toThrow();
+  it("lets port 54329 through in CI, when CI is true or 1", () => {
+    for (const value of ["true", "TRUE", "1"])
+      expect(() => refuseOwnerDatabase("54329", "pnpm e2e", { CI: value })).not.toThrow();
+  });
+
+  it("refuses port 54329 when CI is set to anything that doesn't mean true (#291)", () => {
+    for (const value of ["", "false", "0", "no"])
+      expect(() => refuseOwnerDatabase("54329", "pnpm e2e", { CI: value })).toThrow(/port 54329/);
   });
 
   it("lets any other port through", () => {
