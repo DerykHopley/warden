@@ -24,12 +24,17 @@ test("an Admin installs the app, signs in with GitHub and links installation 42 
   await signIn(ADA);
   await page.route("**/api/github/app", (route) => route.fulfill({ json: APP }));
   let signInUrl: URL | undefined;
+  // GitHub answers with a redirect; the fake answers with a page that sends the browser back the same way, as
+  // WebKit's Playwright can't fulfill a route with a redirect status (#285).
   await page.route("https://github.com/login/oauth/authorize**", (route) => {
     signInUrl = new URL(route.request().url());
     const back = new URL("/setup/github/callback", baseURL);
     back.searchParams.set("code", "the-code");
     back.searchParams.set("state", signInUrl.searchParams.get("state") ?? "");
-    return route.fulfill({ status: 302, headers: { location: back.toString() } });
+    return route.fulfill({
+      contentType: "text/html",
+      body: `<script>location.replace(${JSON.stringify(back.toString())})</script>`,
+    });
   });
   const linkCalls: unknown[] = [];
   await page.route("**/api/github/installations", (route) => {
@@ -71,13 +76,17 @@ test("an Admin installs the app, signs in with GitHub and links installation 42 
   await expect(page.getByRole("link", { name: "Back to Setup" })).toHaveAttribute("href", "/setup");
 });
 
-/** Each listed repo's row as [ref, last Scan words]. */
+/**
+ * Each listed repo's row as [ref, last Scan words]. Read with `evaluate` on the list, never `evaluateAll`: Playwright
+ * runs an `evaluateAll` locator in the page's own world, where naming the region (`ariaLabelledByElements`) crashes
+ * Firefox's page process; `evaluate` finds the list in Playwright's isolated world first (#285).
+ */
 const repoRows = (page: Page) =>
   page
     .getByRole("region", { name: "Repos" })
-    .getByRole("listitem")
-    .evaluateAll((items) =>
-      items.map((item) => [...item.children].map((part) => part.textContent ?? "")),
+    .getByRole("list")
+    .evaluate((list) =>
+      [...list.children].map((item) => [...item.children].map((part) => part.textContent ?? "")),
     );
 
 test("an Admin starts Scan now and sees each repo's last Scan go from failed, through under way, to failed again (story 2)", async ({
