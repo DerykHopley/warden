@@ -39,11 +39,8 @@ import { patchRoutes } from "../src/modules/patch/routes.ts";
 import { createSaveLimit, type SaveLimit } from "../src/modules/patch/save-limit.ts";
 import { createPatchScan, PATCH_RULE, type PatchScan } from "../src/modules/patch/scan.ts";
 import { createAuditReads } from "../src/modules/vouch/audit.ts";
-import { VDA_ISA_2027_1 } from "../src/modules/vouch/catalogue.ts";
-import { createControlReviews } from "../src/modules/vouch/control-reviews.ts";
+import { createVouchDeps } from "../src/modules/vouch/deps.ts";
 import { vouchRoutes } from "../src/modules/vouch/routes.ts";
-import { createTeamAssets } from "../src/modules/vouch/team-assets.ts";
-import { createTeamCatalogues } from "../src/modules/vouch/team-catalogues.ts";
 import {
   createScans,
   type AssetChecks,
@@ -455,16 +452,12 @@ const noCatalogueOn: AuditReads = {
  * VDA ISA 2027.1, for `testApp`'s `moduleRoutes` and `audit`.
  */
 export function vouchWiring(withTeam: WithTeam): { routes: MountRoutes; audit: AuditReads } {
-  const vouch = {
-    teamCatalogues: createTeamCatalogues({ withTeam }),
-    catalogues: [VDA_ISA_2027_1],
+  const vouch = createVouchDeps({
+    withTeam,
     findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
-    teamAssets: createTeamAssets({
-      repoAssets: createRepoAssets({ withTeam }),
-      products: createProducts({ withTeam }),
-    }),
-    controlReviews: createControlReviews({ withTeam }),
-  };
+    repoAssets: createRepoAssets({ withTeam }),
+    products: createProducts({ withTeam }),
+  });
   return { routes: vouchRoutes(vouch), audit: createAuditReads(vouch) };
 }
 

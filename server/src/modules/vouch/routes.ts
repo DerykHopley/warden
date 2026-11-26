@@ -10,18 +10,17 @@ import {
   type ControlDetail,
   type ControlReview,
   type ControlsBody,
-  type ControlVerdict,
   type TeamCatalogue,
 } from "@warden/contracts";
 import type { MountRoutes } from "../../app.ts";
 import { pathId } from "../../path-id.ts";
 import { refusedBody } from "../../refused-body.ts";
 import type { Catalogue, Control } from "./catalogue.ts";
-import type { ControlReviews, StoredControlReview } from "./control-reviews.ts";
-import { judgeCatalogue, judgeControls, type JudgedControl, type VouchReads } from "./controls.ts";
-import { reviewStateOf } from "./review-state.ts";
-import type { TeamAssets } from "./team-assets.ts";
-import type { TeamCatalogueChoice, TeamCatalogues } from "./team-catalogues.ts";
+import type { StoredControlReview } from "./control-reviews.ts";
+import { judgeCatalogue, judgeControls, type JudgedControl } from "./controls.ts";
+import type { VouchDeps } from "./deps.ts";
+import { withReviewState } from "./review-state.ts";
+import { isOn, type TeamCatalogueChoice } from "./team-catalogues.ts";
 
 /** `catalogue` as the Team sees it, with the Team's `choice` (none: off, set by no one). */
 function teamCatalogue(
@@ -64,26 +63,13 @@ const controlReviewOf = (review: StoredControlReview): ControlReview => ({
   reviewed_at: review.reviewedAt.toISOString(),
 });
 
-/** `judged` with where it stands with `reviews`, its own, newest first. */
-const withReviewState = (
-  judged: JudgedControl,
-  reviews: readonly ControlReview[],
-): ControlVerdict => ({ ...judged, ...reviewStateOf(judged.verdict, reviews) });
-
 export function vouchRoutes({
   teamCatalogues,
   catalogues,
   findings,
   teamAssets,
   controlReviews,
-}: {
-  teamCatalogues: TeamCatalogues;
-  /** Every Catalogue Warden has, in the order the API lists them. */
-  catalogues: readonly Catalogue[];
-  findings: VouchReads;
-  teamAssets: TeamAssets;
-  controlReviews: ControlReviews;
-}): MountRoutes {
+}: VouchDeps): MountRoutes {
   /** One Control as `GET .../controls/:ref` answers it: `judged`, its review state and its reviews. */
   async function detailOf(
     team: string,
@@ -120,11 +106,6 @@ export function vouchRoutes({
     return catalogues.find((candidate) => candidate.id === wanted);
   };
 
-  /** Whether `team` has `catalogue` on (none set: off). */
-  const isOn = async (team: string, catalogue: Catalogue) =>
-    (await teamCatalogues.list(team)).find((choice) => choice.catalogue === catalogue.id)?.on ??
-    false;
-
   return (app, requireRole) => {
     // Any person in the Team reads each judged Control's Verdict, reason and evidence, worked out now from the last 30
     // days, whether the Catalogue is on or off, with its review state from its newest review. Nothing is stored.
@@ -132,7 +113,7 @@ export function vouchRoutes({
       const catalogue = catalogueOf(c.req.param("id"));
       if (catalogue === undefined) return c.json({ error: "No such Catalogue" }, 404);
       const team = c.get("team");
-      const on = await isOn(team, catalogue);
+      const on = isOn(await teamCatalogues.list(team), catalogue.id);
       const controls = await judgeCatalogue(
         { findings, teamAssets, controlReviews },
         team,

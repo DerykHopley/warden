@@ -4,8 +4,8 @@
 import type { ControlEvidence, ControlVerdict, Finding, RuleId } from "@warden/contracts";
 import { OVERVIEW_PERIOD_DAYS, type Findings } from "../../findings/index.ts";
 import type { Catalogue, Control } from "./catalogue.ts";
-import type { ControlReviews } from "./control-reviews.ts";
-import { reviewStateOf } from "./review-state.ts";
+import type { VouchDeps } from "./deps.ts";
+import { reviewedOn, withReviewState } from "./review-state.ts";
 import { JUDGE_SPOT_RUN_CONTROLS, RULE_CONTROLS } from "./rule-controls.ts";
 import type { TeamAssets } from "./team-assets.ts";
 import { kindOf, workOutVerdict, type WorkedOutVerdict } from "./verdict.ts";
@@ -74,7 +74,7 @@ export async function judgeCatalogue(
     findings,
     teamAssets,
     controlReviews,
-  }: { findings: VouchReads; teamAssets: TeamAssets; controlReviews: ControlReviews },
+  }: Pick<VouchDeps, "findings" | "teamAssets" | "controlReviews">,
   team: string,
   catalogue: Catalogue,
   now: Date,
@@ -84,11 +84,7 @@ export async function judgeCatalogue(
   const newest = await controlReviews.newest(team, catalogue.id);
   return judged.map((control) => {
     const review = newest.find(({ controlRef }) => controlRef === control.ref);
-    const reviews =
-      review === undefined
-        ? []
-        : [{ worked_out_verdict: review.workedOutVerdict, verdict: review.verdict }];
-    return { ...control, ...reviewStateOf(control.verdict, reviews) };
+    return withReviewState(control, review === undefined ? [] : [reviewedOn(review)]);
   });
 }
 

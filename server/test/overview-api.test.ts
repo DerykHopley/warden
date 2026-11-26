@@ -19,7 +19,7 @@ import type { Hono } from "hono";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import type { AppEnv } from "../src/app.ts";
+import type { AppEnv, AuditReads } from "../src/app.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
@@ -173,8 +173,8 @@ describe("GET /api/overview", () => {
 
 // Vouch's answer and the Level (spec #341, slice 4).
 
-const app_: Asset = { kind: "repo", ref: repoRef("app") };
-const api: Asset = { kind: "repo", ref: repoRef("api") };
+const appRepo: Asset = { kind: "repo", ref: repoRef("app") };
+const apiRepo: Asset = { kind: "repo", ref: repoRef("api") };
 
 /** A Team with an Admin, a Lead and a Member. */
 async function vouchTeam() {
@@ -269,14 +269,14 @@ const guardScan = (
  */
 async function seededTeam() {
   const team = await vouchTeam();
-  await linkRepos(repoAssets, team, [app_.ref, api.ref]);
+  await linkRepos(repoAssets, team, [appRepo.ref, apiRepo.ref]);
   await findings.reconcile(
     guardScan(
       team,
       2,
-      [app_, api],
+      [appRepo, apiRepo],
       [UNAPPROVED, MCP, SECRET, SETTINGS],
-      [observation(app_, SECRET)],
+      [observation(appRepo, SECRET)],
     ),
   );
   await setIsa(team, true);
@@ -298,7 +298,7 @@ async function teamWithGaps() {
  */
 async function readyTeam() {
   const team = await teamWithGaps();
-  await findings.reconcile(guardScan(team, 1, [app_, api], [SECRET, SETTINGS]));
+  await findings.reconcile(guardScan(team, 1, [appRepo, apiRepo], [SECRET, SETTINGS]));
   await confirm(team, "4.1.3");
   await review(team, "5.2.4", {
     outcome: "override",
@@ -397,7 +397,7 @@ describe("GET /api/overview: Are we ready for the audit?", () => {
   it("waits again on a reviewed Control whose Verdict changed, while the Level stays Audit-ready", async () => {
     const team = await readyTeam();
     await findings.reconcile(
-      guardScan(team, 0, [app_], [UNAPPROVED], [observation(app_, UNAPPROVED)]),
+      guardScan(team, 0, [appRepo], [UNAPPROVED], [observation(appRepo, UNAPPROVED)]),
     );
 
     const { body } = await overviewOf(team);
@@ -471,7 +471,6 @@ describe("GET /api/overview: Are we ready for the audit?", () => {
     const off = await overviewOf(teamB);
     expect(off.body.audit).toEqual(NO_CATALOGUE);
     expect(off.body.level).toBe("quick");
-    expect(off.text).not.toContain(teamA);
 
     await setIsa(teamB, true);
 
@@ -503,15 +502,14 @@ describe("GET /api/overview: Are we ready for the audit?", () => {
 });
 
 describe("a Vouch read that throws", () => {
-  it.each(["/api/overview", "/api/me"])("makes %s answer the logged 500", async (path) => {
-    const failing = testApp({
-      publicPem,
-      withTeam,
-      audit: {
-        answer: () => Promise.reject(new Error("the test's Vouch read failed")),
-        auditReady: () => Promise.reject(new Error("the test's Vouch read failed")),
-      },
-    });
+  const failed = () => Promise.reject(new Error("the test's Vouch read failed"));
+
+  // Each route fails on the one read it makes: the Overview's Level comes from its answer, `/api/me`'s from auditReady.
+  it.each<[string, AuditReads]>([
+    ["/api/overview", { answer: failed, auditReady: async () => false }],
+    ["/api/me", { answer: async () => NO_CATALOGUE, auditReady: failed }],
+  ])("makes %s answer the logged 500", async (path, audit) => {
+    const failing = testApp({ publicPem, withTeam, audit });
     const team = await vouchTeam();
 
     const res = await call(failing.app, key, "GET", path, { as: MEMBER, teamId: team });

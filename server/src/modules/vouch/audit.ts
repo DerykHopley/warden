@@ -3,11 +3,11 @@
 // review. Nothing is stored. The app reads them through `AuditReads` (ADR 0005: it imports no module).
 import type { AuditAnswer, AuditControl, CatalogueId, ControlVerdict } from "@warden/contracts";
 import type { AuditReads } from "../../app.ts";
+import { auditReadyOf } from "../../level.ts";
 import type { Catalogue } from "./catalogue.ts";
-import type { ControlReviews } from "./control-reviews.ts";
-import { judgeCatalogue, type VouchReads } from "./controls.ts";
-import type { TeamAssets } from "./team-assets.ts";
-import type { TeamCatalogues } from "./team-catalogues.ts";
+import { judgeCatalogue } from "./controls.ts";
+import type { VouchDeps } from "./deps.ts";
+import { isOn } from "./team-catalogues.ts";
 
 /** What the answer reads of one judged Control: its text, its Verdict worked out now and its review state. */
 export type ControlStanding = Pick<
@@ -25,7 +25,8 @@ const isGap = ({ review_state, reviewed_verdict }: ControlStanding) =>
 
 /**
  * The answer from the Catalogues the Team has on, each with its judged Controls in the order it shows them: no
- * Catalogue on, no Catalogue; every Control reviewed with no Gap, yes; otherwise not yet.
+ * Catalogue on, no Catalogue; every Control reviewed with no Gap, yes; otherwise not yet. A Catalogue on that judges no
+ * Control is never yes: there is nothing reviewed to be ready with.
  */
 export function auditAnswerOf(
   on: readonly { catalogue: CatalogueId; controls: readonly ControlStanding[] }[],
@@ -44,20 +45,29 @@ export function auditAnswerOf(
   const gaps = controls.filter(({ gap }) => gap).length;
   const waiting = controls.filter(({ review_state }) => review_state !== "reviewed").length;
   if (on.length === 0) return { answer: "no_catalogue", gaps, waiting, controls };
-  return { answer: gaps === 0 && waiting === 0 ? "yes" : "not_yet", gaps, waiting, controls };
+  const judgesEach = on.every(({ controls: standing }) => standing.length > 0);
+  return {
+    answer: judgesEach && gaps === 0 && waiting === 0 ? "yes" : "not_yet",
+    gaps,
+    waiting,
+    controls,
+  };
 }
 
 /**
- * Audit-ready: at least one Catalogue is on, and every judged Control of each one on has a review, changed since
- * review included, with Gaps or without. `judged` and `reviewed` are Control refs.
+ * Audit-ready, by the Level's rule (`auditReadyOf`): at least one Catalogue is on, each judging at least one Control,
+ * and every judged Control of each one on has a review, changed since review included, with Gaps or without.
+ * `judged` and `reviewed` are Control refs.
  */
 export function isAuditReady(
   catalogues: readonly { on: boolean; judged: readonly string[]; reviewed: readonly string[] }[],
 ): boolean {
-  const on = catalogues.filter((catalogue) => catalogue.on);
-  return (
-    on.length > 0 &&
-    on.every(({ judged, reviewed }) => judged.every((ref) => reviewed.includes(ref)))
+  return auditReadyOf(
+    catalogues
+      .filter((catalogue) => catalogue.on)
+      .map(({ judged, reviewed }) =>
+        judged.map((ref) => (reviewed.includes(ref) ? "reviewed" : "not_reviewed")),
+      ),
   );
 }
 
@@ -72,20 +82,11 @@ export function createAuditReads({
   findings,
   teamAssets,
   controlReviews,
-}: {
-  teamCatalogues: TeamCatalogues;
-  /** Every Catalogue Warden has, in the order the API lists them. */
-  catalogues: readonly Catalogue[];
-  findings: VouchReads;
-  teamAssets: TeamAssets;
-  controlReviews: ControlReviews;
-}): AuditReads {
+}: VouchDeps): AuditReads {
   /** The Catalogues `team` has on, in `catalogues`' order. */
   async function onFor(team: string): Promise<Catalogue[]> {
     const choices = await teamCatalogues.list(team);
-    return catalogues.filter(
-      (catalogue) => choices.find((choice) => choice.catalogue === catalogue.id)?.on ?? false,
-    );
+    return catalogues.filter((catalogue) => isOn(choices, catalogue.id));
   }
 
   return {

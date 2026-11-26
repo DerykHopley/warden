@@ -8,15 +8,15 @@ export interface TeamAssets {
   held(team: string): Promise<Record<JudgedKind, string[]>>;
 }
 
-export function createTeamAssets({
-  repoAssets,
-  products,
-}: {
+/** Guard's and Patch's stores, as the start-up file hands them in. */
+export type AssetStores = {
   /** Guard's Repo Assets. */
   repoAssets: { list(team: string): Promise<readonly { ref: string }[]> };
   /** Patch's Products: a Product Asset's ref is its id. */
   products: { list(team: string): Promise<readonly { id: string }[]> };
-}): TeamAssets {
+};
+
+export function createTeamAssets({ repoAssets, products }: AssetStores): TeamAssets {
   return {
     async held(team) {
       const repos = await repoAssets.list(team);

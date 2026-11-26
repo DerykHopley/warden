@@ -118,6 +118,10 @@ describe("auditAnswerOf", () => {
 
     expect(answer).toMatchObject({ answer: "not_yet", gaps: 2, waiting: 1 });
   });
+
+  it("answers not_yet, never yes, when the Catalogue on judges no Control", () => {
+    expect(auditAnswerOf(on())).toEqual({ answer: "not_yet", gaps: 0, waiting: 0, controls: [] });
+  });
 });
 
 /** ISA2027's four judged Controls. */
@@ -149,6 +153,10 @@ describe("isAuditReady", () => {
         { on: true, judged: ["1.1"], reviewed: [] },
       ]),
     ).toBe(false);
+  });
+
+  it("is false when the Catalogue on judges no Control", () => {
+    expect(isAuditReady([{ on: true, judged: [], reviewed: [] }])).toBe(false);
   });
 
   it("ignores a Catalogue that is off, when the one on is fully reviewed", () => {

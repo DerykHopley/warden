@@ -28,11 +28,8 @@ import { patchRoutes } from "./modules/patch/routes.ts";
 import { createSaveLimit } from "./modules/patch/save-limit.ts";
 import { createPatchScan } from "./modules/patch/scan.ts";
 import { createAuditReads } from "./modules/vouch/audit.ts";
-import { VDA_ISA_2027_1 } from "./modules/vouch/catalogue.ts";
-import { createControlReviews } from "./modules/vouch/control-reviews.ts";
+import { createVouchDeps } from "./modules/vouch/deps.ts";
 import { vouchRoutes } from "./modules/vouch/routes.ts";
-import { createTeamAssets } from "./modules/vouch/team-assets.ts";
-import { createTeamCatalogues } from "./modules/vouch/team-catalogues.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";
 import { createScans } from "./scans.ts";
 import { createShutdown } from "./shutdown.ts";
@@ -113,13 +110,7 @@ const products = createProducts({ withTeam });
 // VDA ISA 2027.1 is read from its files (`loadCatalogue`) once, when this file imports it: a file that can't be read or
 // fails its schema stops start-up with that error, before the server listens. A Control's Verdict reads the Team's
 // Findings, and its Repo Assets and Products handed in here, as Vouch imports neither Guard nor Patch.
-const vouch = {
-  teamCatalogues: createTeamCatalogues({ withTeam }),
-  catalogues: [VDA_ISA_2027_1],
-  findings,
-  teamAssets: createTeamAssets({ repoAssets, products }),
-  controlReviews: createControlReviews({ withTeam }),
-};
+const vouch = createVouchDeps({ withTeam, findings, repoAssets, products });
 const appDeps: AppDeps = {
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
