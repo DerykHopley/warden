@@ -88,17 +88,30 @@ const WRITE_WORDS: AppWords = {
   through: (id, team) => `Grant write access through installation ${id} to ${team}`,
 };
 
+/** `call`, run at most once however often it's called. */
+function useOnce(call: () => void): () => void {
+  const called = useRef(false);
+  return useCallback(() => {
+    if (called.current) return;
+    called.current = true;
+    call();
+  }, [call]);
+}
+
 export function SetupPage(props: PageProps) {
+  // Each app's 403 says the same thing, that the Role changed since /api/me answered, so the app sections share one
+  // ask for the Role (#325). Scan now's 403 is a later click, so the repo list keeps the shell's own refreshMe.
+  const roleChanged = useOnce(props.refreshMe);
   return (
     <>
       <h1>Setup</h1>
       <section className="setup-section" aria-labelledby="setup-github">
         <h2 id="setup-github">GitHub</h2>
-        <AppSection {...props} words={READ_WORDS} />
+        <AppSection {...props} refreshMe={roleChanged} words={READ_WORDS} />
       </section>
       <section className="setup-section" aria-labelledby="setup-write">
         <h2 id="setup-write">Grant write access</h2>
-        <AppSection {...props} words={WRITE_WORDS} HowTo={WriteAppHowTo} />
+        <AppSection {...props} refreshMe={roleChanged} words={WRITE_WORDS} HowTo={WriteAppHowTo} />
         <WriteGrantList {...props} />
       </section>
       <section className="setup-section" aria-labelledby={REPOS_ANCHOR}>

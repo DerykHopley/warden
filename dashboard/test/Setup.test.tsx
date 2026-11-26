@@ -243,6 +243,18 @@ describe("SetupPage: Grant write access (#224, story 5)", () => {
     await vi.waitFor(() => expect(refreshMe).toHaveBeenCalledOnce());
   });
 
+  it("when both apps answer 403, asks for /api/me again once, for both sections (#325)", async () => {
+    const forbidden = () => json(403, { error: "Only an Admin can do this" });
+    const { refreshMe } = renderSetup("admin", { githubApp: forbidden, writeApp: forbidden });
+
+    expect(await github().findByText("An Admin connects GitHub.")).toBeInTheDocument();
+    expect(await write().findByText("An Admin grants write access.")).toBeInTheDocument();
+    await vi.waitFor(() => expect(refreshMe).toHaveBeenCalled());
+    // Both sections' effects have run once both lines show and React has settled.
+    await act(async () => {});
+    expect(refreshMe).toHaveBeenCalledOnce();
+  });
+
   it("shows the not-answering line with Retry when the write app answers 502, and the link after Retry", async () => {
     let answer = () => json(502, { error: "GitHub didn't answer" });
     renderSetup("admin", { writeApp: () => answer() });
