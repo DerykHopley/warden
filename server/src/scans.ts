@@ -19,7 +19,7 @@ import type { WithTeam } from "./with-team.ts";
 
 /**
  * At most this many Scans per Team in a rolling hour, counted from the table, failed ones included, except a Scan the
- * time limit below ended.
+ * queued limit below ended. A Scan the running limit ended was queued over two hours ago, so it's never in the hour.
  */
 export const SCANS_PER_HOUR = 10;
 
@@ -29,6 +29,17 @@ export const SCANS_PER_HOUR = 10;
  * the hourly count leaves it out by. A Job that starts later still runs it, as a rerun of a failed Scan.
  */
 export const QUEUED_SCAN_LIMIT_MINUTES = 15;
+
+/**
+ * A Scan still running this long after its `started_at` has a Job that died after starting it (a crash, out of memory,
+ * a killed task whose retry died too), and is ended as failed with `ended_at` exactly this long after `started_at`:
+ * the moment the limit ran out, and the mark that makes the end final, so `move` never moves it again. Why 150: the
+ * Job's task timeout is 1 hour with one retry (ADR 0009), Cloud Run kills a task 10 s after its timeout and a retry
+ * takes 15 to 29 s to start, and a retry keeps the first attempt's `started_at` once its Findings were applied; so a
+ * Job can be alive up to about 2 h 1 min after `started_at`, and 150 leaves half an hour of slack, never ending a live
+ * Job's Scan early.
+ */
+export const RUNNING_SCAN_LIMIT_MINUTES = 150;
 
 /**
  * What a module hands over to be scanned: the Rules it checks, and the function that checks the Assets and reports
@@ -95,17 +106,20 @@ export interface Scans {
     team: string,
     input: { module: Module; assets: Asset[]; rules: RuleId[]; requestedBy: string },
   ): Promise<QueueOutcome>;
-  /** The Team's Scan with this id; undefined for any other id, another Team's included. */
+  /**
+   * The Team's Scan with this id; undefined for any other id, another Team's included. It first ends the Team's stale
+   * Scans, as `queue` does: those past QUEUED_SCAN_LIMIT_MINUTES or RUNNING_SCAN_LIMIT_MINUTES.
+   */
   get(team: string, id: string): Promise<ScanBody | undefined>;
   /**
    * For each of `assets`, the Team's newest Scan of `module` naming it (by `queued_at`, then id), keyed by `assetKey`;
-   * an Asset no such Scan names has no entry. One query for the whole list, after ending stale queued Scans as `get`
-   * does.
+   * an Asset no such Scan names has no entry. One query for the whole list, after ending stale Scans as `get` does.
    */
   lastFor(team: string, module: Module, assets: readonly Asset[]): Promise<Map<string, ScanBody>>;
   /**
    * Moves the Team's Scan to `state`, answering it as moved; undefined when nothing moved, for an id the Team doesn't
-   * have or a move MOVES_FROM doesn't allow (never out of done), so a late attempt can't undo a finished Scan.
+   * have or a move MOVES_FROM doesn't allow (never out of done), so a late attempt can't undo a finished Scan; and for
+   * a Scan RUNNING_SCAN_LIMIT_MINUTES ended, whose end is final.
    * Running clears the end and sets the start: the start reconcile already applied this Scan's id under, so a retried
    * Job reconciles under the same pair and changes nothing (ADR 0009); otherwise now, so a Scan started after an
    * attempt that reconciled nothing doesn't count as newer than the rerun. Done and failed set the end.
@@ -175,7 +189,8 @@ export async function startScan(
 
 /**
  * The states each move may start from. Running from failed is a rerun, and from running a retried execution; done
- * from failed is an attempt that reconciled after a late one failed it. Nothing moves out of done.
+ * from failed is an attempt that reconciled after a late one failed it. Nothing moves out of done, nor out of a failed
+ * Scan the running limit ended (`move` checks that apart, by its `ended_at`).
  */
 const MOVES_FROM = {
   running: ["queued", "running", "failed"],
@@ -213,6 +228,35 @@ async function endStaleQueued(tx: Transaction<Database>): Promise<void> {
     .execute();
 }
 
+/** RUNNING_SCAN_LIMIT_MINUTES as an interval, a literal so the database can compare `ended_at` to it exactly. */
+const RUNNING_LIMIT = sql<string>`make_interval(mins => ${sql.lit(RUNNING_SCAN_LIMIT_MINUTES)})`;
+
+/**
+ * The end the running limit gives a Scan: RUNNING_LIMIT after its start. `endStaleRunning` writes it as `ended_at`, and
+ * `move` tells a Scan the limit ended apart by it.
+ */
+const ENDED_BY_RUNNING_LIMIT = sql<Date>`started_at + ${RUNNING_LIMIT}`;
+
+/**
+ * Ends the transaction's Team's Scans still running RUNNING_SCAN_LIMIT_MINUTES after they started, as failed and ended
+ * when the limit ran out. Row-level security binds it to the Team `withTeam` set; a Scan in any other state is never
+ * touched.
+ */
+async function endStaleRunning(tx: Transaction<Database>): Promise<void> {
+  await tx
+    .updateTable("scan_requests")
+    .set({ state: "failed", ended_at: ENDED_BY_RUNNING_LIMIT })
+    .where("state", "=", "running")
+    .where("started_at", "<=", sql<Date>`now() - ${RUNNING_LIMIT}`)
+    .execute();
+}
+
+/** Ends the transaction's Team's stale Scans: those whose Job never started, and those whose Job died after starting. */
+async function endStale(tx: Transaction<Database>): Promise<void> {
+  await endStaleQueued(tx);
+  await endStaleRunning(tx);
+}
+
 export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
   return {
     queue(team, { module, assets, rules, requestedBy }) {
@@ -221,8 +265,8 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
         await sql`select pg_advisory_xact_lock(hashtextextended(${`scans:${team}`}, 0))`.execute(
           tx,
         );
-        await endStaleQueued(tx);
-        // A Scan the time limit ended is the only one with no start and an end exactly that limit after its queueing;
+        await endStale(tx);
+        // A Scan the queued limit ended is the only one with no start and an end exactly that limit after its queueing;
         // it never ran, so it doesn't count. A start the route failed ends within seconds, and still counts.
         const recent = await tx
           .selectFrom("scan_requests")
@@ -258,7 +302,7 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
 
     get(team, id) {
       return withTeam(team, async (tx) => {
-        await endStaleQueued(tx);
+        await endStale(tx);
         const row = await tx
           .selectFrom("scan_requests")
           .selectAll()
@@ -270,7 +314,7 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
 
     lastFor(team, module, assets) {
       return withTeam(team, async (tx) => {
-        await endStaleQueued(tx);
+        await endStale(tx);
         // Each Asset joined to the Scans whose `assets` contain it, the newest per Asset kept.
         const { rows } = await sql<Selectable<Database["scan_requests"]> & { asset: Asset }>`
           select distinct on (wanted.asset) wanted.asset, s.*
@@ -302,6 +346,11 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
           )
           .where("id", "=", id)
           .where("state", "in", MOVES_FROM[state])
+          // A Scan the running limit ended stays ended, so a Job that finishes after the limit can't undo it.
+          .where(
+            sql<boolean>`not (state = 'failed' and started_at is not null
+              and ended_at is not distinct from ${ENDED_BY_RUNNING_LIMIT})`,
+          )
           .returningAll()
           .executeTakeFirst();
         return row && toBody(row);

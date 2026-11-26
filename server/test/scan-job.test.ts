@@ -17,6 +17,7 @@ import { runScanJob } from "../src/scan-job.ts";
 import {
   createScans,
   QUEUED_SCAN_LIMIT_MINUTES,
+  RUNNING_SCAN_LIMIT_MINUTES,
   type Scanner,
   type Scanners,
   type Scans,
@@ -32,6 +33,7 @@ import {
   minutesAgo,
   seedTeam,
   sessionToken,
+  setRunningSince,
   testApp,
   testKey,
 } from "./helpers.ts";
@@ -106,6 +108,18 @@ async function queued(team: string): Promise<ScanBody> {
   });
   if (outcome.kind !== "queued") throw new Error("the test's Scan was rate limited");
   return outcome.scan;
+}
+
+/**
+ * A Guard Scan its Job moved to running RUNNING_SCAN_LIMIT_MINUTES + 1 minutes ago and then died: read once, which ends
+ * it as failed. Answers it as read.
+ */
+async function endedByRunningLimit(team: string): Promise<ScanBody> {
+  const scan = await queued(team);
+  await setRunningSince(withTeam, team, scan.id, RUNNING_SCAN_LIMIT_MINUTES + 1);
+  const ended = await scans.get(team, scan.id);
+  if (ended?.state !== "failed") throw new Error("the running limit didn't end the test's Scan");
+  return ended;
 }
 
 type Move = () => Promise<ScanBody | undefined>;
@@ -331,6 +345,18 @@ describe("runScanJob", () => {
     expect(await findings.list(team)).toEqual([
       expect.objectContaining({ rule_id: ENV, status: "open", first_seen_scan: scan.id }),
     ]);
+  });
+
+  it("scans nothing for a Scan the running limit ended: it stays failed with the same end", async () => {
+    const team = await newTeam();
+    const ended = await endedByRunningLimit(team);
+    const counting = fakeScanner();
+
+    await job(team, ended.id, counting.scanner).run;
+
+    expect(counting.runs).toEqual([]);
+    expect(await findings.list(team)).toEqual([]);
+    expect(await scans.get(team, ended.id)).toEqual(ended);
   });
 
   it("returns 0 for a Scan already done, without running the scanner", async () => {
@@ -562,5 +588,16 @@ describe("Scans.move", () => {
     expect(await scans.move(team, scan.id, "running")).toBeUndefined();
 
     expect(await scans.get(team, scan.id)).toEqual(done);
+  });
+
+  it("never moves a Scan the running limit ended: each move answers undefined and changes nothing", async () => {
+    const team = await newTeam();
+    const ended = await endedByRunningLimit(team);
+
+    expect(await scans.move(team, ended.id, "running")).toBeUndefined();
+    expect(await scans.move(team, ended.id, "done")).toBeUndefined();
+    expect(await scans.move(team, ended.id, "failed")).toBeUndefined();
+
+    expect(await scans.get(team, ended.id)).toEqual(ended);
   });
 });
