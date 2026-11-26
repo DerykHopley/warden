@@ -18,6 +18,7 @@ export const PERMISSION_SKIP = "guard/permission-skip";
 export const AGENT_CAN_READ_ENV = "guard/agent-can-read-env";
 export const NO_RUNTIME_GUARD = "guard/no-runtime-guard";
 export const MCP_SERVER_UNPINNED = "guard/mcp-server-unpinned";
+export const UNAPPROVED_AI_TOOL = "guard/unapproved-ai-tool";
 
 export const DEFAULT_PACK: readonly PackRule[] = [
   {
@@ -61,6 +62,12 @@ export const DEFAULT_PACK: readonly PackRule[] = [
     severity: "medium",
     title: "An MCP server runs without a pinned version",
     fix: "Pin each MCP server to an exact version: a package's x.y.z, or an image's digest or version tag.",
+  },
+  {
+    ruleId: UNAPPROVED_AI_TOOL,
+    severity: "medium",
+    title: "Another AI tool's config is in the repo",
+    fix: "Remove the tool's config, or accept the Finding if your Team approves the tool.",
   },
 ];
 
