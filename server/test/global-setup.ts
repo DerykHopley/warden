@@ -9,6 +9,7 @@ import {
   loadTestCveSnapshot,
   waitForPostgres,
 } from "./databases.ts";
+import { refuseOwnerDatabase } from "./owner-database.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -25,6 +26,7 @@ export default async function setup(project: TestProject) {
     user: env.PGUSER,
     database: env.PGDATABASE,
   };
+  refuseOwnerDatabase(env.PGPORT, "pnpm --filter @warden/server test"); // outside CI, unless asked (#286)
   await waitForPostgres(connection); // a container started just before the run (#99)
   await dropStaleTestDatabases(connection);
   await dropStaleTestRoles(connection);

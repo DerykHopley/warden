@@ -151,14 +151,32 @@ to `main`:
 | eslint | `pnpm lint` |
 | prettier | `pnpm format:check` (`pnpm format` fixes it) |
 | `tsc --noEmit`, every package | `pnpm typecheck` |
-| vitest, every package | `pnpm test` (the server's tests need the compose Postgres: they make a throwaway database there and drop it after; the `warden` database is left alone) |
+| vitest, every package | `pnpm test` (the server's tests need a Postgres: they make a throwaway database there and drop it after; the `PGDATABASE` database is left alone. Locally, run them on a throwaway Postgres: see "Running the tests locally") |
 | Browser tests (Chromium) | `pnpm e2e` (below) |
 | Design lint | `pnpm design-lint` |
 | Script tests | each `scripts/test/*.test.sh`, run with `bash` (the setup script's in `DRY_RUN=1` and against a fake `gcloud`: nothing reaches Google) |
 | Image build | `docker build --build-arg VITE_CLERK_PUBLISHABLE_KEY=<key> .` |
 
+**Running the tests locally.** Outside CI (`CI` unset), the server's tests and the browser tests refuse port 54329,
+the compose Postgres that holds your own data, and stop before they connect, printing these steps. Run them on a
+throwaway Postgres on a spare port instead, then stop it (`podman` takes the same arguments):
+
+```sh
+docker run -d --rm --name warden-test-postgres -p 127.0.0.1:55432:5432 -e POSTGRES_USER=warden \
+  -e POSTGRES_DB=warden -e POSTGRES_HOST_AUTH_METHOD=trust pgvector/pgvector:pg17
+PGHOST=127.0.0.1 PGPORT=55432 pnpm --filter @warden/server test
+PGHOST=127.0.0.1 PGPORT=55432 pnpm e2e
+docker stop warden-test-postgres
+```
+
+The global setups wait for the new container to take connections, so the tests can start straight after
+`docker run`. To run against your own compose database on purpose, add `WARDEN_TEST_OWNER_DB=1` (exactly `1`):
+`WARDEN_TEST_OWNER_DB=1 pnpm --filter @warden/server test`. CI runs its own Postgres service and sets `CI`, so it's
+never refused.
+
 **Browser tests.** `pnpm e2e` runs the Playwright tests in `e2e/` against the real server and a throwaway database.
-They need the compose Postgres (as the server's tests do) and Playwright's Chromium, installed once with
+They need a Postgres (as the server's tests do, and locally the throwaway one above) and Playwright's Chromium,
+installed once with
 `pnpm --filter @warden/e2e exec playwright install chromium`. No Clerk keys are needed, and none is read: the global
 setup builds the dashboard in Vite's `e2e` mode, where a stand-in replaces `@clerk/react`, signs session tokens with a
 key pair it makes, and starts the server with that key's public half as `CLERK_JWT_KEY`. It opens three Teams through

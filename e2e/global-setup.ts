@@ -23,6 +23,7 @@ import {
   loadTestCveSnapshot,
   waitForPostgres,
 } from "../server/test/databases.ts";
+import { refuseOwnerDatabase } from "../server/test/owner-database.ts";
 import {
   ACME,
   BLUEBIRD,
@@ -40,7 +41,7 @@ import {
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
-/** The Postgres the server's tests use: the PG* variables, or the compose database. */
+/** The Postgres the server's tests use: the PG* variables, or the compose database (refused outside CI unless asked). */
 const postgres = {
   host: process.env.PGHOST ?? "127.0.0.1",
   port: process.env.PGPORT ?? "54329",
@@ -142,6 +143,7 @@ export default async function globalSetup() {
     for (const step of cleanup.splice(0).reverse()) await step();
   };
   try {
+    refuseOwnerDatabase(postgres.port, "pnpm e2e"); // outside CI, unless asked (#286)
     const connection = { ...postgres, port: Number(postgres.port) };
     await waitForPostgres(connection); // a container started just before the run (#236)
     const database = await createMigratedTestDatabase(connection);
