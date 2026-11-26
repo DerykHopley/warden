@@ -521,7 +521,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
         status: "open",
         severity: "medium",
         title: tool.title,
-        location: { kind: "file", path: ".cursorrules" },
+        location: { kind: "file", path: ".cursor" },
         evidence: {
           summary: `Cursor config in 1 path (.cursorrules). Claude Code is the only approved AI tool. To fix: ${tool.fix}`,
         },
@@ -534,6 +534,39 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
     expect(await listFindings(guard, team)).toEqual([
       expect.objectContaining({ id: opened[0]!.id, rule_id: tool.ruleId, status: "fixed" }),
     ]);
+  });
+
+  it("keeps an accepted AI tool Finding the same Finding while any of the tool's config stays (stories 3, 4)", async () => {
+    const team = await newTeam();
+    const cursorRules: RepoFile = { path: ".cursorrules", text: "Always use tabs.\n" };
+    const cursorFolder: RepoFile = { path: ".cursor/rules/a.mdc", text: "Always use tabs.\n" };
+    let current: RepoFile[] = [guarded, cursorRules];
+    const guard = guardApp(readerOf(() => files(current)()));
+    await linkRepos(guard.repoAssets, team, [repo.ref], LEAD);
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+    const [opened] = await listFindings(guard, team);
+    const until = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+    await createFindings({ withTeam, moveRules: MOVE_RULES }).accept(team, opened!.id, {
+      actor: { kind: "person", id: LEAD },
+      reason: "The team trials Cursor this month",
+      until,
+    });
+    const accepted = expect.objectContaining({
+      id: opened!.id,
+      rule_id: "guard/unapproved-ai-tool",
+      status: "accepted",
+      location: { kind: "file", path: ".cursor" },
+    });
+
+    // A Cursor folder is added beside the .cursorrules.
+    current = [guarded, cursorRules, cursorFolder];
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+    expect(await listFindings(guard, team)).toEqual([accepted]);
+
+    // The .cursorrules is removed, so only the folder is left.
+    current = [guarded, cursorFolder];
+    expect((await scanRepo(guard, team)).exit).toBe(0);
+    expect(await listFindings(guard, team)).toEqual([accepted]);
   });
 
   it("keeps the whole-repo Findings Open when a root settings file is unread, rather than marking them Fixed on a guess", async () => {

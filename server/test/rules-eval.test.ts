@@ -14,6 +14,7 @@ import {
   ROOT_SETTINGS,
   WHOLE_REPO_PATH,
 } from "../src/modules/guard/agent-config.ts";
+import { AI_TOOL_LOCATIONS } from "../src/modules/guard/ai-tools.ts";
 import { DEFAULT_PACK_RULE_IDS, UNAPPROVED_AI_TOOL } from "../src/modules/guard/default-pack.ts";
 import type { RepoFile, RepoReader } from "../src/modules/guard/repo-reader.ts";
 import { guardScanner } from "../src/modules/guard/scanner.ts";
@@ -214,10 +215,12 @@ describe("the Seeded org", () => {
     const strays = SEEDED_ORG.flatMap(({ name, files, labels, nearMisses }) =>
       [...labels, ...nearMisses]
         .filter(
-          ({ path }) =>
+          ({ rule, path }) =>
             !files.some((file) => file.path === path || file.path.startsWith(`${path}/`)) &&
             // A whole-repo Rule's label sits at the root settings file, which a repo with no settings doesn't hold.
-            path !== WHOLE_REPO_PATH,
+            path !== WHOLE_REPO_PATH &&
+            // An AI tool's label sits at the tool's fixed Location, which a repo with only its other paths doesn't hold.
+            !(rule === UNAPPROVED_AI_TOOL && AI_TOOL_LOCATIONS.includes(path)),
         )
         .map(({ rule, path }) => `${name}: ${rule} at ${path}`),
     );
@@ -323,7 +326,7 @@ describe("scoreRules", () => {
 
     expect(misses(scores)).toEqual([
       `guard/permission-skip missed the label in ${api} at deploy/run.sh`,
-      `guard/unapproved-ai-tool reported ${app} at .cursorrules, with no label`,
+      `guard/unapproved-ai-tool reported ${app} at .cursor, with no label`,
     ]);
     expect(
       scores.map(({ rule, labels, observations, truePositives, precision, recall }) => ({

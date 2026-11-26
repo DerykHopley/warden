@@ -149,7 +149,8 @@ export const SEEDED_ORG: readonly SeededRepo[] = [
     ],
     labels: [
       { rule: SECRET_IN_REPO, path: "src/config.ts" },
-      { rule: UNAPPROVED_AI_TOOL, path: ".cursorrules" },
+      // A tool's Finding sits at its fixed Location, whichever of its paths the repo holds.
+      { rule: UNAPPROVED_AI_TOOL, path: ".cursor" },
     ],
     nearMisses: [
       { rule: PERMISSION_SKIP, path: "scripts/deploy.sh", what: "the skip flag on a comment line" },
@@ -294,7 +295,7 @@ export const SEEDED_ORG: readonly SeededRepo[] = [
     ],
     labels: [
       { rule: UNAPPROVED_AI_TOOL, path: ".github/copilot-instructions.md" },
-      { rule: UNAPPROVED_AI_TOOL, path: "GEMINI.md" },
+      { rule: UNAPPROVED_AI_TOOL, path: ".gemini" },
     ],
     nearMisses: [
       {
