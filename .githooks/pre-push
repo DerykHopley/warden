@@ -3,6 +3,21 @@
 # package.json's `prepare` script). The full fast lane runs in CI.
 set -e
 
+# A push that only deletes remote branches sends no code, so it skips the checks. git gives one line per ref on
+# stdin, `<local ref> <local sha> <remote ref> <remote sha>`, and a deletion's local sha is all zeros.
+refs=0
+sends_code=no
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  refs=$((refs + 1))
+  case $local_sha in
+    '' | *[!0]*) sends_code=yes ;;
+  esac
+done
+if [ "$refs" -gt 0 ] && [ "$sends_code" = no ]; then
+  echo "pre-push: only deleting remote branches, so no checks."
+  exit 0
+fi
+
 if ! command -v pnpm >/dev/null 2>&1; then
   echo "pre-push: pnpm isn't on PATH; install it (see README.md) or push with --no-verify." >&2
   exit 1
