@@ -355,46 +355,19 @@ describe("a Finding id holding a NUL (#129)", () => {
   });
 });
 
-// Each decision on a Finding it takes, so only the NUL can refuse it: Postgres can't store one (#248).
+// Every decision route parses its body the same way, and each field's NUL refusal is the contracts'
+// (contracts/test/decisions.test.ts); one case proves the route answers 400, where Postgres gave a 500 (#248).
 describe("a decision's body holding a NUL (#248)", () => {
-  /** A Team's Finding the route's decision takes, and the body's valid fields other than the reason. */
-  type Setup = () => Promise<{ team: string; id: string; rest: Record<string, unknown> }>;
-  const open: Setup = async () => {
+  it("accept answers 400 naming the reason, and writes nothing", async () => {
     const { team, finding } = await teamWithFinding();
-    return { team, id: finding.id, rest: {} };
-  };
-  const unconfirmedFix: Setup = async () => {
-    const { team, old, candidate } = await teamWithUnconfirmedFix();
-    return { team, id: old.id, rest: { candidate: candidate.id } };
-  };
-  const accepted: Setup = async () => {
-    const { team, id } = await open();
-    expect(
-      (await post(`/api/findings/${id}/accept`, team, { reason: "r", until: nextWeek() })).status,
-    ).toBe(200);
-    return { team, id, rest: {} };
-  };
-
-  it.each<[string, string, Setup, (rest: Record<string, unknown>) => Record<string, unknown>]>([
-    ["accept", "reason", open, () => ({ reason: "a\0b", until: nextWeek() })],
-    ["false-positive", "reason", open, () => ({ reason: "a\0b" })],
-    ["confirm-fix", "reason", unconfirmedFix, () => ({ reason: "a\0b" })],
-    ["mark-moved", "reason", unconfirmedFix, (rest) => ({ ...rest, reason: "a\0b" })],
-    [
-      "mark-moved",
-      "candidate",
-      unconfirmedFix,
-      (rest) => ({ reason: "r", candidate: `${rest.candidate}\0` }),
-    ],
-    ["reopen", "reason", accepted, () => ({ reason: "a\0b" })],
-  ])("%s answers 400 naming its %s, and writes nothing", async (route, field, setup, body) => {
-    const { team, id, rest } = await setup();
     const before = await stored(team);
 
-    expect(await post(`/api/findings/${id}/${route}`, team, body(rest))).toEqual({
-      status: 400,
-      body: { error: `${field}: ${NUL_MESSAGE}` },
-    });
+    expect(
+      await post(`/api/findings/${finding.id}/accept`, team, {
+        reason: "a\0b",
+        until: nextWeek(),
+      }),
+    ).toEqual({ status: 400, body: { error: `reason: ${NUL_MESSAGE}` } });
     expect(await stored(team)).toEqual(before);
   });
 });
