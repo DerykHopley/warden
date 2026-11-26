@@ -164,6 +164,75 @@ describe("the summary line and the top 5", () => {
   });
 });
 
+describe("the Scan now line (#342)", () => {
+  const scanNow = () => screen.queryByRole("link", { name: "Scan now" });
+  const linkedRepos = {
+    repos: () =>
+      json(200, {
+        repos: [
+          {
+            asset: { kind: "repo", ref: "https://github.com/acme/web" },
+            installation_id: 42,
+            listed_at: "2026-11-25T09:00:00.000Z",
+            last_scan: null,
+          },
+        ],
+      }),
+  };
+
+  it.each(["lead", "admin"] as const)(
+    "with Findings, shows a %s 'Scan now on Setup.' under the summary line, linking to Setup's repos, with no call of its own",
+    async (role) => {
+      open("/findings", demoFindings, {}, role);
+      const summary = await screen.findByRole("heading", { level: 1 });
+      const link = screen.getByRole("link", { name: "Scan now" });
+
+      expect(link).toHaveAttribute("href", "/setup#setup-repos");
+      const line = link.closest("p");
+      expect(line).toHaveTextContent(/^Scan now on Setup\.$/);
+      expect(line).toHaveClass("setup-line");
+      expect(summary.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(callsTo("/api/repos")).toEqual([]);
+    },
+  );
+
+  it("with Findings, shows a Member no Scan now", async () => {
+    open("/findings", demoFindings, {}, "member");
+    await screen.findByRole("table");
+    expect(scanNow()).not.toBeInTheDocument();
+    expect(screen.queryByText(/Scan now/)).not.toBeInTheDocument();
+  });
+
+  it.each(["lead", "admin"] as const)(
+    "with no Findings but linked repos, shows a %s the Scan now line once the repos answer",
+    async (role) => {
+      open("/findings", [], linkedRepos, role);
+      expect(await screen.findByRole("link", { name: "Scan now" })).toHaveAttribute(
+        "href",
+        "/setup#setup-repos",
+      );
+    },
+  );
+
+  it("with no Findings but linked repos, shows a Member no Scan now", async () => {
+    open("/findings", [], linkedRepos, "member");
+    await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(1));
+    // The repos' answer is read and rendered before the link is looked for: the call alone proves nothing.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(scanNow()).not.toBeInTheDocument();
+  });
+
+  it.each(["lead", "admin"] as const)(
+    "with no Findings and no linked repos, shows a %s no Scan now: Setup has nothing to Scan",
+    async (role) => {
+      open("/findings", [], { repos: () => json(200, { repos: [] }) }, role);
+      // Any Role: an Admin's line starts "Connect GitHub on", its "Setup" a link.
+      await screen.findByText(/connects? GitHub on/i);
+      expect(scanNow()).not.toBeInTheDocument();
+    },
+  );
+});
+
 describe("the Level line", () => {
   it("reads Level: Quick · see the journey above the summary line, from /api/me's answer, with no call of its own", async () => {
     open();

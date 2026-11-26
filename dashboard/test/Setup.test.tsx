@@ -489,6 +489,49 @@ describe("SetupPage: Scan now (story 2)", () => {
     );
   });
 
+  describe("opened at #setup-repos, Findings' Scan now link (#342)", () => {
+    // jsdom lays nothing out, so it has no scrollIntoView: each test gives Element one, and records what it was called on.
+    const scrolled = vi.fn<(this: Element, options?: ScrollIntoViewOptions) => void>();
+    beforeEach(() => {
+      scrolled.mockReset();
+      Element.prototype.scrollIntoView = scrolled;
+    });
+    afterEach(() => {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    });
+
+    it("brings the Repos heading into view once the list answers, and not again when the list is read again", async () => {
+      window.history.replaceState(null, "", "/setup#setup-repos");
+      const list = deferred<Response>();
+      let reads = 0;
+      renderSetup("lead", {
+        repos: () => (reads++ === 0 ? list.promise : reposOf(repo("web", "queued"))()),
+        startScan: () => json(202, scan("queued")),
+      });
+
+      await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(1));
+      expect(scrolled).not.toHaveBeenCalled();
+      list.resolve(reposOf(repo("web", "done"))());
+
+      await userEvent.click(await repos().findByRole("button", { name: "Scan now" }));
+      await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(2));
+      await repos().findByText("A Scan is under way.");
+
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(
+        screen.getByRole("heading", { level: 2, name: "Repos" }),
+      );
+    });
+
+    it("scrolls nothing when the address has no #setup-repos", async () => {
+      window.history.replaceState(null, "", "/setup");
+      renderSetup("lead", { repos: reposOf(repo("web", "done")) });
+
+      await repos().findByRole("button", { name: "Scan now" });
+      expect(scrolled).not.toHaveBeenCalled();
+    });
+  });
+
   it("gives a Member each repo's last Scan and no Scan now", async () => {
     renderSetup("member", { repos: reposOf(repo("web", "done")) });
 
