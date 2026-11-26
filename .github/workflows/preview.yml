@@ -101,5 +101,8 @@ jobs:
           CLOUD_SQL_CONNECTION: ${{ vars.CLOUD_SQL_CONNECTION }}
           VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY }}
           WARDEN_GITHUB_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_APP_CLIENT_ID }}
+          # The write app's client id (#334): optional; a preview shares the live write app, and runs with Fix PRs off
+          # while it's unset.
+          WARDEN_GITHUB_WRITE_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_WRITE_APP_CLIENT_ID }}
           PREVIEW_NAME: ${{ needs.check.outputs.name }}
         run: scripts/cloud-run-deploy.sh "$IMAGE" preview "$PREVIEW_NAME"

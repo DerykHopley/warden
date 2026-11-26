@@ -74,15 +74,32 @@ bindings_to() {
   }' | sort
 }
 
-assert_equal "warden-run gets Cloud SQL client, five secrets and the Scan Job's executor with overrides, nothing else" \
+assert_equal "warden-run gets Cloud SQL client, seven secrets and the Scan Job's executor with overrides, nothing else" \
   "projects $project roles/cloudsql.client
 run warden-scan roles/run.jobsExecutorWithOverrides
 secrets warden-clerk-jwt-key roles/secretmanager.secretAccessor
 secrets warden-clerk-secret roles/secretmanager.secretAccessor
 secrets warden-db-app-password roles/secretmanager.secretAccessor
 secrets warden-github-app-client-secret roles/secretmanager.secretAccessor
-secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
+secrets warden-github-app-private-key roles/secretmanager.secretAccessor
+secrets warden-github-write-app-client-secret roles/secretmanager.secretAccessor
+secrets warden-github-write-app-private-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-run)"
+# The write app's two secrets (#334): only the two services read them, so Fix PRs open from the service alone. No
+# Scan Job reads either: Scans stay read-only.
+write_secrets="warden-github-write-app-client-secret warden-github-write-app-private-key"
+for secret in $write_secrets; do
+  assert_equal "only warden-run and warden-preview-run read $secret" \
+    "--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
+    "$(grep -F "add-iam-policy-binding $secret " <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
+  for account in warden-scan warden-preview-scan; do
+    assert_no_line "$account doesn't read $secret" \
+      "add-iam-policy-binding $secret --member=serviceAccount:$account@" "$output"
+  done
+done
+assert_line "a dry run prints the write app's grants under a note that they need both its secrets" \
+  "# when both of the write app's secrets exist"
 # The GitHub app's two secrets (#151, #188): each service reads both; each Scan Job reads the private key alone, so
 # it can read repos but never sign anyone in. A preview shares the live read-only app (#275).
 assert_equal "only warden-run and warden-preview-run read warden-github-app-client-secret" \
@@ -151,7 +168,9 @@ secrets warden-clerk-jwt-key roles/secretmanager.secretAccessor
 secrets warden-clerk-secret roles/secretmanager.secretAccessor
 secrets warden-db-preview-app-password roles/secretmanager.secretAccessor
 secrets warden-github-app-client-secret roles/secretmanager.secretAccessor
-secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
+secrets warden-github-app-private-key roles/secretmanager.secretAccessor
+secrets warden-github-write-app-client-secret roles/secretmanager.secretAccessor
+secrets warden-github-write-app-private-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-preview-run)"
 
 # The preview Scan Job (#275): the live one's twin on the preview database, as its own account.
@@ -258,7 +277,7 @@ for secret in $generated; do
     "<random value> | gcloud secrets create $secret --replication-policy=user-managed --locations=europe-west1 --data-file=- --project=$project"
 done
 for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-  warden-github-app-client-secret warden-github-app-private-key $generated; do
+  warden-github-app-client-secret warden-github-app-private-key $write_secrets $generated; do
   assert_line "$secret's replication is printed" \
     "gcloud secrets describe $secret '--format=yaml(name,replication)' --project=$project"
 done
@@ -309,15 +328,23 @@ trigger_line=$(line_of "$daily_trigger")
 pass "the Scheduler job is printed after the daily Job and its binding"
 
 variables=$(grep -E '^gh variable set' <<<"$output" | awk '{ print $4 }' | sort)
-assert_equal "a gh variable line for each of the seven variables" \
+assert_equal "a gh variable line for each of the eight variables" \
   "CLOUD_SQL_CONNECTION
 GCP_DEPLOY_SA
 GCP_PREVIEW_DEPLOY_SA
 GCP_PROJECT_ID
 GCP_WIF_PROVIDER
 VITE_CLERK_PUBLISHABLE_KEY
-WARDEN_GITHUB_APP_CLIENT_ID" \
+WARDEN_GITHUB_APP_CLIENT_ID
+WARDEN_GITHUB_WRITE_APP_CLIENT_ID" \
   "$variables"
+write_variable="gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID --body \"\$(secret-tool lookup service warden-github-write-app-client-id)\" --repo $repo"
+assert_equal "the write app's client id is read from the keyring when the line is pasted" \
+  "$write_variable" "$(grep -F 'gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID ' <<<"$output")"
+read_variable_line=$(line_of "gh variable set WARDEN_GITHUB_APP_CLIENT_ID --body \"\$(secret-tool lookup service warden-github-app-client-id)\" --repo $repo")
+write_variable_line=$(line_of "$write_variable")
+[[ $read_variable_line -lt $write_variable_line ]] || fail "the write app's variable line is printed before the read-only app's"
+pass "the write app's variable line is printed after the read-only app's"
 assert_line "the deploy account variable names warden-deploy" \
   "gh variable set GCP_DEPLOY_SA --body warden-deploy@$project.iam.gserviceaccount.com --repo $repo"
 assert_line "the preview deploy account variable names warden-preview-deploy" \
@@ -392,12 +419,14 @@ for value in true yes; do
 done
 
 # A fake gcloud that's signed in, records every call, and finds what FAKE_STATE says:
-#   fresh         the instance and the six hand-made secrets only, as on a first run
+#   fresh         the instance and the eight hand-made secrets only (the write app's two among them), as on a first run
 #   rerun         everything, with point-in-time recovery on
 #   before-scan   as rerun, but without the warden-scan account and Job (the owner's rerun for the Scan Job, #115)
 #   before-preview-scan  as rerun, but without the warden-preview-scan account and warden-scan-preview Job (#275)
 #   unprepared    neither the instance nor warden-clerk-jwt-key
 #   no-github-app as fresh, but without the GitHub app's two secrets (#132 not done yet)
+#   no-write-app  as fresh, but without the write app's two secrets (an owner who never registered it)
+#   one-write-secret  as fresh, but without the write app's private key
 #   denied      every secret refuses with PERMISSION_DENIED
 #   no-adc      as fresh, but with no application-default credentials
 # Each describe that finds nothing fails the way that gcloud command does. A secret's value is what was piped into
@@ -449,6 +478,9 @@ case "$*" in
       warden-db-password | warden-clerk-secret | warden-clerk-publishable) exit 0 ;;
       warden-clerk-jwt-key) [[ $FAKE_STATE != unprepared ]] && exit 0 ;;
       warden-github-app-client-secret | warden-github-app-private-key) [[ $FAKE_STATE != no-github-app ]] && exit 0 ;;
+      warden-github-write-app-client-secret) [[ $FAKE_STATE != no-write-app ]] && exit 0 ;;
+      warden-github-write-app-private-key)
+        [[ $FAKE_STATE != no-write-app && $FAKE_STATE != one-write-secret ]] && exit 0 ;;
     esac
     not_found secrets.describe "NOT_FOUND: Secret [projects/1/secrets/$3] not found or has no versions." ;;
   "sql instances describe"*)
@@ -560,6 +592,25 @@ adc_file() {
 }
 # A call that changes something: anything but signing in and reading.
 changes() { grep -vE '^auth |describe|get-iam-policy|versions access' <<<"$calls" || true; }
+# assert_write_app <label>: a real run with both of the write app's secrets granted them to the two services only,
+# printed their replication, and printed the write app's variable line.
+assert_write_app() {
+  local secret account
+  for secret in $write_secrets; do
+    assert_equal "$1: only warden-run and warden-preview-run are granted $secret" \
+      "--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
+      "$(grep -F "secrets add-iam-policy-binding $secret " <<<"$calls" | grep -o -- '--member=[^ ]*' | sort)"
+    for account in warden-scan warden-preview-scan; do
+      assert_no_line "$1: $account isn't granted $secret" \
+        "add-iam-policy-binding $secret --member=serviceAccount:$account@" "$calls"
+    done
+    assert_line "$1: $secret's replication is printed" \
+      "secrets describe $secret --format=yaml(name,replication) --project=$project" "$calls"
+  done
+  assert_line "$1: the write app's variable line is printed" "$write_variable" "$out"
+  assert_no_line "$1: no Fix PRs-off note" "Fix PRs stay off" "$out"
+}
 # How many times the run tried to create the warden-run service account.
 run_sa_creates() { grep -c '^iam service-accounts create warden-run ' <<<"$calls" || true; }
 
@@ -579,6 +630,33 @@ assert_line "it says where to read how to make them" "make these first" "$out"
 assert_no_line "it names no secret that exists" "secret warden-clerk" "$out"
 assert_no_line "it doesn't name the instance, which exists" "Cloud SQL instance" "$out"
 assert_equal "it changes nothing" "" "$(changes)"
+
+# The write app is optional (#334), but only as a pair: one of its two secrets alone stops the run before any change,
+# naming the other.
+real_run one-write-secret one-write-secret
+assert_equal "with one of the write app's secrets: exit 1" 1 "$code"
+assert_line "it names the missing private key" "secret warden-github-write-app-private-key" "$out"
+assert_no_line "it doesn't name the client secret, which exists" "secret warden-github-write-app-client-secret" "$out"
+assert_line "it says the write app needs both or neither" "the write app needs both its secrets, or neither" "$out"
+assert_no_line "it names no other secret" "secret warden-clerk" "$out"
+assert_equal "it changes nothing" "" "$(changes)"
+
+# Neither of the write app's secrets: the run goes on with Fix PRs off, granting and printing nothing for it.
+real_run no-write-app no-write-app
+[[ $code == 0 ]] || fail "a run without the write app's secrets failed: $out"
+pass "a run without the write app's secrets ends"
+assert_line "it says Fix PRs stay off until both are made, then to run it again" \
+  "# Fix PRs stay off: the write app's secrets warden-github-write-app-client-secret and warden-github-write-app-private-key don't exist. Make both (README.md, \"Granting write access\"), then run this script again" \
+  "$out"
+for secret in $write_secrets; do
+  assert_no_line "without the write app: no grant on $secret" "add-iam-policy-binding $secret " "$calls"
+  assert_no_line "without the write app: no replication line for $secret" \
+    "secrets describe $secret --format=yaml(name,replication)" "$calls"
+done
+assert_no_line "without the write app: no WARDEN_GITHUB_WRITE_APP_CLIENT_ID line" \
+  "WARDEN_GITHUB_WRITE_APP_CLIENT_ID" "$out"
+assert_line "without the write app: the read-only app is still granted" \
+  "secrets add-iam-policy-binding warden-github-app-client-secret --member=serviceAccount:warden-run@" "$calls"
 
 real_run denied denied
 assert_equal "a describe refused for another reason than not found: exit 1" 1 "$code"
@@ -781,6 +859,7 @@ assert_line "a first run makes the daily Job" "run jobs create warden-daily-expi
 assert_line "a first run makes the Scan Job" "run jobs create warden-scan " "$calls"
 assert_line "a first run makes the preview Scan Job" "run jobs create warden-scan-preview " "$calls"
 assert_line "a first run makes the daily Job's Scheduler job" "scheduler jobs create http warden-daily-expiry " "$calls"
+assert_write_app "a first run with the write app's secrets"
 
 # An empty DRY_RUN is a real run too.
 real_run empty-dry-run fresh DRY_RUN=
@@ -879,6 +958,7 @@ assert_equal "a rerun runs the roles script for both sets again" \
   "live warden
 preview warden_preview" \
   "$(cut -d' ' -f1,2 "$scratch/rerun/roles-runs")"
+assert_write_app "a rerun with the write app's secrets"
 
 # The owner's rerun for the Scan Job (#115): everything else exists, so it makes the warden-scan account and Job, and
 # nothing else, and binds them.

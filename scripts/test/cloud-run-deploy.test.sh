@@ -556,6 +556,52 @@ assert_line "release: after the traffic move, the script prints the service's UR
   "https://warden-123456789012.europe-west1.run.app" "$out"
 assert_line "release: the last line names the Scan Job" "warden-scan" "$(tail -1 <<<"$out")"
 
+# --- The write app (#334): optional, switched on by WARDEN_GITHUB_WRITE_APP_CLIENT_ID, for the service alone ---
+# A preview shares the live write app (#224), as it shares the read-only one. No Scan Job ever gets a write-app value.
+write_client_id=Iv23liWRITE00000000
+for mode in preview release; do
+  if [[ $mode == preview ]]; then
+    args=("$image" preview demo) service=warden-preview scan_job=warden-scan-preview
+    scan_names=(warden-preview-scan warden_preview warden_preview_app warden-db-preview-app-password)
+  else
+    args=("$release_image" release) service=warden scan_job=warden-scan
+    scan_names=(warden-scan warden warden_app warden-db-app-password)
+  fi
+
+  run_deploy 200 ok WARDEN_GITHUB_WRITE_APP_CLIENT_ID="$write_client_id" -- "${args[@]}"
+  [[ $code == 0 ]] || fail "$mode with the write app against the stubs failed (exit $code): $out"
+  pass "$mode with the write app: exits 0"
+  service_deploy=$(call_of "gcloud run deploy $service ")
+  assert_equal "$mode with the write app: the revision's plain values gain its client id" \
+    "GITHUB_WRITE_APP_CLIENT_ID=$write_client_id" \
+    "$(gcloud_dict "$(flag set-env-vars "$service_deploy")" | grep '^GITHUB_WRITE_APP_')"
+  service_secrets=$(gcloud_dict "$(flag set-secrets "$service_deploy")")
+  assert_equal "$mode with the write app: the revision's secrets gain its two, pinned at version 1" \
+    "GITHUB_WRITE_APP_CLIENT_SECRET=warden-github-write-app-client-secret:1
+GITHUB_WRITE_APP_PRIVATE_KEY=warden-github-write-app-private-key:1" \
+    "$(grep '^GITHUB_WRITE_APP_' <<<"$service_secrets")"
+  assert_equal "$mode with the write app: each of the revision's secrets is pinned to a version number" "" \
+    "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
+  scan=$(call_of "gcloud run jobs update $scan_job ")
+  assert_scan_job "$mode with the write app: the Scan Job" "$scan" "${args[0]}" "${scan_names[@]}"
+  assert_no_match "$mode with the write app: the Scan Job gets no write-app value" 'GITHUB_WRITE_APP|write-app' \
+    "$scan"
+  assert_no_match "$mode with the write app: no job (migration, Scan or daily) gets a write-app value" \
+    'GITHUB_WRITE_APP|write-app' "$(grep -F 'gcloud run jobs ' <<<"$calls")"
+
+  for setting in unset empty; do
+    if [[ $setting == unset ]]; then
+      run_deploy 200 ok -- "${args[@]}"
+    else
+      run_deploy 200 ok WARDEN_GITHUB_WRITE_APP_CLIENT_ID= -- "${args[@]}"
+    fi
+    [[ $code == 0 ]] || fail "$mode with the write app's client id $setting failed (exit $code): $out"
+    pass "$mode with the write app's client id $setting: exits 0"
+    assert_no_match "$mode with the write app's client id $setting: no call names the write app" \
+      'GITHUB_WRITE_APP|write-app' "$calls"
+  done
+done
+
 # --- The first release, from Google's placeholder: no release to tag previous ---
 run_deploy 200 ok FAKE_SERVING=warden-00001-xyz -- "$release_image" release
 assert_equal "release from the placeholder: exit 0" 0 "$code"

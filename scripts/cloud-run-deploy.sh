@@ -25,7 +25,10 @@
 # Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>), VITE_CLERK_PUBLISHABLE_KEY (public) and
 #        WARDEN_GITHUB_APP_CLIENT_ID (the read-only GitHub app's client id, public; a preview shares the live app),
 #        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT (default 1), which GitHub
-#        Actions sets, name the revision. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health gate.
+#        Actions sets, name the revision. WARDEN_GITHUB_WRITE_APP_CLIENT_ID (the write GitHub app's client id, public;
+#        optional): set, the revision also gets it and the write app's two secrets, and opens Fix PRs; unset or empty,
+#        Fix PRs stay off. A preview shares the live write app; no Scan Job gets it. HEALTH_ATTEMPTS and
+#        HEALTH_INTERVAL (seconds) bound the health gate.
 # Needs: gcloud signed in as an account that may deploy the mode's job and service and act as its accounts; curl; jq;
 #        git, for a release.
 # The secret versions it pins, and what it shares with the rollback, are in scripts/lib/cloud-run.sh.
@@ -82,6 +85,9 @@ readonly CLERK_JWT_SECRET=warden-clerk-jwt-key
 # The read-only GitHub app's (#132), which a preview shares (#275).
 readonly GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
 readonly GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key
+# The write app's (#334), which opens Fix PRs: optional, and a preview shares the live one (#224).
+readonly GITHUB_WRITE_APP_CLIENT_SECRET=warden-github-write-app-client-secret
+readonly GITHUB_WRITE_APP_PRIVATE_KEY=warden-github-write-app-private-key
 # The migration job's one execution: the migrations, then Patch's CVE snapshot (README.md's "CVE data"). A failure in
 # either fails the job, so no revision is deployed. gcloud splits --args at commas, so this holds none.
 readonly MIGRATE_COMMAND="node server/src/migrate.ts && node server/src/modules/patch/cve-snapshot.ts"
@@ -106,7 +112,7 @@ migrate() {
 }
 
 deploy_revision() {
-  local parties=$1 password clerk_secret clerk_jwt github_secret github_key env secrets
+  local parties=$1 password clerk_secret clerk_jwt github_secret github_key write_secret write_key env secrets
   password=$(pinned "$APP_PASSWORD_SECRET") || exit 1
   clerk_secret=$(pinned "$CLERK_SECRET") || exit 1
   clerk_jwt=$(pinned "$CLERK_JWT_SECRET") || exit 1
@@ -118,6 +124,14 @@ deploy_revision() {
     "WARDEN_SCAN_JOB=$(scan_job_name "$MODE_SCAN_JOB")" "GITHUB_APP_CLIENT_ID=$WARDEN_GITHUB_APP_CLIENT_ID")
   secrets=("PGPASSWORD=$password" "CLERK_SECRET_KEY=$clerk_secret" "CLERK_JWT_KEY=$clerk_jwt"
     "GITHUB_APP_CLIENT_SECRET=$github_secret" "GITHUB_APP_PRIVATE_KEY=$github_key")
+  # The write app, only when its client id is set: without it the revision runs with Fix PRs off. An empty value is
+  # unset, as .envrc and loadConfig read it. The Scan Jobs never get it (update_scan_job).
+  if [[ -n ${WARDEN_GITHUB_WRITE_APP_CLIENT_ID:-} ]]; then
+    write_secret=$(pinned "$GITHUB_WRITE_APP_CLIENT_SECRET") || exit 1
+    write_key=$(pinned "$GITHUB_WRITE_APP_PRIVATE_KEY") || exit 1
+    env+=("GITHUB_WRITE_APP_CLIENT_ID=$WARDEN_GITHUB_WRITE_APP_CLIENT_ID")
+    secrets+=("GITHUB_WRITE_APP_CLIENT_SECRET=$write_secret" "GITHUB_WRITE_APP_PRIVATE_KEY=$write_key")
+  fi
   gcloud run deploy "$SERVICE" \
     --image="$IMAGE" \
     --region="$REGION" \
