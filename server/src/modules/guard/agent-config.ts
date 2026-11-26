@@ -2,7 +2,7 @@
 // file: a broad Bash allow in a settings file, and the flag or mode that skips permission checks. Two are whole-repo,
 // answered once every file has been seen: the agent can read .env, and nothing checks the agent's tool calls.
 // A settings file is read as Claude Code reads it, through its own keys (`permissions.allow`, `permissions.deny`,
-// `permissions.defaultMode`, `hooks`); a file that isn't valid JSON holds no rules, as Claude Code wouldn't apply it
+// `permissions.defaultMode`, `hooks`, `statusLine`, `apiKeyHelper`); a file that isn't valid JSON holds no rules, as Claude Code wouldn't apply it
 // either. A summary quotes only allow entries that match the broad patterns, which can't hold a secret, and never a
 // line of a file. The flag and the mode are built here by joining their parts, so this file never holds a whole one
 // for a Guard Scan of Warden to report.
@@ -81,8 +81,11 @@ export function isClaudeSettingsFile(path: string): boolean {
 
 type PermissionEntry = { rule: string; line: number };
 
+/** A shell command a settings file runs, with the line its value starts on. */
+type SettingsCommand = { command: string; line: number };
+
 /** A hook that runs a command: its event (`PreToolUse`, `Stop`, …), and the `command` value with its line. */
-type HookCommand = { event: string; command: string; line: number };
+type HookCommand = SettingsCommand & { event: string };
 
 /** What the agent-config Rules read from a settings file, each value with the line it starts on. */
 type ClaudeSettings = {
@@ -94,16 +97,27 @@ type ClaudeSettings = {
   defaultMode: { mode: string; line: number } | undefined;
   /** Every `type: "command"` hook with a string `command`, under any event. */
   hooks: readonly HookCommand[];
+  /**
+   * The other commands Claude Code runs from the file: a `type: "command"` `statusLine`'s string `command`, and the
+   * string `apiKeyHelper`.
+   */
+  commands: readonly SettingsCommand[];
 };
 
-const NO_SETTINGS: ClaudeSettings = { allow: [], deny: [], defaultMode: undefined, hooks: [] };
+const NO_SETTINGS: ClaudeSettings = {
+  allow: [],
+  deny: [],
+  defaultMode: undefined,
+  hooks: [],
+  commands: [],
+};
 
 /** How deep `valueLines` reads: down to a hook's `command`, at `hooks.<event>.<group>.hooks.<hook>.command`. */
 const SETTINGS_DEPTH = 6;
 
 /**
- * A settings file's permissions and hook commands, read through `readJsonObject`. A file it doesn't read, and a field
- * of another type, hold nothing.
+ * A settings file's permissions and the commands it runs (hooks, `statusLine`, `apiKeyHelper`), read through
+ * `readJsonObject`. A file it doesn't read, and a field of another type, hold nothing.
  */
 function readClaudeSettings(raw: string): ClaudeSettings {
   const read = readJsonObject(raw);
@@ -117,6 +131,18 @@ function readClaudeSettings(raw: string): ClaudeSettings {
       typeof rule === "string" ? [{ rule, line: lineOf("permissions", key, i) }] : [],
     );
   const mode = permissions.defaultMode;
+  const { statusLine, apiKeyHelper } = parsed;
+  const commands: SettingsCommand[] = [];
+  if (
+    isObject(statusLine) &&
+    statusLine.type === "command" &&
+    typeof statusLine.command === "string"
+  ) {
+    commands.push({ command: statusLine.command, line: lineOf("statusLine", "command") });
+  }
+  if (typeof apiKeyHelper === "string") {
+    commands.push({ command: apiKeyHelper, line: lineOf("apiKeyHelper") });
+  }
   return {
     allow: entries("allow"),
     deny: entries("deny"),
@@ -137,6 +163,7 @@ function readClaudeSettings(raw: string): ClaudeSettings {
         ),
       ),
     ),
+    commands,
   };
 }
 
@@ -323,11 +350,11 @@ function permissionSkip(
   { path, text }: RepoFile,
   settings: ClaudeSettings | undefined,
 ): Observation | undefined {
-  // A settings file counts only through its parsed `defaultMode` and the hooks that run the agent: its text can name
-  // the flag to deny or block it.
+  // A settings file counts only through its parsed `defaultMode` and the commands it runs that run the agent: its text
+  // can name the flag to deny or block it.
   const places =
     settings !== undefined
-      ? [...defaultModePlaces(settings), ...hookPlaces(settings)]
+      ? [...defaultModePlaces(settings), ...commandPlaces(settings)]
       : DOCS_FILE.test(path)
         ? []
         : flagPlaces(text);
@@ -697,11 +724,12 @@ function agentRuns(command: string): string[] {
 }
 
 /**
- * Each run of the agent in each hook command, once per flag in that run's own arguments, on the `command` value's
- * line. A later command, or a quoted argument of more than one word (a prompt), isn't one of them.
+ * Each run of the agent in each command the settings run (a hook's, the `statusLine`'s, the `apiKeyHelper`), once per
+ * flag in that run's own arguments, on the command value's line. A later command, or a quoted argument of more than
+ * one word (a prompt), isn't one of them.
  */
-const hookPlaces = ({ hooks }: ClaudeSettings): Place[] =>
-  hooks.flatMap(({ command, line }) =>
+const commandPlaces = ({ hooks, commands }: ClaudeSettings): Place[] =>
+  [...hooks, ...commands].flatMap(({ command, line }) =>
     agentRuns(command).flatMap((args) =>
       SKIP_FLAGS.flatMap(({ kind, pattern }) =>
         Array.from(args.matchAll(pattern), () => ({ kind, line })),
