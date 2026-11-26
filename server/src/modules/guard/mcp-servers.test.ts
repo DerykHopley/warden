@@ -28,6 +28,18 @@ const observe = (path: string, text: string) => mcpServerObservations(repo, { pa
 const server = (command: string, args?: string[]) =>
   args === undefined ? { command } : { command, args };
 
+/** A row for a server written as `line`: its command, then its args, split on spaces. */
+const asWritten = (line: string): [string, string, string[]] => {
+  const [command = "", ...args] = line.split(" ");
+  return [line, command, args];
+};
+
+/** A "gives nothing" row for a server written as `line`. */
+const entryWritten = (line: string): [string, Record<string, unknown>] => {
+  const [, command, args] = asWritten(line);
+  return [line, server(command, args)];
+};
+
 describe("guard/mcp-server-unpinned", () => {
   it.each([
     ["npx -y some-mcp-server", "npx", ["-y", "some-mcp-server"]],
@@ -92,6 +104,46 @@ describe("guard/mcp-server-unpinned", () => {
       "docker",
       ["run", "-i", "--rm", "--add-host", "host.docker.internal:host-gateway", "mcp/github"],
     ],
+    // An npm runner reads an option it doesn't list as a switch as taking the next word, as npx does.
+    ...[
+      "npx --prefix /opt/x pkg",
+      "npx --cache ~/.npm pkg",
+      "npx --userconfig ./.npmrc pkg",
+      "npx --made-up-option ./x pkg",
+      "bunx --made-up-option ./x pkg",
+      "pnpm dlx --made-up-option ./x pkg",
+      "yarn dlx --made-up-option ./x pkg",
+      "npm exec --prefix ./tools -- pkg",
+      // Its switches, and an option before another option, take no value; `--` ends the options.
+      "npx --yes pkg",
+      "npx -q pkg",
+      "npx --prefer-offline pkg",
+      "npx --no-color pkg",
+      "bunx --bun pkg",
+      "npx --made-up-option --yes pkg",
+      "npx -- pkg",
+      // npm's shorthands (`-ws`, `-iwr`) and its single-letter ones written together (`-yq`) are switches.
+      "npx -ws pkg",
+      "npx -iwr pkg",
+      "npx -yq pkg",
+      // pnpm's on/off options and every `--no-<option>` are switches, before `dlx` and after it; yarn's too.
+      "pnpm --no-color dlx pkg",
+      "pnpm --stream dlx pkg",
+      "pnpm dlx --prefer-offline pkg",
+      "yarn dlx --no-quiet pkg",
+      // A container runner does the same, and reads a short-option cluster letter by letter.
+      "docker run --cidfile /tmp/c mcp/github",
+      "podman run --made-up-option x mcp/github",
+      "docker run -it mcp/github",
+      // A command's own options before its subcommand word don't hide the runner.
+      "pnpm --dir x dlx pkg",
+      "npm --prefix ./x exec pkg",
+      "uv --directory /x tool run pkg",
+      "docker --log-level debug run mcp/github",
+      "docker -D run mcp/github",
+      "docker container run mcp/github",
+      "podman container run mcp/github",
+    ].map(asWritten),
   ])("reports %s at .mcp.json and the server key's line", (_name, command, args) => {
     const text = mcpJson({ remote: REMOTE, unpinned: server(command, args) });
 
@@ -182,6 +234,26 @@ describe("guard/mcp-server-unpinned", () => {
     ["npx -p ../server some-bin", server("npx", ["-p", "../server", "some-bin"])],
     ["uvx ./local-server", server("uvx", ["./local-server"])],
     ["uvx --from ./local-server some-bin", server("uvx", ["--from", "./local-server", "some-bin"])],
+    // A pinned package or image after a runner's option values.
+    ...[
+      "npx -y --registry https://registry.example.com pkg@1.2.3",
+      "npx --made-up-option ./x pkg@1.2.3",
+      "npm exec --prefix ./tools -- pkg@1.2.3",
+      "npx -ws pkg@1.2.3 serve",
+      "pnpm dlx --use-stderr pkg@1.2.3 serve",
+      "docker run -i --rm --security-opt no-new-privileges mcp/github:1.0",
+      "docker run --ipc host mcp/github:1.0",
+      "podman run --made-up-option x mcp/github:1.0",
+      "docker run -it --rm mcp/github:1.0",
+      "docker run -ie TOKEN mcp/github:1.0",
+      "pnpm --dir x dlx pkg@1.2.3",
+      "uv --directory /x tool run pkg==1.0.0",
+      "docker --log-level debug run mcp/github:1.0",
+      "docker container run mcp/github:1.0",
+      // `uv run` runs a project's command, not a package.
+      "uv run pkg",
+      "uv --directory /x run pkg",
+    ].map(entryWritten),
   ])("gives nothing for %s", (_name, entry) => {
     expect(observe(".mcp.json", mcpJson({ remote: REMOTE, pinned: entry }))).toEqual([]);
   });

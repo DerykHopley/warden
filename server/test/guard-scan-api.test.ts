@@ -465,7 +465,8 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
         {
           mcpServers: {
             docs: { type: "http", url: "https://example.com/mcp" },
-            github: { command: "npx", args: ["-y", pkg] },
+            // An npm option's value before the package isn't read as the package.
+            github: { command: "npx", args: ["--prefix", "/opt/x", "-y", pkg] },
           },
         },
         null,
