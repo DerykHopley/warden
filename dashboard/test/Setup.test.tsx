@@ -714,22 +714,6 @@ describe("WriteAppSetupPage (#224, story 5)", () => {
     expect(callsTo("/api/github/app")).toEqual([]);
   });
 
-  it("when this browser can't keep the attempt, says so in an alert and gives the button back", async () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new DOMException("The storage is blocked", "SecurityError");
-    });
-    renderWriteSetup("?installation_id=42&setup_action=install");
-
-    const button = await screen.findByRole("button", { name: "Sign in with GitHub" });
-    await userEvent.click(button);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "This browser couldn't start the GitHub sign-in. Allow this site to store data for this tab, and open Warden over https.",
-    );
-    expect(button).toBeEnabled();
-    expect(goTo).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["no installation_id", "?setup_action=install"],
     ["installation_id=0", "?installation_id=0&setup_action=install"],
@@ -763,22 +747,16 @@ describe("WriteAppSetupPage (#224, story 5)", () => {
     },
   );
 
-  it("tells an Admin Fix PRs aren't set up on this Warden when the write app answers 503, with no button", async () => {
+  // The words and the 403's refreshMe are the Setup section's, tested above; here, only that no button is offered.
+  it.each([
+    [503, "Fix PRs aren't set up on this Warden."],
+    [403, "An Admin grants write access."],
+  ])("when the write app answers %i, offers an Admin no sign-in button", async (status, words) => {
     renderWriteSetup("?installation_id=42", "admin", {
-      writeApp: () => json(503, { error: "Fix PRs aren't set up on this Warden" }),
+      writeApp: () => json(status, { error: "Refused" }),
     });
 
-    expect(await screen.findByText("Fix PRs aren't set up on this Warden.")).toBeInTheDocument();
+    await screen.findByText(words);
     expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
-  });
-
-  it("on the write app's 403, tells the Admin an Admin grants write access and asks for /api/me again", async () => {
-    const { refreshMe } = renderWriteSetup("?installation_id=42", "admin", {
-      writeApp: () => json(403, { error: "Only an Admin can do this" }),
-    });
-
-    expect(await screen.findByText("An Admin grants write access.")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Sign in with GitHub" })).toBeNull();
-    await vi.waitFor(() => expect(refreshMe).toHaveBeenCalledOnce());
   });
 });

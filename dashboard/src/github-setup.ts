@@ -10,6 +10,7 @@ import {
   WriteGrantBody,
   WriteGrantsBody,
   type Asset,
+  type LinkInstallationBody,
   type ListedRepoBody,
   type StartScanBody,
 } from "@warden/contracts";
@@ -25,21 +26,28 @@ export const WRITE_ATTEMPT_KEY = "warden.githubWriteSignIn";
 
 /**
  * One of Warden's two GitHub apps, as the dashboard reaches it: the read app links Repo Assets (story 1), and the write
- * app grants the write access Fix PRs go through (#224, story 5). Each has its own settings route, callback page and
- * kept attempt.
+ * app grants the write access Fix PRs go through (#224, story 5). Each has its own settings route, callback page,
+ * kept attempt, and the h1 its Connect and callback pages share.
  */
-export type WardenApp = { settingsPath: string; callbackPath: string; attemptKey: string };
+export type WardenApp = {
+  settingsPath: string;
+  callbackPath: string;
+  attemptKey: string;
+  heading: string;
+};
 
 export const READ_APP: WardenApp = {
   settingsPath: "/api/github/app",
   callbackPath: "/setup/github/callback",
   attemptKey: ATTEMPT_KEY,
+  heading: "Connect GitHub",
 };
 
 export const WRITE_APP: WardenApp = {
   settingsPath: "/api/github/write-app",
   callbackPath: "/setup/github/write/callback",
   attemptKey: WRITE_ATTEMPT_KEY,
+  heading: "Grant write access",
 };
 
 export type GitHubAppResult =
@@ -55,10 +63,7 @@ export type GitHubAppResult =
  * `GET /api/github/app`, or the write app's `GET /api/github/write-app`; a 502 (GitHub didn't answer) is not
  * answering, as no answer is.
  */
-export async function fetchGitHubApp(
-  getToken: GetToken,
-  app: WardenApp = READ_APP,
-): Promise<GitHubAppResult> {
+export async function fetchGitHubApp(getToken: GetToken, app: WardenApp): Promise<GitHubAppResult> {
   const res = await callWarden(getToken, app.settingsPath);
   if (!(res instanceof Response)) return res;
   if (res.status === 503) return { kind: "not-set-up" };
@@ -92,7 +97,7 @@ const SAID = new Set([400, 403, 409, 502, 503]);
 /** `POST /api/github/installations`: links the installation with GitHub's `code` and the attempt's verifier. */
 export async function linkInstallation(
   getToken: GetToken,
-  body: { installation_id: number; code: string; code_verifier: string },
+  body: LinkInstallationBody,
 ): Promise<LinkResult> {
   const res = await callWarden(getToken, "/api/github/installations", { method: "POST", body });
   if (!(res instanceof Response)) return res;
@@ -134,7 +139,7 @@ export type GrantResult =
 /** `POST /api/github/write-installations`: grants write access through the installation, as `linkInstallation` links. */
 export async function grantWriteAccess(
   getToken: GetToken,
-  body: { installation_id: number; code: string; code_verifier: string },
+  body: LinkInstallationBody,
 ): Promise<GrantResult> {
   const res = await callWarden(getToken, "/api/github/write-installations", {
     method: "POST",
@@ -204,7 +209,7 @@ export function signInUrl(
   clientId: string,
   state: string,
   codeChallenge: string,
-  app: WardenApp = READ_APP,
+  app: WardenApp,
 ): string {
   const url = new URL("https://github.com/login/oauth/authorize");
   url.searchParams.set("client_id", clientId);
@@ -250,7 +255,7 @@ export type SignInAttempt = { state: string; verifier: string; installationId: n
 export async function startSignIn(
   clientId: string,
   installationId: number,
-  app: WardenApp = READ_APP,
+  app: WardenApp,
 ): Promise<string> {
   const attempt: SignInAttempt = { state: randomToken(), verifier: randomToken(), installationId };
   sessionStorage.setItem(app.attemptKey, JSON.stringify(attempt));
@@ -261,7 +266,7 @@ export async function startSignIn(
  * The app's kept attempt, removed as it's read: GitHub's code works once, so an attempt is used once. The other app's
  * attempt is never read.
  */
-export function takeAttempt(app: WardenApp = READ_APP): SignInAttempt | undefined {
+export function takeAttempt(app: WardenApp): SignInAttempt | undefined {
   let stored: string | null;
   try {
     stored = sessionStorage.getItem(app.attemptKey);
@@ -289,7 +294,7 @@ export function takeAttempt(app: WardenApp = READ_APP): SignInAttempt | undefine
  * Keeps a taken attempt again, for an attempt whose code never reached Warden (the session had ended), so the callback
  * can link with it once the person signs in again. Storage that refuses it leaves Connect again from Setup.
  */
-export function putBackAttempt(attempt: SignInAttempt, app: WardenApp = READ_APP): void {
+export function putBackAttempt(attempt: SignInAttempt, app: WardenApp): void {
   try {
     sessionStorage.setItem(app.attemptKey, JSON.stringify(attempt));
   } catch {

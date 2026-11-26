@@ -37,6 +37,9 @@ afterEach(() => {
 
 const keep = (attempt: SignInAttempt = ATTEMPT) =>
   sessionStorage.setItem(ATTEMPT_KEY, JSON.stringify(attempt));
+const WRITE_CALLBACK = "/setup/github/write/callback";
+const keepWrite = (attempt: SignInAttempt = ATTEMPT) =>
+  sessionStorage.setItem(WRITE_ATTEMPT_KEY, JSON.stringify(attempt));
 
 /** Opens the callback at `search` (null: the address as it is), and renders the page over the fake API. */
 function renderCallback(search: string | null, routes: Routes = {}, { strict = false } = {}) {
@@ -57,6 +60,7 @@ function renderCallback(search: string | null, routes: Routes = {}, { strict = f
 const address = () => location.pathname + location.search;
 
 const links = () => callsTo("/api/github/installations");
+const grants = () => callsTo("/api/github/write-installations");
 const backToSetup = () => screen.getByRole("link", { name: "Back to Setup" });
 
 describe("GitHubCallbackPage", () => {
@@ -244,11 +248,20 @@ describe("GitHubCallbackPage", () => {
 
     await vi.waitFor(() => expect(props.onSessionEnded).toHaveBeenCalledOnce());
   });
+
+  it("with the write app's attempt kept, says the sign-in didn't start here and sends nothing", async () => {
+    keepWrite();
+    renderCallback("?code=the-code&state=the-state");
+
+    expect(
+      await screen.findByText("This GitHub sign-in didn't start here. Connect again from Setup."),
+    ).toBeInTheDocument();
+    expect(links()).toEqual([]);
+    expect(grants()).toEqual([]);
+    expect(JSON.parse(sessionStorage.getItem(WRITE_ATTEMPT_KEY)!)).toEqual(ATTEMPT);
+  });
 });
 
-const WRITE_CALLBACK = "/setup/github/write/callback";
-const keepWrite = (attempt: SignInAttempt = ATTEMPT) =>
-  sessionStorage.setItem(WRITE_ATTEMPT_KEY, JSON.stringify(attempt));
 const granted = (status: 200 | 201) => () =>
   json(status, {
     installation_id: 42,
@@ -271,7 +284,6 @@ function renderWriteCallback(search: string | null, routes: Routes = {}) {
   return { ...props, unmount };
 }
 
-const grants = () => callsTo("/api/github/write-installations");
 const GRANTED = "Write access granted through installation 42.";
 
 describe("WriteAppCallbackPage (#224, story 5)", () => {
@@ -357,18 +369,6 @@ describe("WriteAppCallbackPage (#224, story 5)", () => {
     expect(grants()).toEqual([]);
     expect(links()).toEqual([]);
     expect(JSON.parse(sessionStorage.getItem(ATTEMPT_KEY)!)).toEqual(ATTEMPT);
-  });
-
-  it("the read callback, with the write app's attempt kept, says the sign-in didn't start here and sends nothing", async () => {
-    keepWrite();
-    renderCallback("?code=the-code&state=the-state");
-
-    expect(
-      await screen.findByText("This GitHub sign-in didn't start here. Connect again from Setup."),
-    ).toBeInTheDocument();
-    expect(links()).toEqual([]);
-    expect(grants()).toEqual([]);
-    expect(JSON.parse(sessionStorage.getItem(WRITE_ATTEMPT_KEY)!)).toEqual(ATTEMPT);
   });
 
   it("when the session has ended, keeps the attempt and GitHub's answer, and grants once the person signs in again", async () => {

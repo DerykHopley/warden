@@ -3,6 +3,7 @@
 // goes to Warden with the code. GitHub's code works once, so the attempt is removed before the one call, and the
 // code leaves the address bar as it's read. `/setup/github/write/callback` is the write app's (#224, story 5): the
 // same steps with its own kept attempt, granting write access instead of linking.
+import type { LinkInstallationBody } from "@warden/contracts";
 import { useEffect, useState } from "react";
 import type { PageProps } from "./App.tsx";
 import {
@@ -18,10 +19,11 @@ import {
   type WardenApp,
 } from "./github-setup.ts";
 
-type Sent = LinkResult | GrantResult;
+/** What Warden answers the code a callback sends. */
+type CallbackAnswer = LinkResult | GrantResult;
 
 type Outcome =
-  | Sent
+  | CallbackAnswer
   /** No kept attempt, no code or state, or a state that isn't the attempt's: nothing is sent. */
   | { kind: "not-started-here" }
   /** GitHub's `error=access_denied`: the person cancelled on GitHub. */
@@ -32,20 +34,15 @@ type Outcome =
 /** What one app's callback sends, and the words that differ between the two apps. */
 type Callback = {
   app: WardenApp;
-  heading: string;
   waiting: string;
   /** What a refusal says wasn't done: "linked" or "granted". */
   done: string;
   notAnswering: string;
-  send: (
-    getToken: PageProps["getToken"],
-    body: { installation_id: number; code: string; code_verifier: string },
-  ) => Promise<Sent>;
+  send: (getToken: PageProps["getToken"], body: LinkInstallationBody) => Promise<CallbackAnswer>;
 };
 
 const READ_CALLBACK: Callback = {
   app: READ_APP,
-  heading: "Connect GitHub",
   waiting: "Linking the installation…",
   done: "linked",
   notAnswering: "Warden didn't answer; the link may not have been made.",
@@ -54,7 +51,6 @@ const READ_CALLBACK: Callback = {
 
 const WRITE_CALLBACK: Callback = {
   app: WRITE_APP,
-  heading: "Grant write access",
   waiting: "Granting write access…",
   done: "granted",
   notAnswering: "Warden didn't answer; write access may not have been granted.",
@@ -145,7 +141,7 @@ function CallbackPage(props: PageProps & { callback: Callback }) {
 
   return (
     <>
-      <h1>{callback.heading}</h1>
+      <h1>{callback.app.heading}</h1>
       <Said outcome={outcome} callback={callback} />
       {outcome !== "waiting" && outcome.kind !== "session-ended" && (
         <p className="setup-link">

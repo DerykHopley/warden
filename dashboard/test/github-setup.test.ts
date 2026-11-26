@@ -8,6 +8,7 @@ import {
   installUrl,
   putBackAttempt,
   randomToken,
+  READ_APP,
   startSignIn,
   takeAttempt,
   tooManyTries,
@@ -58,7 +59,7 @@ it("builds the install link from the slug", () => {
 
 describe("startSignIn and takeAttempt", () => {
   it("keeps the attempt and answers GitHub's sign-in URL with its state, S256 challenge and this origin's callback", async () => {
-    const url = new URL(await startSignIn("Iv23li-client", 42));
+    const url = new URL(await startSignIn("Iv23li-client", 42, READ_APP));
 
     const kept = JSON.parse(sessionStorage.getItem(ATTEMPT_KEY)!) as Record<string, unknown>;
     expect(`${url.origin}${url.pathname}`).toBe("https://github.com/login/oauth/authorize");
@@ -73,16 +74,16 @@ describe("startSignIn and takeAttempt", () => {
   });
 
   it("answers the kept attempt once, then none", async () => {
-    await startSignIn("Iv23li-client", 42);
+    await startSignIn("Iv23li-client", 42, READ_APP);
 
-    expect(takeAttempt()).toMatchObject({ installationId: 42 });
-    expect(takeAttempt()).toBeUndefined();
+    expect(takeAttempt(READ_APP)).toMatchObject({ installationId: 42 });
+    expect(takeAttempt(READ_APP)).toBeUndefined();
     expect(sessionStorage.getItem(ATTEMPT_KEY)).toBeNull();
   });
 
   it("answers none for a kept value that isn't an attempt", () => {
     sessionStorage.setItem(ATTEMPT_KEY, "not json");
-    expect(takeAttempt()).toBeUndefined();
+    expect(takeAttempt(READ_APP)).toBeUndefined();
   });
 });
 
@@ -108,12 +109,12 @@ describe("the write app's sign-in (#224, story 5)", () => {
   it("takes only its own app's attempt: neither app reads the other's", async () => {
     await startSignIn("Iv23li-writer", 42, WRITE_APP);
 
-    expect(takeAttempt()).toBeUndefined();
+    expect(takeAttempt(READ_APP)).toBeUndefined();
     expect(takeAttempt(WRITE_APP)).toMatchObject({ installationId: 42 });
 
-    await startSignIn("Iv23li-client", 7);
+    await startSignIn("Iv23li-client", 7, READ_APP);
     expect(takeAttempt(WRITE_APP)).toBeUndefined();
-    expect(takeAttempt()).toMatchObject({ installationId: 7 });
+    expect(takeAttempt(READ_APP)).toMatchObject({ installationId: 7 });
   });
 
   it("puts a taken attempt back under its own app's key", () => {

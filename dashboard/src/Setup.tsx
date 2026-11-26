@@ -43,8 +43,6 @@ const CANT_START =
 /** One GitHub app's Setup words: its section on Setup and its Connect page (its Setup URL on GitHub). */
 type AppWords = {
   app: WardenApp;
-  /** The Connect page's h1. */
-  heading: string;
   asking: string;
   /** The app's 503: this Warden has no settings for it. */
   notSetUp: string;
@@ -60,7 +58,6 @@ type AppWords = {
 
 const READ_WORDS: AppWords = {
   app: READ_APP,
-  heading: "Connect GitHub",
   asking: "Asking Warden's server about GitHub…",
   notSetUp: "GitHub isn't set up on this Warden.",
   adminDoes: "An Admin connects GitHub.",
@@ -73,7 +70,6 @@ const READ_WORDS: AppWords = {
 /** The write app (#224, story 5): the second GitHub app, which Fix PRs go through. */
 const WRITE_WORDS: AppWords = {
   app: WRITE_APP,
-  heading: "Grant write access",
   asking: "Asking Warden's server about the write app…",
   // Slice 4 adds the write app's how-to beside this line.
   notSetUp: "Fix PRs aren't set up on this Warden.",
@@ -330,7 +326,7 @@ export function WriteAppSetupPage(props: PageProps) {
 function ConnectPage(props: AppProps) {
   return (
     <>
-      <h1>{props.words.heading}</h1>
+      <h1>{props.words.app.heading}</h1>
       {props.me.role === "admin" ? (
         <LinkInstallation {...props} />
       ) : (
