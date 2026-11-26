@@ -87,6 +87,32 @@ export function rereadsAfterDrop(result: SaveResult | TeamCheckRefused): boolean
 }
 
 /**
+ * Whether a delete a Team or Role change dropped still reads the list again, back on its Team: the server answered that
+ * the Product isn't stored ("deleted", or "not-found" when it was already gone). No answer leaves the list as it is, as
+ * for a save (`rereadsAfterDrop`).
+ */
+export const rereadsAfterDroppedDelete = (result: DeleteResult | TeamCheckRefused): boolean =>
+  result.kind === "deleted" || result.kind === "not-found";
+
+/** The Products pages shown now, each told when a dropped change may have changed a Team's Products. */
+const productsWatchers = new Set<(team: string | null) => void>();
+
+/**
+ * Calls `watcher` with the Team whenever a dropped save or delete may have changed that Team's Products; it returns
+ * the call that stops it. A Team switch mounts a fresh Products page, so the page that sent a change may be gone by
+ * the time its answer arrives: the page shown then is the one that reads the list again.
+ */
+export function watchProducts(watcher: (team: string | null) => void): () => void {
+  productsWatchers.add(watcher);
+  return () => productsWatchers.delete(watcher);
+}
+
+/** Tells each Products page shown now that `team`'s Products may have changed. */
+export function productsMayHaveChanged(team: string | null): void {
+  for (const watcher of productsWatchers) watcher(team);
+}
+
+/**
  * Creates a Product (`id` null: POST /api/products) or replaces the Product `id` whole (PUT /api/products/:id). The
  * server checks the Role and runs the Product's Patch Scan before it answers.
  */

@@ -27,9 +27,12 @@ import {
   deleteProductInTeam,
   fetchFrameworks,
   productAnchor,
+  productsMayHaveChanged,
   rereadsAfterDrop,
+  rereadsAfterDroppedDelete,
   saveProductInTeam,
   USAGE_WORDS,
+  watchProducts,
   type DeleteResult,
   type ProductsResult,
   type SaveResult,
@@ -233,13 +236,25 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     setDeleting(false);
     setGone(false);
   }
-  // The Team the page shows now, for a forgotten save whose answer arrives once its Team shows again.
-  const teamNow = useRef(team);
-  useEffect(() => {
-    teamNow.current = team;
-    saveCall.current = null;
-    deleteCall.current = null;
-  }, [team, changes]);
+  // The page leaving forgets them too: a Team switch mounts a fresh page, so their answer is dropped, not shown in a
+  // page that's gone.
+  useEffect(
+    () => () => {
+      saveCall.current = null;
+      deleteCall.current = null;
+    },
+    [team, changes],
+  );
+  // A forgotten save or delete whose answer may have changed the Products of the Team shown now reads the list again,
+  // whether this page sent it or one a Team switch replaced.
+  const { refresh: refreshList } = list;
+  useEffect(
+    () =>
+      watchProducts((changedIn) => {
+        if (changedIn === team) refreshList();
+      }),
+    [team, refreshList],
+  );
   // A confirm whose Product leaves the list goes, refusal and all, so a later read that lists it again doesn't bring
   // it back.
   if (
@@ -372,8 +387,12 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     deleteCall.current = call;
     setDeleting(true);
     const result = await deleteProductInTeam(getToken, deletedIn, id);
-    // A Team or Role change since forgot this delete: its answer is about a page no longer shown.
-    if (deleteCall.current !== call) return;
+    // A Team or Role change since forgot this delete: its answer is about a confirm no longer shown. Back on the
+    // delete's Team, the list is read again if the Product is gone.
+    if (deleteCall.current !== call) {
+      if (rereadsAfterDroppedDelete(result)) productsMayHaveChanged(deletedIn);
+      return;
+    }
     deleteCall.current = null;
     setDeleting(false);
     switch (result.kind) {
@@ -408,7 +427,7 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     // A Team or Role change since forgot this save: its answer is about a form no longer shown. Back on the save's
     // Team, `rereadsAfterDrop` says whether its answer still reads the list again, so the list shows what's stored.
     if (saveCall.current !== call) {
-      if (rereadsAfterDrop(result) && teamNow.current === savedIn) list.refresh();
+      if (rereadsAfterDrop(result)) productsMayHaveChanged(savedIn);
       return;
     }
     saveCall.current = null;

@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.tsx";
-import { callsTo, deferred, fetchMock, json, serve } from "./fake-api.ts";
+import { callsTo, deferred, fetchMock, json, noContent, serve } from "./fake-api.ts";
 import { clerk, resetClerk } from "./fake-clerk.tsx";
 
 vi.mock("@clerk/react", () => import("./fake-clerk.tsx"));
@@ -292,5 +292,88 @@ describe("AppShell", () => {
     expect(callsTo("/api/me")).toHaveLength(4);
     expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
     expect(header().queryByText("Admin")).not.toBeInTheDocument();
+  });
+});
+
+// The shell shows its waiting line while /api/me answers about the new Team, so a Team switch mounts a fresh page:
+// a change sent from the page left behind still reaches the list shown once the person is back on its Team (#307).
+describe("a change on Products under way across a Team switch and back", () => {
+  const CHAT = { id: "prod_chat", name: "Chat assistant", repo_urls: [], dependencies: [] };
+  const DOCS_BOT = { id: "prod_docs", name: "Docs bot", repo_urls: [], dependencies: [] };
+  const BLUEBIRD = { id: "prod_b", name: "Bluebird", repo_urls: [], dependencies: [] };
+
+  /**
+   * Opens /products as an Admin of Acme, the Team's Products read from `stored` (Bluebird's from its own list), and
+   * holds each save and delete until the test answers it.
+   */
+  async function openProducts(stored: () => unknown[]) {
+    window.history.replaceState(null, "", "/products");
+    clerk.auth.orgId = "org_a";
+    const save = deferred<Response>();
+    const remove = deferred<Response>();
+    serve({
+      me: () => me(clerk.auth.orgId, "admin"),
+      products: () =>
+        clerk.auth.orgId === "org_b"
+          ? json(200, { team: "org_b", products: [BLUEBIRD] })
+          : json(200, { team: "org_a", products: stored() }),
+      frameworks: () => json(200, { frameworks: [] }),
+      saveProduct: () => save.promise,
+      deleteProduct: () => remove.promise,
+    });
+    const { rerender } = render(<App />);
+    await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+    /** Switches to Bluebird and back to Acme, each once its list shows. */
+    const awayAndBack = async () => {
+      clerk.auth.orgId = "org_b";
+      rerender(<App />);
+      await screen.findByRole("heading", { level: 2, name: "Bluebird" });
+      clerk.auth.orgId = "org_a";
+      rerender(<App />);
+      await screen.findByRole("heading", { level: 2, name: "Chat assistant" });
+    };
+    return { save, remove, awayAndBack };
+  }
+
+  const sent = (method: string) =>
+    fetchMock.mock.calls.filter(
+      ([input, init]) => String(input).startsWith("/api/products") && init?.method === method,
+    );
+
+  it("a save the server stores while the Admin is on another Team shows in the list once they're back", async () => {
+    let stored = [CHAT];
+    const { save, awayAndBack } = await openProducts(() => stored);
+    await userEvent.click(screen.getByRole("button", { name: "Add a Product" }));
+    await userEvent.type(screen.getByRole("textbox", { name: "Name" }), "Docs bot");
+    await userEvent.click(screen.getByRole("button", { name: "Save" }));
+    await vi.waitFor(() => expect(sent("POST")).toHaveLength(1));
+
+    await awayAndBack();
+    stored = [CHAT, DOCS_BOT];
+    save.resolve(json(201, DOCS_BOT));
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Docs bot" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("a delete the server makes while the Admin is on another Team leaves the list once they're back", async () => {
+    let stored = [CHAT, DOCS_BOT];
+    const { remove, awayAndBack } = await openProducts(() => stored);
+    await userEvent.click(screen.getByRole("button", { name: "Delete Chat assistant" }));
+    const confirm = within(
+      screen.getByRole("group", { name: "Delete Chat assistant? Its CVE Findings turn Fixed." }),
+    );
+    await userEvent.click(confirm.getByRole("button", { name: "Delete" }));
+    await vi.waitFor(() => expect(sent("DELETE")).toHaveLength(1));
+
+    await awayAndBack();
+    stored = [DOCS_BOT];
+    remove.resolve(noContent());
+
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("heading", { level: 2, name: "Chat assistant" })).toBeNull(),
+    );
+    expect(screen.getByRole("heading", { level: 2, name: "Docs bot" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
