@@ -1,6 +1,7 @@
 // The RepoReader a Guard Scan reads a repo through on GitHub (Guard spec, stories 3, 4 and 15). For each repo, the App
 // gets an installation token scoped to that one repo with contents read only, downloads the repo's default-branch
-// tarball with it, and yields its text files one at a time through the tar reader. Nothing touches disk. The token is
+// tarball with it, and yields its text files one at a time through the tar reader; a repo with no commits, whose
+// tarball answers 404 and whose commits answer 409, yields none. Nothing touches disk. The token is
 // dropped after the repo; it, the App's JWT and the download URL GitHub redirects to (which carries its own token) are
 // never logged, stored or put in an error. It needs the App's client id and private key, never its client secret.
 import { createPrivateKey } from "node:crypto";
@@ -148,6 +149,25 @@ export function createGitHubReader({
     return parsed.data.token;
   }
 
+  /**
+   * Whether the repo has no commits, asked after its tarball answered 404: GitHub answers its commits 409 then, with a
+   * JSON body. Any other answer, or none, is "not known to be empty", so the tarball's 404 stands.
+   */
+  async function hasNoCommits(owner: string, name: string, token: string): Promise<boolean> {
+    try {
+      const answer = await callJson(fetch, {
+        step: "GitHub's commits check",
+        url: `${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits?per_page=1`,
+        init: { headers: apiHeaders(token) },
+        timeoutMs,
+      });
+      return answer.status === 409 && answer.body !== undefined;
+    } catch (error) {
+      if (error instanceof CallFailed) return false;
+      throw error;
+    }
+  }
+
   return {
     async *readRepo(installationId, repo) {
       checkInstallationId(installationId);
@@ -175,8 +195,13 @@ export function createGitHubReader({
           const why = timedOut(error) ? `timed out after ${archiveTimeoutMs} ms` : "failed";
           throw new GitHubUnavailable(step, undefined, `${step} ${why}`);
         }
+        // A repo with no commits has no archive, and its tarball answers 404 (GitHub documents it for the zip archive),
+        // as a repo gone or out of reach does; only an empty one's commits answer 409. It's read as no files.
+        if (response.status === 404 && (await hasNoCommits(owner, name, token))) {
+          logger.info("guard scan: repo empty", { repo: repo.ref });
+          return;
+        }
         if (!response.ok || response.body === null) {
-          // An empty repo's tarball may answer 404 (GitHub documents it for the zip archive).
           throw new GitHubUnavailable(
             step,
             response.status,
