@@ -30,6 +30,7 @@ const TOKEN_URL = "https://github.com/login/oauth/access_token";
 const INSTALLATIONS_URL = "https://api.github.com/user/installations";
 const ACCESS_TOKENS_URL = `https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`;
 const USER_REPOS_URL = `https://api.github.com/user/installations/${INSTALLATION_ID}/repositories`;
+const INSTALLATION_REPOS_URL = "https://api.github.com/installation/repositories";
 const APP_URL = "https://api.github.com/app";
 const SLUG = "warden-reader";
 
@@ -38,6 +39,7 @@ const STEPS = {
   installations: "GitHub's list of the user's installations",
   userRepos: `GitHub's list of the user's repositories in installation ${INSTALLATION_ID}`,
   accessToken: `GitHub's installation token for installation ${INSTALLATION_ID}`,
+  installationRepos: `GitHub's count of installation ${INSTALLATION_ID}'s repositories`,
   app: "GitHub's authenticated app",
 };
 
@@ -85,12 +87,16 @@ function fakeGitHub(
         },
         201,
       ),
+    // The installation reaches two repos.
+    installationRepos = (call) =>
+      json({ total_count: 2, repositories: page(call, [repo(1), repo(2)]) }),
     app = () => json({ id: 1, slug: SLUG, name: "Warden reader", client_id: CLIENT_ID }),
   }: {
     token?: Answer;
     installations?: Answer;
     userRepos?: Answer;
     accessToken?: Answer;
+    installationRepos?: Answer;
     app?: Answer;
   } = {},
   timeoutMs?: number,
@@ -101,6 +107,7 @@ function fakeGitHub(
     [`GET ${INSTALLATIONS_URL}`]: installations,
     [`GET ${USER_REPOS_URL}`]: userRepos,
     [`POST ${ACCESS_TOKENS_URL}`]: accessToken,
+    [`GET ${INSTALLATION_REPOS_URL}`]: installationRepos,
     [`GET ${APP_URL}`]: app,
   };
   const fetch: Fetch = async (url, init) => {
@@ -156,7 +163,7 @@ describe("createGitHub", () => {
       const { github, calls } = fakeGitHub();
 
       expect(await userInstallationRepos(github)).toEqual([
-        { ref: "https://github.com/acme/repo-1", githubId: 1001 },
+        { ref: "https://github.com/acme/repo-1", githubId: 1001, admin: false },
       ]);
 
       const [exchange, list, repos] = calls;
@@ -185,10 +192,40 @@ describe("createGitHub", () => {
 
       const repos = await userInstallationRepos(github);
 
-      expect(repos).toEqual(all.map((r) => ({ ref: r.html_url, githubId: r.id })));
+      expect(repos).toEqual(all.map((r) => ({ ref: r.html_url, githubId: r.id, admin: false })));
       const pages = callsTo(calls, USER_REPOS_URL);
       expect(pages.map(({ url }) => url.searchParams.get("page"))).toEqual(["1", "2"]);
       for (const call of pages) expect(header(call, "Authorization")).toBe(`Bearer ${USER_TOKEN}`);
+    });
+
+    it("answers whether the person is admin of each repo, from GitHub's permissions for them, and not admin where GitHub names none", async () => {
+      const permissions = (admin: boolean) => ({
+        admin,
+        maintain: admin,
+        push: true,
+        triage: true,
+        pull: true,
+      });
+      const { github } = fakeGitHub({
+        userRepos: () =>
+          json({
+            total_count: 4,
+            repositories: [
+              { ...repo(1), permissions: permissions(true) },
+              { ...repo(2), permissions: permissions(false) },
+              repo(3),
+              // A shape GitHub doesn't document counts as not admin, and still lists the repo.
+              { ...repo(4), permissions: { admin: "yes" } },
+            ],
+          }),
+      });
+
+      expect((await userInstallationRepos(github))?.map((r) => [r.githubId, r.admin])).toEqual([
+        [1001, true],
+        [1002, false],
+        [1003, false],
+        [1004, false],
+      ]);
     });
 
     it("answers [] for an installation the person reaches but reads no repo in", async () => {
@@ -353,6 +390,49 @@ describe("createGitHub", () => {
     );
   });
 
+  const installationRepoCount = (github: ReturnType<typeof createGitHub>) =>
+    github.installationRepoCount(INSTALLATION_ID);
+
+  describe("installationRepoCount", () => {
+    it("answers how many repos the installation reaches, GitHub's count read through the installation's own token", async () => {
+      const { github, calls } = fakeGitHub();
+
+      expect(await installationRepoCount(github)).toBe(2);
+
+      expect(calls.map(({ url }) => `${url.origin}${url.pathname}`)).toEqual([
+        ACCESS_TOKENS_URL,
+        INSTALLATION_REPOS_URL,
+      ]);
+      const [, list] = calls;
+      expect(header(list!, "Authorization")).toBe(`Bearer ${INSTALLATION_TOKEN}`);
+    });
+
+    it.each([403, 404])(
+      "throws GitHubInstallationUnreachable when the token call answers %i",
+      async (status) => {
+        const { github } = fakeGitHub({
+          accessToken: () => json({ message: "Not Found" }, status),
+        });
+
+        const error = await rejection(installationRepoCount(github));
+
+        expect(error).toBeInstanceOf(GitHubInstallationUnreachable);
+      },
+    );
+
+    it.each([0, -1, 1.5])(
+      "refuses installation id %s, which isn't a positive integer, before any call",
+      async (installationId) => {
+        const { github, calls } = fakeGitHub();
+
+        const error = await rejection(github.installationRepoCount(installationId));
+
+        expect(error).toBeInstanceOf(RangeError);
+        expect(calls).toEqual([]);
+      },
+    );
+  });
+
   const appSlug = (github: ReturnType<typeof createGitHub>) => github.appSlug();
 
   describe("appSlug", () => {
@@ -394,6 +474,7 @@ describe("createGitHub", () => {
 
     await github.userInstallationRepos(CODE, VERIFIER, INSTALLATION_ID);
     await installationPermissions(github);
+    await installationRepoCount(github);
     await appSlug(github);
 
     const apiCalls = calls.filter(({ url }) => url.origin === "https://api.github.com");
@@ -401,6 +482,8 @@ describe("createGitHub", () => {
       "/user/installations",
       `/user/installations/${INSTALLATION_ID}/repositories`,
       `/app/installations/${INSTALLATION_ID}/access_tokens`,
+      `/app/installations/${INSTALLATION_ID}/access_tokens`,
+      "/installation/repositories",
       "/app",
     ]);
     for (const call of apiCalls) {
@@ -416,6 +499,7 @@ describe("createGitHub", () => {
       ["installations", { installations: answer }, userInstallationRepos],
       ["userRepos", { userRepos: answer }, userInstallationRepos],
       ["accessToken", { accessToken: answer }, installationPermissions],
+      ["installationRepos", { installationRepos: answer }, installationRepoCount],
       ["app", { app: answer }, appSlug],
     ] as [
       keyof typeof STEPS,
