@@ -3,6 +3,7 @@
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { RSA_PRIVATE_KEY } from "../test/secret-fixtures.ts";
 import { localScanJobStarter, type Spawn } from "./local-scan-job-starter.ts";
 import { createLogger } from "./log.ts";
 
@@ -77,8 +78,7 @@ describe("localScanJobStarter", () => {
     const { start } = starter(fake.spawn, {
       ...SERVER_ENV,
       GITHUB_APP_CLIENT_ID: "Iv23li-client-id-value",
-      GITHUB_APP_PRIVATE_KEY:
-        "-----BEGIN RSA PRIVATE KEY-----\nthe-key\n-----END RSA PRIVATE KEY-----\n",
+      GITHUB_APP_PRIVATE_KEY: RSA_PRIVATE_KEY,
       GITHUB_APP_CLIENT_SECRET: "never-handed-on",
     });
 
