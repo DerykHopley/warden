@@ -3,6 +3,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach } from "vitest";
+import { cleanEnvironment } from "./child-process.ts";
 
 const entry = fileURLToPath(new URL("../src/index.ts", import.meta.url));
 
@@ -12,8 +13,7 @@ afterEach(() => {
 });
 
 export function startServer(env: Record<string, string>) {
-  const { PATH, HOME } = process.env;
-  const child = spawn(process.execPath, [entry], { env: { PATH, HOME, ...env } });
+  const child = spawn(process.execPath, [entry], { env: cleanEnvironment(env) });
   children.push(child);
   let output = "";
   child.stdout.on("data", (chunk) => (output += chunk));
