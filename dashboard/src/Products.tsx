@@ -21,10 +21,12 @@ import {
 } from "react";
 import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
 import type { PageProps } from "./App.tsx";
+import { useLandOnAnchor } from "./land-on-anchor.ts";
 import {
   askProducts,
   deleteProductInTeam,
   fetchFrameworks,
+  productAnchor,
   rereadsAfterDrop,
   saveProductInTeam,
   USAGE_WORDS,
@@ -34,6 +36,10 @@ import {
   type TeamCheckRefused,
 } from "./products.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
+
+/** A Product's entry's name takes focus, once the page has brought the entry into view itself. */
+const focusEntryName = (entry: HTMLElement) =>
+  entry.querySelector<HTMLElement>(".product-name")?.focus({ preventScroll: true });
 
 /** The frameworks' display names by id, in the API's order: null when the frameworks couldn't be read in time. */
 type FrameworkNames = ReadonlyMap<string, string> | null;
@@ -272,6 +278,18 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
       if (element !== undefined) return element.focus();
     }
   });
+
+  // Opened at `#product-<id>` (a Product Asset's link on Findings, #210), that Product's entry comes into view and its
+  // name takes focus once the list first shows. An anchor no listed Product has moves nothing.
+  const listed = view?.products;
+  const findEntry = useCallback(
+    (anchor: string) =>
+      listed?.some(({ id }) => productAnchor(id) === anchor)
+        ? document.getElementById(anchor)
+        : null,
+    [listed],
+  );
+  useLandOnAnchor(view !== null, findEntry, focusEntryName);
 
   function openForm(
     product: Product | null,
@@ -555,7 +573,7 @@ function ProductEntry({
   const reposId = `repos-${product.id}`;
   const dependenciesId = `dependencies-${product.id}`;
   return (
-    <li className="product">
+    <li id={productAnchor(product.id)} className="product">
       <div className="product-head">
         {/* Focus lands here after a save, so it takes focus from script only. */}
         <h2 className="product-name" tabIndex={-1} data-focus={`name:${product.id}`}>

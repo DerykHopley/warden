@@ -76,7 +76,7 @@ function show(focused: Finding, routes: Routes, role: Role | null = "member") {
       userId={ME}
       getToken={() => Promise.resolve("session-token")}
       candidates={[]}
-      assetName={null}
+      productName={null}
       onClear={() => {}}
       onRetryProposals={() => {}}
       onFindingChanged={calls.onFindingChanged}

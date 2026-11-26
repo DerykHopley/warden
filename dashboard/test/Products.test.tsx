@@ -1447,3 +1447,53 @@ describe("ProductsPage's delete confirm", () => {
     );
   });
 });
+
+// #210: a Product Asset's name on Findings links to `/products#product-<id>`; the page opens on that Product's entry.
+describe("ProductsPage opened at a Product's anchor", () => {
+  // jsdom lays nothing out, so it has no scrollIntoView: each test gives Element one, and records what it was called on.
+  const scrolled = vi.fn<(this: Element, options?: ScrollIntoViewOptions) => void>();
+  beforeEach(() => {
+    scrolled.mockReset();
+    Element.prototype.scrollIntoView = scrolled;
+  });
+  afterEach(() => {
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
+
+  const nameOf = (name: string) => screen.getByRole("heading", { level: 2, name });
+
+  it.each<Role>(["member", "admin"])(
+    "brings that Product's entry into view and puts focus on its name, for a %s, once the list answers",
+    async (role) => {
+      window.history.replaceState(null, "", "/products#product-prod_search");
+      renderProducts(role);
+
+      await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled.mock.contexts[0]).toBe(nameOf("Search").closest("li"));
+    },
+  );
+
+  it("moves nothing for an anchor no listed Product has, or with no anchor", async () => {
+    window.history.replaceState(null, "", "/products#product-prod_gone");
+    renderProducts("member");
+    await screen.findByRole("heading", { level: 2, name: "Search" });
+    expect(document.activeElement).toBe(document.body);
+    expect(scrolled).not.toHaveBeenCalled();
+  });
+
+  it("doesn't move again when the list is read again", async () => {
+    window.history.replaceState(null, "", "/products#product-prod_search");
+    renderProducts("admin", { deleteProduct: noContent });
+    await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete Chat assistant" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus(),
+    );
+    await vi.waitFor(() => expect(callsTo("/api/products").length).toBeGreaterThanOrEqual(2));
+    expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  });
+});

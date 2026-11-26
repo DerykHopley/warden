@@ -16,6 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { askAboutTeam } from "./api.ts";
 import type { PageProps } from "./App.tsx";
+import { AssetRef } from "./AssetRef.tsx";
 import { FINDING_GONE } from "./decisions.ts";
 import {
   ASSET_KIND_WORDS,
@@ -29,6 +30,7 @@ import {
   assetLabel,
   fetchFindings,
   inView,
+  productName,
   shortId,
   summaryLine,
   topFive,
@@ -78,8 +80,8 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     [getToken, me.team],
   );
   const list = useWardenCall<FindingsResult>(listFindings, onSessionEnded);
-  // The Team's Products, once per page load, only to name a Product Asset: until they come, or when they're refused,
-  // each Asset shows its ref and the page says nothing about it.
+  // The Team's Products, once per page load, only to name a Product Asset and link it to Products: until they come, or
+  // when they're refused, each Asset shows its ref, with no link, and the page says nothing about it.
   const listProducts = useCallback(
     (signal: AbortSignal) => askProducts(getToken, me.team, signal),
     [getToken, me.team],
@@ -124,7 +126,8 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
   // The Ask Warden panel talks about this view and the focused Finding; its detail card's ✕ clears the focus. A
   // decision in the card asks for the list again, so the card and the table show the new Status.
   const focusedFinding = findings?.find((f) => f.id === focused) ?? null;
-  const assetName = focusedFinding === null ? null : assetLabel(focusedFinding.asset, products);
+  const focusedProductName =
+    focusedFinding === null ? null : productName(focusedFinding.asset, products);
   // Its Unconfirmed fix's candidates, in its order; one the list doesn't hold is left out.
   const candidates = useMemo(
     () =>
@@ -152,7 +155,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
       onFindingChanged: refresh,
       onFindingGone,
       candidates,
-      assetName,
+      productName: focusedProductName,
     });
   }, [
     setContext,
@@ -164,7 +167,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     refresh,
     onFindingGone,
     candidates,
-    assetName,
+    focusedProductName,
   ]);
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);
@@ -408,7 +411,10 @@ function FindingsTable(props: {
               </button>
             </td>
             <td className="asset-col">
-              <span className="asset-ref">{assetLabel(finding.asset, props.products)}</span>
+              <AssetRef
+                asset={finding.asset}
+                productName={productName(finding.asset, props.products)}
+              />
               <span className="asset-kind">{ASSET_KIND_WORDS[finding.asset.kind]}</span>
             </td>
             <td className="narrow">

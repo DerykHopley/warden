@@ -72,10 +72,14 @@ export function summaryLine(findings: readonly Finding[]): string {
 export const shortId = (id: string) => id.slice(0, 8);
 
 /**
- * An Asset's words: a Product Asset's Product name when `products` (null: not loaded, or refused) holds its id;
- * otherwise its ref as it is.
+ * A Product Asset's Product name when `products` (null: not loaded, or refused) holds its id; null for any other Asset,
+ * or a ref no Product has (the demo's made-up `shop`, a deleted Product).
  */
-export function assetLabel(asset: Asset, products: readonly Product[] | null): string {
-  if (asset.kind !== "product") return asset.ref;
-  return products?.find((p) => p.id === asset.ref)?.name ?? asset.ref;
+export function productName(asset: Asset, products: readonly Product[] | null): string | null {
+  if (asset.kind !== "product") return null;
+  return products?.find((p) => p.id === asset.ref)?.name ?? null;
 }
+
+/** An Asset's words: its Product's name (`productName`), otherwise its ref as it is. */
+export const assetLabel = (asset: Asset, products: readonly Product[] | null): string =>
+  productName(asset, products) ?? asset.ref;

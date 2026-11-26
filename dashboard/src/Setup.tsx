@@ -32,11 +32,15 @@ import {
   type WardenApp,
   type WriteGrantsResult,
 } from "./github-setup.ts";
+import { useLandOnAnchor } from "./land-on-anchor.ts";
 import { goTo } from "./navigate.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 /** How long after each answer the repo list is read again while a listed Scan is queued or running. */
 const READ_AGAIN_MS = 5_000;
+/** The Repos heading, when the address's anchor names it. */
+const findReposHeading = (anchor: string) =>
+  anchor === REPOS_ANCHOR ? document.getElementById(REPOS_ANCHOR) : null;
 const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
 /** The write app's Setup URL's path, `WriteAppSetupPage`'s route. */
 const WRITE_SETUP_PATH = "/setup/github/write";
@@ -342,16 +346,8 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   }, [underWay, list.result, refresh]);
 
   // Opened at `#setup-repos` (Findings' "Scan now" link, #342), the Repos heading comes into view once the list first
-  // answers: the browser's own jump to the anchor came before the page rendered it. Only once, so a later read of the
-  // list never moves a page the person has scrolled.
-  const firstAnswer = list.result !== "loading";
-  const landed = useRef(false);
-  useEffect(() => {
-    if (!firstAnswer || landed.current) return;
-    landed.current = true;
-    if (location.hash !== `#${REPOS_ANCHOR}`) return;
-    document.getElementById(REPOS_ANCHOR)?.scrollIntoView();
-  }, [firstAnswer]);
+  // answers.
+  useLandOnAnchor(list.result !== "loading", findReposHeading);
 
   async function scanNow(repos: ListedRepoBody[]) {
     if (startRuns.current) return;
