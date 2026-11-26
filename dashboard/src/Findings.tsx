@@ -3,11 +3,11 @@
 // URL: a filter pushes a history entry, so Back and Forward step through views; selecting a Finding replaces the
 // entry, so a reload or a shared link selects it again, and opens the Ask Warden panel as a click does.
 import {
-  atLeast,
   FindingsView,
   findingsViewPath,
   Module,
   Severity,
+  startsScans,
   type Finding,
   type Level,
   type Product,
@@ -200,7 +200,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
           {me.level !== null && <LevelLine level={me.level} />}
           <h1 className="summary-line">{summaryLine(findings)}</h1>
           {findings.length === 0 ? (
-            <SetupLine getToken={getToken} role={me.role} onSessionEnded={onSessionEnded} />
+            <NoFindingsLine getToken={getToken} role={me.role} onSessionEnded={onSessionEnded} />
           ) : (
             <ScanLine role={me.role} />
           )}
@@ -258,12 +258,14 @@ function LevelLine({ level }: { level: Level }) {
 }
 
 /**
- * With no Findings, the line under the summary that points to Setup. While the Team has no linked repos, an Admin gets
- * the link to connect GitHub, and a Lead or Member is told who connects it; with linked repos, it's the Scan now line.
- * Nothing while the repos are asked for, or when they can't be read: the line is a pointer, and the summary already
- * says there are no Findings.
+ * With no Findings, the line under the summary that says how the first Findings come. While the Team has no linked
+ * repos, an Admin gets the link to connect GitHub on Setup, and a Lead or Member is told who connects it; with linked
+ * repos, it's the Scan now line. Nothing while the repos are asked for, or when they can't be read: the line is a
+ * pointer, and the summary already says there are no Findings.
  */
-function SetupLine(props: Pick<PageProps, "getToken" | "onSessionEnded"> & { role: Role | null }) {
+function NoFindingsLine(
+  props: Pick<PageProps, "getToken" | "onSessionEnded"> & { role: Role | null },
+) {
   const { getToken } = props;
   const ask = useCallback(() => fetchRepos(getToken), [getToken]);
   const repos = useWardenCall<ReposResult>(ask, props.onSessionEnded);
@@ -284,7 +286,7 @@ function SetupLine(props: Pick<PageProps, "getToken" | "onSessionEnded"> & { rol
  * Setup's Repos, where the button is. A Member starts no Scan, so gets nothing.
  */
 function ScanLine({ role }: { role: Role | null }) {
-  if (role === null || !atLeast(role, "lead")) return null;
+  if (!startsScans(role)) return null;
   return (
     <p className="setup-line">
       <a href={`/setup#${REPOS_ANCHOR}`}>Scan now</a> on Setup.

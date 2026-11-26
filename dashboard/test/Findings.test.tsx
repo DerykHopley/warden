@@ -199,7 +199,6 @@ describe("the Scan now line (#342)", () => {
   it("with Findings, shows a Member no Scan now", async () => {
     open("/findings", demoFindings, {}, "member");
     await screen.findByRole("table");
-    expect(scanNow()).not.toBeInTheDocument();
     expect(screen.queryByText(/Scan now/)).not.toBeInTheDocument();
   });
 

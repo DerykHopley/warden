@@ -6,8 +6,8 @@
 import { useOrganization } from "@clerk/react";
 import {
   assetKey,
-  atLeast,
   MAX_SCAN_ASSETS,
+  startsScans,
   type ListedRepoBody,
   type ScanBody,
 } from "@warden/contracts";
@@ -399,7 +399,7 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   if (listed.repos.length === 0) return <p className="muted">No repos linked yet.</p>;
   return (
     <>
-      {me.role !== null && atLeast(me.role, "lead") && (
+      {startsScans(me.role) && (
         <div className="scan-now">
           <button
             type="button"
