@@ -4,14 +4,18 @@ import { randomUUID } from "node:crypto";
 import type { CryptoKey } from "jose";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type pg from "pg";
-import { FindingsBody } from "@warden/contracts";
+import { ControlsBody, FindingsBody } from "@warden/contracts";
+import { createRepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { createWithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
   activeOrganization,
   ADMIN,
   gitHubAppKey,
+  linkRepos,
   newTeam,
+  repoRef,
+  seedProduct,
   seedTeam,
   sessionToken,
   testKey,
@@ -157,6 +161,52 @@ describe("start-up with or without the GitHub app's settings", () => {
 });
 
 describe("the start-up file's wiring", () => {
+  // Vouch's Controls read the Team's Findings and its held Assets through the TeamAssets the start-up file builds from
+  // Guard's Repo Assets and Patch's Products.
+  it("answers a Member each Control's Rules held on the Team's Repo Asset and Product", async () => {
+    const database = inject("testDatabase");
+    const pool = poolAs("warden_app", database);
+    const withTeam = createWithTeam(pool);
+    const team = `org_${randomUUID()}`;
+    try {
+      await seedTeam(withTeam, team, [["user_member", "member"]]);
+      await linkRepos(createRepoAssets({ withTeam }), team, [repoRef("app")]);
+      await seedProduct(withTeam, team, { name: "Shop" });
+    } finally {
+      await pool.end();
+    }
+    const { privateKey, publicPem } = await testKey();
+    const port = await closedPort();
+    const server = start({
+      CLERK_SECRET_KEY: "clerk-secret-value",
+      CLERK_JWT_KEY: publicPem,
+      VITE_CLERK_PUBLISHABLE_KEY: testPublishableKey,
+      ...pgConnection(),
+      PGUSER: "warden_app",
+      PGDATABASE: database,
+      PORT: String(port),
+    });
+    await waitForListening(server.output);
+    const token = await sessionToken(privateKey, "user_member", 60, activeOrganization(team));
+
+    const res = await fetch(
+      `http://127.0.0.1:${port}/api/vouch/catalogues/vda-isa-2027.1/controls`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+
+    expect(res.status).toBe(200);
+    const { controls } = ControlsBody.parse(await res.json());
+    const held = new Set(
+      controls.flatMap(({ evidence }) =>
+        evidence.rules.map(({ asset_kind, assets_held }) => `${asset_kind} ${assets_held}`),
+      ),
+    );
+    expect([...held].sort()).toEqual(["product 1", "repo 1"]);
+    expect(controls.map(({ verdict }) => verdict)).toEqual(Array(4).fill("not_evidenced"));
+  });
+
   // Story 3 end to end: the start-up file gives Patch's routes the Patch Scan, so a saved Product's CVEs are Findings.
   it("answers a Lead's saved Product with its CVE Findings", async () => {
     const database = inject("testDatabase");
