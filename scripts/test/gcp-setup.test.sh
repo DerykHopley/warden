@@ -289,6 +289,11 @@ for secret in warden-db-password warden-clerk-secret warden-clerk-publishable wa
   assert_line "$secret's replication is printed" \
     "gcloud secrets describe $secret '--format=yaml(name,replication)' --project=$project"
 done
+# The note over that list says what docs/data.md's Secret Manager row says (#340): the four made by hand outside the
+# GitHub apps use automatic replication; the rest are user-managed, in europe-west1 only.
+assert_equal "the replication note names the four automatic secrets and the rest as user-managed in europe-west1" \
+  "# Each secret's replication: warden-db-password, warden-clerk-secret, warden-clerk-publishable and warden-clerk-jwt-key use automatic replication (made by hand); every other one should be user-managed, in europe-west1 only" \
+  "$(grep -F "Each secret's replication" <<<"$output")"
 
 # The roles step: from this machine, as postgres, through the proxy, once per set on its own database.
 assert_line "the roles step starts the Cloud SQL Auth Proxy on a free local port" \
