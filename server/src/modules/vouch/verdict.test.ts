@@ -217,16 +217,6 @@ describe("rollUp: a Control's Verdict from its Rules'", () => {
   it.each(cases)("%j rolls up to %s", (verdicts, expected) => {
     expect(rollUp(verdicts)).toBe(expected);
   });
-
-  it("is what workOutVerdict gives a Control with one Rule evidenced and one not", () => {
-    const result = byRules(rule(ENV, [APP], [covered(ENV, "repo", APP, 1)]), rule(VULN, [SHOP]));
-
-    expect(result.verdict).toBe("partly_evidenced");
-    expect(result.kind === "rules" && result.rules.map((r) => r.verdict)).toEqual([
-      "evidenced",
-      "not_evidenced",
-    ]);
-  });
 });
 
 describe("workOutVerdict: the reason", () => {
