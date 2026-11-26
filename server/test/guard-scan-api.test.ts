@@ -138,12 +138,12 @@ async function headers(team: string) {
   return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
 }
 
-/** Starts a Guard Scan of the repo as the Lead, and answers the Job's exit code once it has run. */
-async function scanRepo({ app, jobs }: GuardApp, team: string) {
+/** Starts a Guard Scan of the repos (the one repo by default) as the Lead, and answers the Job's exit code once it has run. */
+async function scanRepo({ app, jobs }: GuardApp, team: string, assets: Asset[] = [repo]) {
   const res = await app.request("/api/scans", {
     method: "POST",
     headers: await headers(team),
-    body: JSON.stringify({ module: "guard", assets: [repo] }),
+    body: JSON.stringify({ module: "guard", assets }),
   });
   expect(res.status).toBe(202);
   const { id } = (await res.json()) as { id: string };
@@ -182,9 +182,11 @@ const INSTALLATION_TOKEN = "ghs_the-fake-installation-token";
 /**
  * GitHub at its HTTP boundary (spec decision 11): an installation token for any installation, and the repo's tarball,
  * built from `served()`, for a call carrying that token. fetch follows GitHub's redirect to the download itself, so the
- * fake answers the tarball call with the archive. Anything else, a tarball call without the token included, is a 404.
+ * fake answers the tarball call with the archive. Each repo in `empty` (`<owner>/<repo>`) has no commits: its commits
+ * call with the token answers 409, as GitHub's does. Anything else, a tarball call without the token or any other
+ * repo's tarball or commits included, is a 404.
  */
-function fakeGitHubFetch(served: () => (RepoFile | RepoLink)[]) {
+function fakeGitHubFetch(served: () => (RepoFile | RepoLink)[], empty: string[] = []) {
   const calls: string[] = [];
   const fetch: Fetch = async (url, init) => {
     const method = init.method ?? "GET";
@@ -208,14 +210,24 @@ function fakeGitHubFetch(served: () => (RepoFile | RepoLink)[]) {
         headers: { "Content-Type": "application/x-gzip" },
       });
     }
+    if (
+      method === "GET" &&
+      empty.some((path) => url === `https://api.github.com/repos/${path}/commits?per_page=1`) &&
+      new Headers(init.headers).get("Authorization") === `Bearer ${INSTALLATION_TOKEN}`
+    ) {
+      return Response.json({ message: "Git Repository is empty.", status: "409" }, { status: 409 });
+    }
     return Response.json({ message: "Not Found" }, { status: 404 });
   };
   return { fetch, calls };
 }
 
-/** The app, its Scan Job reading the repo through the GitHub reader from fake GitHub serving `served()`. */
-function gitHubGuardApp(served: () => (RepoFile | RepoLink)[]) {
-  const github = fakeGitHubFetch(served);
+/**
+ * The app, its Scan Job reading the repo through the GitHub reader from fake GitHub serving `served()`, and each repo
+ * in `empty` as one with no commits.
+ */
+function gitHubGuardApp(served: () => (RepoFile | RepoLink)[], empty: string[] = []) {
+  const github = fakeGitHubFetch(served, empty);
   const guard = guardApp((logger) =>
     gitHubRepoReader(
       { clientId: "Iv23li-the-client-id", privateKey: gitHubAppKey() },
@@ -336,6 +348,41 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
       expect(stored.filter((row) => row.includes(secret))).toEqual([]);
       expect(logged.filter((line) => line.includes(secret))).toEqual([]);
     }
+  });
+
+  it("reads a linked repo with no commits as one with no files, and still opens the other repo's Findings (stories 2, 3)", async () => {
+    const team = await newTeam();
+    const emptyRepo: Asset = { kind: "repo", ref: "https://github.com/example/empty" };
+    const { guard } = gitHubGuardApp(() => planted, ["example/empty"]);
+    await linkRepos(guard.repoAssets, team, [repo.ref, emptyRepo.ref], LEAD);
+
+    const scanned = await scanRepo(guard, team, [repo, emptyRepo]);
+
+    expect(scanned.exit).toBe(0);
+    expect(await createScans({ withTeam }).get(team, scanned.id)).toMatchObject({ state: "done" });
+    const opened = await listFindings(guard, team);
+    expect(opened.map(({ rule_id, status, asset }) => ({ rule_id, status, asset }))).toEqual(
+      expect.arrayContaining([
+        { rule_id: "guard/secret-in-repo", status: "open", asset: repo },
+        { rule_id: "guard/secret-in-agent-settings", status: "open", asset: repo },
+      ]),
+    );
+    expect(opened).toHaveLength(2);
+  });
+
+  it("still fails a Scan whose one repo's tarball and commits both answer 404, gone or out of reach, reconciling nothing", async () => {
+    const team = await newTeam();
+    const gone: Asset = { kind: "repo", ref: "https://github.com/example/gone" };
+    const { guard } = gitHubGuardApp(() => planted);
+    await linkRepos(guard.repoAssets, team, [gone.ref], LEAD);
+
+    const failed = await scanRepo(guard, team, [gone]);
+
+    expect(failed.exit).toBe(1);
+    expect(await createScans({ withTeam }).get(team, failed.id)).toMatchObject({
+      state: "failed",
+    });
+    expect(await listFindings(guard, team)).toEqual([]);
   });
 
   it("keeps a secret's Finding Open, unchanged, once its file grows past the 1 MiB a Scan reads, and marks the removed one Fixed", async () => {

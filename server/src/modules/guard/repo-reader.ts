@@ -13,8 +13,8 @@ export type UnreadFile = { path: string; unread: true };
 export interface RepoReader {
   /**
    * The repo's files, one at a time, read through the installation the Team linked: each text file, and each file it
-   * couldn't read as text. Throws, before or during the files, when the repo can't be read: a Scan reads a repo whole
-   * or not at all.
+   * couldn't read as text. A repo with no commits yields nothing, as a repo with no files. Throws, before or during the
+   * files, when the repo can't be read: a Scan reads a repo whole or not at all.
    */
   readRepo(installationId: number, repo: GitHubRepo): AsyncIterable<RepoFile | UnreadFile>;
 }

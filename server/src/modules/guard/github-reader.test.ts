@@ -1,8 +1,8 @@
 // The GitHub reader over a fake fetch (spec decision 11: GitHub is faked at its HTTP boundary). For one repo it asks
 // for an installation token scoped to that repo, contents read only, then that repo's default-branch tarball with it,
-// and yields its files. The fake answers the tarball call with the archive itself, as fetch hands it back after
-// following GitHub's redirect. Every failure throws GitHubInstallationUnreachable or GitHubUnavailable, and none
-// carries the token, the App's JWT or the download URL.
+// and yields its files; a repo with no commits (a tarball 404, then commits 409) yields none. The fake answers the
+// tarball call with the archive itself, as fetch hands it back after following GitHub's redirect. Every failure throws
+// GitHubInstallationUnreachable or GitHubUnavailable, and none carries the token, the App's JWT or the download URL.
 import { createPublicKey, randomBytes } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { jwtVerify } from "jose";
@@ -26,6 +26,8 @@ const DOWNLOAD_URL =
 
 const ACCESS_TOKENS_URL = `https://api.github.com/app/installations/${INSTALLATION_ID}/access_tokens`;
 const TARBALL_URL = "https://api.github.com/repos/example/guarded/tarball";
+/** The check the reader makes only after a tarball 404: a repo with no commits answers it 409. */
+const COMMITS_URL = "https://api.github.com/repos/example/guarded/commits?per_page=1";
 
 const ARCHIVE = gitHubTarball([
   file("README.md", "# Guarded\n"),
@@ -90,7 +92,16 @@ const lostOnRedirect: Answer = () =>
     new TypeError(`fetch failed: ${DOWNLOAD_URL}`, { cause: new Error(DOWNLOAD_URL) }),
   );
 
-/** A fake GitHub: the token call and the tarball, each answered by its handler, every call recorded. */
+/** A connection lost before any answer came, as undici rejects. */
+const lost: Answer = () => Promise.reject(new TypeError("fetch failed"));
+
+/** A tarball call answering 404, as GitHub answers for a repo with no commits, or one gone. */
+const tarball404: Answer = () => json({ message: "Not Found" }, 404);
+
+/** The commits call's answer for a repo with no commits. */
+const emptyRepo: Answer = () => json({ message: "Git Repository is empty.", status: "409" }, 409);
+
+/** A fake GitHub: the token call, the tarball and the commits check, each answered by its handler, every call recorded. */
 function fakeGitHub({
   accessToken = () =>
     json(
@@ -103,11 +114,13 @@ function fakeGitHub({
       201,
     ),
   tarball = (call) => archive(call),
+  commits = () => json([{ sha: "0123456789abcdef0123456789abcdef01234567" }]),
   tarballUrl = TARBALL_URL,
   archiveTimeoutMs = 50,
 }: {
   accessToken?: Answer;
   tarball?: Answer;
+  commits?: Answer;
   /** Where the fake serves the tarball: the repo's own `/repos/<owner>/<repo>/tarball`. */
   tarballUrl?: string;
   archiveTimeoutMs?: number;
@@ -120,6 +133,7 @@ function fakeGitHub({
     const routes: Record<string, Answer | undefined> = {
       [`POST ${ACCESS_TOKENS_URL}`]: accessToken,
       [`GET ${tarballUrl}`]: tarball,
+      [`GET ${COMMITS_URL}`]: commits,
     };
     const route = routes[`${init.method ?? "GET"} ${url}`];
     if (route === undefined) throw new Error(`unexpected call to ${init.method} ${url}`);
@@ -232,6 +246,37 @@ describe("createGitHubReader", () => {
     }
   });
 
+  it("reads a repo with no commits, whose tarball answers 404 and commits 409, as no files, and logs it as empty", async () => {
+    const { reader, calls, lines } = fakeGitHub({ tarball: tarball404, commits: emptyRepo });
+
+    expect(await readAll(reader)).toEqual([]);
+
+    expect(calls.map(({ url, init }) => `${init.method ?? "GET"} ${url}`)).toEqual([
+      `POST ${ACCESS_TOKENS_URL}`,
+      `GET ${TARBALL_URL}`,
+      `GET ${COMMITS_URL}`,
+    ]);
+    const [tokenCall, , commitsCall] = calls;
+    expect(JSON.parse(tokenCall!.init.body as string)).toEqual({
+      repository_ids: [REPO.githubId],
+      permissions: { contents: "read" },
+    });
+    expect(header(commitsCall!, "Authorization")).toBe(`Bearer ${INSTALLATION_TOKEN}`);
+    expect(header(commitsCall!, "Accept")).toBe("application/vnd.github+json");
+    expect(header(commitsCall!, "X-GitHub-Api-Version")).toBe("2026-03-10");
+    expect(commitsCall!.init.signal).toBeInstanceOf(AbortSignal);
+
+    expect(lines.map((line) => JSON.parse(line) as unknown)).toEqual([
+      expect.objectContaining({
+        severity: "INFO",
+        message: "guard scan: repo empty",
+        repo: REPO.ref,
+      }),
+    ]);
+    const jwt = /^Bearer (.+)$/.exec(header(tokenCall!, "Authorization") ?? "")?.[1];
+    for (const secret of [INSTALLATION_TOKEN, jwt!]) expect(lines[0]).not.toContain(secret);
+  });
+
   describe("ends the download, its signal fired, when the read stops before the archive's end", () => {
     it("because the scanner stopped after the first file", async () => {
       const { reader, calls } = fakeGitHub({
@@ -328,7 +373,8 @@ describe("createGitHubReader", () => {
   describe("fails with GitHubUnavailable, holding no token, JWT or download URL", () => {
     const tokenStep = `GitHub's installation token for installation ${INSTALLATION_ID}`;
     const tarballStep = `GitHub's tarball of ${REPO.ref}`;
-    const cases: [string, Parameters<typeof fakeGitHub>[0], string, number | undefined][] = [
+    type FailureCase = [string, Parameters<typeof fakeGitHub>[0], string, number | undefined];
+    const cases: FailureCase[] = [
       ["a token call answering 500", { accessToken: () => json({}, 500) }, tokenStep, 500],
       ["a token call that never answers", { accessToken: never }, tokenStep, undefined],
       [
@@ -337,12 +383,25 @@ describe("createGitHubReader", () => {
         tokenStep,
         201,
       ],
-      [
-        "a tarball 404, as an empty repo may answer",
-        { tarball: () => json({}, 404) },
-        tarballStep,
-        404,
-      ],
+      ...(
+        [
+          ["200, a repo with commits", () => json([{ sha: "0123abcd" }])],
+          ["403", () => json({ message: "Resource not accessible by integration" }, 403)],
+          ["404, a repo gone or out of reach", () => json({ message: "Not Found" }, 404)],
+          ["500", () => json({}, 500)],
+          ["409 in a body that isn't JSON", () => new Response("Conflict", { status: 409 })],
+          ["nothing within the timeout", never],
+          ["a lost connection", lost],
+        ] satisfies [string, Answer][]
+      ).map(
+        ([commitsAnswer, commits]) =>
+          [
+            `a tarball 404 whose commits check answers ${commitsAnswer}`,
+            { tarball: tarball404, commits },
+            tarballStep,
+            404,
+          ] satisfies FailureCase,
+      ),
       ["a tarball 500", { tarball: () => json({}, 500) }, tarballStep, 500],
       ["a tarball that never answers", { tarball: never }, tarballStep, undefined],
       ["a download lost on the redirect", { tarball: lostOnRedirect }, tarballStep, undefined],
@@ -367,6 +426,13 @@ describe("createGitHubReader", () => {
 
       expect(error).toBeInstanceOf(GitHubUnavailable);
       expect(error).toMatchObject({ step, status });
+      // The commits check is made only after a tarball 404, and its own answer never reaches the error.
+      const checked = calls.filter(({ url }) => url === COMMITS_URL);
+      expect(checked).toHaveLength(step === tarballStep && status === 404 ? 1 : 0);
+      if (status === 404) {
+        expect(error.message).toBe(`${tarballStep} answered HTTP 404`);
+        expect(error.cause).toBeUndefined();
+      }
       const jwts = calls
         .map((call) => /^Bearer (eyJ.+)$/.exec(header(call, "Authorization") ?? "")?.[1])
         .filter((jwt) => jwt !== undefined);
