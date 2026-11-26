@@ -1,6 +1,6 @@
 // Guard's other-AI-tool Rule (Guard spec, stories 3 and 4): `aiToolCheck(asset)` takes each of a repo's file paths,
 // read or unread, and answers one Observation per AI tool other than Claude Code whose config the repo holds, located
-// at the tool's first signal with no line.
+// at the tool's fixed Location with no line, whichever of its paths the repo holds.
 import { Observation, type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import { aiToolCheck } from "./ai-tools.ts";
@@ -20,37 +20,71 @@ const observe = (paths: readonly string[]) => {
 describe("aiToolCheck", () => {
   it.each([
     ["Cursor", ".cursor/rules/a.mdc", ".cursor"],
-    ["Cursor", ".cursorrules", ".cursorrules"],
+    ["Cursor", "apps/web/.cursor/rules/a.mdc", ".cursor"],
+    ["Cursor", ".cursorrules", ".cursor"],
     ["Windsurf", ".windsurf/rules/a.md", ".windsurf"],
-    ["Windsurf", ".windsurfrules", ".windsurfrules"],
-    ["GitHub Copilot", ".github/instructions/ts.instructions.md", ".github/instructions"],
+    ["Windsurf", ".windsurfrules", ".windsurf"],
+    [
+      "GitHub Copilot",
+      ".github/instructions/ts.instructions.md",
+      ".github/copilot-instructions.md",
+    ],
     ["GitHub Copilot", ".github/copilot-instructions.md", ".github/copilot-instructions.md"],
     ["Gemini CLI", ".gemini/settings.json", ".gemini"],
-    ["Gemini CLI", "GEMINI.md", "GEMINI.md"],
-    ["Gemini CLI", "docs/GEMINI.md", "docs/GEMINI.md"],
+    ["Gemini CLI", "GEMINI.md", ".gemini"],
+    ["Gemini CLI", "docs/GEMINI.md", ".gemini"],
     ["Aider", ".aider.conf.yml", ".aider.conf.yml"],
-    ["Aider", ".aiderignore", ".aiderignore"],
-    ["Aider", "app/.aider.chat.history.md", "app/.aider.chat.history.md"],
+    ["Aider", ".aiderignore", ".aider.conf.yml"],
+    ["Aider", "app/.aider.chat.history.md", ".aider.conf.yml"],
     ["Continue", ".continue/config.yaml", ".continue"],
     ["Cline", ".clinerules", ".clinerules"],
-  ])("gives one %s Observation for %s, located at %s with no line", (tool, path, at) => {
-    const rule = packRule(RULE);
+  ])(
+    "gives one %s Observation for %s, located at the tool's fixed %s with no line",
+    (tool, path, at) => {
+      const rule = packRule(RULE);
 
-    expect(observe([path])).toEqual([
-      {
-        asset: repo,
-        rule_id: RULE,
-        location: { kind: "file", path: at },
-        severity: "medium",
-        title: rule.title,
-        evidence: {
-          summary: `${tool} config in 1 path (${path}). Claude Code is the only approved AI tool. To fix: ${rule.fix}`,
+      expect(observe([path])).toEqual([
+        {
+          asset: repo,
+          rule_id: RULE,
+          location: { kind: "file", path: at },
+          severity: "medium",
+          title: rule.title,
+          evidence: {
+            summary: `${tool} config in 1 path (${path}). Claude Code is the only approved AI tool. To fix: ${rule.fix}`,
+          },
         },
-      },
-    ]);
-  });
+      ]);
+    },
+  );
 
-  it("gives one Observation per tool, at its first signal in sorted order, counting each of its paths", () => {
+  it.each([
+    ["Cursor", ".cursorrules", ".cursor/rules/a.mdc", ".cursor"],
+    ["Windsurf", ".windsurfrules", ".windsurf/rules/a.md", ".windsurf"],
+    [
+      "GitHub Copilot",
+      ".github/copilot-instructions.md",
+      ".github/instructions/ts.instructions.md",
+      ".github/copilot-instructions.md",
+    ],
+    ["Gemini CLI", "GEMINI.md", ".gemini/settings.json", ".gemini"],
+    ["Aider", ".aiderignore", ".aider.conf.yml", ".aider.conf.yml"],
+  ])(
+    "keeps %s at one Location whichever of its paths the repo holds: %s, both, or %s",
+    (_, one, other, at) => {
+      const locations = [[one], [one, other], [other]].map((paths) =>
+        observe(paths).map(({ location }) => location),
+      );
+
+      expect(locations).toEqual([
+        [{ kind: "file", path: at }],
+        [{ kind: "file", path: at }],
+        [{ kind: "file", path: at }],
+      ]);
+    },
+  );
+
+  it("gives one Observation per tool, counting each of its paths in the summary", () => {
     const [cursor, ...rest] = observe([
       ".cursorrules",
       ".cursor/rules/b.mdc",
@@ -58,7 +92,6 @@ describe("aiToolCheck", () => {
     ]);
 
     expect(rest).toEqual([]);
-    expect(cursor?.location).toEqual({ kind: "file", path: ".cursor" });
     expect(cursor?.evidence.summary).toBe(
       `Cursor config in 3 paths (.cursor/rules/a.mdc, .cursor/rules/b.mdc, .cursorrules). Claude Code is the only approved AI tool. To fix: ${packRule(RULE).fix}`,
     );
@@ -76,25 +109,31 @@ describe("aiToolCheck", () => {
     const found = observe([".cursorrules", "src/index.ts", ".windsurf/rules/a.md"]);
 
     expect(found.map(({ rule_id, location }) => ({ rule_id, location }))).toEqual([
-      { rule_id: RULE, location: { kind: "file", path: ".cursorrules" } },
+      { rule_id: RULE, location: { kind: "file", path: ".cursor" } },
       { rule_id: RULE, location: { kind: "file", path: ".windsurf" } },
     ]);
   });
 
-  it("locates a folder signal in a subfolder at the folder, which a second file under it doesn't move", () => {
-    const one = observe(["apps/web/.cursor/rules/a.mdc"]);
-    const two = observe(["apps/web/.cursor/rules/a.mdc", "apps/web/.cursor/rules/0.mdc"]);
+  it("keeps a tool's folder in a subfolder at the same Location when a root folder of it is added", () => {
+    const nested = observe(["apps/web/.cursor/rules/a.mdc"]);
+    const both = observe(["apps/web/.cursor/rules/a.mdc", ".cursor/rules/a.mdc"]);
 
-    expect(one[0]?.location).toEqual({ kind: "file", path: "apps/web/.cursor" });
-    expect(two[0]?.location).toEqual({ kind: "file", path: "apps/web/.cursor" });
+    expect(nested.map(({ location }) => location)).toEqual([{ kind: "file", path: ".cursor" }]);
+    expect(both.map(({ location }) => location)).toEqual([{ kind: "file", path: ".cursor" }]);
   });
 
   it.each([
-    [".cursor/.cursorrules", ".cursor"],
-    [".gemini/GEMINI.md", ".gemini"],
-  ])("locates %s, which both a folder and a file signal match, at the folder", (path, at) => {
-    expect(observe([path])[0]?.location).toEqual({ kind: "file", path: at });
-  });
+    ["Cursor", ".cursor/.cursorrules", ".cursor"],
+    ["Gemini CLI", ".gemini/GEMINI.md", ".gemini"],
+  ])(
+    "counts %s's %s, which both a folder and a file signal match, once at %s",
+    (tool, path, at) => {
+      const found = observe([path]);
+
+      expect(found.map(({ location }) => location)).toEqual([{ kind: "file", path: at }]);
+      expect(found[0]?.evidence.summary).toContain(`${tool} config in 1 path (${path}).`);
+    },
+  );
 
   it.each([
     ["AGENTS.md alone", ["AGENTS.md"]],
