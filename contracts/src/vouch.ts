@@ -4,7 +4,10 @@
 //
 // Each judged Control's Verdict, reason and evidence (slice 2b): worked out on read from the Team's Findings, Scan
 // coverage and Judge Spot runs in the last 30 days, never stored.
+//
+// A Lead's review of a Control's Verdict (slice 3): confirmed or overridden, each a row of an append-only review log.
 import { z } from "zod";
+import { DecisionReason } from "./decisions.ts";
 import { Asset, AssetKind, DateTime, Id, RuleId, Severity, Title } from "./finding.ts";
 
 /**
@@ -16,10 +19,25 @@ export type CatalogueId = z.infer<typeof CatalogueId>;
 
 /**
  * Vouch's judgement of one Control (GLOSSARY: Verdict), worked out from the Team's Findings, Scan coverage and Judge
- * Spot runs. A Lead's override to not applicable joins it with the review log (spec #341, slice 3).
+ * Spot runs. A worked-out Verdict is never not applicable: only a Lead's review says that (`ReviewedVerdict`).
  */
 export const Verdict = z.enum(["evidenced", "partly_evidenced", "not_evidenced"]);
 export type Verdict = z.infer<typeof Verdict>;
+
+/** A Verdict as a Lead reviewed it (spec #341, slice 3): a worked-out one, or not applicable, which only a Lead says. */
+export const ReviewedVerdict = z.enum([...Verdict.options, "not_applicable"]);
+export type ReviewedVerdict = z.infer<typeof ReviewedVerdict>;
+
+/**
+ * Where a Control stands with its reviews: none yet; reviewed, the newest review made on the Verdict worked out now;
+ * or changed since review, the Verdict worked out now differing from the one the newest review was made on.
+ */
+export const ReviewState = z.enum(["not_reviewed", "reviewed", "changed_since_review"]);
+export type ReviewState = z.infer<typeof ReviewState>;
+
+/** What a review did: kept the worked-out Verdict, or put another in its place. */
+export const ReviewOutcome = z.enum(["confirmed", "overridden"]);
+export type ReviewOutcome = z.infer<typeof ReviewOutcome>;
 
 /** One judged Control, its text unchanged from the Catalogue: its ref, its question and its ISO 27001 reference. */
 export const CatalogueControl = z.object({
@@ -90,18 +108,62 @@ export const ControlEvidence = z.object({
 });
 export type ControlEvidence = z.infer<typeof ControlEvidence>;
 
-/** One judged Control with its worked-out Verdict, its one-line reason and the evidence behind it. */
+/**
+ * One judged Control with its worked-out Verdict, its one-line reason and the evidence behind it, and where it stands
+ * with its reviews: `reviewed_verdict` is the newest review's Verdict while `review_state` is `reviewed`, and null
+ * otherwise (not reviewed, or changed since review: it waits for a review of the Verdict worked out now).
+ */
 export const ControlVerdict = CatalogueControl.extend({
   verdict: Verdict,
   reason: z.string().min(1),
   evidence: ControlEvidence,
+  review_state: ReviewState,
+  reviewed_verdict: ReviewedVerdict.nullable(),
 });
 export type ControlVerdict = z.infer<typeof ControlVerdict>;
 
 /**
+ * One row of the review log, as the API answers it: the Verdict the server worked out when it was written, what the
+ * Lead did and the Verdict they gave (the worked-out one on a confirm), their reason (null on a confirm without one),
+ * who reviewed (a Lead's or an Admin's Clerk user id, from the session) and when. Never changed.
+ */
+export const ControlReview = z.object({
+  id: Id,
+  worked_out_verdict: Verdict,
+  outcome: ReviewOutcome,
+  verdict: ReviewedVerdict,
+  reason: DecisionReason.nullable(),
+  reviewed_by: Id,
+  reviewed_at: DateTime,
+});
+export type ControlReview = z.infer<typeof ControlReview>;
+
+/**
+ * `GET /api/vouch/catalogues/:id/controls/:ref`, and `POST .../controls/:ref/reviews`' answer: one Control as the list
+ * shows it, with its reviews, newest first.
+ */
+export const ControlDetail = ControlVerdict.extend({ reviews: z.array(ControlReview) });
+export type ControlDetail = z.infer<typeof ControlDetail>;
+
+/**
+ * `POST /api/vouch/catalogues/:id/controls/:ref/reviews`' body (a Lead or an Admin): confirm the worked-out Verdict,
+ * with a reason if they like, or override it to another Verdict with a reason. Strict: who reviewed, the worked-out
+ * Verdict and the Team are the server's, never the body's.
+ */
+export const ReviewBody = z.discriminatedUnion("outcome", [
+  z.strictObject({ outcome: z.literal("confirm"), reason: DecisionReason.optional() }),
+  z.strictObject({
+    outcome: z.literal("override"),
+    verdict: ReviewedVerdict,
+    reason: DecisionReason,
+  }),
+]);
+export type ReviewBody = z.infer<typeof ReviewBody>;
+
+/**
  * `GET /api/vouch/catalogues/:id/controls`: the Catalogue's judged Controls with their Verdicts, in the order it shows
  * them, and whether the Team has it on. Any person in the Team reads it. `GET .../controls/:ref` answers one
- * `ControlVerdict`.
+ * `ControlDetail`.
  */
 export const ControlsBody = z.object({
   catalogue: CatalogueId,

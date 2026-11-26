@@ -5,8 +5,9 @@
 // its own; Scans and Spot runs go through the Findings module, as a module's would.
 import { randomUUID } from "node:crypto";
 import {
+  ControlDetail,
   ControlsBody,
-  ControlVerdict,
+  type ControlVerdict,
   type Asset,
   type Observation,
   type RuleId,
@@ -21,6 +22,7 @@ import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
 import { VDA_ISA_2027_1 } from "../src/modules/vouch/catalogue.ts";
+import { createControlReviews } from "../src/modules/vouch/control-reviews.ts";
 import { vouchRoutes } from "../src/modules/vouch/routes.ts";
 import { createTeamAssets, type TeamAssets } from "../src/modules/vouch/team-assets.ts";
 import { createTeamCatalogues, type TeamCatalogues } from "../src/modules/vouch/team-catalogues.ts";
@@ -73,6 +75,7 @@ beforeAll(async () => {
   findings = createFindings({ withTeam, moveRules: {} });
   repoAssets = createRepoAssets({ withTeam });
   teamCatalogues = createTeamCatalogues({ withTeam });
+  const controlReviews = createControlReviews({ withTeam });
   const teamAssets = createTeamAssets({ repoAssets, products: createProducts({ withTeam }) });
   // The real stores, each read noted first, so a case can see that a refusal read none.
   const noted =
@@ -97,6 +100,11 @@ beforeAll(async () => {
           lastSpotRunAt: noted("lastSpotRunAt", findings.lastSpotRunAt),
         },
         teamAssets: { held: noted("teamAssets.held", teamAssets.held) } satisfies TeamAssets,
+        controlReviews: {
+          ...controlReviews,
+          newest: noted("controlReviews.newest", controlReviews.newest),
+          history: noted("controlReviews.history", controlReviews.history),
+        },
       }),
     ],
   }));
@@ -351,7 +359,7 @@ describe("GET /api/vouch/catalogues/:id/controls/:ref: one Control", () => {
     const res = await get(teamId, `${CONTROLS}/4.1.3`);
 
     expect(res.status).toBe(200);
-    expect(ControlVerdict.parse(res.body)).toEqual(listed);
+    expect(ControlDetail.parse(res.body)).toEqual({ ...listed, reviews: [] });
   });
 
   it.each([

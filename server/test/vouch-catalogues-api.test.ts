@@ -12,6 +12,7 @@ import { createFindings } from "../src/findings/index.ts";
 import { createRepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
 import { VDA_ISA_2027_1 } from "../src/modules/vouch/catalogue.ts";
+import { createControlReviews } from "../src/modules/vouch/control-reviews.ts";
 import { vouchRoutes } from "../src/modules/vouch/routes.ts";
 import { createTeamAssets } from "../src/modules/vouch/team-assets.ts";
 import { createTeamCatalogues } from "../src/modules/vouch/team-catalogues.ts";
@@ -41,12 +42,14 @@ beforeAll(async () => {
       vouchRoutes({
         teamCatalogues: createTeamCatalogues({ withTeam }),
         catalogues: [VDA_ISA_2027_1],
-        // Read only by the Controls routes, which `vouch-controls-api.test.ts` covers.
+        // Read only by the Controls routes, which `vouch-controls-api.test.ts` covers, and the review route, which
+        // `vouch-reviews-api.test.ts` covers.
         findings: createFindings({ withTeam, moveRules: {} }),
         teamAssets: createTeamAssets({
           repoAssets: createRepoAssets({ withTeam }),
           products: createProducts({ withTeam }),
         }),
+        controlReviews: createControlReviews({ withTeam }),
       }),
     ],
   }));
