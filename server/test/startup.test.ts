@@ -84,6 +84,15 @@ describe("start-up", () => {
     expect(res.status).toBe(401);
   });
 
+  // Vouch's routes read the Catalogue loaded at start-up; a load error would have stopped the server before it listened.
+  it("mounts Vouch's routes: GET /api/vouch/catalogues asks for a sign-in", async () => {
+    const server = await startWithoutDatabase();
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/vouch/catalogues`);
+
+    expect(res.status).toBe(401);
+  });
+
   it("exits 0 on SIGTERM", async () => {
     const server = await startWithoutDatabase();
 
