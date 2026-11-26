@@ -1,21 +1,29 @@
-// The Setup page (Guard spec, story 1): an Admin connects GitHub from here, and anyone in the Team sees its Repo
-// Assets. GitHub sends the Admin back from installing the app to `/setup/github`, its Setup URL, which asks them to
+// The Setup page (Guard spec, stories 1 and 2): an Admin connects GitHub from here, anyone in the Team sees its Repo
+// Assets with each one's last Scan, and a Lead or an Admin starts a Scan of them. GitHub sends the Admin back from installing the app to `/setup/github`, its Setup URL, which asks them to
 // sign in with GitHub so Warden can link that installation to the Team.
 import { useOrganization } from "@clerk/react";
-import { useCallback, useEffect, useState } from "react";
+import { MAX_SCAN_ASSETS, type ListedRepoBody, type ScanBody } from "@warden/contracts";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { NOT_ANSWERING, TEAM_NOT_OPENED } from "./api.ts";
 import type { PageProps } from "./App.tsx";
+import { dayAndTimeWords } from "./date-words.ts";
 import {
   fetchGitHubApp,
   fetchRepos,
   installationIdFrom,
   installUrl,
+  scanRepos,
   startSignIn,
+  tooManyTries,
   type GitHubAppResult,
   type ReposResult,
 } from "./github-setup.ts";
 import { goTo } from "./navigate.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
+/** How long after each answer the repo list is read again while a listed Scan is queued or running. */
+const READ_AGAIN_MS = 5_000;
+const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
 const ADMIN_CONNECTS = "An Admin connects GitHub.";
 const NOT_SET_UP = "GitHub isn't set up on this Warden.";
 const CANT_START =
@@ -79,12 +87,78 @@ function InstallLink(props: PageProps) {
   return <AppNotReady app={app} />;
 }
 
-function RepoList({ getToken, onSessionEnded }: PageProps) {
+/** A repo's last Scan, in the row beside its ref (story 2). */
+function lastScanWords(scan: ScanBody | null): string {
+  if (scan === null) return "Never scanned";
+  switch (scan.state) {
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running";
+    // A done or failed Scan always has an ended_at; its queued_at only stands in for the type.
+    case "done":
+      return `Done, ${dayAndTimeWords(scan.ended_at ?? scan.queued_at)}`;
+    case "failed":
+      return `Failed, ${dayAndTimeWords(scan.ended_at ?? scan.queued_at)}`;
+  }
+}
+
+const isUnderWay = (repo: ListedRepoBody) =>
+  repo.last_scan?.state === "queued" || repo.last_scan?.state === "running";
+
+function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   const ask = useCallback(() => fetchRepos(getToken), [getToken]);
   const list = useWardenCall<ReposResult>(ask, onSessionEnded);
+  const { refresh } = list;
+  const [starting, setStarting] = useState(false);
+  // Set at the click itself, before React renders the disabled button: one start per click.
+  const startRuns = useRef(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const listed = list.result !== "loading" && list.result.kind === "repos" ? list.result : null;
+  const underWay = listed?.repos.some(isUnderWay) ?? false;
+
+  // While a listed Scan is queued or running, the list is read again READ_AGAIN_MS after each answer, keeping it on
+  // screen; an answer with none under way, an unreadable list, or leaving the page stops it.
+  useEffect(() => {
+    if (!underWay) return;
+    const next = setTimeout(refresh, READ_AGAIN_MS);
+    return () => clearTimeout(next);
+  }, [underWay, listed, refresh]);
+
+  async function scanNow(repos: ListedRepoBody[]) {
+    if (startRuns.current) return;
+    startRuns.current = true;
+    setStarting(true);
+    setRefusal(null);
+    const result = await scanRepos(
+      getToken,
+      repos.slice(0, MAX_SCAN_ASSETS).map((repo) => repo.asset),
+    );
+    startRuns.current = false;
+    setStarting(false);
+    switch (result.kind) {
+      case "started":
+        return refresh();
+      case "refused":
+        setRefusal(result.words);
+        if (result.listChanged) refresh();
+        return;
+      case "forbidden":
+        setRefusal(NOT_A_LEAD);
+        return refreshMe();
+      case "team-not-opened":
+        return setRefusal(TEAM_NOT_OPENED);
+      case "too-many-attempts":
+        return setRefusal(tooManyTries(result.retryAfter));
+      case "not-answering":
+        return setRefusal(NOT_ANSWERING);
+      case "session-ended":
+        return onSessionEnded();
+    }
+  }
 
   if (list.result === "loading") return <p className="muted">Loading the Team's repos…</p>;
-  if (list.result.kind !== "repos") {
+  if (listed === null) {
     return (
       <>
         <CallRefused result={list.result} onRetry={list.retry} />
@@ -92,13 +166,37 @@ function RepoList({ getToken, onSessionEnded }: PageProps) {
       </>
     );
   }
-  if (list.result.repos.length === 0) return <p className="muted">No repos linked yet.</p>;
+  if (listed.repos.length === 0) return <p className="muted">No repos linked yet.</p>;
   return (
-    <ul className="repo-list">
-      {list.result.repos.map((repo) => (
-        <li key={repo.asset.ref}>{repo.asset.ref}</li>
-      ))}
-    </ul>
+    <>
+      {(me.role === "lead" || me.role === "admin") && (
+        <div className="scan-now">
+          <button
+            type="button"
+            className="primary"
+            disabled={starting || underWay}
+            aria-busy={starting}
+            onClick={() => void scanNow(listed.repos)}
+          >
+            Scan now
+          </button>
+          {underWay && <span className="muted">A Scan is under way.</span>}
+        </div>
+      )}
+      {refusal !== null && (
+        <p className="notice" role="alert">
+          {refusal}
+        </p>
+      )}
+      <ul className="repo-list">
+        {listed.repos.map((repo) => (
+          <li key={repo.asset.ref}>
+            <span className="repo-ref">{repo.asset.ref}</span>
+            <span className="repo-scan muted">{lastScanWords(repo.last_scan)}</span>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }
 

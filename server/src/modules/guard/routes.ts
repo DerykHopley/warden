@@ -147,7 +147,10 @@ export function guardRoutes(
           )
         : new Map<string, ScanBody>();
       return c.json({
-        repos: repos.map((repo) => ({ ...repo, last_scan: last.get(assetKey(repo.asset)) ?? null })),
+        repos: repos.map((repo) => ({
+          ...repo,
+          last_scan: last.get(assetKey(repo.asset)) ?? null,
+        })),
       } satisfies ReposBody);
     });
 

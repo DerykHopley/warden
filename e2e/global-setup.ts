@@ -1,16 +1,22 @@
 // Before the browser tests: a throwaway Postgres database with every migration and Patch's CVE snapshot loaded (as the
 // release does, so a Product's save opens its CVE Findings), a key pair standing in for Clerk's, the dashboard built in
 // Vite's `e2e` mode, and the real server process on a free port serving that build. Acme, Bluebird and Cedar are
-// opened through the API as their Admins would (each Team's Member joins too); Acme and Bluebird are then filled by the
+// opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets and a stale
+// Guard Scan of them (`seedCedarRepos`); Acme and Bluebird are then filled by the
 // demo seed (`server/src/seed.ts`) without its demo Product (`--no-product`), so the Findings their tests count stay
 // the demo ones. Returns the teardown: the server stopped, the database dropped, the build removed.
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exportJWK, exportSPKI, generateKeyPair } from "jose";
+import { createPool } from "../server/src/database.ts";
+import { createLogger } from "../server/src/log.ts";
+import { createRepoAssets } from "../server/src/modules/guard/repo-assets.ts";
+import { createWithTeam } from "../server/src/with-team.ts";
 import {
   createMigratedTestDatabase,
   loadTestCveSnapshot,
@@ -20,8 +26,10 @@ import {
   ACME,
   BLUEBIRD,
   CEDAR,
+  CEDAR_REPOS,
   FRONTEND_API_HOST,
   GRACE,
+  HEDY,
   KATHERINE,
   MARGARET,
   sessionToken,
@@ -84,6 +92,47 @@ async function startServer(env: Record<string, string>) {
   }
   child.kill();
   throw new Error(`the server didn't start:\n${output}`);
+}
+
+/**
+ * Cedar's repos for story 2's Setup tests, as warden_app inside withTeam: its two Repo Assets, as Hedy's link of
+ * installation 4242 would write them, and a Guard Scan of both queued 2 hours ago that never started.
+ */
+async function seedCedarRepos(connection: { host: string; port: number }, database: string) {
+  const pool = createPool(
+    createLogger(() => {}),
+    {
+      ...connection,
+      user: "warden_app",
+      database,
+      max: 1,
+    },
+  );
+  try {
+    const withTeam = createWithTeam(pool);
+    await createRepoAssets({ withTeam }).link(CEDAR.id, {
+      installationId: 4242,
+      linkedBy: HEDY.userId,
+      repos: CEDAR_REPOS.map((ref, i) => ({ ref, githubId: i + 1 })),
+    });
+    // Written straight to the table, as the server's Scan tests do: `queued_at` is set once, on insert.
+    await withTeam(CEDAR.id, (tx) =>
+      tx
+        .insertInto("scan_requests")
+        .values({
+          team_id: CEDAR.id,
+          id: randomUUID(),
+          module: "guard",
+          assets: JSON.stringify(CEDAR_REPOS.map((ref) => ({ kind: "repo", ref }))),
+          rules: ["guard/secret-in-repo"],
+          requested_by: HEDY.userId,
+          queued_at: new Date(Date.now() - 2 * 3_600_000),
+        })
+        .execute(),
+    );
+  } finally {
+    await pool.end();
+  }
 }
 
 export default async function globalSetup() {
@@ -165,6 +214,7 @@ export default async function globalSetup() {
     // Cedar gets no demo seed: the Products tests create its Products, and their saves open its CVE Findings.
     await open(CEDAR.admin, CEDAR, "admin");
     await open(KATHERINE, CEDAR, "member");
+    await seedCedarRepos(connection, database.name);
     for (const team of [ACME, BLUEBIRD]) {
       await run(process.execPath, ["server/src/seed.ts", team.id, "--no-product"], {
         ...db,

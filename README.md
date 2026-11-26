@@ -118,6 +118,11 @@ Only an Admin connects GitHub: a Lead or a Member sees the Team's repos on Setup
 The sign-in must start and end in the same browser tab: Warden keeps the sign-in's check there until GitHub sends you
 back. An installation links to one Team only.
 
+Once the repos are linked, Setup shows each one's last Scan beside it: Never scanned, Queued, Running, or Done or
+Failed with the day and time it ended. A Lead or an Admin starts a Guard Scan of the listed repos (the first 100) with
+**Scan now**; the list follows it without a reload, and the button waits while a Scan is under way. A Member sees each
+repo's last Scan, and no button.
+
 ## CVE data
 
 Patch matches a Team's Products against a frozen snapshot of public CVE data, **as of 2026-10-13**. It ships in the
