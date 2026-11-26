@@ -76,7 +76,7 @@ const json = (body: unknown, status = 200) =>
 function fakeGitHub({
   installationId = 0,
   clientId = WRITE_CLIENT_ID,
-  slugs = [WRITE_SLUG],
+  slug = WRITE_SLUG,
   reachable = [installationId],
   permissions = WRITE_APP,
   tokenStatus,
@@ -85,13 +85,12 @@ function fakeGitHub({
 }: {
   installationId?: number;
   clientId?: string;
-  /** `GET /app`'s slug for each call in turn, the last one repeating. */
-  slugs?: string[];
+  slug?: string;
   reachable?: number[];
   permissions?: Record<string, string>;
   tokenStatus?: 404;
   refuse?: boolean;
-  failAt?: "installations" | "app";
+  failAt?: "installations";
 } = {}) {
   const calls: string[] = [];
   const fetch: Fetch = async (url, init) => {
@@ -118,11 +117,8 @@ function fakeGitHub({
       case `POST ${api}/app/installations/${installationId}/access_tokens`:
         if (tokenStatus !== undefined) return json({ message: "Not Found" }, tokenStatus);
         return json({ token: INSTALLATION_TOKEN, permissions }, 201);
-      case `GET ${api}/app`: {
-        if (failAt === "app") return json({ message: "Server Error" }, 500);
-        const asked = calls.filter((call) => call === route).length;
-        return json({ id: 1, slug: slugs[Math.min(asked, slugs.length) - 1], name: "Warden" });
-      }
+      case `GET ${api}/app`:
+        return json({ id: 1, slug, name: "Warden" });
       default:
         throw new Error(`unexpected call to ${route}`);
     }
@@ -137,19 +133,14 @@ function fakeGitHub({
 }
 
 /**
- * The app with the write grant's routes, linking through the write app's `github` (none: the write app isn't set up)
- * on `now`'s clock; with `readGitHub`, Guard's routes too, linking through the read app. Every log line it writes.
+ * The app with the write grant's routes, linking through the write app's `github` (none: the write app isn't set up);
+ * with `readGitHub`, Guard's routes too, linking through the read app. Every log line it writes.
  */
-function writeApp(
-  github?: GitHub,
-  { now, readGitHub }: { now?: () => number; readGitHub?: GitHub } = {},
-) {
+function writeApp(github?: GitHub, { readGitHub }: { readGitHub?: GitHub } = {}) {
   const routeLines: string[] = [];
   const logger = createLogger((line) => routeLines.push(line));
   const routes = [
-    github
-      ? writeGrantRoutes({ writeGrants, github, logger, now })
-      : writeGrantRoutes({ writeGrants }),
+    github ? writeGrantRoutes({ writeGrants, github, logger }) : writeGrantRoutes({ writeGrants }),
   ];
   if (readGitHub) routes.push(guardRoutes({ repoAssets, github: readGitHub, logger }));
   const { app, lines } = testApp({ publicPem, withTeam, moduleRoutes: routes });
@@ -254,28 +245,21 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
     expect(await rowCount(team)).toBe(1);
   });
 
-  it.each([
-    ["can also write workflows", { ...WRITE_APP, workflows: "write" }],
-    ["can also read administration", { ...WRITE_APP, administration: "read" }],
-    ["lacks pull requests", { contents: "write", metadata: "read" }],
-    ["can only read contents", { ...WRITE_APP, contents: "read" }],
-    ["names no permissions", {}],
-  ])(
-    "answers 409 for an installation whose token %s, and writes no row",
-    async (_name, permissions) => {
-      const team = await newTeam(withTeam);
-      const installationId = newInstallation();
-      const { app } = writeApp(fakeGitHub({ installationId, permissions }).github);
+  // Which tokens hold the write app's permissions is holdsWriteAppPermissions' unit test; here, one that doesn't.
+  it("answers 409 for an installation whose token holds more than the write app's permissions, and writes no row", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const permissions = { ...WRITE_APP, workflows: "write" };
+    const { app } = writeApp(fakeGitHub({ installationId, permissions }).github);
 
-      const res = await link(app, team, installationId);
+    const res = await link(app, team, installationId);
 
-      expect(res).toMatchObject({
-        status: 409,
-        body: { error: "This installation's permissions aren't the write app's" },
-      });
-      expect(await rowCount(team)).toBe(0);
-    },
-  );
+    expect(res).toMatchObject({
+      status: 409,
+      body: { error: "This installation's permissions aren't the write app's" },
+    });
+    expect(await rowCount(team)).toBe(0);
+  });
 
   it("answers 503 without the write app's settings, and writes no row", async () => {
     const team = await newTeam(withTeam);
@@ -349,6 +333,7 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
     expect(entry).toMatchObject({
       severity: "ERROR",
       team,
+      app: "write",
       step: "GitHub's list of the user's installations",
       status: 500,
     });
@@ -416,32 +401,28 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
   );
 });
 
+// How long a slug is kept, and a GitHub that doesn't answer, are the shared handler's, proven on the read app's route
+// (github-app-api.test.ts); here, what is the write app's own.
 describe("GET /api/github/write-app: the write app's Connect step", () => {
-  it("answers the write app's slug and client id, never the read app's, asking GitHub at most once an hour", async () => {
+  it("answers the write app's slug and client id, never the read app's, and keeps its own slug apart from the read app's", async () => {
     const team = await newTeam(withTeam);
-    const write = fakeGitHub({ slugs: [WRITE_SLUG, "warden-writer-renamed"] });
-    const read = fakeGitHub({ clientId: READ_CLIENT_ID, slugs: [READ_SLUG] });
-    let now = Date.parse("2026-11-26T09:00:00Z");
-    const { app } = writeApp(write.github, { now: () => now, readGitHub: read.github });
+    const write = fakeGitHub();
+    const read = fakeGitHub({ clientId: READ_CLIENT_ID, slug: READ_SLUG });
+    const { app } = writeApp(write.github, { readGitHub: read.github });
 
+    const readApp = await call(app, team, "/api/github/app");
     const first = await call(app, team, "/api/github/write-app");
-    now += 3_600_000 - 1;
-    const withinTheHour = await call(app, team, "/api/github/write-app");
-    now += 1;
-    const afterIt = await call(app, team, "/api/github/write-app");
+    const again = await call(app, team, "/api/github/write-app");
 
+    expect(readApp.body).toEqual({ slug: READ_SLUG, client_id: READ_CLIENT_ID });
     expect(first.status).toBe(200);
     expect(GitHubAppBody.parse(first.body)).toEqual({
       slug: WRITE_SLUG,
       client_id: WRITE_CLIENT_ID,
     });
-    expect(withinTheHour.body).toEqual(first.body);
-    expect(afterIt.body).toEqual({ slug: "warden-writer-renamed", client_id: WRITE_CLIENT_ID });
-    expect(write.calls).toEqual([
-      "GET https://api.github.com/app",
-      "GET https://api.github.com/app",
-    ]);
-    expect(read.calls).toEqual([]);
+    expect(again.body).toEqual(first.body);
+    expect(write.calls).toEqual(["GET https://api.github.com/app"]);
+    expect(read.calls).toEqual(["GET https://api.github.com/app"]);
   });
 
   it("answers 503 without the write app's settings", async () => {
@@ -452,25 +433,6 @@ describe("GET /api/github/write-app: the write app's Connect step", () => {
       status: 503,
       body: { error: "Fix PRs aren't set up on this Warden" },
     });
-  });
-
-  it("answers 502 when GitHub answers 500, logs the step and status only, and asks again next time", async () => {
-    const team = await newTeam(withTeam);
-    const { github, calls } = fakeGitHub({ failAt: "app" });
-    const { app, logLines } = writeApp(github);
-
-    const failed = await call(app, team, "/api/github/write-app");
-    await call(app, team, "/api/github/write-app");
-
-    expect(failed).toMatchObject({ status: 502, body: { error: "GitHub didn't answer" } });
-    const entry = logEntries(logLines().join("\n")).find((e) => e.step !== undefined);
-    expect(entry).toMatchObject({
-      severity: "ERROR",
-      step: "GitHub's authenticated app",
-      status: 500,
-    });
-    expect(JSON.stringify(entry)).not.toContain("Server Error");
-    expect(calls).toHaveLength(2);
   });
 });
 

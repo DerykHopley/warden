@@ -171,7 +171,7 @@ describe("GET /api/github/app: what an Admin's Setup builds GitHub's links from 
       expect(failed).toEqual({ status: 502, body: { error: "GitHub didn't answer" } });
       const entries = logLines().map((line) => JSON.parse(line) as Record<string, unknown>);
       const entry = entries.find((e) => e.step === "GitHub's authenticated app");
-      expect(entry).toMatchObject({ severity: "ERROR", status });
+      expect(entry).toMatchObject({ severity: "ERROR", app: "read", status });
       // GitHub's own words aren't repeated.
       expect(JSON.stringify(entry)).not.toContain("Server Error");
       expect(next).toEqual({ status: 200, body: { slug: SLUG, client_id: CLIENT_ID } });

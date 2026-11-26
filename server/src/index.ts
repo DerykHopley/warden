@@ -120,8 +120,8 @@ const appDeps: AppDeps = {
         ? { repoAssets, scans, startScanJob, github: createGitHub(config.github), logger }
         : { repoAssets, scans, startScanJob },
     ),
-    // The write grant, through the write app's own client when its settings are set; without them, linking answers
-    // 503 and the grant is still read.
+    // The write grant, through the write app's own client when its settings are set; without them, both Admin routes
+    // (the write app's Connect step and linking) answer 503, and the grant is still read.
     writeGrantRoutes(
       config.githubWrite
         ? { writeGrants, github: createGitHub(config.githubWrite), logger }
