@@ -50,25 +50,24 @@ describe("refuseOwnerDatabase", () => {
   });
 });
 
-describe.each([
-  { command: "the server's tests", args: ["--filter", "@warden/server", "test"] },
-  { command: "the browser tests", args: ["e2e"] },
-])("$command, outside CI", ({ args }) => {
+// One literal group per command, not `describe.each` with a `$command` title: `vitest list` reads the file without
+// running it, so it can't fill the title in, and both groups came out with the same name (#292).
+describe("outside CI", () => {
   let postgres: Awaited<ReturnType<typeof socketPostgres>>;
   beforeEach(async () => {
     postgres = await socketPostgres("54329");
   });
   afterEach(() => postgres.close());
 
-  it("exit non-zero with PGPORT unset, naming the port and the fix, before any login", async () => {
+  async function refusesBeforeAnyLogin(args: string[]) {
     const { code, output } = await pnpm(args, { PGHOST: postgres.host });
 
     expect(code).not.toBe(0);
     expect(output).toMatch(/won't run against port 54329[\s\S]*WARDEN_TEST_OWNER_DB=1/);
     expect(postgres.logins()).toBe(0);
-  }, 60_000);
+  }
 
-  it("go on to the database on port 54329 with WARDEN_TEST_OWNER_DB=1", async () => {
+  async function goesOnWithTheOptIn(args: string[]) {
     const { output } = await pnpm(args, {
       PGHOST: postgres.host,
       PGPORT: "54329",
@@ -77,5 +76,33 @@ describe.each([
 
     expect(output).not.toMatch(/won't run against port/);
     expect(postgres.logins()).toBeGreaterThan(0);
-  }, 60_000);
+  }
+
+  describe("the server's tests", () => {
+    const args = ["--filter", "@warden/server", "test"];
+    it(
+      "exit non-zero with PGPORT unset, naming the port and the fix, before any login",
+      () => refusesBeforeAnyLogin(args),
+      60_000,
+    );
+    it(
+      "go on to the database on port 54329 with WARDEN_TEST_OWNER_DB=1",
+      () => goesOnWithTheOptIn(args),
+      60_000,
+    );
+  });
+
+  describe("the browser tests", () => {
+    const args = ["e2e"];
+    it(
+      "exit non-zero with PGPORT unset, naming the port and the fix, before any login",
+      () => refusesBeforeAnyLogin(args),
+      60_000,
+    );
+    it(
+      "go on to the database on port 54329 with WARDEN_TEST_OWNER_DB=1",
+      () => goesOnWithTheOptIn(args),
+      60_000,
+    );
+  });
 });
