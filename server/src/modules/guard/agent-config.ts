@@ -2,10 +2,10 @@
 // file: a broad Bash allow in a settings file, and the flag or mode that skips permission checks. Two are whole-repo,
 // answered once every file has been seen: the agent can read .env, and nothing checks the agent's tool calls.
 // A settings file is read as Claude Code reads it, through its own keys (`permissions.allow`, `permissions.deny`,
-// `permissions.defaultMode`, `hooks`, `statusLine`, `apiKeyHelper`); a file that isn't valid JSON holds no rules, as Claude Code wouldn't apply it
-// either. A summary quotes only allow entries that match the broad patterns, which can't hold a secret, and never a
-// line of a file. The flag and the mode are built here by joining their parts, so this file never holds a whole one
-// for a Guard Scan of Warden to report.
+// `permissions.defaultMode`, `hooks`, `statusLine`, `apiKeyHelper`); a file that isn't valid JSON holds no rules, as
+// Claude Code wouldn't apply it either. A summary quotes only allow entries that match the broad patterns, which can't
+// hold a secret, and never a line of a file. The flag and the mode are built here by joining their parts, so this file
+// never holds a whole one for a Guard Scan of Warden to report.
 import type { Asset, Observation, RuleId } from "@warden/contracts";
 import {
   AGENT_CAN_READ_ENV,
@@ -101,7 +101,7 @@ type ClaudeSettings = {
    * The other commands Claude Code runs from the file: a `type: "command"` `statusLine`'s string `command`, and the
    * string `apiKeyHelper`.
    */
-  commands: readonly SettingsCommand[];
+  otherCommands: readonly SettingsCommand[];
 };
 
 const NO_SETTINGS: ClaudeSettings = {
@@ -109,7 +109,7 @@ const NO_SETTINGS: ClaudeSettings = {
   deny: [],
   defaultMode: undefined,
   hooks: [],
-  commands: [],
+  otherCommands: [],
 };
 
 /** How deep `valueLines` reads: down to a hook's `command`, at `hooks.<event>.<group>.hooks.<hook>.command`. */
@@ -132,16 +132,16 @@ function readClaudeSettings(raw: string): ClaudeSettings {
     );
   const mode = permissions.defaultMode;
   const { statusLine, apiKeyHelper } = parsed;
-  const commands: SettingsCommand[] = [];
+  const otherCommands: SettingsCommand[] = [];
   if (
     isObject(statusLine) &&
     statusLine.type === "command" &&
     typeof statusLine.command === "string"
   ) {
-    commands.push({ command: statusLine.command, line: lineOf("statusLine", "command") });
+    otherCommands.push({ command: statusLine.command, line: lineOf("statusLine", "command") });
   }
   if (typeof apiKeyHelper === "string") {
-    commands.push({ command: apiKeyHelper, line: lineOf("apiKeyHelper") });
+    otherCommands.push({ command: apiKeyHelper, line: lineOf("apiKeyHelper") });
   }
   return {
     allow: entries("allow"),
@@ -163,7 +163,7 @@ function readClaudeSettings(raw: string): ClaudeSettings {
         ),
       ),
     ),
-    commands,
+    otherCommands,
   };
 }
 
@@ -728,8 +728,8 @@ function agentRuns(command: string): string[] {
  * flag in that run's own arguments, on the command value's line. A later command, or a quoted argument of more than
  * one word (a prompt), isn't one of them.
  */
-const commandPlaces = ({ hooks, commands }: ClaudeSettings): Place[] =>
-  [...hooks, ...commands].flatMap(({ command, line }) =>
+const commandPlaces = ({ hooks, otherCommands }: ClaudeSettings): Place[] =>
+  [...hooks, ...otherCommands].flatMap(({ command, line }) =>
     agentRuns(command).flatMap((args) =>
       SKIP_FLAGS.flatMap(({ kind, pattern }) =>
         Array.from(args.matchAll(pattern), () => ({ kind, line })),
