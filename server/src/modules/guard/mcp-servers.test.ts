@@ -102,6 +102,8 @@ describe("guard/mcp-server-unpinned", () => {
       "C:\\Windows\\System32\\cmd.exe",
       ["/c", "npx", "-y", "some-mcp-server"],
     ],
+    // A command string whose last word ends in a runner's name is still split into words (#317).
+    ["npx -y @acme/uvx", "npx -y @acme/uvx", []],
     // A Python runner's option values aren't the package.
     [
       "uvx --with httpx==0.27.0 mcp-server-fetch",
@@ -226,6 +228,16 @@ describe("guard/mcp-server-unpinned", () => {
     ["an SSE server", { type: "sse", url: "https://example.com/sse" }],
     ["node ./server.js", server("node", ["./server.js"])],
     ["a binary by path", server("./bin/mcp-server")],
+    // A command string's words are one spaced path only when it starts as a path and no later word starts an option or
+    // another path, so a script named after a runner isn't read as that runner.
+    [
+      "node /opt/tools/uvx server.js in one command string",
+      server("node /opt/tools/uvx server.js"),
+    ],
+    [
+      "/usr/bin/node /opt/tools/uvx server.js in one command string",
+      server("/usr/bin/node /opt/tools/uvx server.js"),
+    ],
     ["a runner with no package", server("npx", ["-y"])],
     ["docker run with no image", server("docker", ["run", "-i", "--rm"])],
     // `-p` / `--package` and `--from` / `--spec` after the package are the server's own args.
@@ -303,6 +315,15 @@ describe("guard/mcp-server-unpinned", () => {
     ["one command string", { command: "npx -y some-mcp-server" }],
     ["one command string in capitals", { command: "NPX -y some-mcp-server" }],
     ["one command string with args after it", { command: "npx -y", args: ["some-mcp-server"] }],
+    // A command string that starts with a path with a space in it, then the runner's args (#260).
+    [
+      "one command string with a spaced Windows path",
+      { command: "C:\\Program Files\\nodejs\\npx.cmd -y some-mcp-server" },
+    ],
+    [
+      "one command string with a spaced path to cmd",
+      { command: "C:\\Program Files\\Windows\\cmd.exe /c npx -y some-mcp-server" },
+    ],
     ["cmd /c with separate args", server("cmd", ["/c", "npx", "-y", "some-mcp-server"])],
     ["cmd /c in one command string", { command: "cmd /c npx -y some-mcp-server" }],
   ])("reads the runner from %s as with separate args", (_name, entry) => {
