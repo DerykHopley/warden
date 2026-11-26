@@ -232,6 +232,12 @@ async function endStaleQueued(tx: Transaction<Database>): Promise<void> {
 const RUNNING_LIMIT = sql<string>`make_interval(mins => ${sql.lit(RUNNING_SCAN_LIMIT_MINUTES)})`;
 
 /**
+ * The end the running limit gives a Scan: RUNNING_LIMIT after its start. `endStaleRunning` writes it as `ended_at`, and
+ * `move` tells a Scan the limit ended apart by it.
+ */
+const ENDED_BY_RUNNING_LIMIT = sql<Date>`started_at + ${RUNNING_LIMIT}`;
+
+/**
  * Ends the transaction's Team's Scans still running RUNNING_SCAN_LIMIT_MINUTES after they started, as failed and ended
  * when the limit ran out. Row-level security binds it to the Team `withTeam` set; a Scan in any other state is never
  * touched.
@@ -239,7 +245,7 @@ const RUNNING_LIMIT = sql<string>`make_interval(mins => ${sql.lit(RUNNING_SCAN_L
 async function endStaleRunning(tx: Transaction<Database>): Promise<void> {
   await tx
     .updateTable("scan_requests")
-    .set({ state: "failed", ended_at: sql<Date>`started_at + ${RUNNING_LIMIT}` })
+    .set({ state: "failed", ended_at: ENDED_BY_RUNNING_LIMIT })
     .where("state", "=", "running")
     .where("started_at", "<=", sql<Date>`now() - ${RUNNING_LIMIT}`)
     .execute();
@@ -260,7 +266,7 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
           tx,
         );
         await endStale(tx);
-        // A Scan the time limit ended is the only one with no start and an end exactly that limit after its queueing;
+        // A Scan the queued limit ended is the only one with no start and an end exactly that limit after its queueing;
         // it never ran, so it doesn't count. A start the route failed ends within seconds, and still counts.
         const recent = await tx
           .selectFrom("scan_requests")
@@ -343,7 +349,7 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
           // A Scan the running limit ended stays ended, so a Job that finishes after the limit can't undo it.
           .where(
             sql<boolean>`not (state = 'failed' and started_at is not null
-              and ended_at is not distinct from started_at + ${RUNNING_LIMIT})`,
+              and ended_at is not distinct from ${ENDED_BY_RUNNING_LIMIT})`,
           )
           .returningAll()
           .executeTakeFirst();

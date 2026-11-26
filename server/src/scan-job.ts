@@ -65,13 +65,17 @@ export async function runScanJob({
   }
 
   // `move` keeps the start reconcile already applied this Scan's id under, so a retry reconciles under the same pair;
-  // otherwise it starts afresh. Nothing moved means another attempt finished the Scan after this one read it.
+  // otherwise it starts afresh. Nothing moved means the Scan has ended: another attempt finished it after this one read
+  // it, or the running limit ended it, which is final.
   const running = await scans.move(team, scanId, "running");
   if (running === undefined) {
-    logger.info("scan job: the Scan was done by another attempt; nothing changed", {
-      scanId,
-      team,
-    });
+    logger.info(
+      "scan job: the Scan was finished by another attempt or ended by the running limit; nothing changed",
+      {
+        scanId,
+        team,
+      },
+    );
     return 0;
   }
 

@@ -33,6 +33,7 @@ import {
   minutesAgo,
   seedTeam,
   sessionToken,
+  setRunningSince,
   testApp,
   testKey,
 } from "./helpers.ts";
@@ -115,13 +116,7 @@ async function queued(team: string): Promise<ScanBody> {
  */
 async function endedByRunningLimit(team: string): Promise<ScanBody> {
   const scan = await queued(team);
-  const started = minutesAgo(RUNNING_SCAN_LIMIT_MINUTES + 1);
-  // The schema keeps `queued_at` unwritable, so the row is set back in SQL.
-  await withTeam(team, (tx) =>
-    sql`update scan_requests set state = 'running', started_at = ${started},
-          queued_at = ${started}::timestamptz - interval '1 minute'
-        where id = ${scan.id}`.execute(tx),
-  );
+  await setRunningSince(withTeam, team, scan.id, RUNNING_SCAN_LIMIT_MINUTES + 1);
   const ended = await scans.get(team, scan.id);
   if (ended?.state !== "failed") throw new Error("the running limit didn't end the test's Scan");
   return ended;

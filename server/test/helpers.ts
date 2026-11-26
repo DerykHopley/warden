@@ -15,6 +15,7 @@ import {
   type Role,
 } from "@warden/contracts";
 import type { Hono } from "hono";
+import { sql } from "kysely";
 import { createApp, type AppEnv, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import {
@@ -269,6 +270,24 @@ export async function queueScan(scans: Scans, team: string, module: Module, asse
   });
   if (outcome.kind !== "queued") throw new Error("the test's Scan was rate limited");
   return outcome.scan;
+}
+
+/**
+ * Sets the Team's Scan `id` back to running since `minutes` minutes ago, queued a minute before that, as if its Job
+ * moved it to running then and died. The schema keeps `queued_at` unwritable, so the row is set back in SQL.
+ */
+export async function setRunningSince(
+  withTeam: WithTeam,
+  team: string,
+  id: string,
+  minutes: number,
+) {
+  const started = minutesAgo(minutes);
+  await withTeam(team, (tx) =>
+    sql`update scan_requests set state = 'running', started_at = ${started},
+          queued_at = ${started}::timestamptz - interval '1 minute'
+        where id = ${id}`.execute(tx),
+  );
 }
 
 /**

@@ -24,6 +24,7 @@ import {
   queueScan,
   repoRef,
   sessionToken,
+  setRunningSince,
   testApp,
   testKey,
 } from "./helpers.ts";
@@ -175,12 +176,7 @@ describe("GET /api/repos: each repo's last Scan (story 2)", () => {
     const team = await teamWithMember();
     await linkRepos(repoAssets, team, [repoRef("web"), repoRef("api")]);
     const { id } = await queueScan(scans, team, "guard", [repo("web"), repo("api")]);
-    const started = sql<Date>`now() - make_interval(mins => ${RUNNING_SCAN_LIMIT_MINUTES + 1})`;
-    await withTeam(team, (tx) =>
-      sql`update scan_requests
-          set state = 'running', started_at = ${started}, queued_at = ${started} - interval '1 minute'
-          where id = ${id}`.execute(tx),
-    );
+    await setRunningSince(withTeam, team, id, RUNNING_SCAN_LIMIT_MINUTES + 1);
 
     const res = await readRepos(team);
 
