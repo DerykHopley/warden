@@ -121,7 +121,10 @@ export type PanelContext = {
   onFindingGone: () => void;
   /** The focused Finding's Unconfirmed-fix candidates, as the page's list holds them; empty without one. */
   candidates: Finding[];
-  /** The focused Finding's Asset words (`assetLabel`): its Product's name, or its ref; null with no focus. */
+  /**
+   * The focused Finding's Product name (`productName`), which the detail card links to Products; null with no focus,
+   * or when its Asset isn't one of the Team's Products (the card shows its ref).
+   */
   assetName: string | null;
 };
 

@@ -25,6 +25,7 @@ import {
   askProducts,
   deleteProductInTeam,
   fetchFrameworks,
+  productAnchor,
   rereadsAfterDrop,
   saveProductInTeam,
   USAGE_WORDS,
@@ -272,6 +273,21 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
       if (element !== undefined) return element.focus();
     }
   });
+
+  // Opened at `#product-<id>` (a Product Asset's link on Findings, #210), that Product's entry comes into view and its
+  // name takes focus once the list first shows: the browser's own jump to the anchor came before the page rendered it.
+  // Only once, so a later read of the list never moves a page the person has scrolled. An anchor no listed Product has
+  // moves nothing.
+  const listShown = view !== null;
+  const landed = useRef(false);
+  useEffect(() => {
+    if (!listShown || landed.current) return;
+    landed.current = true;
+    const entry = document.getElementById(location.hash.slice(1));
+    if (entry === null || !entry.matches("li.product")) return;
+    entry.scrollIntoView();
+    entry.querySelector<HTMLElement>(".product-name")?.focus({ preventScroll: true });
+  }, [listShown]);
 
   function openForm(
     product: Product | null,
@@ -555,7 +571,7 @@ function ProductEntry({
   const reposId = `repos-${product.id}`;
   const dependenciesId = `dependencies-${product.id}`;
   return (
-    <li className="product">
+    <li id={productAnchor(product.id)} className="product">
       <div className="product-head">
         {/* Focus lands here after a save, so it takes focus from script only. */}
         <h2 className="product-name" tabIndex={-1} data-focus={`name:${product.id}`}>

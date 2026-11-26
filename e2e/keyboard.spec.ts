@@ -13,6 +13,7 @@ import {
   GRACE,
   HEDY,
   KATHERINE,
+  LANGCHAIN_SERVICE,
   signInEachTest,
   SIGNS_IN_ITSELF,
   test,
@@ -197,7 +198,7 @@ test(
 );
 
 test(
-  "at 390px, a CVE Finding's NVD and OSV links are each at least 44 by 44px and show a ring",
+  "at 390px, a CVE Finding's Product link, NVD and OSV links are each at least 44 by 44px and show a ring",
   SIGNS_IN_ITSELF,
   async ({ page, signIn }) => {
     const finding = await cedarCveFinding((assessment) => assessment.links.osv.length > 0);
@@ -207,8 +208,12 @@ test(
     const links = (await openCveCard(page, finding)).locator(".patch-links").getByRole("link");
     await expect(links.first()).toHaveText("NVD");
     await expect(links.nth(1)).toHaveText(/^OSV/);
+    // The Asset's Product name links to its entry on Products (#210).
+    const product = page
+      .locator(".detail-card")
+      .getByRole("link", { name: LANGCHAIN_SERVICE.name, exact: true });
 
-    const all = await links.all();
+    const all = [product, ...(await links.all())];
     await expectTargets(all);
     await expectRings(page, all);
   },

@@ -148,6 +148,20 @@ describe("the detail card's Finding", () => {
     expect(fields(show(onProduct).card).Asset).toBe(`Product ${OTHER}`);
   });
 
+  /** The Asset field's value. */
+  const assetField = (card: ReturnType<typeof show>["card"]) =>
+    within(card.getByText("Asset", { selector: "dt" }).nextElementSibling as HTMLElement);
+
+  it("links a Product's name to its entry on Products; a ref the page names no Product for links nothing", () => {
+    const onProduct = finding(ID, { asset: { kind: "product", ref: OTHER } });
+    const named = show(onProduct, listed([]), { assetName: "Shop web" });
+    const link = assetField(named.card).getByRole("link", { name: "Shop web" });
+    expect(link).toHaveAttribute("href", `/products#product-${OTHER}`);
+    named.unmount();
+
+    expect(assetField(show(onProduct).card).queryByRole("link")).toBeNull();
+  });
+
   it.each<[string, Location, string]>([
     ["a file with a line", { kind: "file", path: ".env", line: 3 }, ".env:3"],
     [

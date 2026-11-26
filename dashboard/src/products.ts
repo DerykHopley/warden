@@ -225,6 +225,12 @@ export async function deleteProductInTeam(
   return deleteProduct(inTeam.getToken, id);
 }
 
+/** The id of a Product's entry on the Products page, which a link names to open the page on it (#210). */
+export const productAnchor = (id: string) => `product-${id}`;
+
+/** Where a Product Asset's name links: the Products page, opened on that Product's entry. */
+export const productHref = (id: string) => `/products#${productAnchor(id)}`;
+
 /** How a Product uses a framework, in words. */
 export const USAGE_WORDS: Record<Usage, string> = {
   self_hosted: "Self-hosted",
