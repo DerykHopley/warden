@@ -76,8 +76,9 @@ const PYTHON_VALUE_OPTIONS = new Set([
 /**
  * The options `npx` and `npm exec` (and `npm`'s own, before `exec`) give the next word as their value: each npm config
  * option whose type isn't, and doesn't include, Boolean (npm 12's `@npmcli/config` definitions, as npx's own
- * `npx-cli.js` reads them; npm 10's and 11's have no other), its shorthands for one (`-C` is `--prefix`), and npx's
- * `-p`. npm reads any other option as a switch: one it doesn't know, a `--no-<option>`, a cluster (`-yq`).
+ * `npx-cli.js` reads them; npm 10 and 11 add no value option missing here), its shorthands for one (`-C` is
+ * `--prefix`), and npx's `-p`. npm reads any other option as a switch: one it doesn't know, a `--no-<option>`, a
+ * cluster (`-yq`).
  */
 const NPM_VALUE_OPTIONS = new Set([
   ...[

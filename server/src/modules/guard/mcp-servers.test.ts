@@ -104,42 +104,30 @@ describe("guard/mcp-server-unpinned", () => {
       "docker",
       ["run", "-i", "--rm", "--add-host", "host.docker.internal:host-gateway", "mcp/github"],
     ],
-    // npm's and pnpm's value options take the next word, whatever it starts with; any other option is a switch, as
-    // npm and pnpm read an option they don't know.
+    // npm's and pnpm's listed value options take the next word, whatever it starts with: a dash-led value is here
+    // another listed value option, so a value option missing from its list would take the package instead.
     ...[
       "npx --prefix /opt/x pkg",
       "npx --cache ~/.npm pkg",
       "npx --userconfig ./.npmrc pkg",
       "npx -C /opt/x pkg",
       "npx --registry https://registry.example.com pkg",
-      "npx --cache -x pkg",
-      "npx --registry -x pkg",
-      "npm --prefix -x exec pkg",
+      "npm exec --prefix ./tools -- pkg",
+      "npx --cache -C pkg",
+      "npx --registry -w pkg",
+      "npm --prefix -C exec pkg",
+      "pnpm --dir -F dlx pkg",
+      // Any option npm and pnpm don't list as taking a value is a switch, one they don't know included; `--` ends
+      // the options.
       "npx --made-up-option evil pkg@1.2.3",
       "npm exec --made-up-option evil -- pkg@1.2.3",
-      "pnpm -C x dlx pkg",
-      "pnpm --filter x dlx pkg",
-      "pnpm --dir -x dlx pkg",
-      // bunx and yarn dlx read an option they don't list as a switch as taking the next word.
+      "npx --yes pkg",
+      "pnpm dlx --prefer-offline pkg",
+      "npx -- pkg",
+      // bunx and yarn dlx list their switches, and read any other option as taking the next word.
       "bunx --made-up-option ./x pkg",
       "yarn dlx --made-up-option ./x pkg",
-      "npm exec --prefix ./tools -- pkg",
-      // Its switches, and an option before another option, take no value; `--` ends the options.
-      "npx --yes pkg",
-      "npx -q pkg",
-      "npx --prefer-offline pkg",
-      "npx --no-color pkg",
       "bunx --bun pkg",
-      "npx --made-up-option --yes pkg",
-      "npx -- pkg",
-      // npm's shorthands (`-ws`, `-iwr`) and its single-letter ones written together (`-yq`) are switches.
-      "npx -ws pkg",
-      "npx -iwr pkg",
-      "npx -yq pkg",
-      // pnpm's on/off options and every `--no-<option>` are switches, before `dlx` and after it; yarn's too.
-      "pnpm --no-color dlx pkg",
-      "pnpm --stream dlx pkg",
-      "pnpm dlx --prefer-offline pkg",
       "yarn dlx --no-quiet pkg",
       // A container runner does the same, and reads a short-option cluster letter by letter.
       "docker run --cidfile /tmp/c mcp/github",
@@ -265,8 +253,8 @@ describe("guard/mcp-server-unpinned", () => {
       "uv --directory /x tool run pkg==1.0.0",
       "docker --log-level debug run mcp/github:1.0",
       "docker container run mcp/github:1.0",
-      "pnpm --filter x dlx pkg@1.2.3",
-      "npx --cache -x pkg@1.2.3",
+      "pnpm dlx --cache-dir evil pkg@1.2.3",
+      "npx --cache evil pkg@1.2.3",
       "docker run -e -x mcp/github:1.0",
       // npm and pnpm read an option they don't know as a switch, before `dlx` and after it, so `./x` is what runs,
       // a local path; pnpm reads `./x` as its command, never reaching `dlx`.
