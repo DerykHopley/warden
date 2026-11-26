@@ -53,6 +53,25 @@ describe("docs/data.md", () => {
     expect(registries).toMatch(/no key, no repo name and no Team/);
   });
 
+  it("marks the write app's branches, commits and Fix PRs, and the Fix PRs row's writing, as built (#313)", () => {
+    const gitHub = row("GitHub, through the GitHub app");
+    const built = /Built: ([\s\S]*?)(?:Designed:|\|\s*$)/.exec(gitHub)?.[1] ?? "";
+    for (const said of ["branch", "commit", "Fix PR", "#313"]) expect(built).toContain(said);
+    expect(gitHub).not.toMatch(/Designed: the branches and Fix PRs/);
+
+    const fixPrs = row("Cloud SQL: Fix PRs");
+    expect(fixPrs).toMatch(/Built: [^|]*Fix PR route[^|]*#313/);
+    expect(fixPrs).not.toMatch(/Designed: writing them/);
+
+    const gitHubLeaves = /^- \*\*GitHub:\*\*[\s\S]*?(?=^- )/m.exec(leaves)?.[0] ?? "";
+    for (const said of ["repo-scoped", "default branch", "branch", "commit", "#313"]) {
+      expect(gitHubLeaves).toContain(said);
+    }
+    expect(gitHubLeaves).not.toMatch(/Designed \(#224\)/);
+    const registries = /^- \*\*npm and PyPI:\*\*[\s\S]*?(?=^- )/m.exec(leaves)?.[0] ?? "";
+    expect(registries).toMatch(/called by the Fix PR route \(built, #313\)/);
+  });
+
   it("says Warden makes no outside call for CVE data", () => {
     expect(leaves).toMatch(/no outside call for CVE data/);
     for (const source of ["NVD", "CISA KEV", "EPSS", "OSV"]) expect(leaves).toContain(source);

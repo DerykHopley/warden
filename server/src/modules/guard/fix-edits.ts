@@ -33,6 +33,9 @@ const NOT_JSON = "isn't valid JSON";
 const MISSING = "the file isn't on the default branch";
 const ALREADY_FIXED = "already fixed on the default branch; the next Scan marks it Fixed";
 const UNCHANGED = "Warden never changes what its edit doesn't mean to";
+/** A PR that leaves a server unpinned doesn't clear the Finding: its Rule still sees that server on the next Scan. */
+const STAYS_OPEN =
+  "The Finding stays Open after this PR merges, until the servers left as they are are pinned by hand.";
 const RANGED = "names a version range or tag, which pinning to the latest version could downgrade";
 
 const notPinnable = (label: string) => `not a package Warden can pin from ${label}`;
@@ -89,6 +92,32 @@ function code(raw: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
+/** Whether `path` is the file a Fix PR for `ruleId` edits; false for a Rule that gets none. */
+function isRuleFile(ruleId: RuleId, path: string): boolean {
+  switch (ruleId) {
+    case AGENT_CAN_READ_ENV:
+    case NO_RUNTIME_GUARD:
+      return path === WHOLE_REPO_PATH;
+    case BLANKET_BASH_ALLOW:
+      return isClaudeSettingsFile(path);
+    case MCP_SERVER_UNPINNED:
+      return isMcpConfigPath(path);
+    default:
+      return false;
+  }
+}
+
+/**
+ * Why the Finding at `location` under `ruleId` gets no Fix PR whatever its file holds, or undefined when it may get
+ * one: not a file Location, a path under `.github/workflows/`, a Rule with no fixed edit, or a path that isn't the
+ * Rule's file. `fixedEdit` asks this first, so whether a Finding is fixable never disagrees with its edit.
+ */
+export function fixRefusal(ruleId: RuleId, location: Location): string | undefined {
+  if (location.kind !== "file") return NO_FIX_PR;
+  if (/(?:^|\/)\.github\/workflows\//.test(location.path)) return NEVER_WORKFLOWS;
+  return isRuleFile(ruleId, location.path) ? undefined : NO_FIX_PR;
+}
+
 /**
  * The change a Fix PR for the Finding at `location` under `ruleId` makes, from the file's `current` text (undefined
  * when it's missing). `registry` gives a package's latest version for `guard/mcp-server-unpinned`; its
@@ -100,17 +129,17 @@ export async function fixedEdit(
   current: string | undefined,
   registry: PackageRegistry,
 ): Promise<FixedEdit> {
-  if (location.kind !== "file") return refused(NO_FIX_PR);
+  const refusal = fixRefusal(ruleId, location);
+  if (refusal !== undefined || location.kind !== "file") return refused(refusal ?? NO_FIX_PR);
   const { path } = location;
-  if (/(?:^|\/)\.github\/workflows\//.test(path)) return refused(NEVER_WORKFLOWS);
   switch (ruleId) {
     case AGENT_CAN_READ_ENV:
     case NO_RUNTIME_GUARD:
-      return path === WHOLE_REPO_PATH ? denyEnv(current) : refused(NO_FIX_PR);
+      return denyEnv(current);
     case BLANKET_BASH_ALLOW:
-      return isClaudeSettingsFile(path) ? removeBroadBash(path, current) : refused(NO_FIX_PR);
+      return removeBroadBash(path, current);
     case MCP_SERVER_UNPINNED:
-      return isMcpConfigPath(path) ? pinServers(path, current, registry) : refused(NO_FIX_PR);
+      return pinServers(path, current, registry);
     default:
       return refused(NO_FIX_PR);
   }
@@ -279,7 +308,11 @@ async function pinServers(
       ...pinned.map(({ key, pinned }) => `- ${code(key)}: ${code(pinned)}`),
       ...(left.length === 0
         ? []
-        : ["Left as they are:", ...left.map(({ key, left }) => `- ${code(key)}: ${left}`)]),
+        : [
+            "Left as they are:",
+            ...left.map(({ key, left }) => `- ${code(key)}: ${left}`),
+            STAYS_OPEN,
+          ]),
     ],
   };
 }
