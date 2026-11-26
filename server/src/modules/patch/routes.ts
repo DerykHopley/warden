@@ -11,10 +11,10 @@ import {
   type ProductsBody,
 } from "@warden/contracts";
 import type { Context, MiddlewareHandler } from "hono";
-import type { z } from "zod";
 import type { AppEnv, MountRoutes } from "../../app.ts";
 import type { Logger } from "../../log.ts";
 import { idParam } from "../../path-id.ts";
+import { refusedBody } from "../../refused-body.ts";
 import type { PatchAssessments } from "./assessment.ts";
 import {
   CveNotInSnapshot,
@@ -102,13 +102,6 @@ const ProductChange = ProductInput.transform(({ dependencies, ...product }): Pro
     }
   });
 });
-
-/** Each refused field and why, as the Findings routes answer a body their schema refuses. */
-function refusedBody(error: z.ZodError): string {
-  return error.issues
-    .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
-    .join("; ");
-}
 
 /**
  * The answer `work` gives, or its refusal, with nothing written: 404 for a Product or a Patch Finding the Team doesn't
