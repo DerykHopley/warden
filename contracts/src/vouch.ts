@@ -10,6 +10,13 @@ import { z } from "zod";
 export const CatalogueId = z.enum(["vda-isa-2027.1"]);
 export type CatalogueId = z.infer<typeof CatalogueId>;
 
+/**
+ * Vouch's judgement of one Control (GLOSSARY: Verdict), worked out from the Team's Findings, Scan coverage and Judge
+ * Spot runs. A Lead's override to not applicable joins it with the review log (spec #341, slice 3).
+ */
+export const Verdict = z.enum(["evidenced", "partly_evidenced", "not_evidenced"]);
+export type Verdict = z.infer<typeof Verdict>;
+
 /** One judged Control, its text unchanged from the Catalogue: its ref, its question and its ISO 27001 reference. */
 export const CatalogueControl = z.object({
   /** The Control's number in its Catalogue, such as 1.3.3. */
