@@ -88,7 +88,7 @@ const AI_TOOLS: readonly { tool: string; at: string; signals: readonly Signal[] 
   { tool: "Cline", at: ".clinerules", signals: [fileNamed(".clinerules")] },
 ];
 
-/** Each tool's fixed Location, which a repo holding only the tool's other paths doesn't hold. */
+/** Each tool's fixed Location, in `AI_TOOLS` order. */
 export const AI_TOOL_LOCATIONS: readonly string[] = AI_TOOLS.map(({ at }) => at);
 
 /**

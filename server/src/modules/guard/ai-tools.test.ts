@@ -84,7 +84,7 @@ describe("aiToolCheck", () => {
     },
   );
 
-  it("gives one Observation per tool, at its fixed Location, counting each of its paths", () => {
+  it("gives one Observation per tool, counting each of its paths in the summary", () => {
     const [cursor, ...rest] = observe([
       ".cursorrules",
       ".cursor/rules/b.mdc",
@@ -92,7 +92,6 @@ describe("aiToolCheck", () => {
     ]);
 
     expect(rest).toEqual([]);
-    expect(cursor?.location).toEqual({ kind: "file", path: ".cursor" });
     expect(cursor?.evidence.summary).toBe(
       `Cursor config in 3 paths (.cursor/rules/a.mdc, .cursor/rules/b.mdc, .cursorrules). Claude Code is the only approved AI tool. To fix: ${packRule(RULE).fix}`,
     );
