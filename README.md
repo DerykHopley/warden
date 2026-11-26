@@ -358,10 +358,13 @@ replace the preview.
    and it gets the read-only GitHub app's settings as a release does: `GITHUB_APP_CLIENT_ID` from the repository
    variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned.
 7. **Health gate:** call `/api/health` on the tag's URL for up to about 90 seconds (a cold start) until it answers
-   200, or fail the run.
+   200, or fail the run. When the deploy (step 6) or the health gate fails, `warden-scan-preview` already runs this
+   image (step 5), and the run says so: every preview's Scans run it until you push a working preview again.
 
 **One Scan Job for every preview.** All previews share `warden-scan-preview`, which runs the image of the last
 preview deployed. Two previews of different code side by side both start Scans on the last-deployed one's image.
+That holds for a preview that failed at its deploy or its health gate too: the Job keeps its image, and every
+preview's Scans run it, until a working preview is pushed.
 
 **One at a time.** Previews share the database, so steps 3 to 7 run for one preview at a time, and a running one is
 never cancelled halfway. Builds run side by side. While one preview deploys, GitHub keeps only the newest waiting

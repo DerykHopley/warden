@@ -74,9 +74,10 @@ rel_of() { printf 'warden-rel-%s-9-1' "${1:0:7}"; }
 # no annotation), as before its first revision is ready; FAKE_DESCRIBE=hashfirst gives the hash URL as status.url and
 # the deterministic one second. FAKE_DAILY=fail makes updating the daily Job fail, and FAKE_SCAN=fail updating the
 # Scan Job; FAKE_SCAN=missing makes describing the Scan Job fail, as before the setup script makes it.
-# FAKE_PREVIEW_SCAN does the same for the preview Scan Job, warden-scan-preview. The service's traffic is all on
-# FAKE_SERVING (default: a release revision, <service>-rel-0000000-11-1, of a commit that isn't in the checkout), and
-# FAKE_PREVIOUS, when set, is the revision tagged previous.
+# FAKE_PREVIEW_SCAN does the same for the preview Scan Job, warden-scan-preview. FAKE_REVISION=fail makes deploying a
+# revision fail. The service's traffic is all on FAKE_SERVING (default: a release revision,
+# <service>-rel-0000000-11-1, of a commit that isn't in the checkout), and FAKE_PREVIOUS, when set, is the revision
+# tagged previous.
 cat >"$scratch/gcloud" <<'FAKE'
 #!/usr/bin/env bash
 dir=$(dirname "$0")
@@ -150,6 +151,12 @@ JSON
       exit 1
     fi
     echo '{"metadata":{"name":"warden-scan-preview"}}'
+    ;;
+  "run deploy "*)
+    if [[ ${FAKE_REVISION-} == fail ]]; then
+      echo "ERROR: (gcloud.run.deploy) Revision failed to become ready." >&2
+      exit 1
+    fi
     ;;
 esac
 exit 0
@@ -389,6 +396,20 @@ assert_line "with the tag's URL answering 503: says the health check failed" "/a
 (($(grep -c '^curl ' <<<"$calls") > 1)) || fail "the health gate didn't retry"
 pass "the health gate retries before giving up"
 
+# --- A preview that fails after its Scan Job took the image: the run says warden-scan-preview runs it now ---
+# No 200 from the health gate.
+run_deploy 503 ok HEALTH_ATTEMPTS=1 -- "$image" preview demo
+assert_equal "preview, with no 200 from the health gate: exit 1" 1 "$code"
+assert_line "preview, with no 200 from the health gate: names the Scan Job" "warden-scan-preview" "$out"
+assert_line "preview, with no 200 from the health gate: says to push a working preview" "push a working preview" "$out"
+# The revision's deploy fails.
+run_deploy 200 ok FAKE_REVISION=fail -- "$image" preview demo
+assert_equal "preview, with the revision's deploy failing: exit 1" 1 "$code"
+assert_line "preview, with the revision's deploy failing: names the Scan Job" "warden-scan-preview" "$out"
+assert_line "preview, with the revision's deploy failing: says to push a working preview" "push a working preview" \
+  "$out"
+assert_no_match "preview, with the revision's deploy failing: the health gate isn't called" '^curl ' "$calls"
+
 # --- The migration job fails ---
 run_deploy 200 fail -- "$image" preview demo
 assert_equal "with the migration job failing: exit 1" 1 "$code"
@@ -529,8 +550,8 @@ pass "release: the Scan Job is updated after the health gate, before traffic mov
 assert_scan_job "release: the Scan Job" "$scan" "$release_image" warden-scan warden warden_app warden-db-app-password
 
 assert_no_match "release: no call names Cloud Scheduler" '^gcloud scheduler' "$calls"
-assert_no_match "release: no call names a preview service, job or account" 'warden-preview|warden-migrate-preview' \
-  "$calls"
+assert_no_match "release: no call names a preview service, job or account" \
+  'warden-preview|warden-(migrate|scan)-preview' "$calls"
 assert_line "release: after the traffic move, the script prints the service's URL" \
   "https://warden-123456789012.europe-west1.run.app" "$out"
 assert_line "release: the last line names the Scan Job" "warden-scan" "$(tail -1 <<<"$out")"
@@ -590,6 +611,13 @@ assert_equal "release, with the candidate answering 503: exit 1" 1 "$code"
 assert_no_match "release, with the candidate answering 503: no traffic moves" 'update-traffic' "$calls"
 assert_no_match "release, with the candidate answering 503: the daily Job isn't touched" 'warden-daily-expiry' "$calls"
 assert_no_match "release, with the candidate answering 503: the Scan Job isn't touched" 'jobs update warden-scan' "$calls"
+# One try: the run says the revision gets no traffic, and nothing about a Scan Job taking the image.
+run_deploy 503 ok HEALTH_ATTEMPTS=1 -- "$release_image" release
+assert_equal "release, with no 200 from one try: exit 1" 1 "$code"
+assert_line "release, with no 200 from one try: says the revision gets no traffic" "the revision gets no traffic" "$out"
+assert_no_match "release, with no 200 from one try: no Scan Job is updated" '^gcloud run jobs update warden-scan' \
+  "$calls"
+assert_no_match "release, with no 200 from one try: doesn't say to push a preview" 'push a working preview' "$out"
 
 # --- A release whose migration fails ---
 run_deploy 200 fail -- "$release_image" release
