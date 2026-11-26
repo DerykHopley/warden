@@ -27,7 +27,8 @@ import { isPackageName, UnpinnableVersion, type PackageRegistry } from "./packag
 export type FixedEdit =
   { ok: true; path: string; text: string; body: string[] } | { ok: false; reason: string };
 
-const NO_FIX_PR = "no Fix PR for this Rule";
+/** Why a Rule, or a Location that isn't a file, gets no Fix PR. */
+export const NO_FIX_PR = "no Fix PR for this Rule";
 const NEVER_WORKFLOWS = "Warden never edits .github/workflows/";
 const NOT_JSON = "isn't valid JSON";
 const MISSING = "the file isn't on the default branch";
@@ -92,20 +93,27 @@ function code(raw: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
-/** Whether `path` is the file a Fix PR for `ruleId` edits; false for a Rule that gets none. */
-function isRuleFile(ruleId: RuleId, path: string): boolean {
-  switch (ruleId) {
-    case AGENT_CAN_READ_ENV:
-    case NO_RUNTIME_GUARD:
-      return path === WHOLE_REPO_PATH;
-    case BLANKET_BASH_ALLOW:
-      return isClaudeSettingsFile(path);
-    case MCP_SERVER_UNPINNED:
-      return isMcpConfigPath(path);
-    default:
-      return false;
-  }
-}
+/** A Rule's Fix PR: whether a path is the file it edits, and its edit of that file's `current` text. */
+type RuleFix = {
+  isFile(path: string): boolean;
+  edit(path: string, current: string | undefined, registry: PackageRegistry): Promise<FixedEdit>;
+};
+
+const DENY_ENV: RuleFix = {
+  isFile: (path) => path === WHOLE_REPO_PATH,
+  edit: async (_path, current) => denyEnv(current),
+};
+
+/** Each Rule that gets a Fix PR; a Rule not here gets none. */
+const FIXES = new Map<RuleId, RuleFix>([
+  [AGENT_CAN_READ_ENV, DENY_ENV],
+  [NO_RUNTIME_GUARD, DENY_ENV],
+  [
+    BLANKET_BASH_ALLOW,
+    { isFile: isClaudeSettingsFile, edit: async (path, current) => removeBroadBash(path, current) },
+  ],
+  [MCP_SERVER_UNPINNED, { isFile: isMcpConfigPath, edit: pinServers }],
+]);
 
 /**
  * Why the Finding at `location` under `ruleId` gets no Fix PR whatever its file holds, or undefined when it may get
@@ -115,7 +123,7 @@ function isRuleFile(ruleId: RuleId, path: string): boolean {
 export function fixRefusal(ruleId: RuleId, location: Location): string | undefined {
   if (location.kind !== "file") return NO_FIX_PR;
   if (/(?:^|\/)\.github\/workflows\//.test(location.path)) return NEVER_WORKFLOWS;
-  return isRuleFile(ruleId, location.path) ? undefined : NO_FIX_PR;
+  return FIXES.get(ruleId)?.isFile(location.path) ? undefined : NO_FIX_PR;
 }
 
 /**
@@ -130,19 +138,11 @@ export async function fixedEdit(
   registry: PackageRegistry,
 ): Promise<FixedEdit> {
   const refusal = fixRefusal(ruleId, location);
-  if (refusal !== undefined || location.kind !== "file") return refused(refusal ?? NO_FIX_PR);
-  const { path } = location;
-  switch (ruleId) {
-    case AGENT_CAN_READ_ENV:
-    case NO_RUNTIME_GUARD:
-      return denyEnv(current);
-    case BLANKET_BASH_ALLOW:
-      return removeBroadBash(path, current);
-    case MCP_SERVER_UNPINNED:
-      return pinServers(path, current, registry);
-    default:
-      return refused(NO_FIX_PR);
+  const fix = FIXES.get(ruleId);
+  if (refusal !== undefined || location.kind !== "file" || fix === undefined) {
+    return refused(refusal ?? NO_FIX_PR);
   }
+  return fix.edit(location.path, current, registry);
 }
 
 /** Adds the `.env` deny entries to the root settings file, creating the file, `permissions` or `deny` as needed. */

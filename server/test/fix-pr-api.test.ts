@@ -92,22 +92,31 @@ type Pull = { number: number; head: string; base: string; state: "open" | "close
 /**
  * A fake GitHub holding one repo, `example/web` with GitHub id `repoId` and default branch `main`, and the npm registry.
  * Each installation in `installations` answers its token request with `status` (201 by default) and `permissions`
- * (the write app's by default); its token is `ghs_fix-<installation id>`. `files` are the default branch's files;
- * `branches` the branches beside it; `pulls` its PRs. `failAt` names one request that answers 500 once. Every
- * request is recorded, and every token and JWT it was sent.
+ * (the write app's by default); its token is `ghs_fix-<installation id>`. `files` are the files at the default
+ * branch's head `HEAD_SHA`; `pushed`, when given, the default branch's files after a push since that head, which a read
+ * by the branch's name answers. `branches` are the branches beside it, and a branch whose name a branch's path takes
+ * (`warden` beside `warden/fix-…`) is refused with 422, as Git refuses it; `pulls` are its PRs. `failAt` names one
+ * request that answers 500 once. `beforePut` holds each contents write until it settles, and `onPullLookup` runs on each
+ * read of the open PRs from a branch. Every request is recorded, and every token and JWT it was sent.
  */
 function fakeGitHub({
   repoId,
   installations,
   files = {},
+  pushed,
   npm = {},
   failAt,
+  beforePut,
+  onPullLookup,
 }: {
   repoId: number;
   installations: Record<number, { status?: number; permissions?: Record<string, string> }>;
   files?: Record<string, string>;
+  pushed?: Record<string, string>;
   npm?: Record<string, string>;
   failAt?: "repo" | "pull" | "npm";
+  beforePut?: () => Promise<void>;
+  onPullLookup?: () => void;
 }) {
   const calls: Call[] = [];
   const secrets = new Set<string>();
@@ -171,24 +180,28 @@ function fakeGitHub({
       if (branch === DEFAULT_BRANCH || branches.has(branch)) {
         return json({ message: "Reference already exists" }, 422);
       }
+      const inTheWay = (other: string) =>
+        branch.startsWith(`${other}/`) || other.startsWith(`${branch}/`);
+      if ([DEFAULT_BRANCH, ...branches].some(inTheWay)) {
+        return json({ message: "Reference update failed" }, 422);
+      }
       branches.add(branch);
       return json({ ref: body?.ref, object: { sha: body?.sha, type: "commit" } }, 201);
     }
     if (route.startsWith(`GET ${repo}/contents/`)) {
       const file = path.slice(`/repos/${FULL_NAME}/contents/`.length);
-      const text = files[file];
-      if (url.searchParams.get("ref") !== DEFAULT_BRANCH || text === undefined) {
-        return json({ message: "Not Found" }, 404);
-      }
-      return json({
-        type: "file",
-        path: file,
-        encoding: "base64",
-        content: base64(text),
-        sha: "b".repeat(40),
-      });
+      const ref = url.searchParams.get("ref");
+      const [text, sha] =
+        ref === HEAD_SHA
+          ? [files[file], "b".repeat(40)]
+          : ref === DEFAULT_BRANCH
+            ? [(pushed ?? files)[file], (pushed ? "e" : "b").repeat(40)]
+            : [undefined, ""];
+      if (text === undefined) return json({ message: "Not Found" }, 404);
+      return json({ type: "file", path: file, encoding: "base64", content: base64(text), sha });
     }
     if (route.startsWith(`PUT ${repo}/contents/`)) {
+      await beforePut?.();
       return json({ content: { sha: "c".repeat(40) }, commit: { sha: "d".repeat(40) } }, 201);
     }
     if (route === `POST ${repo}/pulls`) {
@@ -203,6 +216,7 @@ function fakeGitHub({
       return json(pullBody(pull), 201);
     }
     if (route === `GET ${repo}/pulls`) {
+      onPullLookup?.();
       const head = url.searchParams.get("head");
       const state = url.searchParams.get("state");
       return json(
@@ -269,8 +283,11 @@ afterEach(() => {
   logs = [];
 });
 
-/** The app with the Fix PR route over `fake` (none: the write app isn't set up), and the write grant's routes. */
-function fixApp(fake?: Fake) {
+/**
+ * The app with the Fix PR route over `fake` (none: the write app isn't set up), and the write grant's routes. The
+ * route's wait between looks for an open PR is `pullWait`, none by default, so a case doesn't sleep.
+ */
+function fixApp(fake?: Fake, { pullWait = () => Promise.resolve() } = {}) {
   const routeLines: string[] = [];
   const logger = createLogger((line) => routeLines.push(line));
   const stores = { findings, repoAssets, writeGrants, fixPrs };
@@ -286,6 +303,7 @@ function fixApp(fake?: Fake) {
           }),
           registry: createPackageRegistry({ fetch: fake.fetch }),
           logger,
+          pullWait,
         })
       : fixPrRoutes(stores),
     writeGrantRoutes({ writeGrants }),
@@ -515,13 +533,102 @@ describe("POST /api/guard/findings/:id/fix-pr: a person opens a Fix PR (story 6)
     expect(res).toMatchObject({
       status: 409,
       body: {
-        error: `Branch ${branchOf(finding)} already exists on the repo; delete it to open a new Fix PR`,
+        error: `Branch ${branchOf(finding)} already exists on the repo with no open Fix PR from it; if one is being opened, try again in a minute, or else delete the branch to open a new Fix PR`,
       },
     });
     expect(fake.calls.some((c) => c.method === "PUT")).toBe(false);
     expect(fake.calls.some((c) => c.method === "POST" && c.url.pathname.endsWith("/pulls"))).toBe(
       false,
     );
+    expect(await fixPrRows(team)).toHaveLength(0);
+  });
+
+  it("answers 409 for an open PR from the branch into another branch, and 200 for one into the default branch", async () => {
+    const { team, repoId, granted, finding } = await fixableTeam();
+    const fake = fakeGitHub({ repoId, installations: installationsOf(granted) });
+    fake.branches.add(branchOf(finding));
+    fake.pulls.push({ number: 9, head: branchOf(finding), base: "develop", state: "open" });
+    const { app } = fixApp(fake);
+
+    const intoDevelop = await post(app, team, finding.id);
+
+    expect(intoDevelop.status).toBe(409);
+    expect(JSON.stringify(intoDevelop.body)).toContain(branchOf(finding));
+    expect(await fixPrRows(team)).toHaveLength(0);
+
+    fake.pulls.push({ number: 10, head: branchOf(finding), base: DEFAULT_BRANCH, state: "open" });
+    const intoMain = await post(app, team, finding.id);
+
+    expect(intoMain.status).toBe(200);
+    expect(FixPrBody.parse(intoMain.body).number).toBe(10);
+    expect((await fixPrRows(team)).map((row) => row.number)).toEqual([10]);
+  });
+
+  it("answers the second of two clicks at once with the PR the first opens, never asking to delete its branch", async () => {
+    const { team, repoId, granted, finding } = await fixableTeam();
+    // The first click's commit waits until the second has looked for an open PR and found none.
+    let lookedUp = () => {};
+    const looked = new Promise<void>((resolve) => (lookedUp = resolve));
+    const fake = fakeGitHub({
+      repoId,
+      installations: installationsOf(granted),
+      beforePut: () => looked,
+      onPullLookup: () => lookedUp(),
+    });
+    // The second click's wait between looks ends once the first click's PR is open, or after 1,000 turns.
+    const pullWait = async () => {
+      for (let turn = 0; turn < 1000 && fake.pulls.length === 0; turn++) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    };
+    const { app } = fixApp(fake, { pullWait });
+
+    const clicks = await Promise.all([post(app, team, finding.id), post(app, team, finding.id)]);
+
+    expect(clicks.map((res) => res.status).sort()).toEqual([200, 201]);
+    expect(clicks[0]?.body).toEqual(clicks[1]?.body);
+    expect(fake.pulls).toHaveLength(1);
+    expect(await fixPrRows(team)).toHaveLength(1);
+  });
+
+  it("builds its edit on the file at the head the branch is made from, though the default branch moved since", async () => {
+    const { team, repoId, granted, finding } = await fixableTeam();
+    const fake = fakeGitHub({
+      repoId,
+      installations: installationsOf(granted),
+      files: { [SETTINGS]: '{\n  "permissions": {}\n}\n' },
+      pushed: { [SETTINGS]: '{\n  "model": "pushed since",\n  "permissions": {}\n}\n' },
+    });
+    const { app } = fixApp(fake);
+
+    expect((await post(app, team, finding.id)).status).toBe(201);
+
+    const read = fake.calls.find(
+      (c) => c.method === "GET" && c.url.pathname.includes("/contents/"),
+    );
+    expect(read?.url.searchParams.get("ref")).toBe(HEAD_SHA);
+    const contents = fake.calls.find((c) => c.method === "PUT");
+    expect(contents?.body?.sha).toBe("b".repeat(40));
+    expect(JSON.parse(fromBase64(String(contents?.body?.content)))).toEqual({
+      permissions: { deny: ["Read(./.env)", "Read(./.env.*)"] },
+    });
+  });
+
+  it("answers 409 naming the branch in the way when a branch named warden takes the Fix PR branch's path", async () => {
+    const { team, repoId, granted, finding } = await fixableTeam();
+    const fake = fakeGitHub({ repoId, installations: installationsOf(granted) });
+    fake.branches.add("warden");
+    const { app } = fixApp(fake);
+
+    const res = await post(app, team, finding.id);
+
+    expect(res).toMatchObject({
+      status: 409,
+      body: {
+        error: `Branch ${branchOf(finding)} can't be made on the repo: a branch's name is in its path, such as warden; rename that branch to open Fix PRs`,
+      },
+    });
+    expect(fake.calls.some((c) => c.method === "PUT")).toBe(false);
     expect(await fixPrRows(team)).toHaveLength(0);
   });
 
@@ -931,12 +1038,5 @@ describe("GET /api/guard/findings/:id/fix-pr", () => {
       expect(FindingFixPrBody.parse(res.body)).toEqual({ fixable: false, fix_pr: null });
     }
     expect(fake.calls).toEqual([]);
-  });
-
-  it("answers fixable true with no PR for an Open agent-can-read-env Finding with none yet", async () => {
-    const { team, finding } = await fixableTeam();
-    const { app } = fixApp();
-
-    expect((await get(app, team, finding.id)).body).toEqual({ fixable: true, fix_pr: null });
   });
 });

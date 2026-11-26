@@ -4,11 +4,13 @@
 // default branch, never a write to the default branch. A second click answers the PR that's still open. A Fix PR opens
 // only on one of the Team's own Repo Assets, whatever the write installation reaches (owner's answer A on #295). The
 // Team and the person always come from the session, never the request.
+import { setTimeout as delay } from "node:timers/promises";
 import {
   STATUS_WORDS,
   type FindingFixPrBody,
   type FixPrBody,
   type Finding,
+  type Location,
 } from "@warden/contracts";
 import type { Context } from "hono";
 import type { AppEnv, MountRoutes } from "../../app.ts";
@@ -17,10 +19,17 @@ import { FindingNotFound, type Findings } from "../../findings/index.ts";
 import type { Logger } from "../../log.ts";
 import { idParam } from "../../path-id.ts";
 import { packRule } from "./default-pack.ts";
-import { fixedEdit, fixRefusal } from "./fix-edits.ts";
+import { fixedEdit, fixRefusal, NO_FIX_PR } from "./fix-edits.ts";
 import type { FixPr, FixPrs } from "./fix-prs.ts";
 import { GitHubUnavailable } from "./github.ts";
-import { FileUnreadable, type GitHubWriter, type RepoWriter } from "./github-writer.ts";
+import {
+  BranchRefused,
+  FileUnreadable,
+  type GitHubWriter,
+  type OpenedPull,
+  type RepoToken,
+  type RepoWriter,
+} from "./github-writer.ts";
 import { RegistryUnavailable, type PackageRegistry } from "./package-registry.ts";
 import type { RepoAssets } from "./repo-assets.ts";
 import { holdsWriteAppPermissions } from "./write-grant-routes.ts";
@@ -29,12 +38,22 @@ import type { WriteGrants } from "./write-grants.ts";
 /** The POSTs a Team may send in an hour, counted before the Finding is read, so a refusal counts too. */
 export const FIX_PRS_PER_HOUR = 20;
 
+/**
+ * How many times a click that finds the Fix PR branch already there looks for an open PR from it, and how long it
+ * waits between looks: a click at once with another finds the branch the other just made, before the other's PR is
+ * open, and waits for it rather than asking for the branch to be deleted.
+ */
+const PULL_LOOKS = 5;
+const PULL_WAIT_MS = 1_000;
+
 const NOT_SET_UP = "Fix PRs aren't set up on this Warden";
 const GITHUB_DOWN = "GitHub didn't answer; no Fix PR was opened";
 const REGISTRY_DOWN = { npm: "The npm registry", pypi: "The PyPI registry" } as const;
 
 /** What answers a request: the route's own refusal, its status and words. */
 type Refusal = { status: 400 | 409; error: string };
+
+type FileLocation = Extract<Location, { kind: "file" }>;
 
 function fixPrBody(fixPr: FixPr): FixPrBody {
   return {
@@ -53,6 +72,20 @@ const statusInSentence = (status: Finding["status"]) =>
 /** The branch a Finding's Fix PR is opened from: one per Finding, so a second click finds it. */
 const branchFor = (finding: Finding) => `warden/fix-${finding.id}`;
 
+/** The 409 for a Fix PR branch already there with no open PR from it into the default branch. */
+const branchInTheWay = (branch: string) =>
+  `Branch ${branch} already exists on the repo with no open Fix PR from it; if one is being opened, try again in a minute, or else delete the branch to open a new Fix PR`;
+
+/** The answer `work` gives, or 404 for a Finding the Team doesn't have, naming nothing of anyone's. */
+async function refusing(c: Context<AppEnv>, work: () => Promise<Response>): Promise<Response> {
+  try {
+    return await work();
+  } catch (error) {
+    if (error instanceof FindingNotFound) return c.json({ error: "No such Finding" }, 404);
+    throw error;
+  }
+}
+
 type Stores = {
   findings: Pick<Findings, "list">;
   repoAssets: Pick<RepoAssets, "list">;
@@ -63,16 +96,22 @@ type Stores = {
 /**
  * The Fix PR routes. Opening one needs the write app's `writer`, which comes with the package registry its edits look
  * versions up in and the logger its failures are written to; without them, the POST answers 503 and the GET still
- * answers.
+ * answers. `pullWait` is the wait between looks for an open PR, PULL_WAIT_MS unless a test gives its own.
  */
 export function fixPrRoutes(
   deps: Stores &
     (
-      | { writer: GitHubWriter; registry: PackageRegistry; logger: Logger }
-      | { writer?: undefined; registry?: undefined; logger?: undefined }
+      | {
+          writer: GitHubWriter;
+          registry: PackageRegistry;
+          logger: Logger;
+          pullWait?: () => Promise<void>;
+        }
+      | { writer?: undefined; registry?: undefined; logger?: undefined; pullWait?: undefined }
     ),
 ): MountRoutes {
   const { findings, repoAssets, writeGrants, fixPrs } = deps;
+  const pullWait = deps.pullWait ?? (() => delay(PULL_WAIT_MS));
   const limit = createAttemptLimit({ max: FIX_PRS_PER_HOUR, windowMs: 60 * 60_000 });
 
   /** The Team's Finding the path names, or FindingNotFound. The Findings module has no one-Finding read. */
@@ -83,17 +122,27 @@ export function fixPrRoutes(
     return finding;
   }
 
-  /** The refusal the Finding alone gives: its Rule and Location, then its Status; undefined when there's none. */
-  function refusalOf(finding: Finding): Refusal | undefined {
-    const refused = fixRefusal(finding.rule_id, finding.location);
-    if (refused !== undefined) return { status: 400, error: refused };
-    if (finding.status !== "open") {
-      return {
-        status: 409,
-        error: `Only an Open Finding gets a Fix PR; this one is ${statusInSentence(finding.status)}`,
-      };
+  /** The refusal the Finding alone gives, its Rule and Location then its Status; or the file Location it fixes. */
+  function refusalOf(finding: Finding): { refusal: Refusal } | { location: FileLocation } {
+    const { location } = finding;
+    const refused = fixRefusal(finding.rule_id, location);
+    if (refused !== undefined || location.kind !== "file") {
+      return { refusal: { status: 400, error: refused ?? NO_FIX_PR } };
     }
-    return undefined;
+    if (finding.status !== "open") {
+      const error = `Only an Open Finding gets a Fix PR; this one is ${statusInSentence(finding.status)}`;
+      return { refusal: { status: 409, error } };
+    }
+    return { location };
+  }
+
+  /** The first open PR from `branch` into the default branch, looked for PULL_LOOKS times; undefined if none shows. */
+  async function openPullFrom(repo: RepoWriter, branch: string): Promise<OpenedPull | undefined> {
+    for (let look = 1; ; look++) {
+      const open = await repo.openPullWithHead(branch);
+      if (open !== undefined || look === PULL_LOOKS) return open;
+      await pullWait();
+    }
   }
 
   return (app, requireRole) => {
@@ -109,12 +158,12 @@ export function fixPrRoutes(
         return c.json({ error: `A Team opens at most ${FIX_PRS_PER_HOUR} Fix PRs an hour` }, 429);
       }
 
-      try {
+      return refusing(c, async () => {
         const finding = await findingOf(c);
-        const refused = refusalOf(finding);
-        if (refused) return c.json({ error: refused.error }, refused.status);
-        const { location } = finding;
-        if (location.kind !== "file") return c.json({ error: "no Fix PR for this Rule" }, 400);
+        const fixable = refusalOf(finding);
+        if ("refusal" in fixable)
+          return c.json({ error: fixable.refusal.error }, fixable.refusal.status);
+        const { location } = fixable;
 
         const asset =
           finding.asset.kind === "repo"
@@ -128,140 +177,115 @@ export function fixPrRoutes(
           return c.json({ error: "Grant write access on Setup to open Fix PRs" }, 409);
         }
 
-        // The first granted installation that gives a token for this one repo. One GitHub answers 404 for is gone, so
-        // its grant is revoked; one that's suspended (403) or doesn't reach the repo (422) is only skipped.
-        let token: Awaited<ReturnType<GitHubWriter["repoToken"]>> | undefined;
-        let uninstalled = false;
-        for (const grant of grants) {
-          const answer = await writer.repoToken(grant.installationId, asset);
-          if (answer.ok) {
-            token = answer;
-            break;
+        try {
+          // The first granted installation that gives a token for this one repo. One GitHub answers 404 for is gone,
+          // so its grant is revoked; one that's suspended (403) or doesn't reach the repo (422) is only skipped.
+          let token: Extract<RepoToken, { ok: true }> | undefined;
+          let uninstalled = false;
+          for (const grant of grants) {
+            const answer = await writer.repoToken(grant.installationId, asset);
+            if (answer.ok) {
+              token = answer;
+              break;
+            }
+            if (answer.status === 404) {
+              const revoked = await writeGrants.revoke(team, {
+                installationId: grant.installationId,
+                revokedBy: person,
+              });
+              uninstalled ||= revoked;
+            }
           }
-          if (answer.status === 404) {
-            const revoked = await writeGrants.revoke(team, {
-              installationId: grant.installationId,
-              revokedBy: person,
-            });
-            uninstalled ||= revoked;
+          if (token === undefined) {
+            return c.json(
+              {
+                error: uninstalled
+                  ? "The write app was uninstalled from GitHub; grant write access again on Setup to open Fix PRs"
+                  : "No write grant reaches this repo",
+              },
+              409,
+            );
           }
-        }
-        if (token === undefined || !token.ok) {
-          return c.json(
-            {
-              error: uninstalled
-                ? "The write app was uninstalled from GitHub; grant write access again on Setup to open Fix PRs"
-                : "No write grant reaches this repo",
-            },
-            409,
-          );
-        }
-        // The app's permissions may have changed on GitHub since the link: a token holding more, or less, writes nothing.
-        if (!holdsWriteAppPermissions(token.permissions)) {
-          return c.json({ error: "This installation's permissions aren't the write app's" }, 409);
-        }
+          // The app's permissions may have changed on GitHub since the link: a token holding more, or less, writes
+          // nothing.
+          if (!holdsWriteAppPermissions(token.permissions)) {
+            return c.json({ error: "This installation's permissions aren't the write app's" }, 409);
+          }
 
-        const repo = await token.open();
-        const held = await fixPrs.newest(team, finding.id);
-        if (held && (await repo.pullIsOpen(held.number))) return c.json(fixPrBody(held), 200);
+          const repo = await token.open();
+          const held = await fixPrs.newest(team, finding.id);
+          if (held && (await repo.pullIsOpen(held.number))) return c.json(fixPrBody(held), 200);
 
-        // The registry is asked here, before anything is written to GitHub.
-        const current = await repo.readFile(location.path);
-        const edit = await fixedEdit(finding.rule_id, location, current?.text, registry);
-        if (!edit.ok) return c.json({ error: edit.reason }, 409);
-        // An edit writes the Finding's own file, whose blob sha the commit names.
-        if (edit.path !== location.path)
-          throw new Error("a fixed edit wrote a file other than its Finding's");
+          // The registry is asked here, before anything is written to GitHub.
+          const current = await repo.readFile(location.path);
+          const edit = await fixedEdit(finding.rule_id, location, current?.text, registry);
+          if (!edit.ok) return c.json({ error: edit.reason }, 409);
+          // An edit writes the Finding's own file, whose blob sha the commit names.
+          if (edit.path !== location.path) {
+            throw new Error("a fixed edit wrote a file other than its Finding's");
+          }
 
-        const branch = branchFor(finding);
-        if ((await repo.createBranch(branch)) === "exists") {
-          return await branchThere(c, { repo, team, finding, branch, person });
+          const branch = branchFor(finding);
+          /** Records `pull` from the branch as the Finding's Fix PR, which writes nothing when it's held. */
+          const record = (pull: OpenedPull) =>
+            fixPrs.record(team, { findingId: finding.id, ...pull, branch, openedBy: person });
+
+          // The branch already there was made by an earlier click: its open PR is answered, or the branch is named
+          // and left as it is.
+          if ((await repo.createBranch(branch)) === "exists") {
+            const open = await openPullFrom(repo, branch);
+            if (open === undefined) return c.json({ error: branchInTheWay(branch) }, 409);
+            return c.json(fixPrBody(await record(open)), 200);
+          }
+          const title = `Fix: ${packRule(finding.rule_id).title}`;
+          await repo.writeFile({
+            branch,
+            path: edit.path,
+            text: edit.text,
+            sha: current?.sha,
+            message: title,
+          });
+          const opened = await repo.openPull({
+            title,
+            body: [
+              `Warden opened this Fix PR for Finding \`${finding.id}\` (\`${finding.rule_id}\`).`,
+              "",
+              ...edit.body,
+            ].join("\n"),
+            head: branch,
+          });
+          const fixPr = await record(opened);
+          logger.info("guard: Fix PR opened", { team, finding: finding.id, number: fixPr.number });
+          return c.json(fixPrBody(fixPr), 201);
+        } catch (error) {
+          if (error instanceof FileUnreadable || error instanceof BranchRefused) {
+            return c.json({ error: error.message }, 409);
+          }
+          if (error instanceof RegistryUnavailable) {
+            const words = `${REGISTRY_DOWN[error.registry]} didn't answer; no Fix PR was opened`;
+            logger.error(words, { team, registry: error.registry, status: error.status });
+            return c.json({ error: words }, 502);
+          }
+          if (error instanceof GitHubUnavailable) {
+            logger.error(GITHUB_DOWN, { team, step: error.step, status: error.status });
+            return c.json({ error: GITHUB_DOWN }, 502);
+          }
+          throw error;
         }
-        const title = `Fix: ${packRule(finding.rule_id).title}`;
-        await repo.writeFile({
-          branch,
-          path: edit.path,
-          text: edit.text,
-          sha: current?.sha,
-          message: title,
-        });
-        const opened = await repo.openPull({
-          title,
-          body: [
-            `Warden opened this Fix PR for Finding \`${finding.id}\` (\`${finding.rule_id}\`).`,
-            "",
-            ...edit.body,
-          ].join("\n"),
-          head: branch,
-        });
-        const fixPr = await fixPrs.record(team, {
-          findingId: finding.id,
-          ...opened,
-          branch,
-          openedBy: person,
-        });
-        logger.info("guard: Fix PR opened", { team, finding: finding.id, number: fixPr.number });
-        return c.json(fixPrBody(fixPr) satisfies FixPrBody, 201);
-      } catch (error) {
-        if (error instanceof FindingNotFound) return c.json({ error: "No such Finding" }, 404);
-        if (error instanceof FileUnreadable) return c.json({ error: error.message }, 409);
-        if (error instanceof RegistryUnavailable) {
-          const words = `${REGISTRY_DOWN[error.registry]} didn't answer; no Fix PR was opened`;
-          logger.error(words, { team, registry: error.registry, status: error.status });
-          return c.json({ error: words }, 502);
-        }
-        if (error instanceof GitHubUnavailable) {
-          logger.error(GITHUB_DOWN, { team, step: error.step, status: error.status });
-          return c.json({ error: GITHUB_DOWN }, 502);
-        }
-        throw error;
-      }
+      });
     });
 
     // Any person in the Team reads whether a Finding can get a Fix PR, and its newest one: the detail card's link
     // (slice 5). No GitHub call, so it answers the same without the write app.
-    app.get("/api/guard/findings/:id/fix-pr", requireRole("member"), async (c) => {
-      try {
+    app.get("/api/guard/findings/:id/fix-pr", requireRole("member"), (c) =>
+      refusing(c, async () => {
         const finding = await findingOf(c);
         const newest = await fixPrs.newest(c.get("team"), finding.id);
         return c.json({
           fixable: fixRefusal(finding.rule_id, finding.location) === undefined,
           fix_pr: newest ? fixPrBody(newest) : null,
         } satisfies FindingFixPrBody);
-      } catch (error) {
-        if (error instanceof FindingNotFound) return c.json({ error: "No such Finding" }, 404);
-        throw error;
-      }
-    });
+      }),
+    );
   };
-
-  /**
-   * The Fix PR branch is already on the repo: an earlier request made it. An open PR from it is answered (200) and
-   * recorded, which writes nothing when it's held; with none, the branch is named and left as it is.
-   */
-  async function branchThere(
-    c: Context<AppEnv>,
-    {
-      repo,
-      team,
-      finding,
-      branch,
-      person,
-    }: { repo: RepoWriter; team: string; finding: Finding; branch: string; person: string },
-  ) {
-    const open = await repo.openPullWithHead(branch);
-    if (open === undefined) {
-      return c.json(
-        { error: `Branch ${branch} already exists on the repo; delete it to open a new Fix PR` },
-        409,
-      );
-    }
-    const fixPr = await fixPrs.record(team, {
-      findingId: finding.id,
-      ...open,
-      branch,
-      openedBy: person,
-    });
-    return c.json(fixPrBody(fixPr) satisfies FixPrBody, 200);
-  }
 }

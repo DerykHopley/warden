@@ -6,6 +6,7 @@
 // and is then dropped; it and the app's JWT are never stored, logged, returned or put in an error. It needs the write
 // app's client id and private key, never its client secret.
 import { createPrivateKey } from "node:crypto";
+import { FixPrBody } from "@warden/contracts";
 import { z } from "zod";
 import { CallFailed, callJson, type Answer, type Fetch } from "../../http-call.ts";
 import { signAppJwt } from "./app-jwt.ts";
@@ -22,6 +23,11 @@ export class FileUnreadable extends Error {
   override name = "FileUnreadable";
 }
 
+/** A branch GitHub won't make that isn't there: another branch's name is in its path (`warden` in `warden/fix-…`). */
+export class BranchRefused extends Error {
+  override name = "BranchRefused";
+}
+
 /** A PR as the writer answers it: GitHub's URL for it and its number. */
 export type OpenedPull = { url: string; number: number };
 
@@ -30,13 +36,16 @@ export interface RepoWriter {
   /** The repo's `owner/name` and default branch, as GitHub answered them by the repo's id. */
   readonly fullName: string;
   readonly defaultBranch: string;
-  /** The file at `path` on the default branch, with its blob sha; undefined when there's none. */
+  /**
+   * The file at `path` at the default branch's head as `open` read it, the commit a new branch is made at, with its
+   * blob sha; undefined when there's none. A push to the default branch since then doesn't change it.
+   */
   readFile(path: string): Promise<{ text: string; sha: string } | undefined>;
   /** Whether the repo's PR `number` is open; false when GitHub has no such PR. */
   pullIsOpen(number: number): Promise<boolean>;
   /**
    * Makes branch `name` at the default branch's head: "created", or "exists" when the branch is already there, which
-   * is left as it is. Never the default branch.
+   * is left as it is. Never the default branch. Throws BranchRefused when GitHub won't make it and it isn't there.
    */
   createBranch(name: string): Promise<"created" | "exists">;
   /** Commits `text` at `path` on `branch` (never the default branch), over the blob `sha` when the file exists. */
@@ -49,7 +58,10 @@ export interface RepoWriter {
   }): Promise<void>;
   /** Opens a PR from `head` into the default branch. */
   openPull(input: { title: string; body: string; head: string }): Promise<OpenedPull>;
-  /** The first open PR whose head is the repo's own `branch`, or undefined when none is. */
+  /**
+   * The first open PR from the repo's own `branch` into the default branch, or undefined when none is: a PR from it
+   * into another branch isn't one Warden opened.
+   */
   openPullWithHead(branch: string): Promise<OpenedPull | undefined>;
 }
 
@@ -91,8 +103,12 @@ const Contents = z.object({
   content: z.string().optional(),
   sha: z.string().min(1),
 });
-const PullUrl = z.url({ protocol: /^https$/, hostname: /^github\.com$/ });
-const Pull = z.object({ html_url: PullUrl, number: z.number().int().positive() });
+/** A PR as GitHub answers it: its URL and number as `FixPrBody` takes them, and the branch it goes into. */
+const Pull = z.object({
+  html_url: FixPrBody.shape.url,
+  number: FixPrBody.shape.number,
+  base: z.object({ ref: z.string() }),
+});
 const PullState = z.object({ state: z.string() });
 
 const apiHeaders = (token: string) => ({
@@ -189,11 +205,10 @@ export function createGitHubWriter({
 
       async readFile(path) {
         const step = "GitHub's file read at the default branch";
-        const answer = await call(
-          step,
-          `${repoUrl(`contents/${encodePath(path)}`)}?ref=${encodeURIComponent(defaultBranch)}`,
-          { headers: apiHeaders(token) },
-        );
+        // Read at the head the branch is made at, not by the branch's name: the commit's blob sha must be the branch's.
+        const answer = await call(step, `${repoUrl(`contents/${encodePath(path)}`)}?ref=${head}`, {
+          headers: apiHeaders(token),
+        });
         if (answer.status === 404) return undefined;
         // A folder answers a list, which isn't the one file an edit writes.
         if (answer.ok && Array.isArray(answer.body)) {
@@ -228,16 +243,22 @@ export function createGitHubWriter({
           body: JSON.stringify({ ref: `refs/heads/${name}`, sha: head }),
         });
         if (answer.status === 201) return "created";
-        // GitHub answers 422 for a ref that's already there, and for other refusals; only a read of the branch tells
-        // them apart.
+        // GitHub answers 422 for a ref that's already there, and for one another ref's name is in the way of (a branch
+        // `warden` beside `warden/fix-…`); only a read of the branch tells them apart.
         if (answer.status === 422) {
           const readStep = "GitHub's branch read";
           const there = await call(readStep, refUrl(name), { headers: apiHeaders(token) });
           if (there.status === 200) return "exists";
-          throw new GitHubUnavailable(
-            step,
-            422,
-            `${step} answered HTTP 422, and the branch isn't there`,
+          if (there.status !== 404) {
+            throw new GitHubUnavailable(
+              readStep,
+              there.status,
+              `${readStep} answered HTTP ${there.status}`,
+            );
+          }
+          const [first = name] = name.split("/");
+          throw new BranchRefused(
+            `Branch ${name} can't be made on the repo: a branch's name is in its path, such as ${first}; rename that branch to open Fix PRs`,
           );
         }
         throw new GitHubUnavailable(step, answer.status, `${step} answered HTTP ${answer.status}`);
@@ -280,14 +301,17 @@ export function createGitHubWriter({
         const query = new URLSearchParams({
           head: `${owner}:${branch}`,
           state: "open",
-          per_page: "1",
+          base: defaultBranch,
         });
-        const [first] = read(
+        const pulls = read(
           z.array(Pull),
           step,
           await call(step, `${repoUrl("pulls")}?${query}`, { headers: apiHeaders(token) }),
         );
-        return first && pull(first);
+        // `base` asks GitHub for those into the default branch; each answer is checked too, so one into another
+        // branch is never taken as Warden's.
+        const into = pulls.find((answered) => answered.base.ref === defaultBranch);
+        return into && pull(into);
       },
     };
   }
