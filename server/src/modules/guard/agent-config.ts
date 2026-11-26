@@ -219,6 +219,9 @@ export function valueLines(text: string, depth: number): Map<string, number> {
 /** Shells and interpreters: `-c` runs whatever command text follows. */
 const RUNS_CODE = ["sh", "bash", "zsh", "python", "python3"];
 
+/** Interpreters: `-e` runs whatever code text follows. */
+const RUNS_CODE_E = ["node", "perl", "ruby"];
+
 /** Commands that read files or run a shell: a wildcard allow for one lets the agent read or run anything. */
 const READS_OR_RUNS = [
   "cat",
@@ -236,23 +239,21 @@ const READS_OR_RUNS = [
   "env",
   "printenv",
   "eval",
-  "node",
-  "perl",
-  "ruby",
+  ...RUNS_CODE_E,
   ...RUNS_CODE,
 ];
 
 /** A command given by path (`/bin/`, `/usr/local/bin/`, `./bin/`, `~/bin/`): path words only, never a space. */
 const BY_PATH = String.raw`(?:(?:~|\.{1,2})?(?:/[\w.-]+)*/)?`;
 
-/** A listed command, maybe by path; a shell or interpreter maybe with `-c`. */
-const COMMAND = `${BY_PATH}(?:(?:${RUNS_CODE.join("|")}) -c|${READS_OR_RUNS.join("|")})`;
+/** A listed command, maybe by path; a shell or interpreter maybe with `-c`, or `node`/`perl`/`ruby` with `-e`. */
+const COMMAND = `${BY_PATH}(?:(?:${RUNS_CODE.join("|")}) -c|(?:${RUNS_CODE_E.join("|")}) -e|${READS_OR_RUNS.join("|")})`;
 
 /**
  * A broad Bash allow: the whole tool (`Bash`, `Bash(*)`, `Bash(:*)`, `Bash(**)`), or a wildcard for a command that
  * reads files or runs a shell, in any of Claude Code's three trailing forms (`Bash(cat:*)`, `Bash(cat *)`,
- * `Bash(cat*)`). The command may be given by path (`Bash(/bin/cat:*)`), and a shell or interpreter may come with
- * `-c` (`Bash(bash -c:*)`).
+ * `Bash(cat*)`). The command may be given by path (`Bash(/bin/cat:*)`), a shell or interpreter may come with
+ * `-c` (`Bash(bash -c:*)`), and `node`, `perl` or `ruby` with `-e` (`Bash(node -e:*)`).
  */
 const BROAD_BASH = new RegExp(String.raw`^Bash(?:\((?:\*|:\*|\*\*|${COMMAND}(?::\*| \*|\*))\))?$`);
 
