@@ -2,10 +2,10 @@
 // file: a broad Bash allow in a settings file, and the flag or mode that skips permission checks. Two are whole-repo,
 // answered once every file has been seen: the agent can read .env, and nothing checks the agent's tool calls.
 // A settings file is read as Claude Code reads it, through its own keys (`permissions.allow`, `permissions.deny`,
-// `permissions.defaultMode`, `hooks`); a file that isn't valid JSON holds no rules, as Claude Code wouldn't apply it
-// either. A summary quotes only allow entries that match the broad patterns, which can't hold a secret, and never a
-// line of a file. The flag and the mode are built here by joining their parts, so this file never holds a whole one
-// for a Guard Scan of Warden to report.
+// `permissions.defaultMode`, `hooks`, `statusLine`, `apiKeyHelper`); a file that isn't valid JSON holds no rules, as
+// Claude Code wouldn't apply it either. A summary quotes only allow entries that match the broad patterns, which can't
+// hold a secret, and never a line of a file. The flag and the mode are built here by joining their parts, so this file
+// never holds a whole one for a Guard Scan of Warden to report.
 import type { Asset, Observation, RuleId } from "@warden/contracts";
 import {
   AGENT_CAN_READ_ENV,
@@ -16,6 +16,7 @@ import {
 } from "./default-pack.ts";
 import { isObject, readJsonObject } from "./json-config.ts";
 import type { RepoFile } from "./repo-reader.ts";
+import { summaryNames } from "./summary.ts";
 
 /**
  * A repo's agent-config check, made once per repo: `see` takes each of its files in turn, `unread` each file the
@@ -81,8 +82,11 @@ export function isClaudeSettingsFile(path: string): boolean {
 
 type PermissionEntry = { rule: string; line: number };
 
+/** A shell command a settings file runs, with the line its value starts on. */
+type SettingsCommand = { command: string; line: number };
+
 /** A hook that runs a command: its event (`PreToolUse`, `Stop`, …), and the `command` value with its line. */
-type HookCommand = { event: string; command: string; line: number };
+type HookCommand = SettingsCommand & { event: string };
 
 /** What the agent-config Rules read from a settings file, each value with the line it starts on. */
 type ClaudeSettings = {
@@ -94,16 +98,27 @@ type ClaudeSettings = {
   defaultMode: { mode: string; line: number } | undefined;
   /** Every `type: "command"` hook with a string `command`, under any event. */
   hooks: readonly HookCommand[];
+  /**
+   * The other commands Claude Code runs from the file: a `type: "command"` `statusLine`'s string `command`, and the
+   * string `apiKeyHelper`.
+   */
+  otherCommands: readonly SettingsCommand[];
 };
 
-const NO_SETTINGS: ClaudeSettings = { allow: [], deny: [], defaultMode: undefined, hooks: [] };
+const NO_SETTINGS: ClaudeSettings = {
+  allow: [],
+  deny: [],
+  defaultMode: undefined,
+  hooks: [],
+  otherCommands: [],
+};
 
 /** How deep `valueLines` reads: down to a hook's `command`, at `hooks.<event>.<group>.hooks.<hook>.command`. */
 const SETTINGS_DEPTH = 6;
 
 /**
- * A settings file's permissions and hook commands, read through `readJsonObject`. A file it doesn't read, and a field
- * of another type, hold nothing.
+ * A settings file's permissions and the commands it runs (hooks, `statusLine`, `apiKeyHelper`), read through
+ * `readJsonObject`. A file it doesn't read, and a field of another type, hold nothing.
  */
 function readClaudeSettings(raw: string): ClaudeSettings {
   const read = readJsonObject(raw);
@@ -117,6 +132,18 @@ function readClaudeSettings(raw: string): ClaudeSettings {
       typeof rule === "string" ? [{ rule, line: lineOf("permissions", key, i) }] : [],
     );
   const mode = permissions.defaultMode;
+  const { statusLine, apiKeyHelper } = parsed;
+  const otherCommands: SettingsCommand[] = [];
+  if (
+    isObject(statusLine) &&
+    statusLine.type === "command" &&
+    typeof statusLine.command === "string"
+  ) {
+    otherCommands.push({ command: statusLine.command, line: lineOf("statusLine", "command") });
+  }
+  if (typeof apiKeyHelper === "string") {
+    otherCommands.push({ command: apiKeyHelper, line: lineOf("apiKeyHelper") });
+  }
   return {
     allow: entries("allow"),
     deny: entries("deny"),
@@ -137,6 +164,7 @@ function readClaudeSettings(raw: string): ClaudeSettings {
         ),
       ),
     ),
+    otherCommands,
   };
 }
 
@@ -260,9 +288,6 @@ const BROAD_BASH = new RegExp(String.raw`^Bash(?:\((?:\*|:\*|\*\*|${COMMAND}(?::
 /** Whether an allow entry is a broad Bash allow (`BROAD_BASH`), so the scanner and a Fix PR's edit agree. */
 export const isBroadBashAllow = (rule: string): boolean => BROAD_BASH.test(rule);
 
-/** How many broad allows a summary names before "and N more". */
-const NAMED = 3;
-
 function blanketBashAllow(
   asset: Asset,
   path: string,
@@ -272,15 +297,14 @@ function blanketBashAllow(
   const [first] = broad;
   if (first === undefined) return undefined;
   const count = broad.length;
-  const named = broad.slice(0, NAMED).map(({ rule }) => rule);
-  const more = count > NAMED ? ` and ${count - NAMED} more` : "";
+  const named = summaryNames(broad.map(({ rule }) => rule));
   const allows = count === 1 ? "allow" : "allows";
   return observation(
     asset,
     BLANKET_BASH_ALLOW,
     path,
     first.line,
-    `${count} broad Bash ${allows} (${named.join(", ")}${more}) in ${path}, ${where(count, first.line)}`,
+    `${count} broad Bash ${allows} (${named}) in ${path}, ${where(count, first.line)}`,
   );
 }
 
@@ -323,11 +347,11 @@ function permissionSkip(
   { path, text }: RepoFile,
   settings: ClaudeSettings | undefined,
 ): Observation | undefined {
-  // A settings file counts only through its parsed `defaultMode` and the hooks that run the agent: its text can name
-  // the flag to deny or block it.
+  // A settings file counts only through its parsed `defaultMode` and the commands it runs that run the agent: its text
+  // can name the flag to deny or block it.
   const places =
     settings !== undefined
-      ? [...defaultModePlaces(settings), ...hookPlaces(settings)]
+      ? [...defaultModePlaces(settings), ...commandPlaces(settings)]
       : DOCS_FILE.test(path)
         ? []
         : flagPlaces(text);
@@ -697,11 +721,12 @@ function agentRuns(command: string): string[] {
 }
 
 /**
- * Each run of the agent in each hook command, once per flag in that run's own arguments, on the `command` value's
- * line. A later command, or a quoted argument of more than one word (a prompt), isn't one of them.
+ * Each run of the agent in each command the settings run (a hook's, the `statusLine`'s, the `apiKeyHelper`), once per
+ * flag in that run's own arguments, on the command value's line. A later command, or a quoted argument of more than
+ * one word (a prompt), isn't one of them.
  */
-const hookPlaces = ({ hooks }: ClaudeSettings): Place[] =>
-  hooks.flatMap(({ command, line }) =>
+const commandPlaces = ({ hooks, otherCommands }: ClaudeSettings): Place[] =>
+  [...hooks, ...otherCommands].flatMap(({ command, line }) =>
     agentRuns(command).flatMap((args) =>
       SKIP_FLAGS.flatMap(({ kind, pattern }) =>
         Array.from(args.matchAll(pattern), () => ({ kind, line })),
@@ -740,8 +765,27 @@ const where = (count: number, line: number) =>
 // `.env.local` and the like.
 const DENIES_ENV = /^Read(?:\((?:\.\/|\/|\*\*\/|\.\/\*\*\/|\/\*\*\/|\/\/\*\*\/)?\.env\*?\))?$/;
 
+/** Whether a deny entry stops the agent reading `.env`, which clears `agent-can-read-env`. */
+const deniesEnv = (deny: readonly PermissionEntry[]) =>
+  deny.some(({ rule }) => DENIES_ENV.test(rule));
+
+/** Whether a guard is set up (a deny rule or a PreToolUse hook command), not whether it works. */
+const hasRuntimeGuard = (deny: readonly PermissionEntry[], hooks: readonly HookCommand[]) =>
+  deny.length > 0 || hooks.some(({ event }) => event === "PreToolUse");
+
+/**
+ * Whether one root settings file's `text` on its own clears the whole-repo Rule `ruleId`, by the match `end` uses on
+ * the root settings it merges; false for a file it doesn't read, and for any other Rule.
+ */
+export function settingsClear(ruleId: RuleId, text: string): boolean {
+  const { deny, hooks } = readClaudeSettings(text);
+  if (ruleId === AGENT_CAN_READ_ENV) return deniesEnv(deny);
+  if (ruleId === NO_RUNTIME_GUARD) return hasRuntimeGuard(deny, hooks);
+  return false;
+}
+
 function agentCanReadEnv(asset: Asset, deny: readonly PermissionEntry[]): Observation | undefined {
-  if (deny.some(({ rule }) => DENIES_ENV.test(rule))) return undefined;
+  if (deniesEnv(deny)) return undefined;
   return observation(
     asset,
     AGENT_CAN_READ_ENV,
@@ -751,13 +795,12 @@ function agentCanReadEnv(asset: Asset, deny: readonly PermissionEntry[]): Observ
   );
 }
 
-/** Whether a guard is set up (a deny rule or a PreToolUse hook command), not whether it works. */
 function noRuntimeGuard(
   asset: Asset,
   deny: readonly PermissionEntry[],
   hooks: readonly HookCommand[],
 ): Observation | undefined {
-  if (deny.length > 0 || hooks.some(({ event }) => event === "PreToolUse")) return undefined;
+  if (hasRuntimeGuard(deny, hooks)) return undefined;
   return observation(
     asset,
     NO_RUNTIME_GUARD,
