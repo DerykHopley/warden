@@ -8,7 +8,7 @@ import { createWriteGrants, type WriteGrants } from "../src/modules/guard/write-
 import type { WriteGrantEvent } from "../src/schema.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
-import { ADMIN, newInstallation, newTeam } from "./helpers.ts";
+import { ADMIN, newInstallation, newTeam, queuedBehindLock } from "./helpers.ts";
 
 let pool: pg.Pool;
 let withTeam: WithTeam;
@@ -28,7 +28,7 @@ afterAll(async () => {
 const rows = (team: string) =>
   withTeam(team, (tx) => tx.selectFrom("github_write_grants").selectAll().orderBy("id").execute());
 
-/** Writes a row straight into the table, as slice 2's `revoked` will, under the Team. */
+/** Writes a row straight into the table under the Team, past the store's checks. */
 const insertRow = (
   team: string,
   row: { installationId: number; event: WriteGrantEvent; causedBy?: string; teamId?: string },
@@ -122,6 +122,100 @@ describe("grant and list", () => {
     });
     expect(await writeGrants.list(team)).toEqual([regrant]);
     expect((await rows(team)).map((row) => row.event)).toEqual(["granted", "revoked", "granted"]);
+  });
+});
+
+/** The Team's rows for the installation, by event. */
+const eventCounts = async (team: string, installationId: number) => {
+  const counts = { granted: 0, revoked: 0 };
+  for (const row of await rows(team)) {
+    if (Number(row.installation_id) === installationId) counts[row.event] += 1;
+  }
+  return counts;
+};
+
+describe("revoke", () => {
+  it("writes a revoked row naming who found the installation gone, and the installation leaves the list", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const other = newInstallation();
+    await writeGrants.grant(team, { installationId, grantedBy: ADMIN });
+    const kept = await writeGrants.grant(team, { installationId: other, grantedBy: ADMIN });
+
+    expect(await writeGrants.revoke(team, { installationId, revokedBy: "user_member" })).toBe(true);
+
+    expect(await eventCounts(team, installationId)).toEqual({ granted: 1, revoked: 1 });
+    expect((await rows(team)).at(-1)).toMatchObject({
+      event: "revoked",
+      caused_by: "user_member",
+      at: expect.any(Date),
+    });
+    expect(await writeGrants.list(team)).toEqual([kept]);
+  });
+
+  it("writes nothing for a second revoke, and a grant after it lists the installation again", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    await writeGrants.grant(team, { installationId, grantedBy: ADMIN });
+    await writeGrants.revoke(team, { installationId, revokedBy: "user_member" });
+
+    expect(await writeGrants.revoke(team, { installationId, revokedBy: "user_member" })).toBe(
+      false,
+    );
+    expect(await eventCounts(team, installationId)).toEqual({ granted: 1, revoked: 1 });
+
+    const regrant = await writeGrants.grant(team, { installationId, grantedBy: ADMIN });
+
+    expect(await writeGrants.list(team)).toEqual([regrant]);
+    expect(await eventCounts(team, installationId)).toEqual({ granted: 2, revoked: 1 });
+  });
+
+  it("writes nothing for an installation the Team never granted", async () => {
+    const team = await newTeam(withTeam);
+
+    expect(
+      await writeGrants.revoke(team, { installationId: newInstallation(), revokedBy: ADMIN }),
+    ).toBe(false);
+    expect(await rows(team)).toEqual([]);
+  });
+
+  it("writes nothing for Team B's revoke of Team A's installation, and Team A's grant is still listed", async () => {
+    const teamA = await newTeam(withTeam);
+    const teamB = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const grant = await writeGrants.grant(teamA, { installationId, grantedBy: ADMIN });
+
+    expect(await writeGrants.revoke(teamB, { installationId, revokedBy: ADMIN })).toBe(false);
+
+    expect(await rows(teamB)).toEqual([]);
+    expect(await eventCounts(teamA, installationId)).toEqual({ granted: 1, revoked: 0 });
+    expect(await writeGrants.list(teamA)).toEqual([grant]);
+  });
+
+  it("waits on the installation's lock: it writes nothing while another transaction holds it, then finishes", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    await writeGrants.grant(team, { installationId, grantedBy: ADMIN });
+    const key = `github_write_grants:${installationId}`;
+    // The holder and the probe get a pool of their own: the store's pool is busy with the waiting revoke.
+    const probe = poolAs("warden_app", inject("testDatabase"));
+    const holder = await probe.connect();
+    try {
+      await holder.query("begin");
+      await holder.query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))", [key]);
+
+      const revoked = writeGrants.revoke(team, { installationId, revokedBy: "user_member" });
+      await queuedBehindLock(probe, key, "the installation's write-grants lock");
+
+      expect(await eventCounts(team, installationId)).toEqual({ granted: 1, revoked: 0 });
+
+      await holder.query("commit");
+      expect(await revoked).toBe(true);
+    } finally {
+      holder.release();
+      await probe.end();
+    }
+    expect(await eventCounts(team, installationId)).toEqual({ granted: 1, revoked: 1 });
   });
 });
 

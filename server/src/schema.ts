@@ -200,6 +200,22 @@ export interface Database {
   };
 
   /**
+   * A Fix PR opened for a Finding (0016_fix_prs): its URL, number and branch, who opened it (a Clerk user id) and when.
+   * Append-only: rows are only ever inserted, one per PR. Written only by the Guard module's Fix PRs store; the newest
+   * row per Finding is the one the store answers.
+   */
+  fix_prs: {
+    team_id: string;
+    id: Generated<string>;
+    finding_id: string;
+    url: string;
+    number: number;
+    branch: string;
+    opened_by: string;
+    at: Generated<Date>;
+  };
+
+  /**
    * A repo an installation lists, as one of the Team's Repo Assets (0011_repo_assets): one row per installation that
    * lists it, keyed by (team_id, installation_id, ref) since 0012_repo_assets_per_installation.
    */

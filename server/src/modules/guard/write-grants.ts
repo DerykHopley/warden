@@ -2,7 +2,7 @@
 // through, that an Admin granted. Kept as an append-only record of `granted` and `revoked` events; the newest row per
 // installation says whether the grant holds. Every call runs inside `withTeam`, so row-level security keeps each Team to
 // its own rows (ADR 0006); an installation belongs to one Team only, across every Team.
-import { sql, type Selectable } from "kysely";
+import { sql, type Selectable, type Transaction } from "kysely";
 import { isPgError } from "../../database.ts";
 import type { Database } from "../../schema.ts";
 import type { WithTeam } from "../../with-team.ts";
@@ -23,6 +23,12 @@ export interface WriteGrants {
   grant(team: string, input: { installationId: number; grantedBy: string }): Promise<WriteGrant>;
   /** The Team's installations whose newest row is `granted`, by installation id. */
   list(team: string): Promise<WriteGrant[]>;
+  /**
+   * Records a `revoked` row for the installation, caused by `revokedBy` (the person whose request found it gone), when
+   * the Team's newest row for it is `granted`, and answers true. Otherwise, for an installation already revoked, never
+   * granted, or another Team's, writes nothing and answers false.
+   */
+  revoke(team: string, input: { installationId: number; revokedBy: string }): Promise<boolean>;
 }
 
 /** A `granted` row as the store answers it; pg reads the bigint id back as a string. */
@@ -32,23 +38,29 @@ const writeGrant = (row: Selectable<Database["github_write_grants"]>): WriteGran
   grantedAt: row.at,
 });
 
+/**
+ * The Team's newest row for the installation, read under the installation's lock. One write per installation at a
+ * time: a grant or revoke made at once with this one reads the row this one wrote, so a second writes nothing, and the
+ * newest row by id is the last committed. Every writer of the table reads through this.
+ */
+async function newestLocked(tx: Transaction<Database>, installationId: number) {
+  await sql`select pg_advisory_xact_lock(hashtextextended(${`github_write_grants:${installationId}`}, 0))`.execute(
+    tx,
+  );
+  return tx
+    .selectFrom("github_write_grants")
+    .selectAll()
+    .where("installation_id", "=", String(installationId))
+    .orderBy("id", "desc")
+    .limit(1)
+    .executeTakeFirst();
+}
+
 export function createWriteGrants({ withTeam }: { withTeam: WithTeam }): WriteGrants {
   return {
     grant(team, { installationId, grantedBy }) {
       return withTeam(team, async (tx) => {
-        // One write per installation at a time: a grant made at once with this one reads the row this one wrote, so a
-        // second grant writes nothing, and the newest row by id is the last committed. Any writer of `revoked` rows
-        // (#224's slice 2) must take this same lock before it reads.
-        await sql`select pg_advisory_xact_lock(hashtextextended(${`github_write_grants:${installationId}`}, 0))`.execute(
-          tx,
-        );
-        const newest = await tx
-          .selectFrom("github_write_grants")
-          .selectAll()
-          .where("installation_id", "=", String(installationId))
-          .orderBy("id", "desc")
-          .limit(1)
-          .executeTakeFirst();
+        const newest = await newestLocked(tx, installationId);
         if (newest?.event === "granted") return writeGrant(newest);
         try {
           // Another Team's row, which row-level security hides, may hold the id: then nothing is inserted here, and
@@ -89,6 +101,24 @@ export function createWriteGrants({ withTeam }: { withTeam: WithTeam }): WriteGr
           .orderBy("id", "desc")
           .execute();
         return newest.filter((row) => row.event === "granted").map(writeGrant);
+      });
+    },
+
+    revoke(team, { installationId, revokedBy }) {
+      return withTeam(team, async (tx) => {
+        // Row-level security hides another Team's rows, so its installation reads as never granted here.
+        const newest = await newestLocked(tx, installationId);
+        if (newest?.event !== "granted") return false;
+        await tx
+          .insertInto("github_write_grants")
+          .values({
+            team_id: team,
+            installation_id: installationId,
+            event: "revoked",
+            caused_by: revokedBy,
+          })
+          .execute();
+        return true;
       });
     },
   };
