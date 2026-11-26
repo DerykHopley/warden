@@ -1,9 +1,15 @@
 // The Default Pack as data (Guard spec, story 3): the Rules a Guard Scan checks, each with its Severity, title and fix,
 // and the Rules Guard's scanner says it covers.
-import { DEMO_OBSERVATIONS } from "@warden/contracts/demo";
+import { DEMO_OBSERVATIONS, demoRuns } from "@warden/contracts/demo";
 import { describe, expect, it } from "vitest";
 import { createLogger } from "../../log.ts";
-import { DEFAULT_PACK, DEFAULT_PACK_RULE_IDS, packRule, SECRET_IN_REPO } from "./default-pack.ts";
+import {
+  BLANKET_BASH_ALLOW,
+  DEFAULT_PACK,
+  DEFAULT_PACK_RULE_IDS,
+  packRule,
+  SECRET_IN_REPO,
+} from "./default-pack.ts";
 import { guardScanner } from "./scanner.ts";
 
 describe("the Default Pack", () => {
@@ -80,5 +86,22 @@ describe("the Default Pack", () => {
   it("holds the Rule the demo's committed-secret Finding names, so a rename can't leave the demo behind", () => {
     expect(DEMO_OBSERVATIONS.secret.rule_id).toBe(SECRET_IN_REPO);
     expect(DEFAULT_PACK_RULE_IDS).toContain(DEMO_OBSERVATIONS.secret.rule_id);
+  });
+
+  it("holds the Rule the demo's broad-Bash-allow Finding names, whose title is that Rule's", () => {
+    expect(DEMO_OBSERVATIONS.push.rule_id).toBe(BLANKET_BASH_ALLOW);
+    expect(DEMO_OBSERVATIONS.push.title).toBe(packRule(BLANKET_BASH_ALLOW).title);
+  });
+
+  it("holds every Rule the demo's Guard Scans cover or report on the Repo, so the demo shows only Rules a Scan reports", () => {
+    const guardScans = demoRuns("team", new Date()).scans.filter((scan) => scan.module === "guard");
+    expect(guardScans).not.toHaveLength(0);
+    for (const scan of guardScans) {
+      const onRepo = scan.observations.filter((o) => o.asset.kind === "repo");
+      // The device Rule is checked on a Device, which no Guard Scan of a repo reads.
+      const covered = scan.rules.filter((rule) => rule !== DEMO_OBSERVATIONS.disk.rule_id);
+      expect(DEFAULT_PACK_RULE_IDS).toEqual(expect.arrayContaining(covered));
+      expect(covered).toEqual(expect.arrayContaining(onRepo.map((o) => o.rule_id)));
+    }
   });
 });
