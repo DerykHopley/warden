@@ -3,6 +3,7 @@
  * Team is always the session's, never the request's.
  */
 import {
+  NUL_MESSAGE,
   PatchAssessment,
   ProductInput,
   type FrameworksBody,
@@ -50,9 +51,6 @@ const FRAMEWORKS = new Map(
     },
   ]),
 );
-
-/** Postgres can't store a NUL in text and would refuse the write as a 500, so a field holding one is a 400. */
-const NUL_MESSAGE = "holds a NUL character, which Warden can't store";
 
 /**
  * A Product as a Lead sends it, with what the contracts can't check: each framework one Patch knows, each Repo URL
