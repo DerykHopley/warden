@@ -81,6 +81,13 @@ export interface HistoryEntry {
   proposal: { id: string; requested_by: Actor } | null;
 }
 
+/** One Rule and Asset pair a Scan covered, and when the newest such Scan started. */
+export interface CoverageEntry {
+  rule_id: RuleId;
+  asset: Asset;
+  last_covered_at: string;
+}
+
 /** What `propose` takes: who asks (a person or an agent), and the decision they suggest. */
 export type ProposeInput = ProposeBody & { requester: Actor };
 
@@ -153,6 +160,19 @@ export interface Findings {
     team: string,
     filter: { module: Module; kind: AssetKind; statuses: Status[] },
   ): Promise<string[]>;
+  /**
+   * The Team's Findings under any of `rules` in any of `statuses`, each parsed with Finding v1, ordered by id. Empty
+   * `rules` or `statuses` answers none, without a query.
+   */
+  listByRules(team: string, filter: { rules: RuleId[]; statuses: Status[] }): Promise<Finding[]>;
+  /**
+   * For each of `rules` and each Asset, when the newest Scan (never a Spot run) that covered the pair started, when
+   * that is at or after `since`; a pair with none isn't listed. Ordered by Rule, then Asset. Empty `rules` answers
+   * none, without a query.
+   */
+  coverageSince(team: string, filter: { rules: RuleId[]; since: Date }): Promise<CoverageEntry[]>;
+  /** When the Team's newest Spot run of `module` started, when that is at or after `since`; otherwise null. */
+  lastSpotRunAt(team: string, filter: { module: Module; since: Date }): Promise<string | null>;
   /** One Finding's history, oldest first. Throws FindingNotFound for an id the Team doesn't have. */
   history(team: string, findingId: string): Promise<HistoryEntry[]>;
   /**
@@ -387,6 +407,60 @@ export function createFindings({
             .execute()
         ).map((row) => row.asset_ref),
       );
+    },
+
+    listByRules(team, { rules, statuses }) {
+      if (rules.length === 0 || statuses.length === 0) return Promise.resolve([]);
+      return withTeam(team, async (tx) =>
+        (
+          await tx
+            .selectFrom("findings")
+            .selectAll()
+            .where("rule_id", "in", rules)
+            .where("status", "in", statuses)
+            .orderBy("id")
+            .execute()
+        ).map(fromRow),
+      );
+    },
+
+    coverageSince(team, { rules, since }) {
+      if (rules.length === 0) return Promise.resolve([]);
+      return withTeam(team, async (tx) => {
+        const rows = await tx
+          .selectFrom("scan_coverage as c")
+          .innerJoin("scans as s", (join) =>
+            join.onRef("s.team_id", "=", "c.team_id").onRef("s.id", "=", "c.scan_id"),
+          )
+          .select(["c.rule_id", "c.asset_kind", "c.asset_ref"])
+          .select((eb) => eb.fn.max("s.started_at").as("last_covered_at"))
+          .where("s.kind", "=", "scan")
+          .where("s.started_at", ">=", since)
+          .where("c.rule_id", "in", rules)
+          .groupBy(["c.rule_id", "c.asset_kind", "c.asset_ref"])
+          .orderBy("c.rule_id")
+          .orderBy("c.asset_kind")
+          .orderBy("c.asset_ref")
+          .execute();
+        return rows.map((row) => ({
+          rule_id: row.rule_id,
+          asset: { kind: row.asset_kind, ref: row.asset_ref },
+          last_covered_at: isoDateTime(row.last_covered_at),
+        }));
+      });
+    },
+
+    lastSpotRunAt(team, { module, since }) {
+      return withTeam(team, async (tx) => {
+        const row = await tx
+          .selectFrom("scans")
+          .select((eb) => eb.fn.max("started_at").as("last"))
+          .where("kind", "=", "spot_run")
+          .where("module", "=", module)
+          .where("started_at", ">=", since)
+          .executeTakeFirstOrThrow();
+        return row.last === null ? null : isoDateTime(row.last);
+      });
     },
 
     overview(team, days) {
