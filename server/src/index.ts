@@ -27,6 +27,7 @@ import { createProducts } from "./modules/patch/products.ts";
 import { patchRoutes } from "./modules/patch/routes.ts";
 import { createSaveLimit } from "./modules/patch/save-limit.ts";
 import { createPatchScan } from "./modules/patch/scan.ts";
+import { createAuditReads } from "./modules/vouch/audit.ts";
 import { VDA_ISA_2027_1 } from "./modules/vouch/catalogue.ts";
 import { createControlReviews } from "./modules/vouch/control-reviews.ts";
 import { vouchRoutes } from "./modules/vouch/routes.ts";
@@ -108,6 +109,17 @@ const startScanJob = scanJobStarterFor(config, { logger });
 const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
 // Patch's Products, which Patch's routes change and Vouch's judge `patch/` Rules on.
 const products = createProducts({ withTeam });
+// Vouch's stores and Catalogues, which its routes and the app's Vouch reads (the Overview's answer, the Level) share.
+// VDA ISA 2027.1 is read from its files (`loadCatalogue`) once, when this file imports it: a file that can't be read or
+// fails its schema stops start-up with that error, before the server listens. A Control's Verdict reads the Team's
+// Findings, and its Repo Assets and Products handed in here, as Vouch imports neither Guard nor Patch.
+const vouch = {
+  teamCatalogues: createTeamCatalogues({ withTeam }),
+  catalogues: [VDA_ISA_2027_1],
+  findings,
+  teamAssets: createTeamAssets({ repoAssets, products }),
+  controlReviews: createControlReviews({ withTeam }),
+};
 const appDeps: AppDeps = {
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
@@ -166,18 +178,11 @@ const appDeps: AppDeps = {
       logger,
       saveLimit: createSaveLimit(),
     }),
-    // Vouch's Catalogues. VDA ISA 2027.1 is read from its files (`loadCatalogue`) once, when this file imports it: a
-    // file that can't be read or fails its schema stops start-up with that error, before the server listens. A
-    // Control's Verdict reads the Team's Findings, and its Repo Assets and Products handed in here, as Vouch imports
-    // neither Guard nor Patch.
-    vouchRoutes({
-      teamCatalogues: createTeamCatalogues({ withTeam }),
-      catalogues: [VDA_ISA_2027_1],
-      findings,
-      teamAssets: createTeamAssets({ repoAssets, products }),
-      controlReviews: createControlReviews({ withTeam }),
-    }),
+    // Vouch's Catalogues, Controls and reviews.
+    vouchRoutes(vouch),
   ],
+  // Vouch's answer to "Are we ready for the audit?" and the Audit-ready fact, from the same stores as its routes.
+  audit: createAuditReads(vouch),
   startScanJob,
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),

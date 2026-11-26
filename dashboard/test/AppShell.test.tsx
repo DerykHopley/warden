@@ -26,6 +26,7 @@ const overview = (team = "org_a") =>
   json(200, {
     team,
     level: "quick",
+    audit: { answer: "no_catalogue", gaps: 0, waiting: 0, controls: [] },
     last_scan_at: null,
     has_findings: false,
     period_days: 30,

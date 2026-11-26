@@ -18,7 +18,7 @@ import { pathId } from "../../path-id.ts";
 import { refusedBody } from "../../refused-body.ts";
 import type { Catalogue, Control } from "./catalogue.ts";
 import type { ControlReviews, StoredControlReview } from "./control-reviews.ts";
-import { judgeControls, type JudgedControl, type VouchReads } from "./controls.ts";
+import { judgeCatalogue, judgeControls, type JudgedControl, type VouchReads } from "./controls.ts";
 import { reviewStateOf } from "./review-state.ts";
 import type { TeamAssets } from "./team-assets.ts";
 import type { TeamCatalogueChoice, TeamCatalogues } from "./team-catalogues.ts";
@@ -133,18 +133,12 @@ export function vouchRoutes({
       if (catalogue === undefined) return c.json({ error: "No such Catalogue" }, 404);
       const team = c.get("team");
       const on = await isOn(team, catalogue);
-      const judged = await judgeControls(
-        { findings, teamAssets },
+      const controls = await judgeCatalogue(
+        { findings, teamAssets, controlReviews },
         team,
-        catalogue.judgedControls,
+        catalogue,
         new Date(),
       );
-      // Only each Control's newest review counts for its review state, so only those are read.
-      const newest = await controlReviews.newest(team, catalogue.id);
-      const controls = judged.map((control) => {
-        const review = newest.find(({ controlRef }) => controlRef === control.ref);
-        return withReviewState(control, review === undefined ? [] : [controlReviewOf(review)]);
-      });
       return c.json({ catalogue: catalogue.id, on, controls } satisfies ControlsBody);
     });
 

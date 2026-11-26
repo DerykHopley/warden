@@ -3,7 +3,9 @@
 // read, never stored. Every read goes through `findings` under `withTeam`, so a Team sees only its own (story 10).
 import type { ControlEvidence, ControlVerdict, Finding, RuleId } from "@warden/contracts";
 import { OVERVIEW_PERIOD_DAYS, type Findings } from "../../findings/index.ts";
-import type { Control } from "./catalogue.ts";
+import type { Catalogue, Control } from "./catalogue.ts";
+import type { ControlReviews } from "./control-reviews.ts";
+import { reviewStateOf } from "./review-state.ts";
 import { JUDGE_SPOT_RUN_CONTROLS, RULE_CONTROLS } from "./rule-controls.ts";
 import type { TeamAssets } from "./team-assets.ts";
 import { kindOf, workOutVerdict, type WorkedOutVerdict } from "./verdict.ts";
@@ -60,6 +62,33 @@ export async function judgeControls(
       reason: worked.reason,
       evidence: evidenceOf(worked, open),
     };
+  });
+}
+
+/**
+ * Each of `catalogue`'s judged Controls, in its order, judged for `team` as of `now`, with its review state from its
+ * newest review: what `GET /api/vouch/catalogues/:id/controls` lists, and what the Overview's answer reads.
+ */
+export async function judgeCatalogue(
+  {
+    findings,
+    teamAssets,
+    controlReviews,
+  }: { findings: VouchReads; teamAssets: TeamAssets; controlReviews: ControlReviews },
+  team: string,
+  catalogue: Catalogue,
+  now: Date,
+): Promise<ControlVerdict[]> {
+  const judged = await judgeControls({ findings, teamAssets }, team, catalogue.judgedControls, now);
+  // Only each Control's newest review counts for its review state, so only those are read.
+  const newest = await controlReviews.newest(team, catalogue.id);
+  return judged.map((control) => {
+    const review = newest.find(({ controlRef }) => controlRef === control.ref);
+    const reviews =
+      review === undefined
+        ? []
+        : [{ worked_out_verdict: review.workedOutVerdict, verdict: review.verdict }];
+    return { ...control, ...reviewStateOf(control.verdict, reviews) };
   });
 }
 

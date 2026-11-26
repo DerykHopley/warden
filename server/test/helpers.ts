@@ -8,6 +8,7 @@ import type pg from "pg";
 import {
   fingerprint,
   type Asset,
+  type AuditAnswer,
   type Finding,
   type HealthBody,
   type Module,
@@ -16,7 +17,7 @@ import {
 } from "@warden/contracts";
 import type { Hono } from "hono";
 import { sql } from "kysely";
-import { createApp, type AppEnv, type MountRoutes } from "../src/app.ts";
+import { createApp, type AppEnv, type AuditReads, type MountRoutes } from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import {
   createFindings,
@@ -29,7 +30,7 @@ import { createLogger, type Logger } from "../src/log.ts";
 import { createMembers, type ClerkOrganizations, type Members } from "../src/members.ts";
 import type { HookTables } from "../src/modules/guard/hook-settings.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
-import type { RepoAssets } from "../src/modules/guard/repo-assets.ts";
+import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
 import { createPatchAssessment } from "../src/modules/patch/assessment.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
@@ -37,6 +38,12 @@ import { createPatchRefresh, type PatchRefresh } from "../src/modules/patch/refr
 import { patchRoutes } from "../src/modules/patch/routes.ts";
 import { createSaveLimit, type SaveLimit } from "../src/modules/patch/save-limit.ts";
 import { createPatchScan, PATCH_RULE, type PatchScan } from "../src/modules/patch/scan.ts";
+import { createAuditReads } from "../src/modules/vouch/audit.ts";
+import { VDA_ISA_2027_1 } from "../src/modules/vouch/catalogue.ts";
+import { createControlReviews } from "../src/modules/vouch/control-reviews.ts";
+import { vouchRoutes } from "../src/modules/vouch/routes.ts";
+import { createTeamAssets } from "../src/modules/vouch/team-assets.ts";
+import { createTeamCatalogues } from "../src/modules/vouch/team-catalogues.ts";
 import {
   createScans,
   type AssetChecks,
@@ -429,6 +436,38 @@ const noScans: Scans = {
   move: noDatabase,
 };
 
+/** Vouch's answer for a Team with no Catalogue on. */
+export const NO_CATALOGUE: AuditAnswer = {
+  answer: "no_catalogue",
+  gaps: 0,
+  waiting: 0,
+  controls: [],
+};
+
+/** Vouch's reads for a test that doesn't look at Vouch: no Catalogue on, so never Audit-ready. */
+const noCatalogueOn: AuditReads = {
+  answer: async () => NO_CATALOGUE,
+  auditReady: async () => false,
+};
+
+/**
+ * Vouch as the start-up file wires it, on `withTeam`: its routes, and the app's Vouch reads from the same stores and
+ * VDA ISA 2027.1, for `testApp`'s `moduleRoutes` and `audit`.
+ */
+export function vouchWiring(withTeam: WithTeam): { routes: MountRoutes; audit: AuditReads } {
+  const vouch = {
+    teamCatalogues: createTeamCatalogues({ withTeam }),
+    catalogues: [VDA_ISA_2027_1],
+    findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
+    teamAssets: createTeamAssets({
+      repoAssets: createRepoAssets({ withTeam }),
+      products: createProducts({ withTeam }),
+    }),
+    controlReviews: createControlReviews({ withTeam }),
+  };
+  return { routes: vouchRoutes(vouch), audit: createAuditReads(vouch) };
+}
+
 /** A Clerk seam for a test that doesn't look at Clerk: every call is refused (a Role change answers 502; a join logs it). */
 const noClerk: ClerkOrganizations = {
   setMembershipRole: () =>
@@ -460,6 +499,8 @@ export function testApp(options: {
   moduleRoutes?: MountRoutes[];
   /** Each module's check of a start's Assets; none by default, so any Assets the body's shape allows are queued. */
   assetChecks?: AssetChecks;
+  /** Vouch's reads for the Overview and the Level; by default no Catalogue on and not Audit-ready, so Quick. */
+  audit?: AuditReads;
 }) {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
@@ -488,6 +529,7 @@ export function testApp(options: {
       startScanJob: options.startScanJob,
       moduleRoutes: options.moduleRoutes ?? [],
       assetChecks: options.assetChecks ?? {},
+      audit: options.audit ?? noCatalogueOn,
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),
       frontendApiHost: FRONTEND_API_HOST,
