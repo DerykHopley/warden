@@ -20,6 +20,7 @@ import {
   type ReactNode,
 } from "react";
 import { sentence, tryAgainIn, type GetToken } from "./api.ts";
+import { AssetRef } from "./AssetRef.tsx";
 import { dayAndTimeWords, dayWords } from "./date-words.ts";
 import {
   approveProposal,
@@ -132,8 +133,8 @@ export function DetailCard(props: {
   getToken: GetToken;
   /** The focused Finding's Unconfirmed-fix candidates the page's list holds: Mark moved's choices. */
   candidates: Finding[];
-  /** The Asset's words from the page (a Product's name); null shows the Asset's ref. */
-  assetName: string | null;
+  /** The Asset's Product name from the page (`productName`), a link to Products; null shows the Asset's ref. */
+  productName: string | null;
   /** The card's ✕: clears the page's focus. */
   onClear: () => void;
   /** Asks for the Proposals again, after they couldn't load. */
@@ -479,7 +480,7 @@ export function DetailCard(props: {
         <dt>Asset</dt>
         <dd>
           {ASSET_KIND_WORDS[finding.asset.kind]}{" "}
-          <span className="asset-ref">{props.assetName ?? finding.asset.ref}</span>
+          <AssetRef asset={finding.asset} productName={props.productName} />
         </dd>
         <dt>Location</dt>
         <dd>

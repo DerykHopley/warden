@@ -1,7 +1,8 @@
 // Stories 1 and 2: a Member sees the Team's Products, with their Repo URLs and the frameworks they use, and nothing on
 // the page that changes them; an Admin adds a Product on the page and changes it. In Cedar, the Team with no demo
-// Findings.
+// Findings. And a Product Finding's Product name links to that Product here (#210).
 import type { ProductInput } from "@warden/contracts";
+import { cedarCveFinding, selectCveRow } from "./cedar-cve.ts";
 import {
   CEDAR,
   CHAT_ASSISTANT,
@@ -10,6 +11,7 @@ import {
   expect,
   HEDY,
   KATHERINE,
+  LANGCHAIN_SERVICE,
   removeProducts,
   test,
 } from "./session.ts";
@@ -74,6 +76,26 @@ test("a Product's save opens its CVE Findings from the loaded snapshot, on the T
       .filter({ hasText: /^CVE-\d{4}-\d+/ })
       .first(),
   ).toBeVisible();
+});
+
+test("a Member follows a CVE Finding's Product name from its card to that Product on Products", async ({
+  page,
+  signIn,
+}) => {
+  const finding = await cedarCveFinding();
+  await signIn(KATHERINE, CEDAR);
+  await page.goto("/findings");
+  await selectCveRow(page, finding);
+
+  await page
+    .locator(".detail-card")
+    .getByRole("link", { name: LANGCHAIN_SERVICE.name, exact: true })
+    .click();
+
+  await expect(page).toHaveURL(new RegExp(`/products#product-${finding.asset.ref}$`));
+  const name = page.getByRole("heading", { level: 2, name: LANGCHAIN_SERVICE.name, exact: true });
+  await expect(name).toBeFocused();
+  await expect(name).toBeInViewport();
 });
 
 /** This test's own Products, by name, so it never changes the Product another spec reads. */

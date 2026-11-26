@@ -178,6 +178,7 @@ button:focus-visible,
 .setup-link a:focus-visible,
 .how-to summary:focus-visible,
 .repo-urls a:focus-visible,
+.asset-link:focus-visible,
 .patch-links a:focus-visible,
 .fix-pr-link a:focus-visible,
 .panel-divider:focus-visible,
@@ -880,6 +881,17 @@ button[aria-busy="true"],
 .finding-title {
   display: block;
   font-weight: 600;
+}
+
+/* A Product Asset's name in the table and the detail card (#210): a link to its entry on Products, a 44px target. A
+   long name wraps by the table's `.asset-ref` rule and the detail card's own `overflow-wrap`. */
+.asset-link {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  max-width: 100%;
+  color: var(--accent);
 }
 
 .rule-id,

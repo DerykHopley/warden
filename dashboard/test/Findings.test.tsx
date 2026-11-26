@@ -457,6 +457,11 @@ describe("a Product Asset's name", () => {
   /** The Asset cell of the row titled `title`. */
   const assetCell = (title: string) =>
     rowButton(title).closest("tr")?.querySelector(".asset-col")?.textContent;
+  /** The table's link on Shop web's name, once the table and the Products have come. */
+  const shopWebLink = async () =>
+    within(await screen.findByRole("table", { name: "All Findings" })).findByRole("link", {
+      name: "Shop web",
+    });
 
   it("shows the Product's name and Product in its row and card, not the id; a ref no Product has stays", async () => {
     open("/findings", onProduct, { products: () => products() });
@@ -465,6 +470,31 @@ describe("a Product Asset's name", () => {
     expect(within(cardOf(LODASH)).getByText("Product")).toBeInTheDocument();
     expect(screen.queryByText(PRODUCT_ID)).not.toBeInTheDocument();
     expect(assetCell(MINIMIST)).toBe("shopProduct");
+  });
+
+  it("links the Product's name in its row to its entry on Products; a ref no Product has, and a card, link nothing", async () => {
+    open("/findings", onProduct, { products: () => products() });
+    const link = await shopWebLink();
+    expect(link).toHaveAttribute("href", `/products#product-${PRODUCT_ID}`);
+    expect(link).toHaveClass("asset-ref");
+    expect(within(table()).getAllByRole("link")).toEqual([link]);
+    // A Start here card is a button: it holds no link.
+    expect(within(cardOf(LODASH)).queryByRole("link")).toBeNull();
+  });
+
+  it("follows the link without selecting its row", async () => {
+    const { panel } = open("/findings", onProduct, { products: () => products() });
+    const link = await shopWebLink();
+    // jsdom doesn't load another page: the link's own way there is stopped before it starts.
+    const stay = (event: Event) => event.preventDefault();
+    window.addEventListener("click", stay, true);
+    try {
+      await userEvent.click(link);
+    } finally {
+      window.removeEventListener("click", stay, true);
+    }
+    expect(panel.open).not.toHaveBeenCalled();
+    expect(current()).toEqual([]);
   });
 
   it.each<[string, Routes]>([
@@ -476,6 +506,7 @@ describe("a Product Asset's name", () => {
     await screen.findByRole("table");
     expect(assetCell(LODASH)).toBe(`${PRODUCT_ID}Product`);
     expect(within(cardOf(LODASH)).getByText(PRODUCT_ID)).toHaveClass("asset-ref");
+    expect(within(table()).queryAllByRole("link")).toEqual([]);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
   });
@@ -487,16 +518,16 @@ describe("a Product Asset's name", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("gives the panel the focused Finding's words: its Product's name, or its ref", async () => {
+  it("gives the panel the focused Finding's Product name, or null when no Product has its ref", async () => {
     const { panel } = open(`/findings?finding=${ID.lodash}`, onProduct, {
       products: () => products(),
     });
-    const assetName = () =>
-      (panel.setContext.mock.lastCall?.[0] as { assetName: string | null } | null)?.assetName;
-    await vi.waitFor(() => expect(assetName()).toBe("Shop web"));
+    const productName = () =>
+      (panel.setContext.mock.lastCall?.[0] as { productName: string | null } | null)?.productName;
+    await vi.waitFor(() => expect(productName()).toBe("Shop web"));
 
     await userEvent.click(rowButton(MINIMIST));
-    expect(assetName()).toBe("shop");
+    expect(productName()).toBeNull();
   });
 });
 
