@@ -120,7 +120,8 @@ export const installUrl = (slug: string) =>
  * GitHub's sign-in for the App, with PKCE (S256). Its `redirect_uri` is this page's own origin plus
  * `/setup/github/callback`, so a sign-in started on an owner preview comes back to the preview, where this tab's
  * attempt is kept (#275). GitHub accepts it only when it's one of the App's registered callback URLs; otherwise it
- * refuses with `redirect_uri_mismatch`, which the callback page shows.
+ * refuses with `redirect_uri_mismatch`. GitHub's docs don't say where a GitHub App's refusal lands: on GitHub, or
+ * on one of the App's registered callback pages (the live dashboard's or a preview's), which shows the code.
  */
 export function signInUrl(clientId: string, state: string, codeChallenge: string): string {
   const url = new URL("https://github.com/login/oauth/authorize");

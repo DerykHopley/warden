@@ -13,12 +13,10 @@ readonly REGION=europe-west1
 readonly RELEASE_PREFIX=warden-rel-
 readonly DAILY_JOB=warden-daily-expiry
 readonly DAILY_ACCOUNT=warden-daily
-# The Scan Job (ADR 0009): the service starts one execution per Scan, naming it by WARDEN_SCAN_JOB.
+# The Scan Job (ADR 0009): the service starts one execution per Scan, naming it by WARDEN_SCAN_JOB. An owner preview's
+# Scan Job (#275) is named by cloud-run-deploy.sh's names_for.
 readonly SCAN_JOB=warden-scan
 readonly SCAN_ACCOUNT=warden-scan
-# An owner preview's Scan Job (#275), shared by every preview: it runs the image of the last preview deployed.
-readonly PREVIEW_SCAN_JOB=warden-scan-preview
-readonly PREVIEW_SCAN_ACCOUNT=warden-preview-scan
 
 # Secret Manager versions the deploys read, one per secret: the only place a version number lives. gcp-setup.sh makes
 # each generated password as version 1; check a hand-made secret's with `gcloud secrets versions list <secret>`.
@@ -110,7 +108,7 @@ wait_for_health() {
 # <job> <image> <account> <script> <database> <user> <secrets> [KEY=VALUE...] [--flag...]: the Job runs <image> as
 # <account>, `node <script>` on <database> as <user>, with one retry, the secrets <secrets> (a dict), any further plain
 # value given and any flag given (each starts with --). Its whole configuration is set afresh from here: the same on a
-# release and a rollback. Returns gcloud's status.
+# release and a rollback, and for the preview Scan Job on each preview. Returns gcloud's status.
 update_job() {
   local job=$1 image=$2 account=$3 script=$4 database=$5 user=$6 secrets=$7 env=()
   shift 7
@@ -142,23 +140,25 @@ update_daily_job() {
     "$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")"
 }
 
-# [job]: a Scan Job's resource name (the live one's by default), as a revision's WARDEN_SCAN_JOB holds it.
-scan_job_name() { echo "projects/$GCP_PROJECT_ID/locations/$REGION/jobs/${1:-$SCAN_JOB}"; }
+# <job>: a Scan Job's resource name, as a revision's WARDEN_SCAN_JOB holds it.
+scan_job_name() { echo "projects/$GCP_PROJECT_ID/locations/$REGION/jobs/$1"; }
 
-# <image> [preview]: the Scan Job (ADR 0009) runs that image, for up to an hour a task. Each execution's override holds
-# only a Scan id and a Team; the Job works inside that Team, as warden_app, so it gets the app password, never the admin
-# password or a Clerk key. It reads the Team's repos as the GitHub app (#168): the client id
-# (WARDEN_GITHUB_APP_CLIENT_ID, which each caller requires) and the private key, never the client secret, so it can't
-# sign anyone in to GitHub. With `preview`, the preview Scan Job (#275) instead: the same, as warden-preview-scan, on
-# warden_preview as warden_preview_app. Returns gcloud's status.
+# <image> [preview <job> <account> <database> <user> <password secret>]: a Scan Job (ADR 0009) runs that image, for up
+# to an hour a task. With the image alone, the live one: warden-scan as warden-scan, on warden as warden_app (a release
+# and a rollback). With preview, the preview Scan Job (#275) and the names the deploy's names_for gives it. Each
+# execution's override holds only a Scan id and a Team; the Job works inside that Team, as the app role, so it gets the
+# app password, never the admin password or a Clerk key. It reads the Team's repos as the GitHub app (#168): the
+# client id (WARDEN_GITHUB_APP_CLIENT_ID, which each caller requires) and the private key, never the client secret, so
+# it can't sign anyone in to GitHub. Any other arguments stop the script before a gcloud call. Returns gcloud's status.
 update_scan_job() {
   # Read here, not inside the $(...) below, so an unset one stops the script (set -u) rather than only the subshell.
   local client_id=$WARDEN_GITHUB_APP_CLIENT_ID app_password github_key
   local job=$SCAN_JOB account=$SCAN_ACCOUNT database=warden user=warden_app password_secret=warden-db-app-password
-  if [[ ${2-} == preview ]]; then
-    job=$PREVIEW_SCAN_JOB account=$PREVIEW_SCAN_ACCOUNT database=warden_preview user=warden_preview_app
-    password_secret=warden-db-preview-app-password
-  fi
+  case $#:${2-} in
+    1:) ;;
+    7:preview) job=$3 account=$4 database=$5 user=$6 password_secret=$7 ;;
+    *) fail "update_scan_job takes an image, alone or with preview and the Job's five names, not: ${*:2}" ;;
+  esac
   app_password=$(pinned "$password_secret") || exit 1
   github_key=$(pinned warden-github-app-private-key) || exit 1
   update_job "$job" "$1" "$account" server/src/scan-job.ts "$database" "$user" \

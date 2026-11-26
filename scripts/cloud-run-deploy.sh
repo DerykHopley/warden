@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # Deploys one Warden image to Cloud Run, in three steps: migrate the database and load Patch's CVE snapshot with a
 # Cloud Run job, deploy a revision with the whole configuration set afresh, and wait for its /api/health to answer
-# 200. Each mode first checks that its Scan Job is there, and after the health gate gives that Job the image; a release
-# then moves all of the service's traffic to the revision, and gives the daily Job the image. README.md's "Owner
-# previews" and "Releasing" say when each runs and what it shows.
+# 200. Each mode first checks that its Scan Job is there, and gives that Job the image: a preview after the migration,
+# before its revision; a release after the health gate. A release then moves all of the service's traffic to the
+# revision, and gives the daily Job the image. README.md's "Owner previews" and "Releasing" say when each runs and what
+# it shows.
 #
 # Usage: scripts/cloud-run-deploy.sh <image> preview <name>
 #        scripts/cloud-run-deploy.sh <image> release
 #        preview <name>: the warden-preview service, a revision tagged <name> that gets no traffic, on the
-#        warden_preview database, as the preview accounts only; after its health gate, the preview Scan Job
-#        warden-scan-preview's image (every preview shares the one Job, so it runs the last preview's image). <name>
-#        is a Cloud Run tag: 1 to 20 lowercase letters, digits and hyphens, starting with a letter and not ending in a
-#        hyphen (20 keeps the revision name short).
+#        warden_preview database, as the preview accounts only; after the migration and before the revision, the
+#        preview Scan Job warden-scan-preview's image (every preview shares the one Job, so it runs the last preview's
+#        image). It prints the tagged URL in its deterministic form,
+#        https://<name>---warden-preview-<project-number>.europe-west1.run.app, the one to open and register on the
+#        GitHub app. <name> is a Cloud Run tag: 1 to 20 lowercase letters, digits and hyphens, starting with a letter
+#        and not ending in a hyphen (20 keeps the revision name short).
 #        release: the warden service, a revision tagged candidate on the warden database, as the live accounts only;
 #        after its health gate, the Scan Job warden-scan's image, then 100% of traffic by revision name (the release
 #        it replaces tagged previous, for a rollback), then the daily Job warden-daily-expiry's image. Run in a
@@ -20,8 +23,8 @@
 #        Each mode's revision names its Scan Job in WARDEN_SCAN_JOB.
 # Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>), VITE_CLERK_PUBLISHABLE_KEY (public) and
 #        WARDEN_GITHUB_APP_CLIENT_ID (the read-only GitHub app's client id, public; a preview shares the live app),
-#        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT
-#        (default 1), which GitHub Actions sets, name the revision. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health gate.
+#        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT (default 1), which GitHub
+#        Actions sets, name the revision. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the health gate.
 # Needs: gcloud signed in as an account that may deploy the mode's job and service and act as its accounts; curl; jq;
 #        git, for a release.
 # The secret versions it pins, and what it shares with the rollback, are in scripts/lib/cloud-run.sh.
@@ -33,11 +36,10 @@ readonly NAME_RULE="1 to 20 lowercase letters, digits and hyphens, starting with
 # shellcheck source-path=SCRIPTDIR source=lib/cloud-run.sh
 source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-run.sh"
 
-# One table of names per mode: the service and its account, the migration job and its account, the Scan Job, the
-# database, its role set and roles, the two password secrets, the revision suffix's start, and which of the service's
-# URLs a Clerk
-# session token may be made for (PARTIES_FROM: the tag's, for a preview reached only there; the service's own, for a
-# release that takes the traffic).
+# One table of names per mode: the service and its account, the migration job and its account, the Scan Job and its
+# account, the database, its role set and roles, the two password secrets, the revision suffix's start, and which of
+# the service's URLs a Clerk session token may be made for (PARTIES_FROM: the tag's, for a preview reached only there;
+# the service's own, for a release that takes the traffic).
 names_for() {
   case $1 in
     preview)
@@ -45,7 +47,8 @@ names_for() {
       RUN_ACCOUNT=warden-preview-run
       JOB=warden-migrate-preview
       MIGRATE_ACCOUNT=warden-preview-migrate
-      MODE_SCAN_JOB=$PREVIEW_SCAN_JOB
+      MODE_SCAN_JOB=warden-scan-preview
+      MODE_SCAN_ACCOUNT=warden-preview-scan
       DATABASE=warden_preview
       DATABASE_ROLES=preview
       APP_USER=warden_preview_app
@@ -61,6 +64,7 @@ names_for() {
       JOB=warden-migrate
       MIGRATE_ACCOUNT=warden-migrate
       MODE_SCAN_JOB=$SCAN_JOB
+      MODE_SCAN_ACCOUNT=$SCAN_ACCOUNT
       DATABASE=warden
       DATABASE_ROLES=live
       APP_USER=warden_app
@@ -196,16 +200,22 @@ main() {
   SUFFIX="$SUFFIX_START-${GITHUB_SHA:0:7}-$GITHUB_RUN_NUMBER-${GITHUB_RUN_ATTEMPT:-1}"
 
   # The service's URLs and serving revision, read before the deploy: the revision's CLERK_AUTHORIZED_PARTIES must
-  # name the URLs it's reached at.
-  local described service=() tagged=() url
+  # name the URLs it's reached at. The tagged URL to open is the deterministic one, from the project number in the
+  # service's deterministic URL (https://<service>-<project-number>.<region>.run.app): the one the README tells the
+  # owner to register on the GitHub app. status.url is usually that one, but its hash form is a URL too.
+  local described service=() tagged=() url open_url=
   described=$(describe_service "$SERVICE") || fail "couldn't read $SERVICE's URLs"
   while IFS= read -r url; do
     if [[ -n $url ]]; then
       service+=("$url")
       tagged+=("$(tag_url "$TAG" "$url")")
+      if [[ -z $open_url && $url =~ ^https://$SERVICE-[0-9]+\.$REGION\.run\.app$ ]]; then
+        open_url=$(tag_url "$TAG" "$url")
+      fi
     fi
   done < <(service_urls "$described")
   [[ ${#service[@]} -gt 0 ]] || fail "$SERVICE reports no URL"
+  open_url=${open_url:-${tagged[0]}}
   local parties
   parties=$(
     IFS=,
@@ -236,13 +246,17 @@ main() {
     fail "the Scan Job $MODE_SCAN_JOB isn't there: rerun scripts/gcp-setup.sh. Nothing was migrated or deployed"
 
   migrate
+  # A preview's Scan Job gets the image before the revision, whose tagged URL can start Scans as soon as it's up.
+  if [[ $mode == preview ]]; then
+    update_scan_job "$IMAGE" preview "$MODE_SCAN_JOB" "$MODE_SCAN_ACCOUNT" "$DATABASE" "$APP_USER" \
+      "$APP_PASSWORD_SECRET" ||
+      fail "updating the Scan Job $MODE_SCAN_JOB failed, so no revision was deployed. Push to the branch again"
+  fi
   deploy_revision "$parties"
   wait_for_health "${tagged[0]}" || fail "the revision gets no traffic"
 
   if [[ $mode == preview ]]; then
-    update_scan_job "$IMAGE" preview ||
-      fail "preview \`$TAG\` is up at ${tagged[0]}, but updating the Scan Job $PREVIEW_SCAN_JOB failed; its Scans run an older image. Push to the branch again"
-    say "Preview \`$TAG\` is up, with no traffic: ${tagged[0]}. $PREVIEW_SCAN_JOB runs its image."
+    say "Preview \`$TAG\` is up, with no traffic: $open_url. $MODE_SCAN_JOB runs its image."
     return 0
   fi
   update_scan_job "$IMAGE" ||

@@ -220,7 +220,7 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 | Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches. The provider maps each token to its repository id and branch kind (`attribute.deploy`, such as `<repo-id>:main`): only this repository's `main` tokens may act as `warden-deploy`, and only its `preview/*` tokens as `warden-preview-deploy`, so a token from another repository can never match, even through another provider in the pool |
 | The services and the job | Cloud Run services `warden` (as `warden-run`, at most 2 instances) and `warden-preview` (as `warden-preview-run`, at most 1 instance), each public with Google's placeholder image, and the Cloud Run job `warden-migrate-preview` (as `warden-preview-migrate`, with Google's placeholder job image). The script makes them because the deploy accounts can't make a service public, and `warden-preview-deploy`'s roles are on the preview service and job themselves. Run again, it puts each one's service account, instance limit and public access back, keeping the image it runs. Sign-in is Clerk's job |
 | The daily Job and its trigger | the Cloud Run job `warden-daily-expiry` (as `warden-daily`, with Google's placeholder job image until a release gives it Warden's). The only account bound on the Job is `warden-scheduler` (`roles/run.invoker`, which holds `run.jobs.run`); accounts with `roles/run.developer` on the project, such as `warden-deploy`, and the project's owner can start it too, as Google's [Cloud Run IAM roles](https://docs.cloud.google.com/run/docs/reference/iam/roles) give each of them `run.jobs.run`. Then the Cloud Scheduler job `warden-daily-expiry` in `europe-west1`, which runs it daily at `0 4 * * *` (`Etc/UTC`, after the 03:00 backup) by a `POST` to the Job's `:run` URL with an OAuth token as `warden-scheduler`. Run again, it puts the Job's service account back, keeping its image, and updates the Scheduler job to these values. Cloud Scheduler is free for up to 3 jobs per billing account |
-| The Scan Jobs | the Cloud Run job `warden-scan` (as `warden-scan`, with Google's placeholder job image until a release gives it Warden's), which the `warden` service starts once per Scan with the Scan's id and Team as its only override (ADR 0009). `warden-run` gets `roles/run.jobsExecutorWithOverrides` on this Job only: `roles/run.invoker` can't pass an override. Then the owner previews' Scan Job `warden-scan-preview` (as `warden-preview-scan`, the placeholder image until a preview gives it Warden's), which `warden-preview-run` alone may start with an override and `warden-preview-deploy` alone may update. No live account has a role on it, and no preview account on `warden-scan`. Run again, it puts each Job's service account back, keeping its image. An existing project gets the Jobs and their accounts by running the script again |
+| The Scan Jobs | the Cloud Run job `warden-scan` (as `warden-scan`, with Google's placeholder job image until a release gives it Warden's), which the `warden` service starts once per Scan with the Scan's id and Team as its only override (ADR 0009). `warden-run` gets `roles/run.jobsExecutorWithOverrides` on this Job only: `roles/run.invoker` can't pass an override. Then the owner previews' Scan Job `warden-scan-preview` (as `warden-preview-scan`, the placeholder image until a preview gives it Warden's), which `warden-preview-run` may start with an override and `warden-preview-deploy` may update: the only roles bound on it. No preview account has a role on `warden-scan`. No live account is bound on `warden-scan-preview` either, but `warden-deploy`'s `roles/run.developer` on the project reaches it, as it reaches the daily Job: it can start and update it (`run.jobs.run`, `run.jobs.update`), and the project's owner can too. This is accepted (threat model, R3): `warden-deploy` already updates every live Job, and narrowing its role would mean binding it Job by Job. Run again, it puts each Job's service account back, keeping its image. An existing project gets the Jobs and their accounts by running the script again |
 
 **The service accounts and what each may do:**
 
@@ -346,18 +346,19 @@ replace the preview.
    image, as `warden-preview-migrate`, run `node server/src/migrate.ts`, then the CVE snapshot loader
    `node server/src/modules/patch/cve-snapshot.ts`, on `warden_preview` in one execution, and wait for it. A failed
    migration or load stops the deploy before any revision exists.
-5. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
+5. **The Scan Job:** `warden-scan-preview` gets the image and its settings afresh, as a release does for
+   `warden-scan`, but as `warden-preview-scan` on `warden_preview` as `warden_preview_app`, with the preview app
+   password and the GitHub app's private key, both pinned (never its client secret). It comes before the revision, so
+   the revision's first Scan runs this image. If this fails, the run fails naming the Job and no revision is deployed:
+   push again.
+6. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
    `warden-preview-run`, tagged `<name>`, with **no traffic**. Every run sets the revision's env vars and secrets
    afresh, so none carries over from an earlier revision. Its `WARDEN_SCAN_JOB` names
    `projects/<project-id>/locations/europe-west1/jobs/warden-scan-preview`, which "Scan now" and a GitHub link start,
    and it gets the read-only GitHub app's settings as a release does: `GITHUB_APP_CLIENT_ID` from the repository
    variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned.
-6. **Health gate:** call `/api/health` on the tag's URL for up to about 90 seconds (a cold start) until it answers
+7. **Health gate:** call `/api/health` on the tag's URL for up to about 90 seconds (a cold start) until it answers
    200, or fail the run.
-7. **The Scan Job:** `warden-scan-preview` gets the image and its settings afresh, as a release does for
-   `warden-scan`, but as `warden-preview-scan` on `warden_preview` as `warden_preview_app`, with the preview app
-   password and the GitHub app's private key, both pinned (never its client secret). If this fails, the run fails
-   naming the Job, with the revision already up: its Scans run an older image until you push again.
 
 **One Scan Job for every preview.** All previews share `warden-scan-preview`, which runs the image of the last
 preview deployed. Two previews of different code side by side both start Scans on the last-deployed one's image.
@@ -366,13 +367,18 @@ preview deployed. Two previews of different code side by side both start Scans o
 never cancelled halfway. Builds run side by side. While one preview deploys, GitHub keeps only the newest waiting
 behind it: an older waiting preview is cancelled (the run shows it) and must be pushed again.
 
-**Its URL** is `https://<name>---warden-preview-<project-number>.europe-west1.run.app`. The run prints it at the end
-of the deploy step's log and on the run's summary page. Sign-in uses Clerk's development instance.
+**Its URL** is `https://<name>---warden-preview-<project-number>.europe-west1.run.app`, the same for every push to
+the branch. The run prints it at the end of the deploy step's log and on the run's summary page: open that one, and
+register that one on the GitHub app (below). Cloud Run also gives the revision a second, hashed URL; it serves the
+same revision, but its callback isn't registered, so linking GitHub fails there. Sign-in uses Clerk's development
+instance.
 
 **Linking GitHub on a preview.** Previews share the live read-only GitHub app. Its sign-in sends GitHub the page's
 own origin plus `/setup/github/callback` as `redirect_uri`, and GitHub refuses one that isn't among the app's
-callback URLs (`redirect_uri_mismatch`, which the callback page shows). So, once per preview name, add that
-preview's callback URL to the app (GitHub, Settings, Developer settings, GitHub Apps, the app, "Callback URL", "Add
+callback URLs with `redirect_uri_mismatch`. GitHub's docs don't say where a GitHub App's refusal lands: it may show
+on GitHub, or on one of the app's registered callback pages (the live dashboard's or a preview's), which says
+"GitHub refused the sign-in (redirect_uri_mismatch)". So, once per preview name, add that preview's callback URL to
+the app (GitHub, Settings, Developer settings, GitHub Apps, the app, "Callback URL", "Add
 Callback URL"), keeping the live one. The Ready preview's default name is `guard`:
 
 ```text
