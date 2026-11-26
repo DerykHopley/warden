@@ -171,6 +171,15 @@ describe("guard/blanket-bash-allow", () => {
     );
   });
 
+  it("cuts a long broad allow its summary names to 64 characters", () => {
+    const entry = `Bash(${"/opt/tools".repeat(8)}/cat:*)`;
+    const text = settings({ allow: [entry] });
+
+    expect(ofRule(".claude/settings.json", text, BLANKET)[0]!.evidence.summary).toBe(
+      `1 broad Bash allow (${entry.slice(0, 63)}…) in .claude/settings.json, on line 5. To fix: ${packRule(BLANKET).fix}`,
+    );
+  });
+
   it("reports a broad allow in a nested folder's settings.local.json at that path", () => {
     const observations = ofRule(
       "apps/web/.claude/settings.local.json",
