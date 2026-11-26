@@ -1,8 +1,8 @@
 // Guard's agent-config Rules (Guard spec, story 3): `agentConfigCheck(asset).see(file)` reads a Claude Code settings
-// file's allow rules, `defaultMode` and hook commands, and any other text file for the flag that skips permission
-// checks, and answers at most one Observation per Rule for the file; `end()` answers the whole-repo Rules from the root
-// settings files. The flag and the mode are built here by joining their parts, so this file never holds a whole one
-// for a Guard Scan of Warden's own repo to report.
+// file's allow rules, `defaultMode` and the commands it runs (hooks, `statusLine`, `apiKeyHelper`), and any other text
+// file for the flag that skips permission checks, and answers at most one Observation per Rule for the file; `end()`
+// answers the whole-repo Rules from the root settings files. The flag and the mode are built here by joining their
+// parts, so this file never holds a whole one for a Guard Scan of Warden's own repo to report.
 import { readdirSync, readFileSync } from "node:fs";
 import { Observation, type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
@@ -750,6 +750,70 @@ describe("guard/permission-skip", () => {
     ["has claude in a comment after ;", `echo hi;# claude -p x ${FLAG}`],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a statusLine",
+      { statusLine: { type: "command", command: `claude ${FLAG} -p "summarise" --bare` } },
+      '"command":',
+      FLAG,
+    ],
+    [
+      "a statusLine with padding",
+      { statusLine: { type: "command", command: `claude ${FLAG} -p x`, padding: 2 } },
+      '"command":',
+      FLAG,
+    ],
+    ["an apiKeyHelper", { apiKeyHelper: `claude ${FLAG} -p key` }, '"apiKeyHelper":', FLAG],
+  ])(
+    "reports %s whose command runs the agent with its checks off, on the command's line",
+    (_name, rest, needle, kind) => {
+      const path = ".claude/settings.json";
+      const text = settings({}, rest);
+      const line = lineWith(text, needle);
+
+      expect(ofRule(path, text, SKIP)).toEqual([
+        expect.objectContaining({
+          location: { kind: "file", path, line },
+          evidence: {
+            summary: `1 place skips the agent's permission checks (${kind}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
+          },
+        }),
+      ]);
+    },
+  );
+
+  it.each([
+    [
+      "a statusLine that isn't a command",
+      { statusLine: { type: "static", command: `claude ${FLAG} -p x` } },
+    ],
+    ["a statusLine whose command isn't a string", { statusLine: { type: "command", command: 7 } }],
+    ["an apiKeyHelper that isn't a string", { apiKeyHelper: [`claude ${FLAG}`] }],
+  ])("gives nothing for %s", (_name, rest) => {
+    expect(see(".claude/settings.json", settings({}, rest))).toEqual([]);
+  });
+
+  it("counts a hook, a statusLine and an apiKeyHelper that each run the flag as 3 places, first on the earliest line", () => {
+    const text = settings(
+      {},
+      {
+        apiKeyHelper: `claude ${FLAG} -p key`,
+        statusLine: { type: "command", command: `claude ${FLAG} -p status` },
+        ...hooks("Stop", `claude ${FLAG} -p x`),
+      },
+    );
+    const first = lineWith(text, '"apiKeyHelper":');
+
+    expect(ofRule(".claude/settings.json", text, SKIP)).toEqual([
+      expect.objectContaining({
+        location: { kind: "file", path: ".claude/settings.json", line: first },
+        evidence: {
+          summary: `3 places skip the agent's permission checks (${FLAG}) in .claude/settings.json, first on line ${first}. To fix: ${packRule(SKIP).fix}`,
+        },
+      }),
+    ]);
   });
 
   it("counts defaultMode bypass and a hook that runs the flag as 2 places in one Observation, first on the earlier line", () => {
