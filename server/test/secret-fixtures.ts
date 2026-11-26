@@ -6,3 +6,12 @@ export const AWS_KEY = ["AKIA", "Q7XJ2M4N6P8R3T5V"].join("");
 
 /** A made-up GitHub personal access token. */
 export const GITHUB_TOKEN = ["ghp", "_", "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"].join("");
+
+/** A made-up Stripe live secret key. */
+export const STRIPE_KEY = ["sk", "_live_", "9Zt4Kq7Wm2Rb8Xn5Hc3Vj6Lp"].join("");
+
+/** A made-up Anthropic API key. */
+export const ANTHROPIC_KEY = ["sk", "-ant-", "api03-", "Qm7Rt2Wx9Kb4Nz6Hd8Fj3Lc5Vp1Sg0Ty"].join("");
+
+/** A made-up Slack bot token. */
+export const SLACK_TOKEN = ["xox", "b-", "4821936507-", "Tq8Wn3Zr6Kd1Hm9Xc"].join("");
