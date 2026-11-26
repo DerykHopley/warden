@@ -285,6 +285,9 @@ function renderWriteCallback(search: string | null, routes: Routes = {}) {
 }
 
 const GRANTED = "Write access granted through installation 42.";
+/** The write callback's own words for a sign-in that didn't start here (#224, story 16). */
+const NOT_STARTED_HERE =
+  "This GitHub sign-in didn't start here. Grant write access again from Setup.";
 
 describe("WriteAppCallbackPage (#224, story 5)", () => {
   it.each([201, 200] as const)(
@@ -359,13 +362,28 @@ describe("WriteAppCallbackPage (#224, story 5)", () => {
     },
   );
 
+  it.each([
+    ["no kept attempt", "?code=the-code&state=the-state", false],
+    ["no code", "?state=the-state", true],
+    ["no state", "?code=the-code", true],
+    ["a state that doesn't match", "?code=the-code&state=another-state", true],
+  ])(
+    "with %s, says the sign-in didn't start here in its own words and sends nothing",
+    async (_name, search, kept) => {
+      if (kept) keepWrite();
+      renderWriteCallback(search);
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(NOT_STARTED_HERE);
+      expect(backToSetup()).toHaveAttribute("href", "/setup");
+      expect(grants()).toEqual([]);
+    },
+  );
+
   it("with the read app's attempt kept, says the sign-in didn't start here and sends nothing", async () => {
     keep();
     renderWriteCallback("?code=the-code&state=the-state");
 
-    expect(
-      await screen.findByText("This GitHub sign-in didn't start here. Connect again from Setup."),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(NOT_STARTED_HERE)).toBeInTheDocument();
     expect(grants()).toEqual([]);
     expect(links()).toEqual([]);
     expect(JSON.parse(sessionStorage.getItem(ATTEMPT_KEY)!)).toEqual(ATTEMPT);

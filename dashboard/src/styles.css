@@ -176,6 +176,7 @@ button:focus-visible,
 .level-line a:focus-visible,
 .setup-line a:focus-visible,
 .setup-link a:focus-visible,
+.how-to summary:focus-visible,
 .repo-urls a:focus-visible,
 .patch-links a:focus-visible,
 .panel-divider:focus-visible,
@@ -953,6 +954,60 @@ button[aria-busy="true"],
   align-items: center;
   gap: 8px 16px;
   margin: 0 0 16px;
+}
+
+/* The write app's how-to (#224, story 16): a disclosure on --surface, as the repo list's box. Its summary is a 44px-high
+   target with the focus ring; each URL, path and variable name wraps rather than pushing the page sideways. */
+.how-to {
+  margin: 0 0 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.how-to summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 16px;
+  font-weight: 600;
+  border-radius: var(--radius);
+  cursor: pointer;
+  list-style: none;
+}
+
+/* The disclosure's marker, drawn by hand: a flex summary loses the browser's own in some browsers. */
+.how-to summary::-webkit-details-marker {
+  display: none;
+}
+
+.how-to summary::before {
+  content: "▸";
+  color: var(--muted);
+}
+
+.how-to[open] summary::before {
+  content: "▾";
+}
+
+.how-to ol {
+  margin: 0;
+  padding: 0 16px 16px 40px;
+}
+
+.how-to h3 {
+  margin: 16px 0 8px;
+  font-size: 1rem;
+}
+
+.how-to p,
+.how-to ul {
+  margin: 0 0 8px;
+}
+
+.how-to code {
+  overflow-wrap: anywhere;
 }
 
 /* One repo per row, by ref, with its last Scan beside it (under it when narrow); a long ref wraps rather than pushing

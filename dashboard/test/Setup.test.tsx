@@ -75,8 +75,8 @@ const writeRoutes: Routes = { writeApp, writeGrant: noGrants };
 function renderSetup(role: Role, routes: Routes = {}) {
   serve({ githubApp: app, repos: () => json(200, { repos: [] }), ...writeRoutes, ...routes });
   const given = props(role);
-  const { unmount } = render(<SetupPage {...given} />);
-  return { ...given, unmount };
+  const { rerender, unmount } = render(<SetupPage {...given} />);
+  return { ...given, rerender, unmount };
 }
 
 const github = () => within(screen.getByRole("region", { name: "GitHub" }));
@@ -318,6 +318,171 @@ describe("SetupPage: Grant write access (#224, story 5)", () => {
     await userEvent.click(write().getByRole("button", { name: "Retry" }));
 
     expect(await write().findByText("No write access granted.")).toBeInTheDocument();
+  });
+});
+
+describe("SetupPage: the write app's how-to (#224, story 16)", () => {
+  const write = () => within(screen.getByRole("region", { name: "Grant write access" }));
+  const HOW_TO = "How to set up the write app";
+  const summary = () => write().getByText(HOW_TO);
+  const howTo = () => summary().closest("details")!;
+  const steps = () => within(howTo()).getAllByRole("heading", { level: 3 });
+  const step = (n: number) => steps()[n - 1]!.closest("li")!;
+  const STEPS = ["Register the app on GitHub", "Give Warden the keys", "Install and link it"];
+  const notSetUp = () => json(503, { error: "Fix PRs aren't set up on this Warden" });
+
+  it("on the write app's 503, shows the how-to open under the not-set-up line and above the grant, with its three steps in order", async () => {
+    renderSetup("admin", { writeApp: notSetUp });
+
+    const line = await write().findByText("Fix PRs aren't set up on this Warden.");
+    expect(howTo()).toHaveAttribute("open");
+    expect(steps().map((h) => h.textContent)).toEqual(STEPS);
+    for (const n of [1, 2, 3]) expect(step(n)).toBeVisible();
+    expect(line.compareDocumentPosition(howTo())).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    const grantLine = await write().findByText("No write access granted.");
+    expect(howTo().compareDocumentPosition(grantLine)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("with the write app answering, shows the install link and the how-to closed; opening it shows the same steps", async () => {
+    renderSetup("admin");
+
+    const link = await write().findByRole("link", { name: "Install the write app" });
+    expect(howTo()).not.toHaveAttribute("open");
+    expect(step(1)).not.toBeVisible();
+    expect(link.compareDocumentPosition(howTo())).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    await userEvent.click(summary());
+
+    expect(howTo()).toHaveAttribute("open");
+    expect(steps().map((h) => h.textContent)).toEqual(STEPS);
+    for (const n of [1, 2, 3]) expect(step(n)).toBeVisible();
+  });
+
+  it.each([
+    [
+      "while the write app's call waits",
+      () => deferred<Response>().promise,
+      "Asking Warden's server about the write app…",
+    ],
+    [
+      "on its 403",
+      () => json(403, { error: "Only an Admin can do this" }),
+      "An Admin grants write access.",
+    ],
+    [
+      "when it doesn't answer",
+      () => json(502, { error: "GitHub didn't answer" }),
+      "Warden's server isn't answering",
+    ],
+  ])("shows an Admin the how-to closed %s", async (_name, answer, words) => {
+    renderSetup("admin", { writeApp: answer });
+
+    expect(await write().findByText(words)).toBeInTheDocument();
+    expect(summary()).toBeInTheDocument();
+    expect(howTo()).not.toHaveAttribute("open");
+  });
+
+  it.each<Role>(["lead", "member"])(
+    "gives a %s no how-to, and no call for the write app",
+    async (role) => {
+      renderSetup(role);
+
+      await write().findByText("No write access granted.");
+      expect(screen.queryByText(HOW_TO)).toBeNull();
+      expect(write().getByText("An Admin grants write access.")).toBeInTheDocument();
+      expect(callsTo("/api/github/write-app")).toEqual([]);
+    },
+  );
+
+  it("step 1 names this page's own URLs, the three permissions with why, and nothing more", async () => {
+    renderSetup("admin", { writeApp: notSetUp });
+    await write().findByText("Fix PRs aren't set up on this Warden.");
+
+    const register = within(step(1));
+    const origin = location.origin;
+    for (const url of [
+      origin,
+      `${origin}/setup/github/write/callback`,
+      `${origin}/setup/github/write`,
+    ]) {
+      expect(register.getByText(url).tagName).toBe("CODE");
+    }
+    const words = step(1).textContent;
+    for (const part of [
+      "Settings, Developer settings, GitHub Apps, New GitHub App",
+      "apart from the read-only one",
+      `Homepage URL: ${origin}`,
+      `Callback URL: ${origin}/setup/github/write/callback`,
+      `Setup URL: ${origin}/setup/github/write`,
+      'Leave "Request user authorization (OAuth) during installation" cleared',
+      'clear "Active". The write app has no webhooks.',
+      "these three and nothing else",
+      "Contents: Read and write, to make the Fix PR's branch and commit its edit.",
+      "Pull requests: Read and write, to open the Fix PR and find one already open.",
+      "Metadata: Read-only, which GitHub requires for every app.",
+      "No account or organization permissions, and no Workflows.",
+      "never .github/workflows/",
+      "Warden refuses to link an installation that holds any other permission, or lacks one of these three.",
+      "generate a client secret and a private key",
+    ]) {
+      expect(words).toContain(part);
+    }
+  });
+
+  it("step 2 names the server's three variables, where each comes from, and the restart", async () => {
+    renderSetup("admin", { writeApp: notSetUp });
+    await write().findByText("Fix PRs aren't set up on this Warden.");
+
+    const keys = within(step(2));
+    for (const name of [
+      "GITHUB_WRITE_APP_CLIENT_ID",
+      "GITHUB_WRITE_APP_CLIENT_SECRET",
+      "GITHUB_WRITE_APP_PRIVATE_KEY",
+      ".envrc",
+    ]) {
+      expect(keys.getByText(name).tagName).toBe("CODE");
+    }
+    const words = step(2).textContent;
+    for (const part of [
+      "all three or none",
+      "Locally they come from the keyring through .envrc.",
+      "On Cloud Run they come from Secret Manager, with the client id as a repository variable.",
+      "restart the server",
+    ]) {
+      expect(words).toContain(part);
+    }
+  });
+
+  it("step 3 says to install the app, then sign in with GitHub on the Grant write access page", async () => {
+    renderSetup("admin", { writeApp: notSetUp });
+    await write().findByText("Fix PRs aren't set up on this Warden.");
+
+    const words = step(3).textContent;
+    for (const part of [
+      'Choose "Install the write app" above',
+      "whose repos should get Fix PRs",
+      'Choose "Sign in with GitHub" there.',
+    ]) {
+      expect(words).toContain(part);
+    }
+  });
+
+  it("stays as the person left it when the write app is asked again and the grant is read again", async () => {
+    const { rerender, ...given } = renderSetup("admin", { writeApp: notSetUp });
+    await write().findByText("Fix PRs aren't set up on this Warden.");
+    expect(howTo()).toHaveAttribute("open");
+
+    await userEvent.click(summary());
+    expect(howTo()).not.toHaveAttribute("open");
+    // A new getToken asks both routes again: the write app's answer comes in again, 503 as before.
+    rerender(
+      <SetupPage {...given} getToken={vi.fn(async () => "session-token" as string | null)} />,
+    );
+
+    await vi.waitFor(() => expect(callsTo("/api/github/write-app")).toHaveLength(2));
+    await vi.waitFor(() => expect(callsTo("/api/github/write-grant")).toHaveLength(2));
+    await write().findByText("Fix PRs aren't set up on this Warden.");
+    expect(howTo()).not.toHaveAttribute("open");
   });
 });
 

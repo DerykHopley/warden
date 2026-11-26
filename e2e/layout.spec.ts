@@ -496,10 +496,15 @@ for (const { path, ready } of SETUP_PAGES) {
           await expect(page.getByText("Never scanned")).toBeVisible();
           await expect(page.getByRole("link", { name: "Install the GitHub app" })).toBeVisible();
           await expect(page.getByText(/^Write access granted: installation 77, /)).toBeVisible();
+          // The write app answers here, so its how-to starts closed: open it, so its URLs are measured too.
+          await page.getByText("How to set up the write app").click();
+          await expect(
+            page.getByRole("heading", { name: "Register the app on GitHub" }),
+          ).toBeVisible();
         }
 
         await expectNoSidewaysScroll(page);
-        const targets = await page.locator("main.page").locator("a, button").all();
+        const targets = await page.locator("main.page").locator("a, button, summary").all();
         expect(targets.length).toBeGreaterThan(0);
         await expectTargets(targets);
         await expectRings(page, targets);
