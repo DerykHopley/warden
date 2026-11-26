@@ -66,16 +66,24 @@ export type SaveResult =
   | { kind: "not-found" }
   /** 409: the name is taken, or the Team isn't opened; `error` is the server's words, null when its body has none. */
   | { kind: "conflict"; error: string | null }
-  /** No answer, or a 2xx whose body isn't a Product: the change may have been saved. */
-  | { kind: "maybe-saved" }
+  /**
+   * The change may have been saved: the server gave no answer (`reason` "not-answering"), or a 2xx whose body isn't a
+   * Product ("unreadable").
+   */
+  | { kind: "maybe-saved"; reason: "not-answering" | "unreadable" }
   | Exclude<Refused, { kind: "not-answering" }>;
 
 /**
- * Whether a save's answer may mean a Product was stored, so the list should be read again. The Products page's
- * `switch` on a save's answer follows the same rule: its "saved" and "maybe-saved" cases both read the list again.
+ * Whether a save a Team or Role change dropped still reads the list again, back on its Team: the server answered, and
+ * its answer may mean a Product was stored ("saved", or "maybe-saved" for an unreadable body). A save that got no
+ * answer leaves the list as it is: the server may still be down, and a read would swap the list for the server-down
+ * notice, an alert about a save no longer shown. A save still shown reads again on either "maybe-saved": the Products
+ * page's `switch` on its answer reads the list again in its "saved" and "maybe-saved" cases.
  */
-export function mayHaveStored(result: SaveResult | TeamCheckRefused): boolean {
-  return result.kind === "saved" || result.kind === "maybe-saved";
+export function rereadsAfterDrop(result: SaveResult | TeamCheckRefused): boolean {
+  return (
+    result.kind === "saved" || (result.kind === "maybe-saved" && result.reason === "unreadable")
+  );
 }
 
 /**
@@ -93,7 +101,7 @@ export async function saveProduct(
     { method: id === null ? "POST" : "PUT", body: input },
   );
   if (!(res instanceof Response))
-    return res.kind === "not-answering" ? { kind: "maybe-saved" } : res;
+    return res.kind === "not-answering" ? { kind: "maybe-saved", reason: "not-answering" } : res;
   switch (res.status) {
     case 400:
       return { kind: "invalid", error: await serverError(res) };
@@ -105,7 +113,9 @@ export async function saveProduct(
       return { kind: "conflict", error: await serverError(res) };
   }
   const product = await parsed(res, Product);
-  return product === undefined ? { kind: "maybe-saved" } : { kind: "saved", product };
+  return product === undefined
+    ? { kind: "maybe-saved", reason: "unreadable" }
+    : { kind: "saved", product };
 }
 
 /**
