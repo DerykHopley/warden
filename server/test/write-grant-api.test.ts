@@ -70,7 +70,8 @@ const json = (body: unknown, status = 200) =>
 /**
  * A fake GitHub for one app (the write app by default) and one installation: the person reaches `reachable`
  * installations, and sees one repo in it for each of `repoAccess`, with that role on it; the installation reaches
- * `installationRepos` repos, those the person sees by default. The App's installation token answer gives
+ * `installationRepos` repos, those the person sees by default. The repos the person sees are numbered 1, 2, … unless
+ * `repoIds` names each one's id, so a list can name one repo twice. The App's installation token answer gives
  * `permissions`, or `tokenStatus` when it's an error; `GET /app` answers `slug`. `failAt` names one endpoint that answers
  * 500; `refuse` makes the token exchange refuse the code. Every call is recorded.
  */
@@ -80,6 +81,7 @@ function fakeGitHub({
   slug = WRITE_SLUG,
   reachable = [installationId],
   repoAccess = ["admin"],
+  repoIds = repoAccess.map((_role, i) => i + 1),
   installationRepos = repoAccess.length,
   permissions = WRITE_APP,
   tokenStatus,
@@ -91,6 +93,7 @@ function fakeGitHub({
   slug?: string;
   reachable?: number[];
   repoAccess?: ("admin" | "push" | "pull")[];
+  repoIds?: number[];
   installationRepos?: number;
   permissions?: Record<string, string>;
   tokenStatus?: 404;
@@ -120,7 +123,7 @@ function fakeGitHub({
         return json({
           total_count: repoAccess.length,
           repositories: repoAccess.map((role, i) => ({
-            ...repo(i + 1),
+            ...repo(repoIds[i] ?? i + 1),
             permissions: {
               admin: role === "admin",
               maintain: role === "admin",
@@ -314,6 +317,10 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
       [
         "sees fewer repos than the installation reaches",
         { repoAccess: ["admin"] as const, installationRepos: 2 },
+      ],
+      [
+        "sees one admin repo listed twice, of an installation reaching two (#309)",
+        { repoAccess: ["admin", "admin"] as const, repoIds: [1, 1], installationRepos: 2 },
       ],
       [
         "sees none, of an installation reaching none",
