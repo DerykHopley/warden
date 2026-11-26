@@ -100,8 +100,12 @@ describe("guard/blanket-bash-allow", () => {
     "Bash(/usr/bin/python3 -c *)",
     "Bash(./bin/grep *)",
     "Bash(~/bin/sed:*)",
+    "Bash(node -e:*)",
+    "Bash(perl -e *)",
+    "Bash(ruby -e*)",
+    "Bash(/usr/bin/node -e:*)",
   ])(
-    "reports %s, a shell or interpreter run with -c or a listed command given by path",
+    "reports %s, a shell or interpreter run with -c or -e, or a listed command given by path",
     (entry) => {
       expect(ofRule(".claude/settings.json", settings({ allow: [entry] }), BLANKET)).toHaveLength(
         1,
@@ -128,6 +132,8 @@ describe("guard/blanket-bash-allow", () => {
     "Bash(/usr/bin/git status)",
     "Bash(npm -c:*)",
     "Bash(bash -c 'npm test')",
+    "Bash(npm -e:*)",
+    "Bash(node -e 'console.log(1)')",
   ])("doesn't report %s", (entry) => {
     expect(ofRule(".claude/settings.json", settings({ allow: [entry] }), BLANKET)).toEqual([]);
   });
