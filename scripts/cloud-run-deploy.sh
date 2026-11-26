@@ -11,7 +11,8 @@
 #        preview <name>: the warden-preview service, a revision tagged <name> that gets no traffic, on the
 #        warden_preview database, as the preview accounts only; after the migration and before the revision, the
 #        preview Scan Job warden-scan-preview's image (every preview shares the one Job, so it runs the last preview's
-#        image). It prints the tagged URL in its deterministic form,
+#        image, even when that preview's revision then fails its deploy or health gate: the failure says so). It prints
+#        the tagged URL in its deterministic form,
 #        https://<name>---warden-preview-<project-number>.europe-west1.run.app, the one to open and register on the
 #        GitHub app. <name> is a Cloud Run tag: 1 to 20 lowercase letters, digits and hyphens, starting with a letter
 #        and not ending in a hyphen (20 keeps the revision name short).
@@ -246,14 +247,18 @@ main() {
     fail "the Scan Job $MODE_SCAN_JOB isn't there: rerun scripts/gcp-setup.sh. Nothing was migrated or deployed"
 
   migrate
-  # A preview's Scan Job gets the image before the revision, whose tagged URL can start Scans as soon as it's up.
+  # A preview's Scan Job gets the image before the revision, whose tagged URL can start Scans as soon as it's up. From
+  # then on, a failure leaves every preview's Scans on this image, and says so.
+  local scan_job_note=
   if [[ $mode == preview ]]; then
     update_scan_job "$IMAGE" preview "$MODE_SCAN_JOB" "$MODE_SCAN_ACCOUNT" "$DATABASE" "$APP_USER" \
       "$APP_PASSWORD_SECRET" ||
       fail "updating the Scan Job $MODE_SCAN_JOB failed, so no revision was deployed. Push to the branch again"
+    scan_job_note=". $MODE_SCAN_JOB already runs this image, so every preview's Scans run it"
+    scan_job_note+=" until you push a working preview again"
   fi
-  deploy_revision "$parties"
-  wait_for_health "${tagged[0]}" || fail "the revision gets no traffic"
+  deploy_revision "$parties" || fail "deploying the revision $SERVICE-$SUFFIX failed$scan_job_note"
+  wait_for_health "${tagged[0]}" || fail "the revision gets no traffic$scan_job_note"
 
   if [[ $mode == preview ]]; then
     say "Preview \`$TAG\` is up, with no traffic: $open_url. $MODE_SCAN_JOB runs its image."
