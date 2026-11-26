@@ -3,3 +3,5 @@ pnpm-lock.yaml
 *.md
 # Patch's CVE snapshot, kept byte for byte as Patch built it.
 server/src/modules/patch/cve-snapshot/
+# The VDA ISA Catalogue: the original Vouch's files byte for byte, and the extraction's output.
+server/src/modules/vouch/vda-isa-2027.1/
