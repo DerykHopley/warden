@@ -1390,4 +1390,44 @@ describe("the card's Fix PR section", () => {
     expect(line).toHaveFocus();
     expect(fixPr.queryByRole("button", { name: "Open a Fix PR" })).toBeNull();
   });
+
+  // The POST's Fix PR outlives the read a Status change asks for: that read was asked before the PR existed.
+  for (const { status, words } of [
+    { status: 201, words: "Fix PR #12 opened." },
+    { status: 200, words: "Fix PR #12 is still open." },
+  ]) {
+    it(`a ${status} that answers while a Status change's read is still loading shows ${words} and the link, which stays once that read answers no Fix PR`, async () => {
+      const opened = {
+        url: "https://github.com/acme/shop-web/pull/12",
+        number: 12,
+        branch: `warden/fix-${ID}`,
+        opened_by: ME,
+        opened_at: "2026-11-24T12:30:00.000Z",
+      };
+      const post = deferred<Response>();
+      const laterRead = deferred<Response>();
+      let reads = 0;
+      serve({
+        ...fixable,
+        fixPr: () =>
+          ++reads === 1 ? json(200, { fixable: true, fix_pr: null }) : laterRead.promise,
+        openFixPr: () => post.promise,
+      });
+      const shown = show(OPEN, listed([]), { role: "member" });
+      await userEvent.click(await shown.card.findByRole("button", { name: "Open a Fix PR" }));
+      // A Lead accepts the Finding elsewhere and the page hands the card its new Status while the POST runs.
+      shown.update(ACCEPTED);
+      await vi.waitFor(() => expect(callsTo(FIX_PR_PATH)).toHaveLength(2));
+
+      post.resolve(json(status, opened));
+      const fixPr = within(await shown.card.findByRole("region", { name: "Fix PR" }));
+      expect(await fixPr.findByText(words)).toHaveFocus();
+      expect(fixPr.getByRole("link", { name: "Fix PR #12" })).toHaveAttribute("href", opened.url);
+
+      laterRead.resolve(json(200, { fixable: true, fix_pr: null }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fixPr.getByRole("link", { name: "Fix PR #12" })).toHaveAttribute("href", opened.url);
+      expect(fixPr.getByText(words)).toBeInTheDocument();
+    });
+  }
 });

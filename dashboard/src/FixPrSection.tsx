@@ -2,7 +2,8 @@
 // when the card opens on it. Its link, who opened it and when; and, for an Open Finding whose Rule and Location get a
 // Fix PR, "Open a Fix PR" while the Team holds a write grant, or the line saying an Admin grants one. Most Guard cards
 // aren't fixable, so nothing shows while it asks, nor when there's nothing to show. A new Status (a decision, or the
-// page's read after a 409) asks again and drops the earlier ask's answer; it drops the line too, but for a 409's.
+// page's read after a 409) asks again and drops the earlier ask's answer; it drops the line too, but for a 409's. The
+// Fix PR an open answered with stays shown through any read, until a read answers with a Fix PR of its own.
 import type { Finding, FixPrBody, Role } from "@warden/contracts";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { NOT_ANSWERING, sentence, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
@@ -50,7 +51,10 @@ export function FixPrSection(props: {
     () => readFixPrInTeam(getToken, team, id, status),
     [getToken, id, team, status],
   );
-  const { result, setResult, refresh } = useWardenCall(call, props.onSessionEnded);
+  const { result, refresh } = useWardenCall(call, props.onSessionEnded);
+  // The Fix PR a POST answered with, kept apart from the read: a read asked before it existed (a Status change's,
+  // while the POST ran) answers with none, and mustn't hide it. A read that answers with a Fix PR shows that one.
+  const [opened, setOpened] = useState<FixPrBody | null>(null);
   // Retry keeps the refusal on screen while it asks again, its button busy until a new answer replaces it.
   const [retriedOn, setRetriedOn] = useState<FixPrRead | null>(null);
   const [opening, setOpening] = useState(false);
@@ -90,7 +94,7 @@ export function FixPrSection(props: {
       case "opened":
       case "still-open": {
         const { fixPr } = answer;
-        setResult((old) => (old !== "loading" && old.kind === "read" ? { ...old, fixPr } : old));
+        setOpened(fixPr);
         setLine({
           kind: "done",
           text:
@@ -138,17 +142,21 @@ export function FixPrSection(props: {
     }
   }
 
+  const read = result !== "loading" && result.kind === "read" ? result : null;
+  const fixPr = read?.fixPr ?? opened;
+  const link =
+    fixPr === null ? null : (
+      <FixPrLink fixPr={fixPr} userId={props.userId} clerkUsers={props.clerkUsers} />
+    );
   let shown: ReactNode = null;
-  if (result !== "loading" && result.kind === "read") {
-    const offered = result.fixable && status === "open";
-    const showButton = offered && result.granted === true && props.role !== null;
-    const noGrant = offered && result.granted === false;
-    if (result.fixPr !== null || showButton || noGrant) {
+  if (read !== null) {
+    const offered = read.fixable && status === "open";
+    const showButton = offered && read.granted === true && props.role !== null;
+    const noGrant = offered && read.granted === false;
+    if (fixPr !== null || showButton || noGrant) {
       shown = (
         <>
-          {result.fixPr !== null && (
-            <FixPrLink fixPr={result.fixPr} userId={props.userId} clerkUsers={props.clerkUsers} />
-          )}
+          {link}
           {showButton && (
             <div className="fix-pr-actions">
               <button
@@ -171,23 +179,29 @@ export function FixPrSection(props: {
     (result.kind === "not-answering" || result.kind === "too-many-attempts")
   ) {
     shown = (
-      <p className="fix-pr-failed">
-        <span className="muted">
-          {result.kind === "too-many-attempts" ? tryAgainIn(result.retryAfter) : FIX_PR_FAILED}
-        </span>
-        {/* Named apart from the Proposals' Retry, which can show in the same card. */}
-        <button
-          type="button"
-          className="secondary"
-          onClick={retry}
-          disabled={retriedOn === result}
-          aria-busy={retriedOn === result}
-          aria-label="Retry the Fix PR"
-        >
-          Retry
-        </button>
-      </p>
+      <>
+        {link}
+        <p className="fix-pr-failed">
+          <span className="muted">
+            {result.kind === "too-many-attempts" ? tryAgainIn(result.retryAfter) : FIX_PR_FAILED}
+          </span>
+          {/* Named apart from the Proposals' Retry, which can show in the same card. */}
+          <button
+            type="button"
+            className="secondary"
+            onClick={retry}
+            disabled={retriedOn === result}
+            aria-busy={retriedOn === result}
+            aria-label="Retry the Fix PR"
+          >
+            Retry
+          </button>
+        </p>
+      </>
     );
+  } else if (result === "loading") {
+    // A read still loading after a POST answered: the POST's Fix PR shows until the read does.
+    shown = link;
   }
   // Waiting, a 404, an ended session, or nothing to show: no heading either.
   if (shown === null && line === null) return null;
