@@ -946,7 +946,17 @@ button[aria-busy="true"],
   margin: 0;
 }
 
-/* One repo per row, by ref; a long ref wraps rather than pushing the page sideways. */
+/* "Scan now" above the repo list, with "A Scan is under way." beside it; the line wraps under the button when narrow. */
+.scan-now {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 0 0 16px;
+}
+
+/* One repo per row, by ref, with its last Scan beside it (under it when narrow); a long ref wraps rather than pushing
+   the page sideways. */
 .repo-list {
   margin: 0;
   padding: 0;
@@ -957,8 +967,16 @@ button[aria-busy="true"],
 }
 
 .repo-list li {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
+}
+
+.repo-ref {
+  min-width: 0;
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }

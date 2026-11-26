@@ -7,8 +7,10 @@ import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
 import type pg from "pg";
 import {
   fingerprint,
+  type Asset,
   type Finding,
   type HealthBody,
+  type Module,
   type ProductInput,
   type Role,
 } from "@warden/contracts";
@@ -257,6 +259,18 @@ export async function linkRepos(
   return installationId;
 }
 
+/** Queues a Scan of `module` over `assets` for the Team, as its Admin's start does, and answers the stored Scan. */
+export async function queueScan(scans: Scans, team: string, module: Module, assets: Asset[]) {
+  const outcome = await scans.queue(team, {
+    module,
+    assets,
+    rules: ["guard/secret-in-repo"],
+    requestedBy: ADMIN,
+  });
+  if (outcome.kind !== "queued") throw new Error("the test's Scan was rate limited");
+  return outcome.scan;
+}
+
 /**
  * A request to `app` as `as`, signed in to Team `teamId` with a session token signed by `key`: `body` sent as JSON,
  * or as it is when it's already a string. Its status, Retry-After, body read as JSON (undefined when empty) and text.
@@ -379,7 +393,12 @@ const noFindings: Findings = {
   expireAcceptances: noDatabase,
 };
 
-const noScans: Scans = { queue: noDatabase, get: noDatabase, move: noDatabase };
+const noScans: Scans = {
+  queue: noDatabase,
+  get: noDatabase,
+  lastFor: noDatabase,
+  move: noDatabase,
+};
 
 /** A Clerk seam for a test that doesn't look at Clerk: every call is refused (a Role change answers 502; a join logs it). */
 const noClerk: ClerkOrganizations = {

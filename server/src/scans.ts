@@ -4,7 +4,14 @@
 // `ScanJobStarter`.
 import { randomUUID } from "node:crypto";
 import { sql, type Selectable, type Transaction } from "kysely";
-import { ScanBody, type Asset, type Module, type RuleId, type ScanState } from "@warden/contracts";
+import {
+  assetKey,
+  ScanBody,
+  type Asset,
+  type Module,
+  type RuleId,
+  type ScanState,
+} from "@warden/contracts";
 import type { ScanRecorder } from "./findings/index.ts";
 import type { Logger } from "./log.ts";
 import type { Database } from "./schema.ts";
@@ -90,6 +97,12 @@ export interface Scans {
   ): Promise<QueueOutcome>;
   /** The Team's Scan with this id; undefined for any other id, another Team's included. */
   get(team: string, id: string): Promise<ScanBody | undefined>;
+  /**
+   * For each of `assets`, the Team's newest Scan of `module` naming it (by `queued_at`, then id), keyed by `assetKey`;
+   * an Asset no such Scan names has no entry. One query for the whole list, after ending stale queued Scans as `get`
+   * does.
+   */
+  lastFor(team: string, module: Module, assets: readonly Asset[]): Promise<Map<string, ScanBody>>;
   /**
    * Moves the Team's Scan to `state`, answering it as moved; undefined when nothing moved, for an id the Team doesn't
    * have or a move MOVES_FROM doesn't allow (never out of done), so a late attempt can't undo a finished Scan.
@@ -252,6 +265,21 @@ export function createScans({ withTeam }: { withTeam: WithTeam }): Scans {
           .where("id", "=", id)
           .executeTakeFirst();
         return row && toBody(row);
+      });
+    },
+
+    lastFor(team, module, assets) {
+      return withTeam(team, async (tx) => {
+        await endStaleQueued(tx);
+        // Each Asset joined to the Scans whose `assets` contain it, the newest per Asset kept.
+        const { rows } = await sql<Selectable<Database["scan_requests"]> & { asset: Asset }>`
+          select distinct on (wanted.asset) wanted.asset, s.*
+          from jsonb_array_elements(${JSON.stringify(assets)}::jsonb) as wanted(asset)
+          join scan_requests s on s.assets @> jsonb_build_array(wanted.asset)
+          where s.module = ${module}
+          order by wanted.asset, s.queued_at desc, s.id desc
+        `.execute(tx);
+        return new Map(rows.map(({ asset, ...row }) => [assetKey(asset), toBody(row)]));
       });
     },
 

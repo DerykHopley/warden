@@ -15,8 +15,15 @@ export const RepoAssetBody = z.strictObject({
 });
 export type RepoAssetBody = z.infer<typeof RepoAssetBody>;
 
+/**
+ * A Repo Asset as `GET /api/repos` lists it (story 2): with its last Scan, the newest Guard Scan naming its ref, or null
+ * when none does.
+ */
+export const ListedRepoBody = RepoAssetBody.extend({ last_scan: ScanBody.nullable() });
+export type ListedRepoBody = z.infer<typeof ListedRepoBody>;
+
 /** `GET /api/repos`: the session's Team's Repo Assets, by ref; `{ repos: [] }` for a Team with none. */
-export const ReposBody = z.strictObject({ repos: z.array(RepoAssetBody) });
+export const ReposBody = z.strictObject({ repos: z.array(ListedRepoBody) });
 export type ReposBody = z.infer<typeof ReposBody>;
 
 /**

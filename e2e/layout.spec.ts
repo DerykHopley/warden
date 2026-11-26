@@ -421,8 +421,9 @@ test("at 1600px: five cards sit in one row, and the content stays within 1480px,
   expect(Math.abs(main!.x - right)).toBeLessThanOrEqual(1);
 });
 
-// Setup and its two GitHub pages, as an Admin sees them: the App's settings and the Team's repos are faked in the
-// browser (one ref long enough to wrap), and the callback page, opened with no sign-in kept, shows its refusal.
+// Setup and its two GitHub pages, as an Admin sees them: the App's settings, the Team's repos with their last Scans
+// (one ref long enough to wrap) and a refused Scan now are faked in the browser, and the callback page, opened with no
+// sign-in kept, shows its refusal.
 const SETUP_PAGES: { path: string; ready: (page: Page) => Locator }[] = [
   { path: "/setup", ready: (page) => page.getByRole("link", { name: "Install the GitHub app" }) },
   {
@@ -445,37 +446,72 @@ for (const { path, ready } of SETUP_PAGES) {
         await page.route("**/api/github/app", (route) =>
           route.fulfill({ json: { slug: "warden-reader", client_id: "Iv23li-e2e-client" } }),
         );
+        // Until Scan now is clicked, the long ref's last Scan failed and the other was never scanned; after it, the
+        // long ref's is running.
+        let started = false;
         await page.route("**/api/repos", (route) =>
           route.fulfill({
             json: {
               repos: [
-                {
-                  asset: {
-                    kind: "repo",
-                    ref: `https://github.com/acme/${"long-repo-name".repeat(6)}`,
-                  },
-                  installation_id: 42,
-                  listed_at: "2026-11-25T09:00:00.000Z",
-                },
+                listedRepo(`acme/${"long-repo-name".repeat(6)}`, started ? "running" : "failed"),
+                listedRepo("acme/web", null),
               ],
             },
           }),
         );
+        await page.route("**/api/scans", (route) => {
+          started = true;
+          return route.fulfill({ status: 502, json: { error: "The Scan couldn't be started" } });
+        });
         await page.setViewportSize({ width, height: 900 });
         await page.goto(path);
         await expect(ready(page)).toBeVisible();
-        if (path === "/setup") await expect(page.locator(".repo-list li")).toHaveCount(1);
+        if (path === "/setup") {
+          await expect(page.locator(".repo-list li")).toHaveCount(2);
+          await expect(page.getByText(/^Failed, /)).toBeVisible();
+          await expect(page.getByText("Never scanned")).toBeVisible();
+        }
 
-        const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-          scrollWidth: document.documentElement.scrollWidth,
-          clientWidth: document.documentElement.clientWidth,
-        }));
-        expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+        await expectNoSidewaysScroll(page);
         const targets = await page.locator("main.page").locator("a, button").all();
         expect(targets.length).toBeGreaterThan(0);
         await expectTargets(targets);
         await expectRings(page, targets);
+
+        if (path === "/setup") {
+          // The refusal line, and the button beside "A Scan is under way.", at this width too. Their words and the
+          // button's state are Setup.test.tsx's.
+          const scanNow = page.getByRole("button", { name: "Scan now" });
+          await scanNow.click();
+          await expect(page.getByRole("alert")).toBeVisible();
+          await expect(page.getByText("A Scan is under way.")).toBeVisible();
+          await expectNoSidewaysScroll(page);
+          await expectTargets([scanNow]);
+        }
       },
     );
   }
+}
+
+/** One of `GET /api/repos`'s repos, with its last Scan in `state` (null: never scanned). */
+function listedRepo(name: string, state: "running" | "failed" | null) {
+  const ref = `https://github.com/${name}`;
+  return {
+    asset: { kind: "repo", ref },
+    installation_id: 42,
+    listed_at: "2026-11-25T09:00:00.000Z",
+    last_scan:
+      state === null
+        ? null
+        : {
+            id: "0b6f1e9c-2d1f-4c55-9a3e-7f1d2c3b4a5e",
+            module: "guard",
+            state,
+            assets: [{ kind: "repo", ref }],
+            rules: ["guard/secret-in-repo"],
+            queued_at: "2026-11-25T09:00:00.000Z",
+            started_at: "2026-11-25T09:00:20.000Z",
+            ended_at: state === "failed" ? "2026-11-25T09:14:00.000Z" : null,
+          },
+  };
 }

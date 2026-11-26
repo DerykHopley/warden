@@ -1,7 +1,7 @@
 // The Findings page (story 9): the summary line, the top 5, the table and its filters in the URL, selecting a Finding,
 // and each answer GET /api/findings can get. It renders FindingsPage alone with spy props, Warden's server faked. The
 // counts and orders themselves are tested below the page, in findings.test.ts.
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Finding, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -139,6 +139,7 @@ describe("the summary line and the top 5", () => {
                   asset: { kind: "repo", ref: "https://github.com/acme/web" },
                   installation_id: 42,
                   listed_at: "2026-11-25T09:00:00.000Z",
+                  last_scan: null,
                 },
               ],
             }),
@@ -148,7 +149,10 @@ describe("the summary line and the top 5", () => {
       await screen.findByText("No Findings yet: they appear after the first Scan.");
 
       await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(1));
-      expect(screen.queryByText(/connects? GitHub on/)).not.toBeInTheDocument();
+      // The repos' answer is read and rendered before the line is looked for: the call alone proves nothing.
+      await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      // Any case: an Admin's line starts "Connect GitHub on".
+      expect(screen.queryByText(/connects? GitHub on/i)).not.toBeInTheDocument();
     },
   );
 

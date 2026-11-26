@@ -3,7 +3,7 @@
 // Through the real app on the suite's shared database, each case with Teams of its own, a fake scanner and a fake
 // starter.
 import { randomUUID } from "node:crypto";
-import { ScanBody, type Asset, type ScanState } from "@warden/contracts";
+import { assetKey, ScanBody, type Asset, type ScanState } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
@@ -25,6 +25,7 @@ import {
   linkRepos,
   logEntries,
   minutesAgo,
+  queueScan,
   seedTeam,
   sessionToken,
   testApp,
@@ -489,6 +490,35 @@ describe("GET /api/scans/:id: any person in the Team reads a Scan", () => {
       status: 404,
       body: { error: "No such Scan" },
     });
+  });
+});
+
+describe("Scans.lastFor: each Asset's newest Scan of a module (story 2)", () => {
+  it("answers the later of two Guard Scans naming a repo, and nothing for a repo no Scan names", async () => {
+    const team = await newTeam();
+    const scans = createScans({ withTeam });
+    await queueScan(scans, team, "guard", [repo(1), repo(2)]);
+    const later = await queueScan(scans, team, "guard", [repo(1)]);
+    const both = (await rows(team))[0]!.id;
+
+    const last = await scans.lastFor(team, "guard", [repo(1), repo(2), repo(3)]);
+
+    expect(last.get(assetKey(repo(1)))).toEqual(later);
+    expect(last.get(assetKey(repo(2)))?.id).toBe(both);
+    expect(last.has(assetKey(repo(3)))).toBe(false);
+  });
+
+  it("never answers a Patch Scan, or another Team's Scan, naming the same ref (story 15)", async () => {
+    const team = await newTeam();
+    const other = await newTeam();
+    const scans = createScans({ withTeam });
+    const guard = await queueScan(scans, team, "guard", [repo(1)]);
+    await queueScan(scans, team, "patch", [repo(1)]);
+    await queueScan(scans, other, "guard", [repo(1), repo(2)]);
+
+    const last = await scans.lastFor(team, "guard", [repo(1), repo(2)]);
+
+    expect([...last.entries()]).toEqual([[assetKey(repo(1)), guard]]);
   });
 });
 

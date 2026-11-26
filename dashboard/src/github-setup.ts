@@ -5,7 +5,10 @@ import {
   GitHubAppBody,
   LinkedInstallationBody,
   ReposBody,
-  type RepoAssetBody,
+  ScanBody,
+  type Asset,
+  type ListedRepoBody,
+  type StartScanBody,
 } from "@warden/contracts";
 import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
 
@@ -32,9 +35,9 @@ export async function fetchGitHubApp(getToken: GetToken): Promise<GitHubAppResul
   return app === undefined ? { kind: "not-answering" } : { kind: "app", app };
 }
 
-export type ReposResult = { kind: "repos"; repos: RepoAssetBody[] } | TeamRefusal | Refused;
+export type ReposResult = { kind: "repos"; repos: ListedRepoBody[] } | TeamRefusal | Refused;
 
-/** `GET /api/repos`: the Team's Repo Assets. */
+/** `GET /api/repos`: the Team's Repo Assets, each with its last Guard Scan. */
 export async function fetchRepos(getToken: GetToken): Promise<ReposResult> {
   const res = await callWarden(getToken, "/api/repos");
   if (!(res instanceof Response)) return res;
@@ -71,6 +74,42 @@ export async function linkInstallation(
         installationId: linked.installation_id,
         repoCount: linked.repos.length,
       };
+}
+
+export type ScanStartResult =
+  /** 202: the Scan queued, as the server stored it. */
+  | { kind: "started"; scan: ScanBody }
+  /**
+   * 400, 503 or another 5xx: no Scan started, in the server's words. `listChanged` when the list may have: a 400 can
+   * answer a list gone stale, and a 502's or an unexpected 5xx's Scan may be stored failed. A 503 stores nothing.
+   */
+  | { kind: "refused"; words: string; listChanged: boolean }
+  /** 403: the person isn't a Lead or an Admin (any more). */
+  | { kind: "forbidden" }
+  | { kind: "team-not-opened" }
+  | Refused;
+
+const NOT_STARTED = "Warden couldn't start the Scan.";
+
+/**
+ * `POST /api/scans`: starts one Guard Scan of `assets`. Any other answer below 500, or a 202 whose Scan doesn't parse,
+ * is not answering, as no answer is.
+ */
+export async function scanRepos(getToken: GetToken, assets: Asset[]): Promise<ScanStartResult> {
+  const body: StartScanBody = { module: "guard", assets };
+  const res = await callWarden(getToken, "/api/scans", { method: "POST", body });
+  if (!(res instanceof Response)) return res;
+  if (res.status === 202) {
+    const scan = await parsed(res, ScanBody);
+    return scan === undefined ? { kind: "not-answering" } : { kind: "started", scan };
+  }
+  if (res.status === 403) return { kind: "forbidden" };
+  if (res.status === 409) return { kind: "team-not-opened" };
+  if (res.status === 400 || res.status >= 500) {
+    const words = (await serverError(res)) ?? NOT_STARTED;
+    return { kind: "refused", words, listChanged: res.status !== 503 };
+  }
+  return { kind: "not-answering" };
 }
 
 /** The App's install page on GitHub; GitHub sends the Admin back to the App's Setup URL, `/setup/github`. */

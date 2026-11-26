@@ -37,6 +37,7 @@ describe("startScan", () => {
       const scans: Scans = {
         queue: async () => ({ kind: "queued", scan: queuedScan }),
         get: async () => undefined,
+        lastFor: async () => new Map(),
         move,
       };
 
