@@ -6,7 +6,12 @@
 // line names a server by its key and package only, never another argument, an env value or a URL, which can hold a
 // token, and each name sits on one line in a code span.
 import type { Location, RuleId } from "@warden/contracts";
-import { isBroadBashAllow, isClaudeSettingsFile, WHOLE_REPO_PATH } from "./agent-config.ts";
+import {
+  isBroadBashAllow,
+  isClaudeSettingsFile,
+  settingsClear,
+  WHOLE_REPO_PATH,
+} from "./agent-config.ts";
 import {
   AGENT_CAN_READ_ENV,
   BLANKET_BASH_ALLOW,
@@ -99,15 +104,16 @@ type RuleFix = {
   edit(path: string, current: string | undefined, registry: PackageRegistry): Promise<FixedEdit>;
 };
 
-const DENY_ENV: RuleFix = {
+/** A whole-repo Rule's Fix PR: the `.env` deny entries, unless the root settings file already clears that Rule. */
+const denyEnvFix = (ruleId: RuleId): RuleFix => ({
   isFile: (path) => path === WHOLE_REPO_PATH,
-  edit: async (_path, current) => denyEnv(current),
-};
+  edit: async (_path, current) => denyEnv(ruleId, current),
+});
 
 /** Each Rule that gets a Fix PR; a Rule not here gets none. */
 const FIXES = new Map<RuleId, RuleFix>([
-  [AGENT_CAN_READ_ENV, DENY_ENV],
-  [NO_RUNTIME_GUARD, DENY_ENV],
+  [AGENT_CAN_READ_ENV, denyEnvFix(AGENT_CAN_READ_ENV)],
+  [NO_RUNTIME_GUARD, denyEnvFix(NO_RUNTIME_GUARD)],
   [
     BLANKET_BASH_ALLOW,
     { isFile: isClaudeSettingsFile, edit: async (path, current) => removeBroadBash(path, current) },
@@ -145,13 +151,17 @@ export async function fixedEdit(
   return fix.edit(location.path, current, registry);
 }
 
-/** Adds the `.env` deny entries to the root settings file, creating the file, `permissions` or `deny` as needed. */
-function denyEnv(current: string | undefined): FixedEdit {
+/**
+ * Adds the `.env` deny entries to the root settings file, creating the file, `permissions` or `deny` as needed. A file
+ * that already clears `ruleId` by its scanner's own match (`settingsClear`) is already fixed.
+ */
+function denyEnv(ruleId: RuleId, current: string | undefined): FixedEdit {
   const read =
     current === undefined
       ? { text: "{}", config: {} as Record<string, unknown> }
       : readJsonObject(current);
   if (read === undefined) return refused(`${WHOLE_REPO_PATH} ${NOT_JSON}`);
+  if (settingsClear(ruleId, read.text)) return refused(ALREADY_FIXED);
   const { config } = read;
   // A key that's there with another type, `null` included, is refused rather than replaced.
   const permissions = config.permissions === undefined ? {} : config.permissions;
@@ -159,7 +169,6 @@ function denyEnv(current: string | undefined): FixedEdit {
   const deny = permissions.deny === undefined ? [] : permissions.deny;
   if (!Array.isArray(deny)) return refused(notReadable("permissions.deny"));
   const added = ENV_DENY.filter((entry) => !deny.includes(entry));
-  if (added.length === 0) return refused(ALREADY_FIXED);
   const changes = rewriteChanges(WHOLE_REPO_PATH, read.text);
   if (changes !== undefined) return refused(changes);
   permissions.deny = [...(deny as unknown[]), ...added];
