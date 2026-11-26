@@ -236,8 +236,8 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     setDeleting(false);
     setGone(false);
   }
-  // The page leaving forgets them too: a Team switch mounts a fresh page, so their answer is dropped, not shown in a
-  // page that's gone.
+  // A Team or Role change forgets the save and delete under way, and so does the page leaving: a Team switch mounts a
+  // fresh page, so their answer is dropped, not shown in a page that's gone.
   useEffect(
     () => () => {
       saveCall.current = null;

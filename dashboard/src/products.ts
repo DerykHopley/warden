@@ -91,8 +91,9 @@ export function rereadsAfterDrop(result: SaveResult | TeamCheckRefused): boolean
  * the Product isn't stored ("deleted", or "not-found" when it was already gone). No answer leaves the list as it is, as
  * for a save (`rereadsAfterDrop`).
  */
-export const rereadsAfterDroppedDelete = (result: DeleteResult | TeamCheckRefused): boolean =>
-  result.kind === "deleted" || result.kind === "not-found";
+export function rereadsAfterDroppedDelete(result: DeleteResult | TeamCheckRefused): boolean {
+  return result.kind === "deleted" || result.kind === "not-found";
+}
 
 /** The Products pages shown now, each told when a dropped change may have changed a Team's Products. */
 const productsWatchers = new Set<(team: string | null) => void>();

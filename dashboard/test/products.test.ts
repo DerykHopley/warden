@@ -9,8 +9,11 @@ import {
   deleteProductInTeam,
   fetchFrameworks,
   fetchProducts,
+  rereadsAfterDroppedDelete,
   saveProduct,
   saveProductInTeam,
+  type DeleteResult,
+  type TeamCheckRefused,
 } from "../src/products.ts";
 import { callsTo, fetchMock, json, noContent, serve } from "./fake-api.ts";
 
@@ -268,6 +271,26 @@ describe("deleteProduct", () => {
   it("reads no answer as not answering", async () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
     expect(await deleteProduct(getToken, "prod_1")).toEqual({ kind: "not-answering" });
+  });
+});
+
+// A dropped delete's 204 is checked through the shell (AppShell.test.tsx); these are its other answers, as
+// `deleteProduct` reads them.
+describe("rereadsAfterDroppedDelete", () => {
+  it("reads the list again on a 404: the Product was already gone", () => {
+    expect(rereadsAfterDroppedDelete({ kind: "not-found" })).toBe(true);
+  });
+
+  it.each<[string, DeleteResult | TeamCheckRefused]>([
+    ["a 5xx or no answer", { kind: "not-answering" }],
+    ["a 403", { kind: "forbidden" }],
+    ["a 409", { kind: "conflict", error: null }],
+    ["another 4xx", { kind: "refused", error: null }],
+    ["a 401", { kind: "session-ended" }],
+    ["a 429", { kind: "too-many-attempts", retryAfter: null }],
+    ["/api/me's 429", { kind: "too-many-sign-ins", retryAfter: null }],
+  ])("leaves the list as it is on %s", (_answer, result) => {
+    expect(rereadsAfterDroppedDelete(result)).toBe(false);
   });
 });
 
