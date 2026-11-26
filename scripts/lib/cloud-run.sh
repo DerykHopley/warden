@@ -31,6 +31,8 @@ secret_version() {
     warden-clerk-jwt-key) echo 1 ;;
     warden-github-app-client-secret) echo 1 ;;
     warden-github-app-private-key) echo 1 ;;
+    warden-github-write-app-client-secret) echo 1 ;;
+    warden-github-write-app-private-key) echo 1 ;;
     *)
       echo "$PROGRAM: no pinned version for the secret $1" >&2
       exit 1
