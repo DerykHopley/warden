@@ -342,21 +342,53 @@ export type WordAt =
 /** One word of a server's command line, and where it sits. */
 type Word = { text: string; at: WordAt };
 
+/** A span of a command string's text, from `start` up to `end`. */
+type Span = { start: number; end: number };
+
+/**
+ * How many of a command string's white-space-split `words` its command takes: the fewest that name a runner or `cmd`,
+ * as one word or as a path with a space in it (`C:\Program Files\nodejs\npx.cmd`). A path starts as one, and no later
+ * word in it starts an option or another path, so `node /opt/uvx` is never a path to `uvx`. 1 when none do.
+ */
+function commandWordCount(command: string, words: readonly Span[]): number {
+  const text = ({ start, end }: Span) => command.slice(start, end);
+  const [first] = words;
+  if (first === undefined) return 1;
+  for (let count = 1; count <= words.length; count += 1) {
+    const last = words[count - 1]!;
+    const later = text(last);
+    if (
+      count > 1 &&
+      (!LOCAL_PATH.test(text(first)) || later.startsWith("-") || LOCAL_PATH.test(later))
+    ) {
+      return 1;
+    }
+    const name = text({ start: first.start, end: last.end });
+    if (RUNNER_COMMANDS.has(commandName(name)) || isCmd(name)) return count;
+  }
+  return 1;
+}
+
 /**
  * A server's command line as words: its `command`, then its string `args`, read after a leading `cmd /c`. The command
- * is one word when the whole of it names a runner or `cmd`, as a path with a space does (`C:\Program
- * Files\nodejs\npx.cmd`); otherwise it is split on white space (`npx -y some-mcp-server`).
+ * string is split on white space (`npx -y some-mcp-server`), except that a path with a space in it, to a runner or
+ * `cmd`, stays one word (`C:\Program Files\nodejs\npx.cmd -y some-mcp-server`).
  */
 function commandLine(command: string, args: unknown): Word[] {
-  const whole = command.trim();
-  const start = command.indexOf(whole);
+  const spans = [...command.matchAll(/\S+/g)].map(({ 0: text, index }) => ({
+    start: index,
+    end: index + text.length,
+  }));
+  const count = commandWordCount(command, spans);
+  const commandSpans =
+    spans.length === 0
+      ? []
+      : [{ start: spans[0]!.start, end: spans[count - 1]!.end }, ...spans.slice(count)];
   const words: Word[] = [
-    ...(RUNNER_COMMANDS.has(commandName(whole)) || isCmd(whole)
-      ? [{ text: whole, at: { field: "command", start, end: start + whole.length } } as const]
-      : [...command.matchAll(/\S+/g)].map(({ 0: text, index }) => ({
-          text,
-          at: { field: "command", start: index, end: index + text.length } as const,
-        }))),
+    ...commandSpans.map(({ start, end }) => ({
+      text: command.slice(start, end),
+      at: { field: "command", start, end } as const,
+    })),
     ...(Array.isArray(args) ? args : []).flatMap((arg: unknown, index) =>
       typeof arg === "string" ? [{ text: arg, at: { field: "args", index } as const }] : [],
     ),
