@@ -23,6 +23,9 @@ import { finding, TEAM } from "./findings-fixture.ts";
 
 beforeEach(() => {
   fetchMock.mockReset();
+  // A Guard card reads its Fix PR as it opens: a test that gives no route has that read refused, never an
+  // undefined answer.
+  serve({});
   vi.stubGlobal("fetch", fetchMock);
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -83,6 +86,8 @@ function show(
     refreshMe: vi.fn(),
     onSessionEnded: vi.fn(),
   };
+  // One function across rerenders, as Clerk's is: a new one would make every read ask again.
+  const getToken = () => Promise.resolve("session-token");
   const element = (shown: Finding, listedNow: ProposalsResult | "loading") => (
     <DetailCard
       finding={shown}
@@ -90,7 +95,7 @@ function show(
       clerkUsers={clerkUsers}
       role={role}
       userId={ME}
-      getToken={() => Promise.resolve("session-token")}
+      getToken={getToken}
       candidates={candidates}
       assetName={assetName}
       onClear={calls.onClear}
@@ -425,6 +430,10 @@ async function fill(form: Form, reason = "Checked by hand") {
   const [candidate] = form.queryAllByRole("radio");
   if (candidate !== undefined) await userEvent.click(candidate);
 }
+
+/** The requests that change something: every one but a read (a Guard card reads its Fix PR as it opens). */
+const changesSent = () =>
+  fetchMock.mock.calls.filter(([, init]) => (init?.method ?? "GET") !== "GET");
 
 /** The bodies sent to `path`, parsed; undefined for a request with none. */
 const sent = (path: string) =>
@@ -922,7 +931,7 @@ describe("a Lead's decision", () => {
 
     expect(card.queryByRole("form")).not.toBeInTheDocument();
     expect(card.getByRole("button", { name: "Reopen" })).toHaveFocus();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(changesSent()).toEqual([]);
   });
 
   it.each<[string, Finding, string]>([
@@ -1097,7 +1106,7 @@ describe("a Reopens on day before tomorrow, typed in or made today by midnight",
       );
       expect(refusal).not.toHaveTextContent(/until/i);
       expect(whyField(form)).toHaveValue("Fixed next sprint.");
-      expect(fetchMock).not.toHaveBeenCalled();
+      expect(changesSent()).toEqual([]);
     },
   );
 
@@ -1300,5 +1309,68 @@ describe("a Lead's Approve and Reject", () => {
 
     expect(await card.findByRole("status")).toHaveTextContent("Proposal approved.");
     expect(reasonField(formNamed(card, "Reject"))).toHaveValue("Half typed");
+  });
+});
+
+// What the Fix PR section shows is FixPrSection.test.tsx's; here, which cards have one, and that a decision reads it again.
+describe("the card's Fix PR section", () => {
+  const FIX_PR_PATH = `/api/guard/findings/${ID}/fix-pr`;
+  const GRANT_PATH = "/api/github/write-grant";
+  /** The reads of an Open, fixable Guard Finding with no Fix PR yet, in a Team holding a write grant. */
+  const fixable: Routes = {
+    me: () => json(200, { userId: ME, team: OPEN.team, role: "lead", level: "quick" }),
+    fixPr: () => json(200, { fixable: true, fix_pr: null }),
+    writeGrant: () =>
+      json(200, {
+        installations: [
+          { installation_id: 7, granted_by: "user_admin", granted_at: "2026-11-20T09:00:00.000Z" },
+        ],
+      }),
+  };
+
+  it("a Patch Finding's card asks neither the Fix PR read nor the write grants", async () => {
+    const assessment = vi.fn(() => json(404, {}));
+    serve({ ...fixable, assessment });
+    const patch = finding(ID, {
+      module: "patch",
+      rule_id: "patch/known-vulnerability",
+      asset: { kind: "product", ref: "9b7c0d1e-0000-4000-8000-000000000009" },
+      location: {
+        kind: "dependency",
+        package: "pkg:pypi/langchain",
+        version: "0.0.200",
+        vulnerability: "CVE-2023-36258",
+      },
+      title: "CVE-2023-36258: LangChain runs code from a prompt",
+    });
+    const { card } = show(patch, listed([]), { role: "lead" });
+    await vi.waitFor(() => expect(assessment).toHaveBeenCalled());
+    // Let any call the card would make go out before counting.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(callsTo(FIX_PR_PATH)).toHaveLength(0);
+    expect(callsTo(GRANT_PATH)).toHaveLength(0);
+    expect(card.queryByRole("region", { name: "Fix PR" })).toBeNull();
+  });
+
+  it("an Open Finding a Lead accepts reads its Fix PR again, and loses its button", async () => {
+    serve({ ...fixable, findingAction: () => json(200, ACCEPTED) });
+    const shown = show(OPEN, listed([]), { role: "lead" });
+    await shown.card.findByRole("button", { name: "Open a Fix PR" });
+    expect(callsTo(FIX_PR_PATH)).toHaveLength(1);
+
+    const form = await openForm(shown.card, "Accept");
+    await fill(form, "Fixed next sprint");
+    await userEvent.click(form.getByRole("button", { name: "Accept" }));
+    await shown.card.findByRole("status");
+    expect(shown.onFindingChanged).toHaveBeenCalled();
+    // The page reads the Finding again and hands the card its new Status.
+    shown.update(ACCEPTED);
+
+    await vi.waitFor(() => expect(callsTo(FIX_PR_PATH)).toHaveLength(2));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(shown.card.queryByRole("button", { name: "Open a Fix PR" })).toBeNull();
+    // An Accepted Finding gets no Fix PR, so the write grants aren't asked again.
+    expect(callsTo(GRANT_PATH)).toHaveLength(1);
   });
 });

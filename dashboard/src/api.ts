@@ -93,6 +93,9 @@ export const NOT_ANSWERING = "Warden's server isn't answering. Try again.";
 export const tryAgainIn = (retryAfter: number | null, tooOften = "sign-in attempts") =>
   `Too many ${tooOften}. Try again in ${retryAfter === null ? "a minute" : `${retryAfter} seconds`}.`;
 
+/** The server's words as one sentence: ending with a full stop, once. */
+export const sentence = (words: string) => `${words.trim().replace(/[.!?]$/, "")}.`;
+
 /** A refusal's `error`: the server's words for it, or null when its body has none. */
 export async function serverError(res: Response): Promise<string | null> {
   const body: unknown = await res.json().catch(() => null);

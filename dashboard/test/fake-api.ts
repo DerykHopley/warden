@@ -35,6 +35,10 @@ export type Routes = {
   frameworks?: () => Answer;
   /** GET /api/patch/findings/:id/assessment, with the Finding id. */
   assessment?: (id: string) => Answer;
+  /** GET /api/guard/findings/:id/fix-pr, with the Finding id: whether it's fixable, and its Fix PR. */
+  fixPr?: (id: string) => Answer;
+  /** POST /api/guard/findings/:id/fix-pr, with the Finding id and the parsed body (none: undefined). */
+  openFixPr?: (id: string, body: unknown) => Answer;
   /** POST /api/products (id null) or PUT /api/products/:id, with the Product id and the parsed body. */
   saveProduct?: (id: string | null, body: unknown) => Answer;
   /** DELETE /api/products/:id, with the Product id. */
@@ -91,6 +95,13 @@ export function serve(routes: Routes) {
     const assessed = /^\/api\/patch\/findings\/([^/]+)\/assessment$/.exec(url);
     if (assessed && method === "GET" && routes.assessment) {
       return routes.assessment(decodeURIComponent(assessed[1] ?? ""));
+    }
+    const fixPr = /^\/api\/guard\/findings\/([^/]+)\/fix-pr$/.exec(url);
+    if (fixPr && method === "GET" && routes.fixPr) {
+      return routes.fixPr(decodeURIComponent(fixPr[1] ?? ""));
+    }
+    if (fixPr && method === "POST" && routes.openFixPr) {
+      return routes.openFixPr(decodeURIComponent(fixPr[1] ?? ""), sentBody(init));
     }
     if (url === "/api/products" && method === "POST" && routes.saveProduct) {
       return routes.saveProduct(null, sentBody(init));
