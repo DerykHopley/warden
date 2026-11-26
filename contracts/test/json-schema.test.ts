@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { jsonSchemaDir, renderJsonSchemas } from "../json-schema/render.ts";
+import { AWS_KEY } from "./secret-fixtures.ts";
 
 describe("the committed JSON Schema files", () => {
   it("are one per published schema", async () => {
@@ -63,7 +64,7 @@ describe("the committed JSON Schema files", () => {
       const mask = file.$defs.SecretEvidence.properties.mask as StringSchema;
       expect(passes(mask, "AKIA****************")).toBe(true);
       expect(passes(mask, "****")).toBe(true);
-      expect(passes(mask, "AKIAABCDEFGHIJKLMNOP")).toBe(false);
+      expect(passes(mask, AWS_KEY)).toBe(false);
       expect(passes(mask, "AKIAB***")).toBe(false);
       expect(passes(mask, "A*K*I*A*B")).toBe(false);
     });

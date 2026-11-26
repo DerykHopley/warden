@@ -13,5 +13,13 @@ export const STRIPE_KEY = ["sk", "_live_", "9Zt4Kq7Wm2Rb8Xn5Hc3Vj6Lp"].join("");
 /** A made-up Anthropic API key. */
 export const ANTHROPIC_KEY = ["sk", "-ant-", "api03-", "Qm7Rt2Wx9Kb4Nz6Hd8Fj3Lc5Vp1Sg0Ty"].join("");
 
+/** A made-up RSA private key block, as a PEM file holds one. */
+export const RSA_PRIVATE_KEY = [
+  ["-----BEGIN RSA ", "PRIVATE KEY-----"].join(""),
+  "the-key",
+  ["-----END RSA ", "PRIVATE KEY-----"].join(""),
+  "",
+].join("\n");
+
 /** A made-up Slack bot token. */
 export const SLACK_TOKEN = ["xox", "b-", "4821936507-", "Tq8Wn3Zr6Kd1Hm9Xc"].join("");
