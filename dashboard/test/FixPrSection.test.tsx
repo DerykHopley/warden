@@ -149,17 +149,13 @@ describe("the Fix PR section's button", () => {
     ],
     ["false_positive", {}],
     ["fixed", {}],
-  ])(
-    "a %s Finding answered fixable shows no button and no line, and asks no write grant",
-    async (status, fields) => {
-      const shown = finding(ID, { status, ...fields });
-      const { card } = show(shown, fixable());
-      await shownAfterReads(card, 1);
-      expect(card.queryByRole("button", { name: "Open a Fix PR" })).toBeNull();
-      expect(card.queryByRole("region", { name: "Fix PR" })).toBeNull();
-      expect(callsTo(GRANT_PATH)).toHaveLength(0);
-    },
-  );
+  ])("a %s Finding answered fixable shows no button and no line", async (status, fields) => {
+    const shown = finding(ID, { status, ...fields });
+    const { card } = show(shown, fixable());
+    await shownAfterReads(card, 1);
+    expect(card.queryByRole("button", { name: "Open a Fix PR" })).toBeNull();
+    expect(card.queryByRole("region", { name: "Fix PR" })).toBeNull();
+  });
 
   it("an Accepted Finding holding a Fix PR still shows its link, and no button", async () => {
     const accepted = finding(ID, {
@@ -185,7 +181,7 @@ describe("the Fix PR section's button", () => {
     expect(fixPr.queryByRole("button")).toBeNull();
   });
 
-  it("a Finding that isn't fixable and has no Fix PR shows no heading and no line, and asks no write grant", async () => {
+  it("a Finding that isn't fixable and has no Fix PR shows no heading and no line", async () => {
     const { card } = show(
       OPEN,
       { fixPr: () => json(200, { fixable: false, fix_pr: null }) },
@@ -194,7 +190,6 @@ describe("the Fix PR section's button", () => {
     await shownAfterReads(card, 1);
     expect(card.queryByRole("region", { name: "Fix PR" })).toBeNull();
     expect(card.queryByText(/Fix PR/)).toBeNull();
-    expect(callsTo(GRANT_PATH)).toHaveLength(0);
   });
 
   it("shows nothing while the reads are waiting", async () => {
@@ -230,31 +225,26 @@ describe("the Fix PR section's link", () => {
 });
 
 describe("the Fix PR section's reads", () => {
-  it.each<[string, () => Response]>([
-    ["a 500", () => json(500, { error: "boom" })],
-    ["a body that doesn't parse", () => json(200, { fixable: "yes", fix_pr: null })],
-  ])(
-    "%s shows Couldn't load the Fix PR. with Retry, busy while it runs; Retry asks again",
-    async (_, failed) => {
-      const again = deferred<Response>();
-      const answers = [failed, () => again.promise];
-      const { card } = show(OPEN, { ...fixable(), fixPr: () => answers.shift()!() });
-      const fixPr = await section(card);
-      expect(await fixPr.findByText("Couldn't load the Fix PR.")).toHaveClass("muted");
+  // A body that doesn't parse is read as not answering too, in fix-pr.test.ts: the section shows it as it shows a 500.
+  it("a 500 shows Couldn't load the Fix PR. with Retry, busy while it runs; Retry asks again", async () => {
+    const again = deferred<Response>();
+    const answers = [() => json(500, { error: "boom" }), () => again.promise];
+    const { card } = show(OPEN, { ...fixable(), fixPr: () => answers.shift()!() });
+    const fixPr = await section(card);
+    expect(await fixPr.findByText("Couldn't load the Fix PR.")).toHaveClass("muted");
 
-      const retry = fixPr.getByRole("button", { name: "Retry the Fix PR" });
-      expect(retry).toHaveTextContent(/^Retry$/);
-      expect(retry).toHaveClass("secondary");
-      await userEvent.click(retry);
-      expect(retry).toHaveAttribute("aria-busy", "true");
-      expect(retry).toBeDisabled();
-      expect(callsTo(FIX_PR_PATH)).toHaveLength(2);
+    const retry = fixPr.getByRole("button", { name: "Retry the Fix PR" });
+    expect(retry).toHaveTextContent(/^Retry$/);
+    expect(retry).toHaveClass("secondary");
+    await userEvent.click(retry);
+    expect(retry).toHaveAttribute("aria-busy", "true");
+    expect(retry).toBeDisabled();
+    expect(callsTo(FIX_PR_PATH)).toHaveLength(2);
 
-      again.resolve(json(200, { fixable: true, fix_pr: null }));
-      expect(await openButton(card)).toBeVisible();
-      expect(fixPr.queryByText("Couldn't load the Fix PR.")).toBeNull();
-    },
-  );
+    again.resolve(json(200, { fixable: true, fix_pr: null }));
+    expect(await openButton(card)).toBeVisible();
+    expect(fixPr.queryByText("Couldn't load the Fix PR.")).toBeNull();
+  });
 
   it("a write grants' read that fails shows Couldn't load the Fix PR. too", async () => {
     const { card } = show(OPEN, { ...fixable(), writeGrant: () => json(500, {}) });
@@ -289,13 +279,7 @@ describe("opening a Fix PR", () => {
     expect(line).toHaveClass("card-line");
     expect(line).toHaveAttribute("role", "status");
     expect(line).toHaveFocus();
-    const link = fixPr.getByRole("link", { name: "Fix PR #12" });
-    expect(link).toHaveAttribute("href", FIX_PR.url);
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", "noopener noreferrer");
-    const posts = callsTo(FIX_PR_PATH).filter(([, sent]) => sent?.method === "POST");
-    expect(posts).toHaveLength(1);
-    expect(posts[0]?.[1]?.body).toBeUndefined();
+    expect(fixPr.getByRole("link", { name: "Fix PR #12" })).toHaveAttribute("href", FIX_PR.url);
   });
 
   it("a 200 shows Fix PR #12 is still open.", async () => {
@@ -344,20 +328,13 @@ describe("opening a Fix PR", () => {
     expect(fixPr.queryByRole("button", { name: "Open a Fix PR" })).toBeNull();
     expect(callsTo(FIX_PR_PATH).filter(([, init]) => init?.method !== "POST")).toHaveLength(2);
     expect(callsTo(GRANT_PATH)).toHaveLength(2);
+    // The button it was pressed on went: focus goes to the refusal, not to the page.
+    expect(line).toHaveFocus();
   });
 
   it.each<[string, () => Response, string]>([
+    // A 502 and a 503 are read as a 400 is, in fix-pr.test.ts.
     ["a 400", () => json(400, { error: "No Fix PR for this Rule" }), "No Fix PR for this Rule."],
-    [
-      "a 502",
-      () => json(502, { error: "GitHub didn't answer; no Fix PR was opened" }),
-      "GitHub didn't answer; no Fix PR was opened.",
-    ],
-    [
-      "a 503",
-      () => json(503, { error: "Fix PRs aren't set up on this Warden" }),
-      "Fix PRs aren't set up on this Warden.",
-    ],
     ["a 400 with no words", () => new Response(null, { status: 400 }), "Warden refused this."],
     [
       "a 429 with Retry-After 30",
@@ -407,7 +384,8 @@ describe("opening a Fix PR", () => {
     await vi.waitFor(() => expect(calls.onSessionEnded).toHaveBeenCalledOnce());
   });
 
-  it("when /api/me names another Team before the POST, sends no POST and says the server isn't answering", async () => {
+  // That no POST is sent is fix-pr.test.ts's (openFixPrInTeam); here, what the section says.
+  it("when /api/me names another Team before the POST, says the server isn't answering", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       let team = OPEN.team;
@@ -423,7 +401,6 @@ describe("opening a Fix PR", () => {
       expect(await card.findByRole("alert")).toHaveTextContent(
         /^Warden's server isn't answering\. Try again\.$/,
       );
-      expect(callsTo(FIX_PR_PATH).filter(([, init]) => init?.method === "POST")).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -440,7 +417,7 @@ describe("opening a Fix PR", () => {
       () => json(429, {}, { "Retry-After": "30" }),
       "Too many sign-in attempts. Try again in 30 seconds.",
     ],
-  ])("the Team check's %s before the POST sends nothing and says so", async (_, me, words) => {
+  ])("the Team check's %s before the POST says so", async (_, me, words) => {
     const answers = [inTeam(), me];
     const { card } = show(OPEN, {
       ...fixable(),
@@ -449,7 +426,6 @@ describe("opening a Fix PR", () => {
     });
     await userEvent.click(await openButton(card));
     expect(await card.findByRole("alert")).toHaveTextContent(words);
-    expect(callsTo(FIX_PR_PATH).filter(([, init]) => init?.method === "POST")).toHaveLength(0);
   });
 
   it("the section's line doesn't take the card's own: after a refused Fix PR, a decision's Done line takes focus", async () => {

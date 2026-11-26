@@ -1,8 +1,8 @@
 // The detail card's Fix PR section (docs/design.md: Fix PR section (Detail card)): a Guard Finding's Fix PR, asked
 // when the card opens on it. Its link, who opened it and when; and, for an Open Finding whose Rule and Location get a
 // Fix PR, "Open a Fix PR" while the Team holds a write grant, or the line saying an Admin grants one. Most Guard cards
-// aren't fixable, so nothing shows while it asks, nor when there's nothing to show. DetailCard keys it by the Finding's
-// Status, so a decision asks again, and the earlier ask's answer is dropped.
+// aren't fixable, so nothing shows while it asks, nor when there's nothing to show. A new Status (a decision, or the
+// page's read after a 409) asks again and drops the earlier ask's answer; it drops the line too, but for a 409's.
 import type { Finding, FixPrBody, Role } from "@warden/contracts";
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { NOT_ANSWERING, sentence, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
@@ -20,8 +20,14 @@ export const MAYBE_OPENED =
 /** A refusal with no words from the server. */
 const REFUSED = "Warden refused this.";
 
-/** The section's one line: what was done (focused), or why the open was refused. */
-type Line = { kind: "done" | "refused"; text: string };
+/** A refusal's line: the server's words as a sentence, or REFUSED when it gave none. */
+const refusalWords = (error: string | null) => (error === null ? REFUSED : sentence(error));
+
+/**
+ * The section's one line: what was done (focused), or why the open was refused. A Status change drops it, except a
+ * 409's refusal (`outlastsChange`), which stays through the one change it may have caused.
+ */
+type Line = { kind: "done" | "refused"; text: string; outlastsChange?: boolean };
 
 export function FixPrSection(props: {
   finding: Finding;
@@ -41,7 +47,7 @@ export function FixPrSection(props: {
   const { id, team, status } = finding;
   const headingId = useId();
   const call = useCallback(
-    () => readFixPrInTeam(getToken, { id, team, status }),
+    () => readFixPrInTeam(getToken, team, id, status),
     [getToken, id, team, status],
   );
   const { result, setResult, refresh } = useWardenCall(call, props.onSessionEnded);
@@ -50,6 +56,11 @@ export function FixPrSection(props: {
   const [opening, setOpening] = useState(false);
   const openingNow = useRef(false);
   const [line, setLine] = useState<Line | null>(null);
+  const [lineStatus, setLineStatus] = useState(status);
+  if (lineStatus !== status) {
+    setLineStatus(status);
+    setLine(line?.outlastsChange === true ? { ...line, outlastsChange: false } : null);
+  }
   const lineRef = useRef<HTMLParagraphElement>(null);
   const focusLine = useRef(false);
 
@@ -92,18 +103,20 @@ export function FixPrSection(props: {
       }
       case "conflict":
         // An uninstalled write app (the server revoked its grant) hides the button; a Finding no longer Open drops it.
-        refused(answer.error === null ? REFUSED : sentence(answer.error));
+        // Either way the button pressed may go, so focus moves to the refusal rather than fall to the page.
+        setLine({ kind: "refused", text: refusalWords(answer.error), outlastsChange: true });
+        focusLine.current = true;
         refresh();
         props.onFindingChanged();
         return;
       case "refused":
-        refused(answer.error === null ? REFUSED : sentence(answer.error));
+        refused(refusalWords(answer.error));
         return;
       case "not-found":
         refused(FINDING_GONE);
         props.onFindingGone();
         return;
-      case "too-many-attempts":
+      case "too-many-fix-prs":
         refused(tryAgainIn(answer.retryAfter, "Fix PRs"));
         return;
       case "maybe-opened":
@@ -128,15 +141,15 @@ export function FixPrSection(props: {
   let shown: ReactNode = null;
   if (result !== "loading" && result.kind === "read") {
     const offered = result.fixable && status === "open";
-    const button = offered && result.granted === true && props.role !== null;
+    const showButton = offered && result.granted === true && props.role !== null;
     const noGrant = offered && result.granted === false;
-    if (result.fixPr !== null || button || noGrant) {
+    if (result.fixPr !== null || showButton || noGrant) {
       shown = (
         <>
           {result.fixPr !== null && (
             <FixPrLink fixPr={result.fixPr} userId={props.userId} clerkUsers={props.clerkUsers} />
           )}
-          {button && (
+          {showButton && (
             <div className="fix-pr-actions">
               <button
                 type="button"

@@ -205,19 +205,19 @@ export function DetailCard(props: {
     focusNext.current = null;
     if (card === null) return;
     // The card's own line, never the Fix PR section's, which keeps its own focus.
-    const cardLine = () => card.querySelector<HTMLElement>(":scope > .card-line");
+    const cardLineElement = () => card.querySelector<HTMLElement>(":scope > .card-line");
     // Focus that sat in a form which went away would fall to <body>: it goes to the line, or the first button left.
     if (closedAway !== refocused.current) {
       refocused.current = closedAway;
       const active = document.activeElement;
       if (target === null && (active === null || active === document.body)) {
-        (cardLine() ?? card.querySelector<HTMLElement>("[data-opener]"))?.focus();
+        (cardLineElement() ?? card.querySelector<HTMLElement>("[data-opener]"))?.focus();
       }
     }
     if (target === null) return;
     const element =
       target === "line"
-        ? cardLine()
+        ? cardLineElement()
         : target === "reason"
           ? card.querySelector<HTMLElement>(".decision-form textarea")
           : [...card.querySelectorAll<HTMLElement>("[data-opener]")].find(
@@ -533,9 +533,9 @@ export function DetailCard(props: {
         />
       )}
       {finding.module === "guard" && (
-        // Keyed by the Status, as the Patch section is: a decision asks again, and drops the earlier ask's answer.
+        // Not keyed by the Status, as the Patch section is: a 409's refusal must outlast the Status change it caused.
+        // The section asks again on a new Status itself, and drops its other lines.
         <FixPrSection
-          key={finding.status}
           finding={finding}
           role={role}
           userId={props.userId}

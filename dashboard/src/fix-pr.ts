@@ -33,26 +33,28 @@ export type FixPrRead =
   | Refused;
 
 /**
- * What the section shows from: `finding`'s Fix PR read, then, for an Open fixable Finding, the Team's write grants. Both
- * are asked only once /api/me says the session is in the Finding's Team, with the token that answer was asked with
- * (`confirmTeam`), as `fetchAssessmentInTeam` asks: neither answer names a Team. While /api/me names another Team, or
- * gives no answer, nothing is asked; its 429 is too many sign-in attempts, and its 409 is not answering. Any refusal
- * of the write grants' read is not answering too.
+ * What the section shows from: the Fix PR read of Finding `findingId`, then, while its `status` is Open and it's
+ * fixable, the Team's write grants. Both are asked only once /api/me says the session is in `team`, the Finding's Team,
+ * with the token that answer was asked with (`confirmTeam`), as `fetchAssessmentInTeam` asks: neither answer names a
+ * Team. While /api/me names another Team, or gives no answer, nothing is asked; its 429 is too many sign-in attempts,
+ * and its 409 is not answering. Any refusal of the write grants' read is not answering too.
  */
 export async function readFixPrInTeam(
   getToken: GetToken,
-  finding: Pick<Finding, "id" | "team" | "status">,
+  team: string,
+  findingId: string,
+  status: Finding["status"],
 ): Promise<FixPrRead> {
-  const inTeam = await confirmTeam(getToken, finding.team);
+  const inTeam = await confirmTeam(getToken, team);
   if (inTeam.kind === "too-many-sign-ins") {
     return { kind: "too-many-attempts", retryAfter: inTeam.retryAfter };
   }
   if (inTeam.kind === "team-not-opened") return { kind: "not-answering" };
   if (inTeam.kind !== "confirmed") return inTeam;
 
-  const read = await fetchFixPr(inTeam.getToken, finding.id);
+  const read = await fetchFixPr(inTeam.getToken, findingId);
   if (read.kind !== "fix-pr") return read;
-  if (!read.fixable || finding.status !== "open") {
+  if (!read.fixable || status !== "open") {
     return { kind: "read", fixable: read.fixable, fixPr: read.fixPr, granted: null };
   }
   const grants = await fetchWriteGrants(inTeam.getToken);
@@ -80,15 +82,18 @@ export type OpenFixPrResult =
   | { kind: "not-found" }
   /** No answer, a 5xx the server doesn't word, or a 2xx that doesn't parse: a Fix PR may have been opened. */
   | { kind: "maybe-opened" }
-  /** 429: the Team opened too many Fix PRs this hour. */
-  | { kind: "too-many-attempts"; retryAfter: number | null }
+  /** 429: the Team opened too many Fix PRs this hour. Named apart from a read's `too-many-attempts`, a sign-in limit. */
+  | { kind: "too-many-fix-prs"; retryAfter: number | null }
   | { kind: "session-ended" };
 
 /** `POST /api/guard/findings/:id/fix-pr`, with no body. The server may wait for GitHub, for several seconds. */
 export async function openFixPr(getToken: GetToken, findingId: string): Promise<OpenFixPrResult> {
   const res = await callWarden(getToken, fixPrPath(findingId), { method: "POST" });
   if (!(res instanceof Response)) {
-    return res.kind === "not-answering" ? { kind: "maybe-opened" } : res;
+    if (res.kind === "not-answering") return { kind: "maybe-opened" };
+    if (res.kind === "too-many-attempts")
+      return { kind: "too-many-fix-prs", retryAfter: res.retryAfter };
+    return res;
   }
   if (res.status === 201 || res.status === 200) {
     const fixPr = await parsed(res, FixPrBody);

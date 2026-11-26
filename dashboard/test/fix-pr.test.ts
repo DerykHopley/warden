@@ -1,11 +1,11 @@
 // The Fix PR section's calls (#224, story 6): a Guard Finding's Fix PR read, and opening one, each read into the result
 // the section shows; and the reads and the open asked only with a token /api/me says is in the Finding's Team. What the
 // section shows for each is FixPrSection.test.tsx's.
-import type { FixPrBody } from "@warden/contracts";
+import type { Finding, FixPrBody } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fetchFixPr, openFixPr, openFixPrInTeam, readFixPrInTeam } from "../src/fix-pr.ts";
 import { callsTo, fetchMock, json, serve } from "./fake-api.ts";
-import { finding, TEAM } from "./findings-fixture.ts";
+import { TEAM } from "./findings-fixture.ts";
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -114,9 +114,9 @@ describe("openFixPr", () => {
     expect(await openFixPr(getToken, ID)).toEqual({ kind: "not-found" });
   });
 
-  it("reads a 429 with its Retry-After", async () => {
+  it("reads a 429 as too many Fix PRs, with its Retry-After", async () => {
     serve({ openFixPr: () => json(429, { error: "slow down" }, { "Retry-After": "30" }) });
-    expect(await openFixPr(getToken, ID)).toEqual({ kind: "too-many-attempts", retryAfter: 30 });
+    expect(await openFixPr(getToken, ID)).toEqual({ kind: "too-many-fix-prs", retryAfter: 30 });
   });
 
   it.each<[string, () => Response | Promise<Response>]>([
@@ -142,7 +142,7 @@ describe("readFixPrInTeam", () => {
       fixPr: () => json(200, { fixable: true, fix_pr: null }),
       writeGrant: () => json(200, { installations: [GRANT] }),
     });
-    expect(await readFixPrInTeam(freshTokens, finding(ID))).toEqual({
+    expect(await readFixPrInTeam(freshTokens, TEAM, ID, "open")).toEqual({
       kind: "read",
       fixable: true,
       fixPr: null,
@@ -161,15 +161,15 @@ describe("readFixPrInTeam", () => {
       fixPr: () => json(200, { fixable: true, fix_pr: null }),
       writeGrant: () => json(200, { installations: [] }),
     });
-    expect(await readFixPrInTeam(getToken, finding(ID))).toMatchObject({ granted: false });
+    expect(await readFixPrInTeam(getToken, TEAM, ID, "open")).toMatchObject({ granted: false });
   });
 
-  it.each<[string, Parameters<typeof finding>[1], boolean]>([
-    ["a Finding that isn't fixable", {}, false],
-    ["a fixable Finding that isn't Open", { status: "accepted" }, true],
-  ])("on %s, asks no write grant", async (_, fields, fixable) => {
+  it.each<[string, Finding["status"], boolean]>([
+    ["a Finding that isn't fixable", "open", false],
+    ["a fixable Finding that isn't Open", "accepted", true],
+  ])("on %s, asks no write grant", async (_, status, fixable) => {
     serve({ me: inTeam(), fixPr: () => json(200, { fixable, fix_pr: FIX_PR }) });
-    expect(await readFixPrInTeam(getToken, finding(ID, fields))).toEqual({
+    expect(await readFixPrInTeam(getToken, TEAM, ID, status)).toEqual({
       kind: "read",
       fixable,
       fixPr: FIX_PR,
@@ -188,12 +188,12 @@ describe("readFixPrInTeam", () => {
       fixPr: () => json(200, { fixable: true, fix_pr: null }),
       writeGrant: answer,
     });
-    expect(await readFixPrInTeam(getToken, finding(ID))).toEqual({ kind: "not-answering" });
+    expect(await readFixPrInTeam(getToken, TEAM, ID, "open")).toEqual({ kind: "not-answering" });
   });
 
   it("reads the Fix PR read's 404 as not found, and asks no write grant", async () => {
     serve({ me: inTeam(), fixPr: () => json(404, { error: "No such Finding" }) });
-    expect(await readFixPrInTeam(getToken, finding(ID))).toEqual({ kind: "not-found" });
+    expect(await readFixPrInTeam(getToken, TEAM, ID, "open")).toEqual({ kind: "not-found" });
     expect(callsTo("/api/github/write-grant")).toHaveLength(0);
   });
 
@@ -201,7 +201,7 @@ describe("readFixPrInTeam", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       serve({ me: inTeam("org_left"), fixPr: () => json(404, {}) });
-      const answer = readFixPrInTeam(getToken, finding(ID));
+      const answer = readFixPrInTeam(getToken, TEAM, ID, "open");
       await vi.runAllTimersAsync();
       expect(await answer).toEqual({ kind: "not-answering" });
       expect(callsTo(FIX_PR_PATH)).toHaveLength(0);
@@ -212,12 +212,12 @@ describe("readFixPrInTeam", () => {
 
   it("reads /api/me's 429 as too many sign-in attempts, and its 409 as not answering", async () => {
     serve({ me: () => json(429, {}, { "Retry-After": "30" }) });
-    expect(await readFixPrInTeam(getToken, finding(ID))).toEqual({
+    expect(await readFixPrInTeam(getToken, TEAM, ID, "open")).toEqual({
       kind: "too-many-attempts",
       retryAfter: 30,
     });
     serve({ me: () => json(409, { error: "not opened" }) });
-    expect(await readFixPrInTeam(getToken, finding(ID))).toEqual({ kind: "not-answering" });
+    expect(await readFixPrInTeam(getToken, TEAM, ID, "open")).toEqual({ kind: "not-answering" });
     expect(callsTo(FIX_PR_PATH)).toHaveLength(0);
   });
 });

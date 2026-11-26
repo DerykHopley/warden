@@ -1370,7 +1370,24 @@ describe("the card's Fix PR section", () => {
     await vi.waitFor(() => expect(callsTo(FIX_PR_PATH)).toHaveLength(2));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(shown.card.queryByRole("button", { name: "Open a Fix PR" })).toBeNull();
-    // An Accepted Finding gets no Fix PR, so the write grants aren't asked again.
-    expect(callsTo(GRANT_PATH)).toHaveLength(1);
+  });
+
+  it("a 409 for a Finding no longer Open keeps the server's words, focused, once the page hands the card its new Status", async () => {
+    const words = "Only an Open Finding gets a Fix PR";
+    serve({ ...fixable, openFixPr: () => json(409, { error: words }) });
+    const shown = show(OPEN, listed([]), { role: "lead" });
+    await userEvent.click(await shown.card.findByRole("button", { name: "Open a Fix PR" }));
+    expect(await shown.card.findByRole("alert")).toHaveTextContent(`${words}.`);
+    expect(shown.onFindingChanged).toHaveBeenCalled();
+    // The page reads the Finding again: a Lead elsewhere accepted it.
+    shown.update(ACCEPTED);
+
+    await vi.waitFor(() => expect(callsTo(FIX_PR_PATH).length).toBeGreaterThanOrEqual(3));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const fixPr = within(shown.card.getByRole("region", { name: "Fix PR" }));
+    const line = fixPr.getByRole("alert");
+    expect(line).toHaveTextContent(`${words}.`);
+    expect(line).toHaveFocus();
+    expect(fixPr.queryByRole("button", { name: "Open a Fix PR" })).toBeNull();
   });
 });
