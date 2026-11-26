@@ -104,4 +104,29 @@ describe("the Default Pack", () => {
       expect(covered).toEqual(expect.arrayContaining(onRepo.map((o) => o.rule_id)));
     }
   });
+
+  // The demo's Guard Findings come from three sources. Guard Scans of the Repo report only Default Pack Rules; the two
+  // sources a Repo Scan doesn't read report Rules of their own: a Device Rule, checked on a Device, and the Judge's
+  // Spot run, which reports an Agent session. A Rule outside the Pack from any other source fails here.
+  it("holds the Rule of every Guard Finding the demo shows, leaving out only a Device's and the Judge's Spot run's", () => {
+    const { scans, spotRun } = demoRuns("team", new Date());
+    const guardRuns = [
+      ...scans
+        .filter((scan) => scan.module === "guard")
+        .map((scan) => ["a Guard Scan", scan] as const),
+      ["the Judge's Spot run", spotRun] as const,
+    ];
+    const outsidePack = new Set(
+      guardRuns.flatMap(([source, run]) =>
+        run.observations
+          .filter((o) => !DEFAULT_PACK_RULE_IDS.includes(o.rule_id))
+          .map((o) => `${o.rule_id} from ${source} (${o.asset.kind})`),
+      ),
+    );
+
+    expect([...outsidePack]).toEqual([
+      `${DEMO_OBSERVATIONS.disk.rule_id} from a Guard Scan (device)`,
+      `${DEMO_OBSERVATIONS.printed.rule_id} from the Judge's Spot run (agent_session)`,
+    ]);
+  });
 });
