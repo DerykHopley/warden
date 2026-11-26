@@ -11,7 +11,7 @@ import {
   type ListedRepoBody,
   type ScanBody,
 } from "@warden/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { NOT_ANSWERING, TEAM_NOT_OPENED } from "./api.ts";
 import type { PageProps } from "./App.tsx";
 import { dayAndTimeWords } from "./date-words.ts";
@@ -37,6 +37,10 @@ import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 /** How long after each answer the repo list is read again while a listed Scan is queued or running. */
 const READ_AGAIN_MS = 5_000;
 const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
+/** The write app's Setup URL's path, `WriteAppSetupPage`'s route. */
+const WRITE_SETUP_PATH = "/setup/github/write";
+/** The Connect page's button, which the write app's how-to names too. */
+const SIGN_IN = "Sign in with GitHub";
 const CANT_START =
   "This browser couldn't start the GitHub sign-in. Allow this site to store data for this tab, and open Warden over https.";
 
@@ -71,7 +75,6 @@ const READ_WORDS: AppWords = {
 const WRITE_WORDS: AppWords = {
   app: WRITE_APP,
   asking: "Asking Warden's server about the write app…",
-  // Slice 4 adds the write app's how-to beside this line.
   notSetUp: "Fix PRs aren't set up on this Warden.",
   adminDoes: "An Admin grants write access.",
   onlyAdmin: "Only an Admin grants write access to the Team.",
@@ -90,7 +93,7 @@ export function SetupPage(props: PageProps) {
       </section>
       <section className="setup-section" aria-labelledby="setup-write">
         <h2 id="setup-write">Grant write access</h2>
-        <AppSection {...props} words={WRITE_WORDS} />
+        <AppSection {...props} words={WRITE_WORDS} HowTo={WriteAppHowTo} />
         <WriteGrantList {...props} />
       </section>
       <section className="setup-section" aria-labelledby="setup-repos">
@@ -103,8 +106,14 @@ export function SetupPage(props: PageProps) {
 
 type AppProps = PageProps & { words: AppWords };
 
-/** An Admin's install link; a Lead or a Member reads who does this instead. */
-function AppSection(props: AppProps) {
+/** An app's how-to for an Admin, under the install link: told whether this Warden has no settings for the app. */
+type HowTo = (props: { notSetUp: boolean }) => ReactNode;
+
+/** An app's section on Setup: its words, and its how-to when it has one. */
+type AppSectionProps = AppProps & { HowTo?: HowTo };
+
+/** An Admin's install link, and the app's how-to when it has one; a Lead or a Member reads who does this instead. */
+function AppSection(props: AppSectionProps) {
   return props.me.role === "admin" ? (
     <InstallLink {...props} />
   ) : (
@@ -138,16 +147,111 @@ function AppNotReady({ app, words }: { app: ReturnType<typeof useGitHubApp>; wor
   );
 }
 
-function InstallLink(props: AppProps) {
+function InstallLink({ HowTo, ...props }: AppSectionProps) {
   const app = useGitHubApp(props);
-  if (app.result !== "loading" && app.result.kind === "app") {
-    return (
-      <p className="setup-link">
-        <a href={installUrl(app.result.app.slug)}>{props.words.install}</a>
-      </p>
-    );
-  }
-  return <AppNotReady app={app} words={props.words} />;
+  const answered = app.result === "loading" ? null : app.result;
+  return (
+    <>
+      {answered?.kind === "app" ? (
+        <p className="setup-link">
+          <a href={installUrl(answered.app.slug)}>{props.words.install}</a>
+        </p>
+      ) : (
+        <AppNotReady app={app} words={props.words} />
+      )}
+      {HowTo !== undefined && <HowTo notSetUp={answered?.kind === "not-set-up"} />}
+    </>
+  );
+}
+
+/**
+ * The write app's how-to (#224, story 16): register it on GitHub, give Warden its keys, then install and link it. It
+ * starts open on a Warden with no write app, closed otherwise, and stays as the person leaves it until they leave the
+ * page. Its URLs are this page's own origin, so a preview's how-to names the preview's.
+ */
+function WriteAppHowTo({ notSetUp }: { notSetUp: boolean }) {
+  // null until the person (or the 503 opening it) toggles it; the browser's own toggle is read back, so find-in-page
+  // opening it is kept too.
+  const [open, setOpen] = useState<boolean | null>(null);
+  const origin = location.origin;
+  return (
+    <details
+      className="how-to"
+      open={open ?? notSetUp}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>How to set up the write app</summary>
+      <ol>
+        <li>
+          <h3>Register the app on GitHub</h3>
+          <p>
+            In GitHub, open Settings, Developer settings, GitHub Apps, New GitHub App. Register it
+            as a second app, apart from the read-only one:
+          </p>
+          <ul>
+            <li>
+              Homepage URL: <code>{origin}</code>
+            </li>
+            <li>
+              Callback URL: <code>{`${origin}${WRITE_APP.callbackPath}`}</code>
+            </li>
+            <li>
+              Setup URL: <code>{`${origin}${WRITE_SETUP_PATH}`}</code>
+            </li>
+            <li>
+              Leave "Request user authorization (OAuth) during installation" cleared, so GitHub
+              sends you to the Setup URL after an install.
+            </li>
+            <li>Webhook: clear "Active". The write app has no webhooks.</li>
+          </ul>
+          <p>Repository permissions, these three and nothing else:</p>
+          <ul>
+            <li>
+              <strong>Contents: Read and write</strong>, to make the Fix PR's branch and commit its
+              edit.
+            </li>
+            <li>
+              <strong>Pull requests: Read and write</strong>, to open the Fix PR and find one
+              already open.
+            </li>
+            <li>
+              <strong>Metadata: Read-only</strong>, which GitHub requires for every app.
+            </li>
+          </ul>
+          <p>
+            No account or organization permissions, and no Workflows. A Fix PR only edits{" "}
+            <code>.claude/settings.json</code> or a <code>.mcp.json</code> file, never{" "}
+            <code>.github/workflows/</code>. Warden refuses to link an installation that holds any
+            other permission, or lacks one of these three.
+          </p>
+          <p>
+            Then generate a client secret and a private key (GitHub downloads the key as a{" "}
+            <code>.pem</code>).
+          </p>
+        </li>
+        <li>
+          <h3>Give Warden the keys</h3>
+          <p>
+            Warden's server reads <code>GITHUB_WRITE_APP_CLIENT_ID</code>,{" "}
+            <code>GITHUB_WRITE_APP_CLIENT_SECRET</code> and{" "}
+            <code>GITHUB_WRITE_APP_PRIVATE_KEY</code> (the <code>.pem</code> as downloaded), all
+            three or none. Locally they come from the keyring through <code>.envrc</code>. On Cloud
+            Run they come from Secret Manager, with the client id as a repository variable. The
+            README's "Granting write access" names each one. Then restart the server: it reads them
+            when it starts.
+          </p>
+        </li>
+        <li>
+          <h3>Install and link it</h3>
+          <p>
+            Choose "{WRITE_WORDS.install}" above, and install it on the account or organization
+            whose repos should get Fix PRs. GitHub sends you to the Grant write access page. Choose
+            "{SIGN_IN}" there. Setup then lists the grant under this section.
+          </p>
+        </li>
+      </ol>
+    </details>
+  );
 }
 
 /** The Team's write grants, shown to every Role; who granted each (a Clerk user id) isn't shown. */
@@ -396,7 +500,7 @@ function LinkInstallation(props: AppProps) {
           aria-busy={leaving}
           onClick={() => void signIn(ready.client_id, installationId)}
         >
-          Sign in with GitHub
+          {SIGN_IN}
         </button>
       ) : (
         <AppNotReady app={app} words={words} />

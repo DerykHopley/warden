@@ -123,6 +123,54 @@ Failed with the day and time it ended. A Lead or an Admin starts a Guard Scan of
 **Scan now**; the list follows it without a reload, and the button waits while a Scan is under way. A Member sees each
 repo's last Scan, and no button.
 
+### Granting write access
+
+Fix PRs go through a second GitHub app, the write app, apart from the read-only one. Until Warden has its settings, Setup's "Grant write access" section says "Fix PRs aren't set up on this
+Warden." and shows an Admin these steps, open, under "How to set up the write app", with this Warden's own URLs.
+
+1. **Register the app on GitHub** (Settings, Developer settings, GitHub Apps, New GitHub App), as a second app:
+   - Homepage URL: this Warden's address.
+   - Callback URL: this Warden's `/setup/github/write/callback`.
+   - Setup URL: this Warden's `/setup/github/write`.
+   - Leave "Request user authorization (OAuth) during installation" cleared, so GitHub sends you to the Setup URL
+     after an install.
+   - Webhook: clear "Active". The write app has no webhooks.
+   - Repository permissions, these three and nothing else:
+     - **Contents: Read and write**, to make the Fix PR's branch and commit its edit.
+     - **Pull requests: Read and write**, to open the Fix PR and find one already open.
+     - **Metadata: Read-only**, which GitHub requires for every app.
+   - No account or organization permissions, and no Workflows. A Fix PR only edits `.claude/settings.json` or a
+     `.mcp.json` file, never `.github/workflows/`. Warden refuses to link an installation that holds any other
+     permission, or lacks one of these three.
+   - Then generate a client secret and a private key. GitHub downloads the key as a `.pem` file named
+     `<app-slug>.<YYYY-MM-DD>.private-key.pem`.
+2. **Give Warden the keys.** The server reads `GITHUB_WRITE_APP_CLIENT_ID`, `GITHUB_WRITE_APP_CLIENT_SECRET` and
+   `GITHUB_WRITE_APP_PRIVATE_KEY` (the `.pem` as downloaded), all three or none: with only some, it stops at start-up
+   naming the missing or malformed ones. Then restart the server: it reads them when it starts.
+   - Locally, the committed `.envrc` reads them from the keyring. Store each once, then `direnv reload`. The last
+     command reads the key from the `.pem` GitHub downloaded: replace the placeholder path with that file's.
+
+     ```sh
+     secret-tool store --label "Warden GitHub write app client id" service warden-github-write-app-client-id
+     secret-tool store --label "Warden GitHub write app client secret" service warden-github-write-app-client-secret
+     secret-tool store --label "Warden GitHub write app private key" service warden-github-write-app-private-key < path/to/<app-slug>.<YYYY-MM-DD>.private-key.pem
+     ```
+
+   - On Cloud Run, the client secret and the private key live in Secret Manager as
+     `warden-github-write-app-client-secret` and `warden-github-write-app-private-key`, read only by `warden-run` and
+     `warden-preview-run`, never by a Scan Job. The client id goes in the repository variable
+     `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` (public by design, as `WARDEN_GITHUB_APP_CLIENT_ID` is for the read app).
+3. **Install and link it.** On Setup, choose **Install the write app**, and install it on the account or organization
+   whose repos should get Fix PRs. GitHub sends you to the Grant write access page; choose **Sign in with GitHub**
+   there. Setup then lists the grant under "Grant write access".
+
+Only an Admin grants write access; a Lead or a Member sees "An Admin grants write access." and the Team's grant.
+
+**On an owner preview,** add the preview's write callback URL to the write app too, keeping the live one, as
+"Linking GitHub on a preview" says for the read app: `<preview URL>/setup/github/write/callback`. The write app's
+Setup URL is the live dashboard's, so after an install note the `installation_id` in that address and open
+`<preview URL>/setup/github/write?installation_id=<id>` on the preview.
+
 ## CVE data
 
 Patch matches a Team's Products against a frozen snapshot of public CVE data, **as of 2026-10-13**. It ships in the

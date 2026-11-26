@@ -204,6 +204,64 @@ test("a Member sees an Admin grants write access, with no install link, and the 
   await expect(page.getByRole("link", { name: "Install the write app" })).toHaveCount(0);
 });
 
+// Story 16 (#224): an Admin reads how to set up the write app on Setup. The e2e server has no write-app settings, so
+// its settings route answers 503 there; the case with the write app fakes that route in the browser, as story 5's do.
+const howTo = (page: Page) => writeAccess(page).locator("details");
+
+/** Fails unless the how-to's three steps show, with this Warden's own URLs and the three permissions. */
+async function expectHowToSteps(page: Page, origin: string) {
+  const steps = howTo(page).getByRole("heading", { level: 3 });
+  await expect(steps).toHaveText([
+    "Register the app on GitHub",
+    "Give Warden the keys",
+    "Install and link it",
+  ]);
+  for (const url of [`${origin}/setup/github/write/callback`, `${origin}/setup/github/write`]) {
+    await expect(howTo(page).getByText(url, { exact: true })).toBeVisible();
+  }
+  for (const permission of [
+    "Contents: Read and write",
+    "Pull requests: Read and write",
+    "Metadata: Read-only",
+  ]) {
+    await expect(howTo(page).getByText(permission, { exact: true })).toBeVisible();
+  }
+}
+
+test("an Admin on a Warden without the write app sees how to set it up, open, on this Warden's URLs (story 16)", async ({
+  page,
+  signIn,
+  baseURL,
+}) => {
+  await signIn(ADA);
+  await page.goto("/setup");
+
+  await expect(writeAccess(page).getByText("Fix PRs aren't set up on this Warden.")).toBeVisible();
+  await expect(howTo(page)).toHaveAttribute("open");
+  await expectHowToSteps(page, new URL(baseURL!).origin);
+});
+
+test("an Admin with the write app sees its install link, and opens the how-to to the same steps (story 16)", async ({
+  page,
+  signIn,
+  baseURL,
+}) => {
+  await signIn(ADA);
+  await page.route("**/api/github/write-app", (route) => route.fulfill({ json: WRITE_APP }));
+  await page.goto("/setup");
+
+  await expect(page.getByRole("link", { name: "Install the write app" })).toBeVisible();
+  await expect(howTo(page)).not.toHaveAttribute("open");
+  await expect(
+    howTo(page).getByRole("heading", { name: "Register the app on GitHub" }),
+  ).toBeHidden();
+
+  await howTo(page).getByText("How to set up the write app").click();
+
+  await expect(howTo(page)).toHaveAttribute("open");
+  await expectHowToSteps(page, new URL(baseURL!).origin);
+});
+
 /**
  * Each listed repo's row as [ref, last Scan words]. Read with `evaluate` on the list, never `evaluateAll`: Playwright
  * runs an `evaluateAll` locator in the page's own world, where naming the region (`ariaLabelledByElements`) crashes

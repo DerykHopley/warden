@@ -38,6 +38,8 @@ type Callback = {
   /** What a refusal says wasn't done: "linked" or "granted". */
   done: string;
   notAnswering: string;
+  /** A sign-in that didn't start here: no kept attempt of this app's, no code or state, or another state. */
+  notStartedHere: string;
   send: (getToken: PageProps["getToken"], body: LinkInstallationBody) => Promise<CallbackAnswer>;
 };
 
@@ -46,6 +48,7 @@ const READ_CALLBACK: Callback = {
   waiting: "Linking the installation…",
   done: "linked",
   notAnswering: "Warden didn't answer; the link may not have been made.",
+  notStartedHere: "This GitHub sign-in didn't start here. Connect again from Setup.",
   send: linkInstallation,
 };
 
@@ -54,6 +57,7 @@ const WRITE_CALLBACK: Callback = {
   waiting: "Granting write access…",
   done: "granted",
   notAnswering: "Warden didn't answer; write access may not have been granted.",
+  notStartedHere: "This GitHub sign-in didn't start here. Grant write access again from Setup.",
   send: grantWriteAccess,
 };
 
@@ -172,7 +176,7 @@ function Said({ outcome, callback }: { outcome: Outcome | "waiting"; callback: C
     case "not-answering":
       return <Alert words={callback.notAnswering} />;
     case "not-started-here":
-      return <Alert words="This GitHub sign-in didn't start here. Connect again from Setup." />;
+      return <Alert words={callback.notStartedHere} />;
     case "cancelled":
       return <p>You cancelled the GitHub sign-in; nothing was {callback.done}.</p>;
     case "github-refused":
