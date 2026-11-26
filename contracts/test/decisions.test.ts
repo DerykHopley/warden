@@ -1,14 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type { z } from "zod";
 import {
   AcceptBody,
   HistoryBody,
   HistoryEntryBody,
   MarkMovedBody,
+  NUL_MESSAGE,
   Proposal,
   ProposeBody,
   ReasonBody,
 } from "../src/index.ts";
-import { expectRefused } from "./refused.ts";
+import { expectIssueAt, expectRefused } from "./refused.ts";
 
 const tomorrow = () => new Date(Date.now() + 24 * 3600 * 1000).toISOString();
 
@@ -56,6 +58,32 @@ describe("the decision bodies", () => {
 
   it("MarkMovedBody refuses no candidate", () => {
     expectRefused(MarkMovedBody, { reason: "r" }, "candidate");
+  });
+});
+
+// Postgres can't store a NUL in text, so each free-text field and the candidate id refuse one, naming the field
+// (#248).
+describe("a decision body holding a NUL", () => {
+  const until = tomorrow();
+  it.each<[string, z.ZodType, Record<string, unknown>, string]>([
+    ["ReasonBody's reason", ReasonBody, { reason: "a\0b" }, "reason"],
+    ["AcceptBody's reason", AcceptBody, { reason: "a\0b", until }, "reason"],
+    ["MarkMovedBody's reason", MarkMovedBody, { reason: "a\0b", candidate: "f-2" }, "reason"],
+    ["MarkMovedBody's candidate", MarkMovedBody, { reason: "r", candidate: "f\0" }, "candidate"],
+    [
+      "a proposed accept's reason",
+      ProposeBody,
+      { decision: "accept", reason: "\0", until },
+      "reason",
+    ],
+    [
+      "a proposed mark_false_positive's reason",
+      ProposeBody,
+      { decision: "mark_false_positive", reason: "a\0" },
+      "reason",
+    ],
+  ])("refuses one in %s", (_name, schema, body, field) => {
+    expectIssueAt(schema, body, [field], new RegExp(`^${NUL_MESSAGE}$`));
   });
 });
 
