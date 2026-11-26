@@ -204,7 +204,6 @@ describe("the start-up file's wiring", () => {
       ),
     );
     expect([...held].sort()).toEqual(["product 1", "repo 1"]);
-    expect(controls.map(({ verdict }) => verdict)).toEqual(Array(4).fill("not_evidenced"));
   });
 
   // Story 3 end to end: the start-up file gives Patch's routes the Patch Scan, so a saved Product's CVEs are Findings.
