@@ -1,7 +1,6 @@
 // Throwaway test databases, made through the PG* superuser: the roles, then owned by warden_migrate, then dropped.
 // The developer's compose database is only where CREATE and DROP DATABASE are issued from; nothing is written to it.
 // Used by the global setup (no vitest imports here) and by tests that need a fresh database of their own.
-import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { copyFile, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -21,6 +20,7 @@ import { migrate, MIGRATIONS_FOLDER } from "../src/migrate.ts";
 import { loadCveSnapshot } from "../src/modules/patch/cve-snapshot.ts";
 import { createRoles } from "../src/roles.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
+import { runCommand } from "./child-process.ts";
 
 /** Returns once the superuser's Postgres takes a connection and answers. A container started seconds before the
  * run resets connections until Postgres listens on TCP (initdb's first server listens on its socket only, which is
@@ -261,16 +261,6 @@ const serverDir = fileURLToPath(new URL("..", import.meta.url));
 
 /** Runs `command` in the server package as its own process, with `env` over the test's environment (so PGPASSWORD
  * and PGSSL* reach it too). A command that can't start fails the test with the spawn error. */
-export function runInServer(
-  [command, ...args]: [string, ...string[]],
-  env: Record<string, string>,
-) {
-  const child = spawn(command, args, { cwd: serverDir, env: { ...process.env, ...env } });
-  let output = "";
-  child.stdout.on("data", (chunk) => (output += chunk));
-  child.stderr.on("data", (chunk) => (output += chunk));
-  return new Promise<{ code: number | null; output: string }>((resolve, reject) => {
-    child.on("error", (error) => reject(new Error(`couldn't run ${command}`, { cause: error })));
-    child.on("close", (code) => resolve({ code, output }));
-  });
+export function runInServer(command: [string, ...string[]], env: Record<string, string>) {
+  return runCommand(command, env, { cwd: serverDir });
 }

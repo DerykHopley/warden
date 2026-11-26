@@ -23,7 +23,7 @@ import {
   loadTestCveSnapshot,
   waitForPostgres,
 } from "../server/test/databases.ts";
-import { refuseOwnerDatabase } from "../server/test/owner-database.ts";
+import { OWNER_PGPORT, refuseOwnerDatabase } from "../server/test/owner-database.ts";
 import {
   ACME,
   BLUEBIRD,
@@ -44,7 +44,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 /** The Postgres the server's tests use: the PG* variables, or the compose database (refused outside CI unless asked). */
 const postgres = {
   host: process.env.PGHOST ?? "127.0.0.1",
-  port: process.env.PGPORT ?? "54329",
+  port: process.env.PGPORT ?? OWNER_PGPORT,
   user: process.env.PGUSER ?? "warden",
   database: process.env.PGDATABASE ?? "warden",
 };

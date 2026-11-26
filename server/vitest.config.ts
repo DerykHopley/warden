@@ -1,4 +1,5 @@
 import { defineConfig } from "vitest/config";
+import { OWNER_PGPORT } from "./test/owner-database.ts";
 
 // The server's integration tests reach Postgres through the standard PG* variables, as its superuser. Unset, they
 // point at the compose file's database (127.0.0.1:54329); CI sets its own service's. Outside CI, the global setup
@@ -9,7 +10,7 @@ export default defineConfig({
   test: {
     env: {
       PGHOST: process.env.PGHOST ?? "127.0.0.1",
-      PGPORT: process.env.PGPORT ?? "54329",
+      PGPORT: process.env.PGPORT ?? OWNER_PGPORT,
       PGUSER: process.env.PGUSER ?? "warden",
       PGDATABASE: process.env.PGDATABASE ?? "warden",
     },

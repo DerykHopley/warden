@@ -2,9 +2,9 @@
 // for (#286). Each command runs against a stand-in Postgres on a Unix socket for port 54329 in a folder of its own
 // (`socketPostgres`), with only PATH and HOME from this run's environment, so CI is unset there; a guard that let it
 // through would reach the stand-in, never the owner's database.
-import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runCommand } from "./child-process.ts";
 import { refuseOwnerDatabase } from "./owner-database.ts";
 import { socketPostgres } from "./ports.ts";
 
@@ -12,15 +12,7 @@ const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
 /** Runs `pnpm <args>` from the repo root with only `env` (plus PATH and HOME), to the end. */
 function pnpm(args: string[], env: Record<string, string>) {
-  const { PATH = "", HOME = "" } = process.env;
-  const child = spawn("pnpm", args, { cwd: repoRoot, env: { PATH, HOME, ...env } });
-  let output = "";
-  child.stdout.on("data", (chunk) => (output += chunk));
-  child.stderr.on("data", (chunk) => (output += chunk));
-  return new Promise<{ code: number | null; output: string }>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", (code) => resolve({ code, output }));
-  });
+  return runCommand(["pnpm", ...args], env, { cwd: repoRoot, clean: true });
 }
 
 describe("refuseOwnerDatabase", () => {
