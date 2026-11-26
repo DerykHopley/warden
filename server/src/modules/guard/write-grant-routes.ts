@@ -62,11 +62,17 @@ export function writeGrantRoutes(
     // The owner's answer A on #295: whoever installed the app on an account administers every repo it reaches, so the
     // installer passes, and someone with push or pull on one repo, or who can't see some, never does. The count is
     // the installation's own, so repos hidden from the person still count. An installation reaching none is refused.
+    // Repos are counted once each by GitHub id (#309): a repo GitHub lists twice never stands in for one the person
+    // can't see.
     mayLink: {
-      check: async ({ installationId, repos }, github) =>
-        repos.length > 0 &&
-        repos.every((repo) => repo.admin) &&
-        repos.length === (await github.installationRepoCount(installationId)),
+      check: async ({ installationId, repos }, github) => {
+        const seen = new Set(repos.map((repo) => repo.githubId)).size;
+        return (
+          seen > 0 &&
+          repos.every((repo) => repo.admin) &&
+          seen === (await github.installationRepoCount(installationId))
+        );
+      },
       refused: "You need admin on every repo this installation reaches to grant write access",
     },
     linkedElsewhere: "This write installation is linked to another Team",
