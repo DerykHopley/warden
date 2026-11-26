@@ -16,6 +16,8 @@ import { hookRoutes } from "./modules/guard/hook-routes.ts";
 import { createHookSettings } from "./modules/guard/hook-settings.ts";
 import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
+import { writeGrantRoutes } from "./modules/guard/write-grant-routes.ts";
+import { createWriteGrants } from "./modules/guard/write-grants.ts";
 import { createPatchAssessment } from "./modules/patch/assessment.ts";
 import { createProducts } from "./modules/patch/products.ts";
 import { patchRoutes } from "./modules/patch/routes.ts";
@@ -87,6 +89,7 @@ const clerk = createClerkClient({ secretKey: config.clerk.secretKey });
 const withTeam = createWithTeam(pool);
 const repoAssets = createRepoAssets({ withTeam });
 const hookSettings = createHookSettings({ withTeam });
+const writeGrants = createWriteGrants({ withTeam });
 const scans = createScans({ withTeam });
 // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503). A Lead's
 // start and the first Scan after a link both start it.
@@ -116,6 +119,13 @@ const appDeps: AppDeps = {
       config.github
         ? { repoAssets, scans, startScanJob, github: createGitHub(config.github), logger }
         : { repoAssets, scans, startScanJob },
+    ),
+    // The write grant, through the write app's own client when its settings are set; without them, linking answers
+    // 503 and the grant is still read.
+    writeGrantRoutes(
+      config.githubWrite
+        ? { writeGrants, github: createGitHub(config.githubWrite), logger }
+        : { writeGrants },
     ),
     hookRoutes({ hookSettings }),
     patchRoutes({

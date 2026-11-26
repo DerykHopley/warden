@@ -58,3 +58,20 @@ export const LinkedInstallationBody = z.strictObject({
   scan: ScanBody.nullable(),
 });
 export type LinkedInstallationBody = z.infer<typeof LinkedInstallationBody>;
+
+/**
+ * A Team's write grant (#224, story 5): an installation of Warden's write GitHub app, which Fix PRs go through, who
+ * granted it (a Clerk user id) and when. `POST /api/github/write-installations` (Admin only) answers one: 201 for a new
+ * grant, 200 for one the Team already held. Its body is a `LinkInstallationBody` from the write app's sign-in. The
+ * write app's own `GET /api/github/write-app` answers a `GitHubAppBody`.
+ */
+export const WriteGrantBody = z.strictObject({
+  installation_id: InstallationId,
+  granted_by: z.string().min(1),
+  granted_at: DateTime,
+});
+export type WriteGrantBody = z.infer<typeof WriteGrantBody>;
+
+/** `GET /api/github/write-grant` (any person in the Team): its write grants, `{ installations: [] }` for none. */
+export const WriteGrantsBody = z.strictObject({ installations: z.array(WriteGrantBody) });
+export type WriteGrantsBody = z.infer<typeof WriteGrantsBody>;

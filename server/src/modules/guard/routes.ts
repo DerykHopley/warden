@@ -11,7 +11,8 @@ import {
   type ReposBody,
   type ScanBody,
 } from "@warden/contracts";
-import type { MountRoutes } from "../../app.ts";
+import type { Context } from "hono";
+import type { AppEnv, MountRoutes } from "../../app.ts";
 import { createAttemptLimit } from "../../attempt-limit.ts";
 import type { Logger } from "../../log.ts";
 import { refusedBody } from "../../refused-body.ts";
@@ -25,8 +26,8 @@ import {
 } from "./github.ts";
 import { InstallationLinkedElsewhere, type RepoAsset, type RepoAssets } from "./repo-assets.ts";
 
-/** Link attempts a Team may make in an hour: the number of Scans it may start. */
-const LINKS_PER_HOUR = SCANS_PER_HOUR;
+/** Link attempts a Team may make in an hour, per app: the number of Scans it may start. */
+export const LINKS_PER_HOUR = SCANS_PER_HOUR;
 
 /** The read-only app's permissions (threat G1): an installation token holding anything else isn't linked. */
 const READ_ONLY: Record<string, string> = { contents: "read", metadata: "read" };
@@ -49,6 +50,40 @@ function repoAssetBody(repo: RepoAsset): RepoAssetBody {
 const SLUG_KEPT_MS = 3_600_000;
 
 /**
+ * A handler answering `github`'s GitHubAppBody, what a Setup page builds GitHub's install and sign-in links from. The
+ * slug is read from GitHub and kept for an hour from when the read began, by `now`; a read that fails isn't kept, so the
+ * next call asks again, and calls while a read runs share it. GitHub not answering is 502, logged with the step and
+ * status only. Each app's route builds its own, so each keeps its own slug.
+ */
+export function gitHubAppAnswer(github: GitHub, logger: Logger, now: () => number) {
+  let slug: { read: Promise<string>; at: number } | undefined;
+  return async (c: Context<AppEnv>) => {
+    if (slug === undefined || now() - slug.at >= SLUG_KEPT_MS) {
+      const reading = {
+        at: now(),
+        read: github.appSlug().catch((error: unknown) => {
+          if (slug === reading) slug = undefined;
+          throw error;
+        }),
+      };
+      slug = reading;
+    }
+    try {
+      return c.json({ slug: await slug.read, client_id: github.clientId } satisfies GitHubAppBody);
+    } catch (error) {
+      if (!(error instanceof GitHubUnavailable)) throw error;
+      // The step and status only, as the link logs them.
+      logger.error("GitHub didn't answer", {
+        team: c.get("team"),
+        step: error.step,
+        status: error.status,
+      });
+      return c.json({ error: "GitHub didn't answer" }, 502);
+    }
+  };
+}
+
+/**
  * Guard's routes; linking needs `github`, which comes with the logger its failures are written to. `now` is the clock
  * the kept slug ages by. With `scans` and `startScanJob`, a link starts the first Scan of its repos.
  */
@@ -63,9 +98,7 @@ export function guardRoutes(
   const { repoAssets, now = Date.now } = deps;
   // Kept in this instance's memory, keyed by Team id as it is: each Cloud Run instance counts on its own (threat A5).
   const linkLimit = createAttemptLimit({ max: LINKS_PER_HOUR, windowMs: 3_600_000 });
-  // The App's slug, read from GitHub and kept for an hour from when the read began. A read that fails isn't kept, so
-  // the next call asks again; calls while a read runs share it.
-  let slug: { read: Promise<string>; at: number } | undefined;
+  const answerApp = deps.github ? gitHubAppAnswer(deps.github, deps.logger, now) : undefined;
 
   /**
    * The first Scan of a link's repos (story 2): a Guard Scan of the first MAX_SCAN_ASSETS by ref, with the Default
@@ -104,35 +137,9 @@ export function guardRoutes(
 
   return (app, requireRole) => {
     // What an Admin's Setup page builds GitHub's install and sign-in links from (story 1).
-    app.get("/api/github/app", requireRole("admin"), async (c) => {
-      if (deps.github === undefined) return c.json({ error: "GitHub isn't set up here" }, 503);
-      const { github, logger } = deps;
-      if (slug === undefined || now() - slug.at >= SLUG_KEPT_MS) {
-        const reading = {
-          at: now(),
-          read: github.appSlug().catch((error: unknown) => {
-            if (slug === reading) slug = undefined;
-            throw error;
-          }),
-        };
-        slug = reading;
-      }
-      try {
-        return c.json({
-          slug: await slug.read,
-          client_id: github.clientId,
-        } satisfies GitHubAppBody);
-      } catch (error) {
-        if (!(error instanceof GitHubUnavailable)) throw error;
-        // The step and status only, as the link logs them.
-        logger.error("GitHub didn't answer", {
-          team: c.get("team"),
-          step: error.step,
-          status: error.status,
-        });
-        return c.json({ error: "GitHub didn't answer" }, 502);
-      }
-    });
+    app.get("/api/github/app", requireRole("admin"), (c) =>
+      answerApp ? answerApp(c) : c.json({ error: "GitHub isn't set up here" }, 503),
+    );
 
     // Any person in the Team reads its Repo Assets, by ref (story 1), each with its last Guard Scan (story 2): null
     // when no Scan names it, or with no `scans` here.

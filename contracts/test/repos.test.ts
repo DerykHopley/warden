@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { GitHubAppBody, LinkedInstallationBody, ReposBody } from "../src/index.ts";
+import {
+  GitHubAppBody,
+  LinkedInstallationBody,
+  ReposBody,
+  WriteGrantBody,
+  WriteGrantsBody,
+} from "../src/index.ts";
 import { expectRefused } from "./refused.ts";
 
 const web = {
@@ -76,5 +82,37 @@ describe("GitHubAppBody", () => {
     ["a field outside the two", { ...app, secret: "x" }, "secret"],
   ])("refuses %s", (_name, body, field) => {
     expectRefused(GitHubAppBody, body, field);
+  });
+});
+
+const grant = {
+  installation_id: 42,
+  granted_by: "user_admin",
+  granted_at: "2026-11-26T09:00:00.000Z",
+};
+
+describe("WriteGrantBody", () => {
+  it("accepts the installation, who granted it and when", () => {
+    expect(WriteGrantBody.parse(grant)).toEqual(grant);
+  });
+
+  it.each([
+    ["an unknown key", { ...grant, token: "ghs_x" }, "token"],
+    ["an installation id of 0", { ...grant, installation_id: 0 }, "installation_id"],
+  ])("refuses %s", (_name, body, field) => {
+    expectRefused(WriteGrantBody, body, field);
+  });
+});
+
+describe("WriteGrantsBody", () => {
+  it.each([
+    ["a Team's grants", { installations: [grant] }],
+    ["none, for a Team with no grant", { installations: [] }],
+  ])("accepts %s", (_name, body) => {
+    expect(WriteGrantsBody.parse(body)).toEqual(body);
+  });
+
+  it("refuses an unknown key", () => {
+    expectRefused(WriteGrantsBody, { installations: [], repos: [] }, "repos");
   });
 });
