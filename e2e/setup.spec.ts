@@ -77,8 +77,9 @@ test("an Admin installs the app, signs in with GitHub and links installation 42 
 });
 
 // Story 5 (#224): an Admin grants write access from Setup, with Warden's second GitHub app, the write app. The e2e
-// server has no write-app settings, so the write app's settings and the grant's answer are faked in the browser, as
-// story 1's are; GitHub's sign-in page is faked the same way.
+// server's write app reaches only the GitHub fake (`fake-github.ts`), which answers no sign-in, so the write app's
+// settings and the grant's answer are faked in the browser, as story 1's are; GitHub's sign-in page is faked the same
+// way.
 const WRITE_APP = { slug: "warden-writer", client_id: "Iv23li-e2e-writer" };
 type Sent = { installation_id: number; code: string; code_verifier: string };
 
@@ -204,9 +205,16 @@ test("a Member sees an Admin grants write access, with no install link, and the 
   await expect(page.getByRole("link", { name: "Install the write app" })).toHaveCount(0);
 });
 
-// Story 16 (#224): an Admin reads how to set up the write app on Setup. The e2e server has no write-app settings, so
-// its settings route answers 503 there; the case with the write app fakes that route in the browser, as story 5's do.
+// Story 16 (#224): an Admin reads how to set up the write app on Setup. The e2e server has the write app's settings
+// (for story 6's Fix PR, e2e/fix-pr.spec.ts), so both cases fake its settings route in the browser, as story 5's do:
+// as the server answers it without them (503), and with them.
 const howTo = (page: Page) => writeAccess(page).locator("details");
+
+/** Fakes the write app's settings route as a Warden without the write app answers it. */
+const withoutWriteApp = (page: Page) =>
+  page.route("**/api/github/write-app", (route) =>
+    route.fulfill({ status: 503, json: { error: "Fix PRs aren't set up on this Warden" } }),
+  );
 
 /** Fails unless the how-to's three steps show, with this Warden's own URLs and the three permissions. */
 async function expectHowToSteps(page: Page, origin: string) {
@@ -234,6 +242,7 @@ test("an Admin on a Warden without the write app sees how to set it up, open, on
   baseURL,
 }) => {
   await signIn(ADA);
+  await withoutWriteApp(page);
   await page.goto("/setup");
 
   await expect(writeAccess(page).getByText("Fix PRs aren't set up on this Warden.")).toBeVisible();
