@@ -1,7 +1,7 @@
 // Vouch's routes (spec #341, slices 1b, 2b and 3), mounted by the app through `moduleRoutes` (ADR 0005): every
 // Catalogue Warden has, as the Team sees it, an Admin's switch to turn one on or off, each judged Control's Verdict,
-// reason, evidence and review state, and a Lead's review of a Verdict. The Team and the reviewer are always the
-// session's, never the request's. The Catalogues are loaded once, at start-up, by whoever wires these routes, and so
+// reason, evidence and review state, and a Lead's review of a Verdict. The Team and the person who reviewed are always
+// the session's, never the request's. The Catalogues are loaded once, at start-up, by whoever wires these routes, and so
 // are the Team's Assets (`TeamAssets`), as Vouch imports neither Guard nor Patch.
 import {
   CatalogueSwitchBody,
@@ -17,7 +17,7 @@ import type { MountRoutes } from "../../app.ts";
 import { pathId } from "../../path-id.ts";
 import { refusedBody } from "../../refused-body.ts";
 import type { Catalogue, Control } from "./catalogue.ts";
-import type { ControlReviews, LoggedReview } from "./control-reviews.ts";
+import type { ControlReviews, StoredControlReview } from "./control-reviews.ts";
 import { judgeControls, type JudgedControl, type VouchReads } from "./controls.ts";
 import { reviewStateOf } from "./review-state.ts";
 import type { TeamAssets } from "./team-assets.ts";
@@ -53,8 +53,8 @@ const CONTROL_REF = /^\d+(\.\d+)*$/;
 const controlOf = (catalogue: Catalogue, ref: string) =>
   CONTROL_REF.test(ref) ? catalogue.judgedControls.find(({ id }) => id === ref) : undefined;
 
-/** A logged review as the API answers it. */
-const answered = (review: LoggedReview): ControlReview => ({
+/** A stored review as the API answers it. */
+const controlReviewOf = (review: StoredControlReview): ControlReview => ({
   id: review.id,
   worked_out_verdict: review.workedOutVerdict,
   outcome: review.outcome,
@@ -84,19 +84,15 @@ export function vouchRoutes({
   teamAssets: TeamAssets;
   controlReviews: ControlReviews;
 }): MountRoutes {
-  /** `team`'s reviews of `catalogue`'s Controls, read once: a function answering one Control's, newest first. */
-  async function reviewsIn(team: string, catalogue: Catalogue) {
-    const logged = await controlReviews.list(team, catalogue.id);
-    return (ref: string) => logged.filter(({ controlRef }) => controlRef === ref).map(answered);
-  }
-
   /** One Control as `GET .../controls/:ref` answers it: `judged`, its review state and its reviews. */
   async function detailOf(
     team: string,
     catalogue: Catalogue,
     judged: JudgedControl,
   ): Promise<ControlDetail> {
-    const reviews = (await reviewsIn(team, catalogue))(judged.ref);
+    const reviews = (await controlReviews.history(team, catalogue.id, judged.ref)).map(
+      controlReviewOf,
+    );
     return { ...withReviewState(judged, reviews), reviews };
   }
 
@@ -143,8 +139,12 @@ export function vouchRoutes({
         catalogue.judgedControls,
         new Date(),
       );
-      const reviewsOf = await reviewsIn(team, catalogue);
-      const controls = judged.map((control) => withReviewState(control, reviewsOf(control.ref)));
+      // Only each Control's newest review counts for its review state, so only those are read.
+      const newest = await controlReviews.newest(team, catalogue.id);
+      const controls = judged.map((control) => {
+        const review = newest.find(({ controlRef }) => controlRef === control.ref);
+        return withReviewState(control, review === undefined ? [] : [controlReviewOf(review)]);
+      });
       return c.json({ catalogue: catalogue.id, on, controls } satisfies ControlsBody);
     });
 
@@ -161,7 +161,7 @@ export function vouchRoutes({
 
     // A Lead (or an Admin) confirms the Verdict worked out now, or overrides it to another; a Member gets requireRole's
     // 403. The Verdict is worked out here, never taken from the body, and stored with the review, so a later read sees
-    // whether it changed since. The reviewer is the session's person. Taken whether the Catalogue is on or off, as the
+    // whether it changed since. The person who reviewed is the session's. Taken whether the Catalogue is on or off, as the
     // reads are. A refused body (400), a Catalogue Warden doesn't have or a Control it doesn't judge (404, before any
     // store is touched), or an override that changes nothing (400) stores nothing.
     app.post("/api/vouch/catalogues/:id/controls/:ref/reviews", requireRole("lead"), async (c) => {

@@ -124,8 +124,8 @@ export type ControlVerdict = z.infer<typeof ControlVerdict>;
 
 /**
  * One row of the review log, as the API answers it: the Verdict the server worked out when it was written, what the
- * reviewer did and the Verdict they gave (the worked-out one on a confirm), their reason (null on a confirm without
- * one), who reviewed (a Lead's or an Admin's Clerk user id, from the session) and when. Never changed.
+ * Lead did and the Verdict they gave (the worked-out one on a confirm), their reason (null on a confirm without one),
+ * who reviewed (a Lead's or an Admin's Clerk user id, from the session) and when. Never changed.
  */
 export const ControlReview = z.object({
   id: Id,
@@ -147,7 +147,7 @@ export type ControlDetail = z.infer<typeof ControlDetail>;
 
 /**
  * `POST /api/vouch/catalogues/:id/controls/:ref/reviews`' body (a Lead or an Admin): confirm the worked-out Verdict,
- * with a reason if they like, or override it to another Verdict with a reason. Strict: the reviewer, the worked-out
+ * with a reason if they like, or override it to another Verdict with a reason. Strict: who reviewed, the worked-out
  * Verdict and the Team are the server's, never the body's.
  */
 export const ReviewBody = z.discriminatedUnion("outcome", [

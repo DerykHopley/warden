@@ -7,7 +7,7 @@
 -- (server/src/modules/vouch/control-reviews.ts) writes it, through `withTeam`.
 create table control_reviews (
   team_id text not null references teams (id),
-  -- Orders a Team's reviews: the highest is the newest.
+  -- Orders reviews stamped at the same `reviewed_at`: the highest is the newest.
   id bigint generated always as identity,
   -- The Catalogues Warden has, as `team_catalogues.catalogue` (0017); each new one widens this check in its own
   -- migration.
@@ -18,14 +18,16 @@ create table control_reviews (
   worked_out_verdict text not null
     check (worked_out_verdict in ('evidenced', 'partly_evidenced', 'not_evidenced')),
   outcome text not null check (outcome in ('confirmed', 'overridden')),
-  -- The reviewed Verdict: the worked-out one on a confirm, the reviewer's on an override.
+  -- The reviewed Verdict: the worked-out one on a confirm, the Lead's own on an override.
   verdict text not null
     check (verdict in ('evidenced', 'partly_evidenced', 'not_evidenced', 'not_applicable')),
   -- Why: required on an override, optional on a confirm, never blank.
   reason text check (reason ~ '\S'),
   -- Who reviewed: a Lead's or an Admin's Clerk user id.
   reviewed_by text not null check (reviewed_by ~ '\S'),
-  reviewed_at timestamptz not null default now(),
+  -- When the row was written, not when its transaction began, so a later review is never stamped earlier: the
+  -- newest is the latest `reviewed_at`, then the highest id.
+  reviewed_at timestamptz not null default clock_timestamp(),
   primary key (team_id, id),
   constraint control_reviews_override_reason check (outcome = 'confirmed' or reason is not null),
   -- A confirm keeps the worked-out Verdict; an override changes it.

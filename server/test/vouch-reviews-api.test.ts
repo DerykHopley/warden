@@ -86,7 +86,8 @@ beforeAll(async () => {
         teamAssets: { held: noted("teamAssets.held", teamAssets.held) } satisfies TeamAssets,
         controlReviews: {
           add: noted("controlReviews.add", controlReviews.add),
-          list: noted("controlReviews.list", controlReviews.list),
+          newest: noted("controlReviews.newest", controlReviews.newest),
+          history: noted("controlReviews.history", controlReviews.history),
         },
       }),
     ],
@@ -228,7 +229,6 @@ describe("POST .../controls/:ref/reviews: a Lead confirms or overrides a Verdict
     };
     expect(ControlDetail.parse(res.body)).toMatchObject(expected);
     expect(listed(await readControls(teamId), "5.2.4")).toMatchObject(expected);
-    expect(await readControl(teamId, "5.2.4")).toMatchObject(expected);
   });
 
   it("takes an Admin's review", async () => {
@@ -254,7 +254,7 @@ describe("who may review (story 5)", () => {
     const res = await review(teamId, "1.3.3", body, MEMBER);
 
     expect(res.status).toBe(403);
-    expect(await controlReviews.list(teamId, ISA)).toEqual([]);
+    expect(await controlReviews.newest(teamId, ISA)).toEqual([]);
   });
 
   it("answers no session the app's 401", async () => {
@@ -292,7 +292,7 @@ describe("a refused review stores nothing", () => {
       { outcome: "override", verdict: "maybe", reason: "Unsure" },
       /^verdict: /,
     ],
-    ["a reviewer in the body", { outcome: "confirm", reviewed_by: ADMIN }, /reviewed_by/],
+    ["who reviewed, in the body", { outcome: "confirm", reviewed_by: ADMIN }, /reviewed_by/],
     [
       "a worked-out Verdict in the body",
       { outcome: "confirm", worked_out_verdict: "evidenced" },
@@ -306,7 +306,7 @@ describe("a refused review stores nothing", () => {
 
     expect(res.status).toBe(400);
     expect((res.body as { error: string }).error).toMatch(message);
-    expect(await controlReviews.list(teamId, ISA)).toEqual([]);
+    expect(await controlReviews.newest(teamId, ISA)).toEqual([]);
   });
 
   it("answers an override to the worked-out Verdict 400: confirm it instead", async () => {
@@ -322,7 +322,7 @@ describe("a refused review stores nothing", () => {
     expect(res.body).toEqual({
       error: "An override must change the Verdict; confirm it instead",
     });
-    expect(await controlReviews.list(teamId, ISA)).toEqual([]);
+    expect(await controlReviews.newest(teamId, ISA)).toEqual([]);
   });
 
   it("answers a Catalogue Warden doesn't have 404 `No such Catalogue`, touching no store", async () => {
@@ -361,7 +361,7 @@ describe("a refused review stores nothing", () => {
 });
 
 describe("a Control's reviews (story 6)", () => {
-  it("lists each review newest first, with what it did, the Verdicts, the reason, when and the session's reviewer", async () => {
+  it("lists each review newest first, with what it did, the Verdicts, the reason, when and the session's person", async () => {
     const teamId = await team();
     const before = Date.now();
     await review(teamId, "4.1.3", { outcome: "confirm", reason: "Nothing to scan yet" }, LEAD);

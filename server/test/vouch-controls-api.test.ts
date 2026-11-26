@@ -102,7 +102,8 @@ beforeAll(async () => {
         teamAssets: { held: noted("teamAssets.held", teamAssets.held) } satisfies TeamAssets,
         controlReviews: {
           ...controlReviews,
-          list: noted("controlReviews.list", controlReviews.list),
+          newest: noted("controlReviews.newest", controlReviews.newest),
+          history: noted("controlReviews.history", controlReviews.history),
         },
       }),
     ],
