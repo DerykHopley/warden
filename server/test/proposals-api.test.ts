@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import {
   HistoryBody,
+  NUL_MESSAGE,
   Proposal,
   ProposalsBody,
   type Observation,
@@ -516,6 +517,18 @@ describe("a Proposal's bad input", () => {
     const answer = await reject(team, proposal.id, { reason: "  \n " });
 
     expect(answer).toEqual({ status: 400, body: { error: expect.stringMatching(/^reason: /) } });
+    expect(await stored(team)).toEqual(before);
+  });
+
+  // Postgres can't store a NUL, so it was a 500 (#248).
+  it("answers 400 naming the reason for a reject reason holding a NUL, and writes nothing", async () => {
+    const { team, proposal } = await pendingProposal();
+    const before = await stored(team);
+
+    expect(await reject(team, proposal.id, { reason: "a\0b" })).toEqual({
+      status: 400,
+      body: { error: `reason: ${NUL_MESSAGE}` },
+    });
     expect(await stored(team)).toEqual(before);
   });
 });

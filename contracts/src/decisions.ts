@@ -26,8 +26,13 @@ export const DECISION_TAKES: Readonly<Record<Decision, readonly Status[]>> = {
   reopen: ["false_positive", "accepted"],
 };
 
-/** Why a person decided: 1 to 2,000 characters, not only whitespace. */
-export const DecisionReason = Text(2000);
+/** Postgres can't store a NUL in text and would refuse the write as a 500, so a field holding one is a 400. */
+export const NUL_MESSAGE = "holds a NUL character, which Warden can't store";
+const storable = <T extends z.ZodString>(schema: T) =>
+  schema.refine((value) => !value.includes("\0"), NUL_MESSAGE);
+
+/** Why a person decided: 1 to 2,000 characters, not only whitespace, and no NUL. */
+export const DecisionReason = storable(Text(2000));
 
 /** `POST /api/findings/:id/false-positive`, `confirm-fix`, `reopen` and `POST /api/proposals/:id/reject`: the reason
  * alone. */
@@ -43,8 +48,11 @@ const FutureUntil = DateTime.refine((until) => Date.parse(until) > Date.now(), {
 export const AcceptBody = z.strictObject({ reason: DecisionReason, until: FutureUntil });
 export type AcceptBody = z.infer<typeof AcceptBody>;
 
-/** `POST /api/findings/:id/mark-moved`: the reason, and the new Finding (one of its candidates) that merges into it. */
-export const MarkMovedBody = z.strictObject({ reason: DecisionReason, candidate: Id });
+/**
+ * `POST /api/findings/:id/mark-moved`: the reason, and the new Finding (one of its candidates) that merges into it.
+ * The candidate is an id the store reads, so it holds no NUL either.
+ */
+export const MarkMovedBody = z.strictObject({ reason: DecisionReason, candidate: storable(Id) });
 export type MarkMovedBody = z.infer<typeof MarkMovedBody>;
 
 /** The decisions a Proposal may suggest: only these two are Proposals. */

@@ -2,7 +2,14 @@
 // Finding through the real app, as the person their session names, and a Member is refused each. Each case uses Teams
 // of its own in the suite's shared database; Findings come from real Scans through the Findings module.
 import { randomUUID } from "node:crypto";
-import { Finding, HistoryBody, type Observation, type Role, type Scan } from "@warden/contracts";
+import {
+  Finding,
+  HistoryBody,
+  NUL_MESSAGE,
+  type Observation,
+  type Role,
+  type Scan,
+} from "@warden/contracts";
 import type { Hono } from "hono";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
@@ -344,6 +351,23 @@ describe("a Finding id holding a NUL (#129)", () => {
     const before = await stored(team);
 
     expect(await post(`/api/findings/a%00b/${route}`, team, body, as)).toEqual(answer);
+    expect(await stored(team)).toEqual(before);
+  });
+});
+
+// Every decision route parses its body the same way, and each field's NUL refusal is the contracts'
+// (contracts/test/decisions.test.ts); one case proves the route answers 400, where Postgres gave a 500 (#248).
+describe("a decision's body holding a NUL (#248)", () => {
+  it("accept answers 400 naming the reason, and writes nothing", async () => {
+    const { team, finding } = await teamWithFinding();
+    const before = await stored(team);
+
+    expect(
+      await post(`/api/findings/${finding.id}/accept`, team, {
+        reason: "a\0b",
+        until: nextWeek(),
+      }),
+    ).toEqual({ status: 400, body: { error: `reason: ${NUL_MESSAGE}` } });
     expect(await stored(team)).toEqual(before);
   });
 });
