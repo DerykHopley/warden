@@ -1,15 +1,17 @@
-// GitHub as the browser tests' server sees it (#224, story 6): loaded with `--import` into the server and each Scan
-// Job it starts (the global setup's NODE_OPTIONS), it replaces `globalThis.fetch` for https://api.github.com and
-// https://github.com, and passes every other address on. No process that loads it can reach GitHub: the browser
-// tests' own processes load it too, through `session.ts`, and only ever call the server.
+// GitHub as the browser tests' server sees it (#224, story 6). This module only defines the fake and runs nothing:
+// `fake-github-preload.ts`, loaded with `--import` into the server and each Scan Job it starts (the global setup's
+// NODE_OPTIONS), installs it there, in place of `globalThis.fetch` for https://api.github.com and https://github.com,
+// passing every other address on. The browser tests' own processes never install it: they only ever call the server,
+// and fix-pr.spec.ts calls the fake's handler directly.
 //
 // It answers the write app's calls on the one repo it knows, `DAHLIA_REPO` (`github-writer.ts`), and the app's own
 // read (`GET /app`, which a Setup page's install link is built from); anything else on those hosts answers 404. It
-// keeps the branches made (`main` from the start) and the PRs opened, each open until a test says otherwise, for as
-// long as the process runs. Each call it answers is appended to the file `E2E_FAKE_GITHUB_LOG` names, as one JSON
-// line of its method, path (with its query) and JSON body, never its headers, so never its Authorization; with that
-// variable unset it still answers, and logs nothing. Only `node:` modules are imported: Node loads this file as it
-// is, types stripped.
+// keeps the branches made (`main` from the start) and the PRs opened, all of them open, for as long as the process
+// runs: nothing it answers closes or merges a PR. Each call is appended to the file `E2E_FAKE_GITHUB_LOG` names, as
+// one JSON line of its method, path (with its query) and JSON body, never its headers, so never its Authorization.
+// With that variable unset, as in a Scan Job (the server hands it only some of its variables), the fake still answers
+// a read (GET), unlogged, and refuses every other call with a rejected fetch naming it, so a write no test could see
+// fails loudly instead. Only `node:` modules are imported: Node loads this file as it is, types stripped.
 import { appendFileSync } from "node:fs";
 
 /** One call the fake answered, as it logs it. `body` is the request's JSON body, or null when it had none. */
@@ -18,11 +20,17 @@ export type Logged = { method: string; path: string; body: unknown };
 /** The one repo the fake knows, by its URL and GitHub id: Dahlia's Repo Asset (`session.ts`). */
 export const DAHLIA_REPO = { ref: "https://github.com/dahlia/agent-tools", githubId: 9301 };
 
+/** `DAHLIA_REPO`'s full name on GitHub, `<owner>/<name>`, as its API paths hold it. */
+export const DAHLIA_REPO_FULL_NAME = new URL(DAHLIA_REPO.ref).pathname.slice(1);
+
 /** The permissions the fake's installation tokens hold: exactly the write app's (`write-grant-routes.ts`). */
 const WRITE_APP_PERMISSIONS = { contents: "write", pull_requests: "write", metadata: "read" };
 
 /** The commit `main` points at from the start. */
 const MAIN_HEAD = "0123456789abcdef0123456789abcdef01234567";
+
+/** The commit each file written on a branch makes its head. */
+const NEW_COMMIT = "fedcba9876543210fedcba9876543210fedcba98";
 
 const GITHUB_HOSTS = new Set(["api.github.com", "github.com"]);
 
@@ -38,10 +46,11 @@ const notFound = () => json(404, { message: "Not Found" });
 
 /**
  * A fake of GitHub, as a handler from a request to its answer, with its own branches and PRs. Each request is logged
- * to the file `log` names, when it's set, before it's answered.
+ * to the file `log` names before it's answered; with no `log`, only a GET is answered, and anything else rejects.
  */
 export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
-  const fullName = new URL(DAHLIA_REPO.ref).pathname.slice(1);
+  const fullName = DAHLIA_REPO_FULL_NAME;
+  const owner = fullName.split("/")[0];
   const branches = new Map([["main", MAIN_HEAD]]);
   const pulls: Pull[] = [];
 
@@ -76,9 +85,8 @@ export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
     if (method === "PUT" && first === "contents") {
       const branch = typeof body.branch === "string" ? body.branch : "";
       if (!branches.has(branch) || branch === "main") return notFound();
-      const commit = "fedcba9876543210fedcba9876543210fedcba98";
-      branches.set(branch, commit);
-      return json(201, { content: { path: rest.slice(1).join("/") }, commit: { sha: commit } });
+      branches.set(branch, NEW_COMMIT);
+      return json(201, { content: { path: rest.slice(1).join("/") }, commit: { sha: NEW_COMMIT } });
     }
     if (method === "POST" && first === "pulls" && rest.length === 1) {
       const head = typeof body.head === "string" ? body.head : "";
@@ -101,7 +109,7 @@ export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
         pulls
           .filter(
             (pull) =>
-              (head === null || `${fullName.split("/")[0]}:${pull.head}` === head) &&
+              (head === null || `${owner}:${pull.head}` === head) &&
               (base === null || pull.base === base) &&
               (state === "all" || pull.state === state),
           )
@@ -117,6 +125,13 @@ export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
 
   return async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
+    const method = request.method;
+    if (!log && method !== "GET") {
+      throw new Error(
+        `the GitHub fake refused ${method} ${url.pathname}: E2E_FAKE_GITHUB_LOG is unset in this process, so no ` +
+          "test could see the call. Only the server's calls are logged; a Scan Job's writes aren't faked.",
+      );
+    }
     const text = await request.text();
     let body: unknown;
     try {
@@ -124,14 +139,13 @@ export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
     } catch {
       body = text;
     }
-    const logged: Logged = { method: request.method, path: url.pathname + url.search, body };
+    const logged: Logged = { method, path: url.pathname + url.search, body };
     if (log) appendFileSync(log, `${JSON.stringify(logged)}\n`);
 
     if (url.hostname !== "api.github.com") return notFound();
     const parts = url.pathname.split("/").slice(1).map(decodeURIComponent);
     const fields =
       typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-    const method = request.method;
     if (method === "GET" && url.pathname === "/app") {
       return json(200, { id: 1, slug: "warden-writer", name: "Warden writer (e2e)" });
     }
@@ -155,11 +169,15 @@ export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
   };
 }
 
-/** Replaces `globalThis.fetch` in this process: GitHub's hosts go to one fake, every other address as before. */
-function install() {
-  const passOn = globalThis.fetch;
-  const handle = createFakeGitHub({ log: process.env.E2E_FAKE_GITHUB_LOG });
-  globalThis.fetch = (input, init) => {
+/**
+ * A `fetch` that sends GitHub's hosts to `handle` and every other address to `passOn`. As `fetch` does, it answers
+ * every input with a promise: an address it can't read rejects, never throws.
+ */
+export function fakeFetch(
+  handle: (request: Request) => Promise<Response>,
+  passOn: typeof fetch,
+): typeof fetch {
+  return async (input, init) => {
     // Read without building a Request: one built from a Request would use up the body passed on.
     const address = input instanceof Request ? input.url : String(input);
     return GITHUB_HOSTS.has(new URL(address).hostname)
@@ -167,5 +185,3 @@ function install() {
       : passOn(input, init);
   };
 }
-
-install();

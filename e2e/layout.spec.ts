@@ -6,7 +6,7 @@
 // Every page, opened directly at each width and scheme, scrolls nothing sideways: Products in Cedar (its Products
 // stay out of Acme's Findings counts), Setup as Ada, the rest as Grace in Acme.
 import type { Locator, Page } from "@playwright/test";
-import { expectRings, expectTargets } from "./a11y.ts";
+import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
 import { cedarCveFinding, openCveCard } from "./cedar-cve.ts";
 import {
   ACME,
@@ -29,16 +29,6 @@ const WIDTHS = [390, 1024, 1600] as const;
 const SCHEMES = ["light", "dark"] as const;
 
 signInEachTest(GRACE);
-
-/** Fails unless the page is no wider than the window, so nothing scrolls sideways; returns the window's width. */
-async function expectNoSidewaysScroll(page: Page) {
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
-  return clientWidth;
-}
 
 test.beforeAll(async () => {
   await ensureProduct(CEDAR, CHAT_ASSISTANT);

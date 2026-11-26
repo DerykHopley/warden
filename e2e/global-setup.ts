@@ -2,8 +2,9 @@
 // release does, so a Product's save opens its CVE Findings), a key pair standing in for Clerk's, the dashboard built in
 // Vite's `e2e` mode, and the real server process on a free port serving that build, each Scan Job it starts held for a
 // moment first (`scan-job-start-delay.ts`). The server has the write app's settings, with a key pair made for the run,
-// and it and its Scan Jobs reach GitHub only through the fake (`fake-github.ts`), which logs each call to a file in a
-// temporary folder (`E2E_FAKE_GITHUB_LOG`, handed to the server and the test workers). Acme, Bluebird, Cedar and
+// and it and its Scan Jobs reach GitHub only through the fake (`fake-github.ts`, installed by `fake-github-preload.ts`),
+// which logs each of the server's calls to a file in a temporary folder (`E2E_FAKE_GITHUB_LOG`, handed to the server
+// and the test workers; a Scan Job doesn't get it, so the fake refuses its writes). Acme, Bluebird, Cedar and
 // Dahlia are opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets
 // and a stale Guard Scan of them (`seedCedarRepos`); Dahlia gets one Repo Asset, a write grant and an Open Finding for
 // story 6's Fix PR (`seedDahliaFixPr`); Acme and Bluebird are then filled by the demo seed (`server/src/seed.ts`)
@@ -32,16 +33,16 @@ import {
 import { OWNER_PGPORT, refuseOwnerDatabase } from "../server/test/owner-database.ts";
 import {
   ACME,
+  ANNIE,
   BLUEBIRD,
   CEDAR,
   CEDAR_REPOS,
   DAHLIA,
   DAHLIA_REPO,
+  DOROTHY,
   FRONTEND_API_HOST,
   GRACE,
   HEDY,
-  ANNIE,
-  DOROTHY,
   KATHERINE,
   MARGARET,
   sessionToken,
@@ -106,11 +107,12 @@ async function startServer(env: Record<string, string>) {
   throw new Error(`the server didn't start:\n${output}`);
 }
 
-/**
- * Cedar's repos for story 2's Setup tests, as warden_app inside withTeam: its two Repo Assets, as Hedy's link of
- * installation 4242 would write them, and a Guard Scan of both queued 2 hours ago that never started.
- */
-async function seedCedarRepos(connection: { host: string; port: number }, database: string) {
+/** Runs `seed` with a `withTeam` on a one-connection warden_app pool to `database`, and ends the pool after it. */
+async function withAppPool(
+  connection: { host: string; port: number },
+  database: string,
+  seed: (withTeam: ReturnType<typeof createWithTeam>) => Promise<void>,
+) {
   const pool = createPool(
     createLogger(() => {}),
     {
@@ -121,7 +123,18 @@ async function seedCedarRepos(connection: { host: string; port: number }, databa
     },
   );
   try {
-    const withTeam = createWithTeam(pool);
+    await seed(createWithTeam(pool));
+  } finally {
+    await pool.end();
+  }
+}
+
+/**
+ * Cedar's repos for story 2's Setup tests, as warden_app inside withTeam: its two Repo Assets, as Hedy's link of
+ * installation 4242 would write them, and a Guard Scan of both queued 2 hours ago that never started.
+ */
+async function seedCedarRepos(connection: { host: string; port: number }, database: string) {
+  await withAppPool(connection, database, async (withTeam) => {
     await createRepoAssets({ withTeam }).link(CEDAR.id, {
       installationId: 4242,
       linkedBy: HEDY.userId,
@@ -142,10 +155,11 @@ async function seedCedarRepos(connection: { host: string; port: number }, databa
         })
         .execute(),
     );
-  } finally {
-    await pool.end();
-  }
+  });
 }
+
+/** The installation of the read app Dahlia's Repo Asset is linked through: not one Cedar's or the Setup tests' use. */
+const DAHLIA_READ_INSTALLATION = 5150;
 
 /** The installation of the write app Dahlia's grant names: not one Cedar's or the Setup tests' links use. */
 const DAHLIA_WRITE_INSTALLATION = 5151;
@@ -157,19 +171,9 @@ const DAHLIA_WRITE_INSTALLATION = 5151;
  * seed's are.
  */
 async function seedDahliaFixPr(connection: { host: string; port: number }, database: string) {
-  const pool = createPool(
-    createLogger(() => {}),
-    {
-      ...connection,
-      user: "warden_app",
-      database,
-      max: 1,
-    },
-  );
-  try {
-    const withTeam = createWithTeam(pool);
+  await withAppPool(connection, database, async (withTeam) => {
     await createRepoAssets({ withTeam }).link(DAHLIA.id, {
-      installationId: 5150,
+      installationId: DAHLIA_READ_INSTALLATION,
       linkedBy: DOROTHY.userId,
       repos: [DAHLIA_REPO],
     });
@@ -197,9 +201,7 @@ async function seedDahliaFixPr(connection: { host: string; port: number }, datab
         },
       ],
     });
-  } finally {
-    await pool.end();
-  }
+  });
 }
 
 export default async function globalSetup() {
@@ -277,7 +279,7 @@ export default async function globalSetup() {
           // Handed on to each Scan Job: the fake in both, and the delay, which holds a Scan Job before it runs and
           // lets the server run at once.
           NODE_OPTIONS: [
-            preload("e2e/fake-github.ts"),
+            preload("e2e/fake-github-preload.ts"),
             preload("e2e/scan-job-start-delay.ts"),
           ].join(" "),
         });

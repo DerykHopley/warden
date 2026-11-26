@@ -100,9 +100,10 @@ export const DAHLIA = {
 export type Team = typeof ACME;
 
 /**
- * Dahlia's one Repo Asset, the one repo the GitHub fake knows (`e2e/fake-github.ts`), with its GitHub id.
+ * Dahlia's one Repo Asset, the one repo the GitHub fake knows (`e2e/fake-github.ts`), with its GitHub id, and its
+ * full name. That module only defines the fake, so importing it here installs nothing in a test worker.
  */
-export { DAHLIA_REPO } from "./fake-github.ts";
+export { DAHLIA_REPO, DAHLIA_REPO_FULL_NAME } from "./fake-github.ts";
 
 /**
  * Cedar's two Repo Assets, linked by the global setup with a Guard Scan of both queued 2 hours ago that never started:

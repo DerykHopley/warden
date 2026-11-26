@@ -8,13 +8,14 @@
 import { readFileSync } from "node:fs";
 import { FindingsBody, type Finding } from "@warden/contracts";
 import type { Locator, Page } from "@playwright/test";
-import { expectRings, expectTargets } from "./a11y.ts";
-import { createFakeGitHub, type Logged } from "./fake-github.ts";
+import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
+import { createFakeGitHub, fakeFetch, type Logged } from "./fake-github.ts";
 import {
   ANNIE,
   asAdmin,
   DAHLIA,
   DAHLIA_REPO,
+  DAHLIA_REPO_FULL_NAME,
   expect,
   signInEachTest,
   SIGNS_IN_ITSELF,
@@ -49,7 +50,7 @@ async function readDahliaFinding(): Promise<Finding> {
 }
 
 /** The fake's paths on Dahlia's repo, as the write app calls them. */
-const repoPath = (path: string) => `/repos/${new URL(DAHLIA_REPO.ref).pathname.slice(1)}/${path}`;
+const repoPath = (path: string) => `/repos/${DAHLIA_REPO_FULL_NAME}/${path}`;
 
 const isTokenRequest = (call: Logged) =>
   call.method === "POST" && /^\/app\/installations\/\d+\/access_tokens$/.test(call.path);
@@ -57,6 +58,12 @@ const isRefCreate = (call: Logged) => call.method === "POST" && call.path === re
 const isContentsWrite = (call: Logged) =>
   call.method === "PUT" && call.path.startsWith(repoPath("contents/"));
 const isPullCreate = (call: Logged) => call.method === "POST" && call.path === repoPath("pulls");
+/** One of the three writes a Fix PR makes: its branch, the commit on it, and the PR. */
+const isWrite = (call: Logged) => isRefCreate(call) || isContentsWrite(call) || isPullCreate(call);
+/** A call on Dahlia's repo, by its full name or its GitHub id: only this file's tests make one. */
+const isOnDahliasRepo = (call: Logged) =>
+  call.path.startsWith(repoPath("")) ||
+  call.path.split("?")[0] === `/repositories/${DAHLIA_REPO.githubId}`;
 
 /** Opens Dahlia's Finding's detail card from its Start here card on Findings, and answers its Fix PR section. */
 async function openFixPrSection(page: Page): Promise<Locator> {
@@ -69,9 +76,10 @@ async function openFixPrSection(page: Page): Promise<Locator> {
 // Annie is Dahlia's Member.
 signInEachTest(ANNIE, DAHLIA);
 
-// No page and no server: the fake's own handler, with its own log, and no one signed in (`SIGNS_IN_ITSELF` keeps
-// `signInEachTest` from opening a page). Playwright reads a test's fixtures from its first parameter's pattern, and
-// this one needs none.
+// The fake's own handler, with its own log, and not the server: these tests use no page and sign no one in.
+// `SIGNS_IN_ITSELF` keeps `signInEachTest`'s beforeEach from signing anyone in, though that hook still takes `signIn`,
+// so Playwright still sets up a page for it. Playwright reads a test's fixtures from its first parameter's pattern,
+// and these take none.
 test(
   "the fake answers a GitHub path it doesn't fake with 404, logged without its Authorization",
   SIGNS_IN_ITSELF,
@@ -93,6 +101,46 @@ test(
   },
 );
 
+test(
+  "with no log to write to, the fake refuses every call but a read, so an unlogged write fails loudly",
+  SIGNS_IN_ITSELF,
+  // eslint-disable-next-line no-empty-pattern
+  async ({}) => {
+    const handle = createFakeGitHub();
+    const read = await handle(
+      new Request(`https://api.github.com/repositories/${DAHLIA_REPO.githubId}`),
+    );
+    expect(read.status).toBe(200);
+    await expect(
+      handle(
+        new Request(`https://api.github.com/repos/${DAHLIA_REPO_FULL_NAME}/git/refs`, {
+          method: "POST",
+          body: JSON.stringify({ ref: "refs/heads/main", sha: "0" }),
+        }),
+      ),
+    ).rejects.toThrow(
+      `the GitHub fake refused POST /repos/${DAHLIA_REPO_FULL_NAME}/git/refs: E2E_FAKE_GITHUB_LOG is unset`,
+    );
+  },
+);
+
+test(
+  "the fake's fetch answers an address it can't read with a rejected promise, as fetch does",
+  SIGNS_IN_ITSELF,
+  // eslint-disable-next-line no-empty-pattern
+  async ({}) => {
+    const passedOn: unknown[] = [];
+    const fetchThroughFake = fakeFetch(createFakeGitHub(), async (input) => {
+      passedOn.push(input);
+      return new Response(null, { status: 204 });
+    });
+    let answer: Promise<Response> | undefined;
+    expect(() => (answer = fetchThroughFake("not an address"))).not.toThrow();
+    await expect(answer!).rejects.toThrow(TypeError);
+    expect(passedOn).toEqual([]);
+  },
+);
+
 test("a Member opens a Fix PR from the Finding's detail card, and a second click answers the same PR (story 6)", async ({
   page,
 }) => {
@@ -111,9 +159,7 @@ test("a Member opens a Fix PR from the Finding's detail card, and a second click
   const calls = logged().slice(before);
   const token = calls.findIndex(isTokenRequest);
   expect(calls[token]?.body).toEqual({ repository_ids: [DAHLIA_REPO.githubId] });
-  const writes = calls.filter(
-    (call) => isRefCreate(call) || isContentsWrite(call) || isPullCreate(call),
-  );
+  const writes = calls.filter(isWrite);
   expect(writes.map(({ method, path }) => `${method} ${path}`)).toEqual([
     `POST ${repoPath("git/refs")}`,
     `PUT ${repoPath("contents/.claude/settings.json")}`,
@@ -131,9 +177,7 @@ test("a Member opens a Fix PR from the Finding's detail card, and a second click
   await expect(fixPr.getByRole("link", { name: `Fix PR #${number}` })).toHaveAttribute("href", url);
   const again = logged().slice(beforeSecond);
   expect(again.filter(isTokenRequest)).toHaveLength(1);
-  expect(
-    again.filter((call) => isRefCreate(call) || isContentsWrite(call) || isPullCreate(call)),
-  ).toEqual([]);
+  expect(again.filter(isWrite)).toEqual([]);
 
   // After a reload, the card still holds the PR's link, opened by the person reading it.
   await page.reload();
@@ -158,12 +202,7 @@ for (const width of WIDTHS) {
       const fixPr = await openFixPrSection(page);
       const link = fixPr.getByRole("link", { name: /^Fix PR #\d+$/ });
       await expect(link).toBeVisible();
-
-      const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-      }));
-      expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+      await expectNoSidewaysScroll(page);
 
       // The root's --accent as the browser computes a colour, read from a probe that wears it.
       const accent = await page.evaluate(() => {
@@ -204,17 +243,22 @@ test("with reduced motion, the detail card holding the Fix PR appears without mo
   ).toBe("none");
 });
 
-test("across this file, nothing was written to main, and nothing was merged, edited or deleted on GitHub", async () => {
+test("on Dahlia's repo, across this file's tests, nothing was written to main, and nothing was merged, edited or deleted", async () => {
   const branch = `warden/fix-${(await dahliaFinding()).id}`;
-  const calls = logged();
+  const calls = logged().filter(isOnDahliasRepo);
   expect(calls.filter(isPullCreate)).toHaveLength(1);
+  // A ref is only ever made, never moved: one create (`POST git/refs`), of the Fix PR's branch.
+  expect(calls.filter(isRefCreate)).toHaveLength(1);
   for (const call of calls) {
     const what = JSON.stringify(call);
     expect(["PATCH", "DELETE"], what).not.toContain(call.method);
     expect(call.path, what).not.toMatch(/\/merges?(\?|$)/);
-    // A ref is only ever made, never moved: and only the Fix PR's branch, as is every commit.
-    if (isRefCreate(call)) expect(call.body, what).toMatchObject({ ref: `refs/heads/${branch}` });
-    if (call.path.includes("/git/refs/")) expect(call.method, what).toBe("GET");
+    // Any write on a `git/ref/…` or `git/refs…` path is that create: none names `main`, in its path or its body.
+    if (call.method !== "GET" && call.path.startsWith(repoPath("git/ref"))) {
+      expect(`${call.method} ${call.path}`, what).toBe(`POST ${repoPath("git/refs")}`);
+      expect(call.body, what).toMatchObject({ ref: `refs/heads/${branch}` });
+    }
+    // Every commit is on the Fix PR's branch.
     if (isContentsWrite(call)) expect(call.body, what).toMatchObject({ branch });
   }
 });
