@@ -1237,7 +1237,9 @@ describe("ProductsPage's delete confirm", () => {
     answer.resolve(refusesWith(409, "Your Team's Admin must open Warden first")());
 
     expect(await confirm().findByRole("alert")).toBeInTheDocument();
-    expect(remove).toHaveFocus();
+    // The refusal lands after an await, so React moves focus in an effect a task after the alert's commit; findByRole
+    // can return between the two on a busy runner, so the test waits for the focus too.
+    await vi.waitFor(() => expect(remove).toHaveFocus());
     await userEvent.keyboard("{Escape}");
     expect(screen.queryByRole("group", { name: CONFIRM })).not.toBeInTheDocument();
     expect(deleteOf("Chat assistant")).toHaveFocus();
