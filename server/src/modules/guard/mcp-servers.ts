@@ -320,14 +320,17 @@ const RUNNER_COMMANDS = new Set(
   RUNNER_KINDS.flatMap(({ runners }) => runners.map(({ words: [first] }) => first)),
 );
 
-/** A command's name: its last path segment, without a Windows `.cmd` or `.exe` ending (in any case). */
+/**
+ * A command's name: its last path segment, without a Windows `.cmd` or `.exe` ending, in lower case. Windows and macOS
+ * find a command in any case (`NPX` runs npx), so a runner is matched by it in any case; its subcommand words are not.
+ */
 function commandName(command: string): string {
   const name = command.slice(Math.max(command.lastIndexOf("/"), command.lastIndexOf("\\")) + 1);
-  return name.replace(/\.(?:cmd|exe)$/i, "");
+  return name.replace(/\.(?:cmd|exe)$/i, "").toLowerCase();
 }
 
 const isCmd = (command: string | undefined) =>
-  command !== undefined && commandName(command).toLowerCase() === "cmd";
+  command !== undefined && commandName(command) === "cmd";
 
 /**
  * Where a command-line word sits in a server's entry: an `args` entry by its index, or a span of `command`'s text
@@ -386,8 +389,8 @@ function afterOptions(words: readonly string[], i: number, options: Options): nu
 }
 
 /**
- * Where the words after `runner` start when `words` start with it: its command by `commandName`, then each subcommand
- * word exactly, with the command's own options allowed before each.
+ * Where the words after `runner` start when `words` start with it: its command by `commandName`, in any case, then
+ * each subcommand word exactly, with the command's own options allowed before each.
  */
 function argsAfterRunner(words: readonly string[], runner: Runner): number | undefined {
   const [command, ...subcommand] = runner.words;
