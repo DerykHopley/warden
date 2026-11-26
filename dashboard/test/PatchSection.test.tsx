@@ -353,7 +353,7 @@ describe("a card that isn't a Patch Finding's", () => {
     // Let any call the card would make go out before counting.
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(assessmentRoute).not.toHaveBeenCalled();
-    expect(fetchMock).not.toHaveBeenCalled();
+    expect(callsTo(ASSESSMENT_PATH)).toHaveLength(0);
   });
 });
 

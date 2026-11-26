@@ -179,6 +179,7 @@ button:focus-visible,
 .how-to summary:focus-visible,
 .repo-urls a:focus-visible,
 .patch-links a:focus-visible,
+.fix-pr-link a:focus-visible,
 .panel-divider:focus-visible,
 .chat-input:focus-visible,
 .field textarea:focus-visible,
@@ -1461,8 +1462,45 @@ button[aria-busy="true"],
   color: var(--accent);
 }
 
-/* "Couldn't load Proposals" (.proposals-failed) and "Couldn't load the CVE assessment." (.patch-failed), each with
-   Retry beside it. */
+/* A Guard Finding's Fix PR, between the card's fields and its decisions, set like the Patch section above. */
+.fix-pr-section {
+  margin-right: 8px;
+}
+
+.fix-pr-section h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.fix-pr-section > p {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* The link, a 44px target with the focus ring, and who opened it on the line under it. */
+.fix-pr-link a {
+  display: inline-flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  color: var(--accent);
+}
+
+.fix-pr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* The section's own done or refused line sits under its button, apart from the card's. */
+.fix-pr-section > .card-line {
+  margin-top: 8px;
+}
+
+/* "Couldn't load Proposals" (.proposals-failed), "Couldn't load the CVE assessment." (.patch-failed) and "Couldn't
+   load the Fix PR." (.fix-pr-failed), each with Retry beside it. */
+.fix-pr-section > p.fix-pr-failed,
 .patch-failed,
 .proposals-failed {
   display: flex;
