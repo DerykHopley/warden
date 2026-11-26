@@ -1,8 +1,8 @@
 // The GitHub reader over a fake fetch (spec decision 11: GitHub is faked at its HTTP boundary). For one repo it asks
 // for an installation token scoped to that repo, contents read only, then that repo's default-branch tarball with it,
-// and yields its files; a repo with no commits (a tarball 404, then commits 409) yields none. The fake answers the tarball call with the archive itself, as fetch hands it back after
-// following GitHub's redirect. Every failure throws GitHubInstallationUnreachable or GitHubUnavailable, and none
-// carries the token, the App's JWT or the download URL.
+// and yields its files; a repo with no commits (a tarball 404, then commits 409) yields none. The fake answers the
+// tarball call with the archive itself, as fetch hands it back after following GitHub's redirect. Every failure throws
+// GitHubInstallationUnreachable or GitHubUnavailable, and none carries the token, the App's JWT or the download URL.
 import { createPublicKey, randomBytes } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { jwtVerify } from "jose";

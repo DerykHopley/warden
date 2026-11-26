@@ -40,6 +40,10 @@ const apiHeaders = (token: string) => ({
   "User-Agent": "Warden",
 });
 
+/** The REST API's URL for `path` under one repo, its owner and name encoded. */
+const repoApiUrl = (owner: string, name: string, path: string) =>
+  `${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/${path}`;
+
 /**
  * `waiting`, settled as it settles, with `download` aborted by a TimeoutError if it takes `ms`. fetch then rejects, or
  * errors its answer's body, with that error.
@@ -157,7 +161,7 @@ export function createGitHubReader({
     try {
       const answer = await callJson(fetch, {
         step: "GitHub's commits check",
-        url: `${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/commits?per_page=1`,
+        url: repoApiUrl(owner, name, "commits?per_page=1"),
         init: { headers: apiHeaders(token) },
         timeoutMs,
       });
@@ -184,7 +188,7 @@ export function createGitHubReader({
         let response: Response;
         try {
           response = await awaitWithin(
-            fetch(`${API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/tarball`, {
+            fetch(repoApiUrl(owner, name, "tarball"), {
               headers: apiHeaders(token),
               signal: download.signal,
             }),

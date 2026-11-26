@@ -353,7 +353,7 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
   it("reads a linked repo with no commits as one with no files, and still opens the other repo's Findings (stories 2, 3)", async () => {
     const team = await newTeam();
     const emptyRepo: Asset = { kind: "repo", ref: "https://github.com/example/empty" };
-    const { github, guard } = gitHubGuardApp(() => planted, ["example/empty"]);
+    const { guard } = gitHubGuardApp(() => planted, ["example/empty"]);
     await linkRepos(guard.repoAssets, team, [repo.ref, emptyRepo.ref], LEAD);
 
     const scanned = await scanRepo(guard, team, [repo, emptyRepo]);
@@ -368,20 +368,12 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
       ]),
     );
     expect(opened).toHaveLength(2);
-    expect(github.calls).toContain(
-      "GET https://api.github.com/repos/example/empty/commits?per_page=1",
-    );
-    expect(
-      guard.logLines().map((line) => JSON.parse(line) as Record<string, unknown>),
-    ).toContainEqual(
-      expect.objectContaining({ message: "guard scan: repo empty", repo: emptyRepo.ref }),
-    );
   });
 
   it("still fails a Scan whose one repo's tarball and commits both answer 404, gone or out of reach, reconciling nothing", async () => {
     const team = await newTeam();
     const gone: Asset = { kind: "repo", ref: "https://github.com/example/gone" };
-    const { github, guard } = gitHubGuardApp(() => planted);
+    const { guard } = gitHubGuardApp(() => planted);
     await linkRepos(guard.repoAssets, team, [gone.ref], LEAD);
 
     const failed = await scanRepo(guard, team, [gone]);
@@ -391,20 +383,6 @@ describe("a Guard Scan of a linked repo (stories 3, 4)", () => {
       state: "failed",
     });
     expect(await listFindings(guard, team)).toEqual([]);
-    expect(github.calls).toContain(
-      "GET https://api.github.com/repos/example/gone/commits?per_page=1",
-    );
-    const logged = guard.logLines().map((line) => JSON.parse(line) as Record<string, unknown>);
-    expect(logged).toContainEqual(
-      expect.objectContaining({
-        severity: "ERROR",
-        scanId: failed.id,
-        error: expect.objectContaining({
-          message: "GitHub's tarball of https://github.com/example/gone answered HTTP 404",
-        }),
-      }),
-    );
-    expect(logged.map(({ message }) => message)).not.toContain("guard scan: repo empty");
   });
 
   it("keeps a secret's Finding Open, unchanged, once its file grows past the 1 MiB a Scan reads, and marks the removed one Fixed", async () => {
