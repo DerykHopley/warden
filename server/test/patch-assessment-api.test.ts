@@ -235,6 +235,10 @@ describe("refusals", () => {
     });
     const guard = (await findings.list(teamId)).find((f) => f.module === "guard")!;
 
+    // The NUL row stays a 404 even without pathId's NUL check (#245): the assessment's read lists the Team's Findings
+    // and matches the id among them in memory, so the id never reaches a query and Postgres can't refuse it as a 500.
+    // The check itself is proven in path-id.test.ts and on the routes that do query by id; this row catches a read
+    // that starts to.
     for (const id of [randomUUID(), "a%00b", guard.id]) {
       const { status, body } = await call(app, key, "GET", assessmentPath(id), {
         as: MEMBER,
