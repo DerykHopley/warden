@@ -5,6 +5,7 @@ import {
   GitHubAppBody,
   LinkedInstallationBody,
   ReposBody,
+  ScanBody,
   type Asset,
   type ListedRepoBody,
   type StartScanBody,
@@ -76,8 +77,12 @@ export async function linkInstallation(
 }
 
 export type ScanStartResult =
-  | { kind: "started" }
-  /** 400, 502 or 503: no Scan started, in the server's words. A 502's Scan is stored failed, so the list changed. */
+  /** 202: the Scan queued, as the server stored it. */
+  | { kind: "started"; scan: ScanBody }
+  /**
+   * 400, 503 or another 5xx: no Scan started, in the server's words. `listChanged` when the list may have: a 400 can
+   * answer a list gone stale, and a 502's or an unexpected 5xx's Scan may be stored failed. A 503 stores nothing.
+   */
   | { kind: "refused"; words: string; listChanged: boolean }
   /** 403: the person isn't a Lead or an Admin (any more). */
   | { kind: "forbidden" }
@@ -86,17 +91,23 @@ export type ScanStartResult =
 
 const NOT_STARTED = "Warden couldn't start the Scan.";
 
-/** `POST /api/scans`: starts one Guard Scan of `assets`. Any other answer is not answering, as no answer is. */
+/**
+ * `POST /api/scans`: starts one Guard Scan of `assets`. Any other answer below 500, or a 202 whose Scan doesn't parse,
+ * is not answering, as no answer is.
+ */
 export async function scanRepos(getToken: GetToken, assets: Asset[]): Promise<ScanStartResult> {
   const body: StartScanBody = { module: "guard", assets };
   const res = await callWarden(getToken, "/api/scans", { method: "POST", body });
   if (!(res instanceof Response)) return res;
-  if (res.status === 202) return { kind: "started" };
+  if (res.status === 202) {
+    const scan = await parsed(res, ScanBody);
+    return scan === undefined ? { kind: "not-answering" } : { kind: "started", scan };
+  }
   if (res.status === 403) return { kind: "forbidden" };
   if (res.status === 409) return { kind: "team-not-opened" };
-  if (res.status === 400 || res.status === 502 || res.status === 503) {
+  if (res.status === 400 || res.status >= 500) {
     const words = (await serverError(res)) ?? NOT_STARTED;
-    return { kind: "refused", words, listChanged: res.status === 502 };
+    return { kind: "refused", words, listChanged: res.status !== 503 };
   }
   return { kind: "not-answering" };
 }

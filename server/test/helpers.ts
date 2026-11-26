@@ -7,8 +7,10 @@ import { exportSPKI, generateKeyPair, SignJWT, type CryptoKey } from "jose";
 import type pg from "pg";
 import {
   fingerprint,
+  type Asset,
   type Finding,
   type HealthBody,
+  type Module,
   type ProductInput,
   type Role,
 } from "@warden/contracts";
@@ -255,6 +257,18 @@ export async function linkRepos(
     repos: refs.map((ref, i) => ({ ref, githubId: i + 1 })),
   });
   return installationId;
+}
+
+/** Queues a Scan of `module` over `assets` for the Team, as its Admin's start does, and answers the stored Scan. */
+export async function queueScan(scans: Scans, team: string, module: Module, assets: Asset[]) {
+  const outcome = await scans.queue(team, {
+    module,
+    assets,
+    rules: ["guard/secret-in-repo"],
+    requestedBy: ADMIN,
+  });
+  if (outcome.kind !== "queued") throw new Error("the test's Scan was rate limited");
+  return outcome.scan;
 }
 
 /**

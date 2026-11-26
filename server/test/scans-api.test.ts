@@ -25,6 +25,7 @@ import {
   linkRepos,
   logEntries,
   minutesAgo,
+  queueScan,
   seedTeam,
   sessionToken,
   testApp,
@@ -493,17 +494,11 @@ describe("GET /api/scans/:id: any person in the Team reads a Scan", () => {
 });
 
 describe("Scans.lastFor: each Asset's newest Scan of a module (story 2)", () => {
-  const queue = async (scans: Scans, team: string, module: "guard" | "patch", assets: Asset[]) => {
-    const outcome = await scans.queue(team, { module, assets, rules: [ENV], requestedBy: LEAD });
-    if (outcome.kind !== "queued") throw new Error("not queued");
-    return outcome.scan;
-  };
-
   it("answers the later of two Guard Scans naming a repo, and nothing for a repo no Scan names", async () => {
     const team = await newTeam();
     const scans = createScans({ withTeam });
-    await queue(scans, team, "guard", [repo(1), repo(2)]);
-    const later = await queue(scans, team, "guard", [repo(1)]);
+    await queueScan(scans, team, "guard", [repo(1), repo(2)]);
+    const later = await queueScan(scans, team, "guard", [repo(1)]);
     const both = (await rows(team))[0]!.id;
 
     const last = await scans.lastFor(team, "guard", [repo(1), repo(2), repo(3)]);
@@ -517,9 +512,9 @@ describe("Scans.lastFor: each Asset's newest Scan of a module (story 2)", () => 
     const team = await newTeam();
     const other = await newTeam();
     const scans = createScans({ withTeam });
-    const guard = await queue(scans, team, "guard", [repo(1)]);
-    await queue(scans, team, "patch", [repo(1)]);
-    await queue(scans, other, "guard", [repo(1), repo(2)]);
+    const guard = await queueScan(scans, team, "guard", [repo(1)]);
+    await queueScan(scans, team, "patch", [repo(1)]);
+    await queueScan(scans, other, "guard", [repo(1), repo(2)]);
 
     const last = await scans.lastFor(team, "guard", [repo(1), repo(2)]);
 

@@ -3,6 +3,7 @@
 // The rest is the real server on the seeded database: Acme has no repos linked.
 // Story 2: Cedar's two Repo Assets and their stale Guard Scan (the global setup's), with nothing faked in the browser.
 // The server has no GitHub settings, so the Scan Job it starts ends each Guard Scan failed: it has no way to read a repo.
+// The global setup holds each Scan Job a few seconds before it runs, so the new Scan reads queued first.
 import { createHash } from "node:crypto";
 import type { Page } from "@playwright/test";
 import { ADA, CEDAR, CEDAR_REPOS, expect, GRACE, HEDY, KATHERINE, test } from "./session.ts";
@@ -106,7 +107,13 @@ test("an Admin starts Scan now and sees each repo's last Scan go from failed, th
   await scanNow.click();
   await expect(scanNow).toHaveAttribute("aria-busy", "true");
   await expect(scanNow).toBeDisabled();
+  // The list as the server answers it after the start, not only as the 202 named it. The e2e server holds each Scan
+  // Job for a moment before it runs, so that answer can't come after the Job has already failed the Scan.
+  const reread = page.waitForResponse(
+    (res) => res.request().method() === "GET" && new URL(res.url()).pathname === "/api/repos",
+  );
   release();
+  await reread;
 
   await expect(page.getByText("A Scan is under way.")).toBeVisible();
   await expect(scanNow).toBeDisabled();

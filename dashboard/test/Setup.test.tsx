@@ -257,6 +257,26 @@ describe("SetupPage: Scan now (story 2)", () => {
     expect(scanNow()).not.toHaveAttribute("aria-busy", "true");
   });
 
+  it("reads the started repos as queued from the 202 at once, so a click before the list answers again sends nothing", async () => {
+    const reread = deferred<Response>();
+    let reads = 0;
+    renderSetup("admin", {
+      repos: () =>
+        reads++ === 0 ? reposOf(repo("web", "done"), repo("api", "done"))() : reread.promise,
+      startScan: () => json(202, scan("queued")),
+    });
+
+    await userEvent.click(await repos().findByRole("button", { name: "Scan now" }));
+
+    expect(await repos().findByText(UNDER_WAY)).toBeInTheDocument();
+    expect(repos().getByText("Queued")).toBeInTheDocument();
+    expect(repos().getByText(`Done, ${dayAndTimeWords(ENDED)}`)).toBeInTheDocument();
+    expect(scanNow()).toBeDisabled();
+    await userEvent.click(scanNow());
+    expect(callsTo("/api/scans")).toHaveLength(1);
+    expect(callsTo("/api/repos")).toHaveLength(2);
+  });
+
   it("sends nothing for a second click while the first start runs", async () => {
     const started = deferred<Response>();
     renderSetup("admin", {
@@ -280,23 +300,27 @@ describe("SetupPage: Scan now (story 2)", () => {
     expect(scanNow()).toBeDisabled();
   });
 
+  // A 400 may answer a list gone stale (a repo the Team no longer holds), so the list is read again after it.
   it.each([
     [
       "a 400, in the server's words",
       () => json(400, { error: "assets: not the Team's" }),
       "assets: not the Team's",
+      2,
     ],
-    ["a 400 with no words", () => json(400, {}), "Warden couldn't start the Scan."],
+    ["a 400 with no words", () => json(400, {}), "Warden couldn't start the Scan.", 2],
     [
       "a 503, in the server's words",
       () => json(503, { error: "Scans aren't set up here" }),
       "Scans aren't set up here",
+      1,
     ],
-    ["a 409", () => json(409, { error: "not opened" }), TEAM_NOT_OPENED],
+    ["a 409", () => json(409, { error: "not opened" }), TEAM_NOT_OPENED, 1],
     [
       "a 429 with Retry-After: 120",
       () => json(429, { error: "too many" }, { "Retry-After": "120" }),
       "Too many tries: try again in 2 min",
+      1,
     ],
     [
       "no answer",
@@ -304,10 +328,11 @@ describe("SetupPage: Scan now (story 2)", () => {
         throw new TypeError("Failed to fetch");
       },
       NOT_ANSWERING,
+      1,
     ],
   ])(
     "shows %s in the refusal line under the button, and gives the button back",
-    async (_name, refusal, words) => {
+    async (_name, refusal, words, reads) => {
       renderSetup("lead", { repos: reposOf(repo("web", "done")), startScan: refusal });
 
       await userEvent.click(await repos().findByRole("button", { name: "Scan now" }));
@@ -315,9 +340,32 @@ describe("SetupPage: Scan now (story 2)", () => {
       expect(await repos().findByRole("alert")).toHaveTextContent(words);
       expect(scanNow()).toBeEnabled();
       expect(scanNow()).not.toHaveAttribute("aria-busy", "true");
-      expect(callsTo("/api/repos")).toHaveLength(1);
+      await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(reads));
     },
   );
+
+  // The server may have stored the Scan before it failed, so the list is read again, as after a 502.
+  it.each([
+    [
+      "a 500, in the server's words",
+      () => json(500, { error: "Something broke" }),
+      "Something broke",
+    ],
+    [
+      "a 500 with no words",
+      () => new Response("Internal Server Error", { status: 500 }),
+      "Warden couldn't start the Scan.",
+    ],
+    ["a 504 with no words", () => json(504, {}), "Warden couldn't start the Scan."],
+  ])("shows %s and reads the list again", async (_name, refusal, words) => {
+    renderSetup("lead", { repos: reposOf(repo("web", "done")), startScan: refusal });
+
+    await userEvent.click(await repos().findByRole("button", { name: "Scan now" }));
+
+    expect(await repos().findByRole("alert")).toHaveTextContent(words);
+    await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(2));
+    expect(scanNow()).toBeEnabled();
+  });
 
   it("shows a 502's words and reads the list again", async () => {
     let answer = reposOf(repo("web", "done"));
@@ -388,6 +436,28 @@ describe("SetupPage: Scan now (story 2)", () => {
         expect(repos().getByText(`Failed, ${dayAndTimeWords(ENDED)}`)).toBeInTheDocument(),
       );
       await act(() => vi.advanceTimersByTimeAsync(20_000));
+      expect(callsTo("/api/repos")).toHaveLength(3);
+    });
+
+    it("keeps the last list on screen, and reading every 5 s, when one read while a Scan is under way fails", async () => {
+      const answers = [
+        reposOf(repo("web", "queued")),
+        () => json(502, { error: "Bad gateway" }),
+        reposOf(repo("web", "failed")),
+      ];
+      let reads = 0;
+      renderSetup("member", { repos: () => answers[Math.min(reads++, answers.length - 1)]!() });
+      await vi.waitFor(() => expect(repos().getByText("Queued")).toBeInTheDocument());
+
+      await act(() => vi.advanceTimersByTimeAsync(5_100));
+      await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(2));
+      expect(repos().getByText("Queued")).toBeInTheDocument();
+      expect(repos().queryByRole("alert")).toBeNull();
+
+      await act(() => vi.advanceTimersByTimeAsync(5_100));
+      await vi.waitFor(() =>
+        expect(repos().getByText(`Failed, ${dayAndTimeWords(ENDED)}`)).toBeInTheDocument(),
+      );
       expect(callsTo("/api/repos")).toHaveLength(3);
     });
 

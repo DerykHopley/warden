@@ -1,8 +1,15 @@
 // The Setup page (Guard spec, stories 1 and 2): an Admin connects GitHub from here, anyone in the Team sees its Repo
-// Assets with each one's last Scan, and a Lead or an Admin starts a Scan of them. GitHub sends the Admin back from installing the app to `/setup/github`, its Setup URL, which asks them to
-// sign in with GitHub so Warden can link that installation to the Team.
+// Assets with each one's last Scan, and a Lead or an Admin starts a Scan of them. GitHub sends the Admin back from
+// installing the app to `/setup/github`, its Setup URL, which asks them to sign in with GitHub so Warden can link that
+// installation to the Team.
 import { useOrganization } from "@clerk/react";
-import { MAX_SCAN_ASSETS, type ListedRepoBody, type ScanBody } from "@warden/contracts";
+import {
+  assetKey,
+  atLeast,
+  MAX_SCAN_ASSETS,
+  type ListedRepoBody,
+  type ScanBody,
+} from "@warden/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NOT_ANSWERING, TEAM_NOT_OPENED } from "./api.ts";
 import type { PageProps } from "./App.tsx";
@@ -106,24 +113,42 @@ function lastScanWords(scan: ScanBody | null): string {
 const isUnderWay = (repo: ListedRepoBody) =>
   repo.last_scan?.state === "queued" || repo.last_scan?.state === "running";
 
+type Listed = Extract<ReposResult, { kind: "repos" }>;
+
+/** The list with `scan` as the last Scan of each repo it names: what a 202 started, before the list is read again. */
+function withScan(list: ReposResult | "loading", scan: ScanBody): ReposResult | "loading" {
+  if (list === "loading" || list.kind !== "repos") return list;
+  const named = new Set(scan.assets.map(assetKey));
+  return {
+    ...list,
+    repos: list.repos.map((repo) =>
+      named.has(assetKey(repo.asset)) ? { ...repo, last_scan: scan } : repo,
+    ),
+  };
+}
+
 function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   const ask = useCallback(() => fetchRepos(getToken), [getToken]);
   const list = useWardenCall<ReposResult>(ask, onSessionEnded);
-  const { refresh } = list;
+  const { refresh, setResult } = list;
   const [starting, setStarting] = useState(false);
   // Set at the click itself, before React renders the disabled button: one start per click.
   const startRuns = useRef(false);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const listed = list.result !== "loading" && list.result.kind === "repos" ? list.result : null;
+  const answered = list.result !== "loading" && list.result.kind === "repos" ? list.result : null;
+  // The last list read. While a Scan in it is under way, a read that fails keeps it on screen and the reading goes on.
+  const [lastListed, setLastListed] = useState<Listed | null>(null);
+  if (answered !== null && answered !== lastListed) setLastListed(answered);
+  const listed = answered ?? (lastListed?.repos.some(isUnderWay) ? lastListed : null);
   const underWay = listed?.repos.some(isUnderWay) ?? false;
 
   // While a listed Scan is queued or running, the list is read again READ_AGAIN_MS after each answer, keeping it on
-  // screen; an answer with none under way, an unreadable list, or leaving the page stops it.
+  // screen; an answer with none under way, an unreadable list with none shown, or leaving the page stops it.
   useEffect(() => {
     if (!underWay) return;
     const next = setTimeout(refresh, READ_AGAIN_MS);
     return () => clearTimeout(next);
-  }, [underWay, listed, refresh]);
+  }, [underWay, list.result, refresh]);
 
   async function scanNow(repos: ListedRepoBody[]) {
     if (startRuns.current) return;
@@ -137,7 +162,9 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
     startRuns.current = false;
     setStarting(false);
     switch (result.kind) {
+      // The started repos read the new Scan at once, so the button stays disabled until the list is read again.
       case "started":
+        setResult((old) => withScan(old, result.scan));
         return refresh();
       case "refused":
         setRefusal(result.words);
@@ -169,7 +196,7 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
   if (listed.repos.length === 0) return <p className="muted">No repos linked yet.</p>;
   return (
     <>
-      {(me.role === "lead" || me.role === "admin") && (
+      {me.role !== null && atLeast(me.role, "lead") && (
         <div className="scan-now">
           <button
             type="button"

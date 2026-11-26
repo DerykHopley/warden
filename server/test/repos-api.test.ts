@@ -16,6 +16,7 @@ import {
   ADMIN,
   linkRepos,
   newTeam,
+  queueScan,
   repoRef,
   sessionToken,
   testApp,
@@ -59,18 +60,6 @@ async function readRepos(team: string, { as = MEMBER, withScans = true } = {}) {
 }
 
 const repo = (name: string): Asset => ({ kind: "repo", ref: repoRef(name) });
-
-/** Queues a Guard Scan of `names` for the Team, as a Lead's start does, and answers it. */
-async function queueGuardScan(team: string, names: string[]) {
-  const outcome = await scans.queue(team, {
-    module: "guard",
-    assets: names.map(repo),
-    rules: ["guard/secret-in-repo"],
-    requestedBy: ADMIN,
-  });
-  if (outcome.kind !== "queued") throw new Error("the test's Scan was rate limited");
-  return outcome.scan;
-}
 
 describe("GET /api/repos: any person in the Team reads its Repo Assets (story 1)", () => {
   it("answers a Member 200 with the Team's Repo Assets, by ref, as ReposBody", async () => {
@@ -130,7 +119,7 @@ describe("GET /api/repos: each repo's last Scan (story 2)", () => {
   it("answers each repo's newest Guard Scan as last_scan, and null for a repo no Scan names", async () => {
     const team = await teamWithMember();
     await linkRepos(repoAssets, team, [repoRef("web"), repoRef("api")]);
-    const scan = await queueGuardScan(team, ["web"]);
+    const scan = await queueScan(scans, team, "guard", [repo("web")]);
 
     const res = await readRepos(team);
 
@@ -146,7 +135,7 @@ describe("GET /api/repos: each repo's last Scan (story 2)", () => {
     const teamB = await teamWithMember();
     await linkRepos(repoAssets, teamA, [repoRef("shared")]);
     await linkRepos(repoAssets, teamB, [repoRef("shared")]);
-    await queueGuardScan(teamA, ["shared"]);
+    await queueScan(scans, teamA, "guard", [repo("shared")]);
 
     const res = await readRepos(teamB);
 
@@ -156,7 +145,7 @@ describe("GET /api/repos: each repo's last Scan (story 2)", () => {
   it("answers a Guard Scan queued 16 minutes ago and never started as failed with an ended_at, and stores it so", async () => {
     const team = await teamWithMember();
     await linkRepos(repoAssets, team, [repoRef("web")]);
-    const { id } = await queueGuardScan(team, ["web"]);
+    const { id } = await queueScan(scans, team, "guard", [repo("web")]);
     await withTeam(team, (tx) =>
       sql`update scan_requests set queued_at = now() - interval '16 minutes' where id = ${id}`.execute(
         tx,
@@ -180,7 +169,7 @@ describe("GET /api/repos: each repo's last Scan (story 2)", () => {
   it("answers last_scan: null for each repo when Guard's routes are built without scans", async () => {
     const team = await teamWithMember();
     await linkRepos(repoAssets, team, [repoRef("web")]);
-    await queueGuardScan(team, ["web"]);
+    await queueScan(scans, team, "guard", [repo("web")]);
 
     const res = await readRepos(team, { withScans: false });
 

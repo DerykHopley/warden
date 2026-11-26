@@ -479,13 +479,12 @@ for (const { path, ready } of SETUP_PAGES) {
         await expectRings(page, targets);
 
         if (path === "/setup") {
-          // The refusal line, and the button disabled beside "A Scan is under way.", at this width too.
+          // The refusal line, and the button beside "A Scan is under way.", at this width too. Their words and the
+          // button's state are Setup.test.tsx's.
           const scanNow = page.getByRole("button", { name: "Scan now" });
           await scanNow.click();
-          await expect(page.getByRole("alert")).toHaveText("The Scan couldn't be started");
+          await expect(page.getByRole("alert")).toBeVisible();
           await expect(page.getByText("A Scan is under way.")).toBeVisible();
-          await expect(page.getByText("Running")).toBeVisible();
-          await expect(scanNow).toBeDisabled();
           await expectNoSidewaysScroll(page);
           await expectTargets([scanNow]);
         }

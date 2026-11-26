@@ -1,17 +1,18 @@
 // Before the browser tests: a throwaway Postgres database with every migration and Patch's CVE snapshot loaded (as the
 // release does, so a Product's save opens its CVE Findings), a key pair standing in for Clerk's, the dashboard built in
-// Vite's `e2e` mode, and the real server process on a free port serving that build. Acme, Bluebird and Cedar are
-// opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets and a stale
-// Guard Scan of them (`seedCedarRepos`); Acme and Bluebird are then filled by the
-// demo seed (`server/src/seed.ts`) without its demo Product (`--no-product`), so the Findings their tests count stay
-// the demo ones. Returns the teardown: the server stopped, the database dropped, the build removed.
+// Vite's `e2e` mode, and the real server process on a free port serving that build, each Scan Job it starts held for a
+// moment first (`scan-job-start-delay.ts`). Acme, Bluebird and Cedar are opened through the API as their Admins would
+// (each Team's Member joins too); Cedar gets two Repo Assets and a stale Guard Scan of them (`seedCedarRepos`); Acme
+// and Bluebird are then filled by the demo seed (`server/src/seed.ts`) without its demo Product (`--no-product`), so
+// the Findings their tests count stay the demo ones. Returns the teardown: the server stopped, the database dropped,
+// the build removed.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { exportJWK, exportSPKI, generateKeyPair } from "jose";
 import { createPool } from "../server/src/database.ts";
 import { createLogger } from "../server/src/log.ts";
@@ -188,6 +189,8 @@ export default async function globalSetup() {
           VITE_CLERK_PUBLISHABLE_KEY: `pk_test_${Buffer.from(`${FRONTEND_API_HOST}$`).toString("base64")}`,
           CLERK_AUTHORIZED_PARTIES: origin,
           WARDEN_DASHBOARD_DIR: dashboard,
+          // Handed on to each Scan Job, which it holds before the Job runs; the server runs at once.
+          NODE_OPTIONS: `--import=${pathToFileURL(join(repoRoot, "e2e/scan-job-start-delay.ts")).href}`,
         });
       } catch (error) {
         if (attempt > 1 || !String(error).includes("EADDRINUSE")) throw error;
