@@ -27,12 +27,16 @@ import { isPackageName, UnpinnableVersion, type PackageRegistry } from "./packag
 export type FixedEdit =
   { ok: true; path: string; text: string; body: string[] } | { ok: false; reason: string };
 
-const NO_FIX_PR = "no Fix PR for this Rule";
+/** Why a Rule, or a Location that isn't a file, gets no Fix PR. */
+export const NO_FIX_PR = "no Fix PR for this Rule";
 const NEVER_WORKFLOWS = "Warden never edits .github/workflows/";
 const NOT_JSON = "isn't valid JSON";
 const MISSING = "the file isn't on the default branch";
 const ALREADY_FIXED = "already fixed on the default branch; the next Scan marks it Fixed";
 const UNCHANGED = "Warden never changes what its edit doesn't mean to";
+/** A PR that leaves a server unpinned doesn't clear the Finding: its Rule still sees that server on the next Scan. */
+const STAYS_OPEN =
+  "The Finding stays Open after this PR merges, until the servers left as they are are pinned by hand.";
 const RANGED = "names a version range or tag, which pinning to the latest version could downgrade";
 
 const notPinnable = (label: string) => `not a package Warden can pin from ${label}`;
@@ -89,6 +93,39 @@ function code(raw: string): string {
   return `${fence}${pad}${text}${pad}${fence}`;
 }
 
+/** A Rule's Fix PR: whether a path is the file it edits, and its edit of that file's `current` text. */
+type RuleFix = {
+  isFile(path: string): boolean;
+  edit(path: string, current: string | undefined, registry: PackageRegistry): Promise<FixedEdit>;
+};
+
+const DENY_ENV: RuleFix = {
+  isFile: (path) => path === WHOLE_REPO_PATH,
+  edit: async (_path, current) => denyEnv(current),
+};
+
+/** Each Rule that gets a Fix PR; a Rule not here gets none. */
+const FIXES = new Map<RuleId, RuleFix>([
+  [AGENT_CAN_READ_ENV, DENY_ENV],
+  [NO_RUNTIME_GUARD, DENY_ENV],
+  [
+    BLANKET_BASH_ALLOW,
+    { isFile: isClaudeSettingsFile, edit: async (path, current) => removeBroadBash(path, current) },
+  ],
+  [MCP_SERVER_UNPINNED, { isFile: isMcpConfigPath, edit: pinServers }],
+]);
+
+/**
+ * Why the Finding at `location` under `ruleId` gets no Fix PR whatever its file holds, or undefined when it may get
+ * one: not a file Location, a path under `.github/workflows/`, a Rule with no fixed edit, or a path that isn't the
+ * Rule's file. `fixedEdit` asks this first, so whether a Finding is fixable never disagrees with its edit.
+ */
+export function fixRefusal(ruleId: RuleId, location: Location): string | undefined {
+  if (location.kind !== "file") return NO_FIX_PR;
+  if (/(?:^|\/)\.github\/workflows\//.test(location.path)) return NEVER_WORKFLOWS;
+  return FIXES.get(ruleId)?.isFile(location.path) ? undefined : NO_FIX_PR;
+}
+
 /**
  * The change a Fix PR for the Finding at `location` under `ruleId` makes, from the file's `current` text (undefined
  * when it's missing). `registry` gives a package's latest version for `guard/mcp-server-unpinned`; its
@@ -100,20 +137,12 @@ export async function fixedEdit(
   current: string | undefined,
   registry: PackageRegistry,
 ): Promise<FixedEdit> {
-  if (location.kind !== "file") return refused(NO_FIX_PR);
-  const { path } = location;
-  if (/(?:^|\/)\.github\/workflows\//.test(path)) return refused(NEVER_WORKFLOWS);
-  switch (ruleId) {
-    case AGENT_CAN_READ_ENV:
-    case NO_RUNTIME_GUARD:
-      return path === WHOLE_REPO_PATH ? denyEnv(current) : refused(NO_FIX_PR);
-    case BLANKET_BASH_ALLOW:
-      return isClaudeSettingsFile(path) ? removeBroadBash(path, current) : refused(NO_FIX_PR);
-    case MCP_SERVER_UNPINNED:
-      return isMcpConfigPath(path) ? pinServers(path, current, registry) : refused(NO_FIX_PR);
-    default:
-      return refused(NO_FIX_PR);
+  const refusal = fixRefusal(ruleId, location);
+  const fix = FIXES.get(ruleId);
+  if (refusal !== undefined || location.kind !== "file" || fix === undefined) {
+    return refused(refusal ?? NO_FIX_PR);
   }
+  return fix.edit(location.path, current, registry);
 }
 
 /** Adds the `.env` deny entries to the root settings file, creating the file, `permissions` or `deny` as needed. */
@@ -279,7 +308,11 @@ async function pinServers(
       ...pinned.map(({ key, pinned }) => `- ${code(key)}: ${code(pinned)}`),
       ...(left.length === 0
         ? []
-        : ["Left as they are:", ...left.map(({ key, left }) => `- ${code(key)}: ${left}`)]),
+        : [
+            "Left as they are:",
+            ...left.map(({ key, left }) => `- ${code(key)}: ${left}`),
+            STAYS_OPEN,
+          ]),
     ],
   };
 }

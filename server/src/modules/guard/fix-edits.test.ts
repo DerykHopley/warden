@@ -5,7 +5,7 @@ import type { Asset, Location } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import { GITHUB_TOKEN, SLACK_TOKEN } from "../../../test/secret-fixtures.ts";
 import { agentConfigCheck } from "./agent-config.ts";
-import { fixedEdit, type FixedEdit } from "./fix-edits.ts";
+import { fixedEdit, fixRefusal, type FixedEdit } from "./fix-edits.ts";
 import { mcpServerObservations, type PackageRegistryName } from "./mcp-servers.ts";
 import {
   RegistryUnavailable,
@@ -344,7 +344,24 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
     const body = result.body.join("\n");
     expect(body).toMatch(/`github`.*a container image gets no Fix PR/);
     expect(body).toContain("`@scope/pkg@1.2.3`");
-    expect(body).not.toContain("pinned");
+    // The server already pinned isn't listed: its key never shows.
+    expect(body).not.toContain("`pinned`");
+  });
+
+  it("says, beside a container server left as it is, that the Finding stays Open until it's pinned by hand", async () => {
+    const result = edited(
+      await fix({ github: DOCKER, scoped: { command: "npx", args: ["-y", "@scope/pkg"] } }),
+    );
+    const at = result.body.indexOf("Left as they are:");
+    expect(result.body[at + 1]).toMatch(/^- `github`: a container image gets no Fix PR$/);
+    expect(result.body.at(-1)).toBe(
+      "The Finding stays Open after this PR merges, until the servers left as they are are pinned by hand.",
+    );
+  });
+
+  it("says nothing of the Finding staying Open when every unpinned server is pinned", async () => {
+    const result = edited(await fix({ scoped: { command: "npx", args: ["-y", "@scope/pkg"] } }));
+    expect(result.body.join("\n")).not.toContain("stays Open");
   });
 
   it("leaves a package its registry doesn't hold, listed by key with the reason", async () => {
@@ -498,6 +515,41 @@ describe("fixedEdit never changes what its edit doesn't mean to", () => {
     for (const [rule, path, text] of files(extra)) {
       edited(await fixedEdit(rule, file(path), text, registry));
     }
+  });
+});
+
+describe("fixRefusal: whether a Finding's Rule and Location can get a Fix PR, without its file", () => {
+  it.each([
+    [READ_ENV, ".claude/settings.json"],
+    [NO_GUARD, ".claude/settings.json"],
+    [BLANKET, "packages/app/.claude/settings.local.json"],
+    [MCP, "tools/.mcp.json"],
+  ])("answers undefined for %s at %s", (rule, path) => {
+    expect(fixRefusal(rule, file(path))).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "another Rule",
+      "guard/permission-skip",
+      file(".claude/settings.json"),
+      "no Fix PR for this Rule",
+    ],
+    ["a non-file Location", MCP, { kind: "session" } as const, "no Fix PR for this Rule"],
+    [
+      "a path under .github/workflows/",
+      MCP,
+      file(".github/workflows/.mcp.json"),
+      "Warden never edits .github/workflows/",
+    ],
+    [
+      "a fixable Rule at another file",
+      READ_ENV,
+      file("app/.claude/settings.json"),
+      "no Fix PR for this Rule",
+    ],
+  ] as const)("answers a reason for %s", (_name, rule, location, reason) => {
+    expect(fixRefusal(rule, location)).toBe(reason);
   });
 });
 
