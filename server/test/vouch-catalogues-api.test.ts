@@ -8,8 +8,12 @@ import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { AppEnv } from "../src/app.ts";
+import { createFindings } from "../src/findings/index.ts";
+import { createRepoAssets } from "../src/modules/guard/repo-assets.ts";
+import { createProducts } from "../src/modules/patch/products.ts";
 import { VDA_ISA_2027_1 } from "../src/modules/vouch/catalogue.ts";
 import { vouchRoutes } from "../src/modules/vouch/routes.ts";
+import { createTeamAssets } from "../src/modules/vouch/team-assets.ts";
 import { createTeamCatalogues } from "../src/modules/vouch/team-catalogues.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
@@ -37,6 +41,12 @@ beforeAll(async () => {
       vouchRoutes({
         teamCatalogues: createTeamCatalogues({ withTeam }),
         catalogues: [VDA_ISA_2027_1],
+        // Read only by the Controls routes, which `vouch-controls-api.test.ts` covers.
+        findings: createFindings({ withTeam, moveRules: {} }),
+        teamAssets: createTeamAssets({
+          repoAssets: createRepoAssets({ withTeam }),
+          products: createProducts({ withTeam }),
+        }),
       }),
     ],
   }));

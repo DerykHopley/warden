@@ -29,6 +29,7 @@ import { createSaveLimit } from "./modules/patch/save-limit.ts";
 import { createPatchScan } from "./modules/patch/scan.ts";
 import { VDA_ISA_2027_1 } from "./modules/vouch/catalogue.ts";
 import { vouchRoutes } from "./modules/vouch/routes.ts";
+import { createTeamAssets } from "./modules/vouch/team-assets.ts";
 import { createTeamCatalogues } from "./modules/vouch/team-catalogues.ts";
 import { scanJobStarterFor } from "./scan-job-starters.ts";
 import { createScans } from "./scans.ts";
@@ -104,6 +105,8 @@ const scans = createScans({ withTeam });
 const startScanJob = scanJobStarterFor(config, { logger });
 // ADR 0005: the modules come in here, through the wiring the Scan Job and the demo seed share.
 const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
+// Patch's Products, which Patch's routes change and Vouch's judge `patch/` Rules on.
+const products = createProducts({ withTeam });
 const appDeps: AppDeps = {
   logger,
   verifySessionToken: createClerkVerifier(config.clerk),
@@ -156,17 +159,21 @@ const appDeps: AppDeps = {
     ),
     hookRoutes({ hookSettings }),
     patchRoutes({
-      products: createProducts({ withTeam }),
+      products,
       scan: createPatchScan({ findings, logger }),
       assessment: createPatchAssessment({ findings, withTeam }),
       logger,
       saveLimit: createSaveLimit(),
     }),
     // Vouch's Catalogues. VDA ISA 2027.1 is read from its files (`loadCatalogue`) once, when this file imports it: a
-    // file that can't be read or fails its schema stops start-up with that error, before the server listens.
+    // file that can't be read or fails its schema stops start-up with that error, before the server listens. A
+    // Control's Verdict reads the Team's Findings, and its Repo Assets and Products handed in here, as Vouch imports
+    // neither Guard nor Patch.
     vouchRoutes({
       teamCatalogues: createTeamCatalogues({ withTeam }),
       catalogues: [VDA_ISA_2027_1],
+      findings,
+      teamAssets: createTeamAssets({ repoAssets, products }),
     }),
   ],
   startScanJob,

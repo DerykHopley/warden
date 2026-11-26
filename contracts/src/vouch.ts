@@ -1,7 +1,11 @@
 // Vouch's Catalogues as the API answers and takes them (spec #341, slice 1b): every Catalogue Warden has, whether the
 // Team has it on, and its judged Controls. The Team comes from the session, never the body. The Catalogue's text is
 // the rights holder's: the credit and licence go wherever it is shown (CC BY-ND 4.0).
+//
+// Each judged Control's Verdict, reason and evidence (slice 2b): worked out on read from the Team's Findings, Scan
+// coverage and Judge Spot runs in the last 30 days, never stored.
 import { z } from "zod";
+import { Asset, AssetKind, DateTime, Id, RuleId, Severity, Title } from "./finding.ts";
 
 /**
  * The Catalogues Warden has, by id. The one place they live: the Vouch module's Catalogues and the database's check
@@ -50,6 +54,61 @@ export type TeamCatalogue = z.infer<typeof TeamCatalogue>;
 /** `GET /api/vouch/catalogues`: every Catalogue Warden has, as the Team sees it. Any person in the Team reads it. */
 export const CataloguesBody = z.object({ catalogues: z.array(TeamCatalogue) });
 export type CataloguesBody = z.infer<typeof CataloguesBody>;
+
+/** One of a Control's Rules, as evidence: the kind of Asset it is judged on, and how much of it was covered. */
+export const ControlRuleEvidence = z.object({
+  rule_id: RuleId,
+  /** A `guard/` Rule is judged on Repos, a `patch/` Rule on Products. */
+  asset_kind: AssetKind.extract(["repo", "product"]),
+  /** The newest Scan that covered the Rule on a held Asset in the last 30 days; null when none did. */
+  last_covered_at: DateTime.nullable(),
+  /** The Team's held Assets of that kind the Rule covered in the last 30 days. */
+  assets_covered: z.number().int().nonnegative(),
+  /** The Team's Assets of that kind, held now. */
+  assets_held: z.number().int().nonnegative(),
+});
+export type ControlRuleEvidence = z.infer<typeof ControlRuleEvidence>;
+
+/** An Open Finding that counts against a Control, with what the dashboard needs to name it and link to it. */
+export const ControlOpenFinding = z.object({
+  id: Id,
+  rule_id: RuleId,
+  title: Title,
+  severity: Severity,
+  asset: Asset,
+});
+export type ControlOpenFinding = z.infer<typeof ControlOpenFinding>;
+
+/** The evidence behind a Control's Verdict. */
+export const ControlEvidence = z.object({
+  /** Each Rule the Control maps to; none for a Control a Judge Spot run evidences. */
+  rules: z.array(ControlRuleEvidence),
+  /** For a Control a Judge Spot run evidences (5.2.4): the newest in the last 30 days, or null. Null for the others. */
+  judge_spot_run_at: DateTime.nullable(),
+  /** The Open Findings under the Control's Rules, on the Team's held Assets, by Rule then id. */
+  open_findings: z.array(ControlOpenFinding),
+});
+export type ControlEvidence = z.infer<typeof ControlEvidence>;
+
+/** One judged Control with its worked-out Verdict, its one-line reason and the evidence behind it. */
+export const ControlVerdict = CatalogueControl.extend({
+  verdict: Verdict,
+  reason: z.string().min(1),
+  evidence: ControlEvidence,
+});
+export type ControlVerdict = z.infer<typeof ControlVerdict>;
+
+/**
+ * `GET /api/vouch/catalogues/:id/controls`: the Catalogue's judged Controls with their Verdicts, in the order it shows
+ * them, and whether the Team has it on. Any person in the Team reads it. `GET .../controls/:ref` answers one
+ * `ControlVerdict`.
+ */
+export const ControlsBody = z.object({
+  catalogue: CatalogueId,
+  on: z.boolean(),
+  controls: z.array(ControlVerdict),
+});
+export type ControlsBody = z.infer<typeof ControlsBody>;
 
 /** `PUT /api/vouch/catalogues/:id`'s body (Admin): turn the Catalogue on or off for the Team. Nothing else. */
 export const CatalogueSwitchBody = z.strictObject({ on: z.boolean() });

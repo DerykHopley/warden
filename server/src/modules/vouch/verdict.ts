@@ -10,7 +10,7 @@ import { OVERVIEW_PERIOD_DAYS, type CoverageEntry } from "../../findings/index.t
 const DAY = 24 * 3600_000;
 
 /** The kinds of Asset a Rule is judged on: a `guard/` Rule on Repos, a `patch/` Rule on Products. */
-type JudgedKind = "repo" | "product";
+export type JudgedKind = "repo" | "product";
 
 /** What the Verdict reads from a Finding: which, where, and its Status. */
 export type VerdictFinding = Pick<Finding, "id" | "asset" | "status">;
@@ -83,7 +83,7 @@ export function workOutVerdict(input: VerdictInput): WorkedOutVerdict {
 }
 
 /** A Rule's kind, from its module. Vouch judges only Guard's and Patch's Rules by their Assets. */
-function kindOf(rule: RuleId): JudgedKind {
+export function kindOf(rule: RuleId): JudgedKind {
   if (rule.startsWith("guard/")) return "repo";
   if (rule.startsWith("patch/")) return "product";
   throw new Error(`${rule}: Vouch judges only guard/ and patch/ Rules on Assets`);
