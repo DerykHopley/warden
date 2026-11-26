@@ -388,9 +388,12 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
     setSaving(true);
     const result = await saveProductInTeam(getToken, savedIn, id, inputOf(draft));
     // A Team or Role change since forgot this save: its answer is about a form no longer shown. Back on the save's
-    // Team, an answer that may have stored a Product still reads the list again, so the list shows what's stored.
+    // Team, an answer that may have stored a Product still reads the list again, so the list shows what's stored. A
+    // save that got no answer at all leaves the list as it is: the server may still be down, and a read would swap the
+    // list for the server-down notice, an alert about a save no longer shown.
     if (saveCall.current !== call) {
-      if (mayHaveStored(result) && teamNow.current === savedIn) list.refresh();
+      const noAnswer = result.kind === "maybe-saved" && !result.answered;
+      if (mayHaveStored(result) && !noAnswer && teamNow.current === savedIn) list.refresh();
       return;
     }
     saveCall.current = null;

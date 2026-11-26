@@ -157,12 +157,18 @@ describe("saveProduct", () => {
 
   it("reads a 2xx whose body isn't a Product as maybe saved", async () => {
     answers(json(201, { ...product, usage: "everywhere" }));
-    expect(await saveProduct(getToken, null, input)).toEqual({ kind: "maybe-saved" });
+    expect(await saveProduct(getToken, null, input)).toEqual({
+      kind: "maybe-saved",
+      answered: true,
+    });
   });
 
   it("reads no answer as maybe saved", async () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
-    expect(await saveProduct(getToken, null, input)).toEqual({ kind: "maybe-saved" });
+    expect(await saveProduct(getToken, null, input)).toEqual({
+      kind: "maybe-saved",
+      answered: false,
+    });
   });
 });
 

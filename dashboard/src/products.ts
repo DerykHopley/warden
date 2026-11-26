@@ -66,8 +66,11 @@ export type SaveResult =
   | { kind: "not-found" }
   /** 409: the name is taken, or the Team isn't opened; `error` is the server's words, null when its body has none. */
   | { kind: "conflict"; error: string | null }
-  /** No answer, or a 2xx whose body isn't a Product: the change may have been saved. */
-  | { kind: "maybe-saved" }
+  /**
+   * No answer (`answered` false), or a 2xx whose body isn't a Product (`answered` true): the change may have been
+   * saved.
+   */
+  | { kind: "maybe-saved"; answered: boolean }
   | Exclude<Refused, { kind: "not-answering" }>;
 
 /**
@@ -93,7 +96,7 @@ export async function saveProduct(
     { method: id === null ? "POST" : "PUT", body: input },
   );
   if (!(res instanceof Response))
-    return res.kind === "not-answering" ? { kind: "maybe-saved" } : res;
+    return res.kind === "not-answering" ? { kind: "maybe-saved", answered: false } : res;
   switch (res.status) {
     case 400:
       return { kind: "invalid", error: await serverError(res) };
@@ -105,7 +108,9 @@ export async function saveProduct(
       return { kind: "conflict", error: await serverError(res) };
   }
   const product = await parsed(res, Product);
-  return product === undefined ? { kind: "maybe-saved" } : { kind: "saved", product };
+  return product === undefined
+    ? { kind: "maybe-saved", answered: true }
+    : { kind: "saved", product };
 }
 
 /**
