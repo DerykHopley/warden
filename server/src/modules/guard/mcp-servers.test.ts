@@ -104,14 +104,24 @@ describe("guard/mcp-server-unpinned", () => {
       "docker",
       ["run", "-i", "--rm", "--add-host", "host.docker.internal:host-gateway", "mcp/github"],
     ],
-    // An npm runner reads an option it doesn't list as a switch as taking the next word, as npx does.
+    // npm's and pnpm's value options take the next word, whatever it starts with; any other option is a switch, as
+    // npm and pnpm read an option they don't know.
     ...[
       "npx --prefix /opt/x pkg",
       "npx --cache ~/.npm pkg",
       "npx --userconfig ./.npmrc pkg",
-      "npx --made-up-option ./x pkg",
+      "npx -C /opt/x pkg",
+      "npx --registry https://registry.example.com pkg",
+      "npx --cache -x pkg",
+      "npx --registry -x pkg",
+      "npm --prefix -x exec pkg",
+      "npx --made-up-option evil pkg@1.2.3",
+      "npm exec --made-up-option evil -- pkg@1.2.3",
+      "pnpm -C x dlx pkg",
+      "pnpm --filter x dlx pkg",
+      "pnpm --dir -x dlx pkg",
+      // bunx and yarn dlx read an option they don't list as a switch as taking the next word.
       "bunx --made-up-option ./x pkg",
-      "pnpm dlx --made-up-option ./x pkg",
       "yarn dlx --made-up-option ./x pkg",
       "npm exec --prefix ./tools -- pkg",
       // Its switches, and an option before another option, take no value; `--` ends the options.
@@ -135,6 +145,11 @@ describe("guard/mcp-server-unpinned", () => {
       "docker run --cidfile /tmp/c mcp/github",
       "podman run --made-up-option x mcp/github",
       "docker run -it mcp/github",
+      // Its value options take the next word, whatever it starts with, the last letter of a cluster's too.
+      "docker run -e -x mcp/github",
+      "podman run -e -x mcp/github",
+      "docker run -ie -x mcp/github",
+      "docker --log-level -x run mcp/github",
       // A command's own options before its subcommand word don't hide the runner.
       "pnpm --dir x dlx pkg",
       "npm --prefix ./x exec pkg",
@@ -250,6 +265,14 @@ describe("guard/mcp-server-unpinned", () => {
       "uv --directory /x tool run pkg==1.0.0",
       "docker --log-level debug run mcp/github:1.0",
       "docker container run mcp/github:1.0",
+      "pnpm --filter x dlx pkg@1.2.3",
+      "npx --cache -x pkg@1.2.3",
+      "docker run -e -x mcp/github:1.0",
+      // npm and pnpm read an option they don't know as a switch, before `dlx` and after it, so `./x` is what runs,
+      // a local path; pnpm reads `./x` as its command, never reaching `dlx`.
+      "npx --made-up-option ./x pkg",
+      "pnpm --made-up-option ./x dlx pkg",
+      "pnpm dlx --made-up-option ./x pkg",
       // `uv run` runs a project's command, not a package.
       "uv run pkg",
       "uv --directory /x run pkg",

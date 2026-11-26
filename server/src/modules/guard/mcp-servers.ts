@@ -73,116 +73,44 @@ const PYTHON_VALUE_OPTIONS = new Set([
   "--backend",
 ]);
 
-/** npm's Boolean config options (npm 12's `@npmcli/config` definitions), by name. */
-const NPM_SWITCHES = new Set([
-  "all",
-  "allow-same-version",
-  "allow-scripts-pending",
-  "allow-scripts-pin",
-  "allow-unused-patches",
-  "audit",
-  "bin-links",
-  "browser",
-  "bypass-2fa",
-  "color",
-  "commit-hooks",
-  "dangerously-allow-all-scripts",
-  "description",
-  "dev",
-  "diff-ignore-all-space",
-  "diff-name-only",
-  "diff-no-prefix",
-  "diff-text",
-  "dry-run",
-  "engine-strict",
-  "expect-results",
-  "force",
-  "foreground-scripts",
-  "format-package-lock",
-  "fund",
-  "git-tag-version",
-  "global",
-  "global-style",
-  "if-present",
-  "ignore-existing",
-  "ignore-extension",
-  "ignore-patch-failures",
-  "ignore-scripts",
-  "include-attestations",
-  "include-staged",
-  "include-workspace-root",
-  "init-private",
-  "install-links",
-  "json",
-  "keep-edit-dir",
-  "legacy-bundling",
-  "legacy-peer-deps",
-  "link",
-  "long",
-  "offline",
-  "omit-lockfile-registry-resolved",
-  "optional",
-  "package-lock",
-  "package-lock-only",
-  "packages-all",
-  "parseable",
-  "prefer-dedupe",
-  "prefer-offline",
-  "prefer-online",
-  "production",
-  "progress",
-  "provenance",
-  "read-only",
-  "rebuild-bundle",
-  "save",
-  "save-bundle",
-  "save-dev",
-  "save-exact",
-  "save-optional",
-  "save-peer",
-  "save-prod",
-  "sign-git-commit",
-  "sign-git-tag",
-  "strict-allow-scripts",
-  "strict-npmrc",
-  "strict-peer-deps",
-  "strict-ssl",
-  "timing",
-  "unicode",
-  "update-notifier",
-  "usage",
-  "version",
-  "versions",
-  "workspaces",
-  "workspaces-update",
-  "yes",
-]);
-
 /**
- * npm's shorthands that stand for a switch, or for an option with its value (`-d` is `--loglevel info`), from npm 12's
- * `@npmcli/config` definitions. The rest (`-C`, `-w`, `-c`, `-L`, `-m`, `--reg`) take a value.
+ * The options `npx` and `npm exec` (and `npm`'s own, before `exec`) give the next word as their value: each npm config
+ * option whose type isn't, and doesn't include, Boolean (npm 12's `@npmcli/config` definitions, as npx's own
+ * `npx-cli.js` reads them; npm 10's and 11's have no other), its shorthands for one (`-C` is `--prefix`), and npx's
+ * `-p`. npm reads any other option as a switch: one it doesn't know, a `--no-<option>`, a cluster (`-yq`).
  */
-const NPM_SWITCH_SHORTHANDS = new Set([
-  ...["d", "dd", "ddd", "q", "s", "n", "a", "f", "g", "l", "p", "S", "B", "D", "E", "O", "P"],
-  ...["?", "H", "h", "v", "y", "quiet", "silent", "verbose", "desc", "help", "local", "no"],
-  ...["porcelain", "readonly", "iwr", "ws"],
+const NPM_VALUE_OPTIONS = new Set([
+  ...[
+    ...["_auth", "access", "allow-directory", "allow-file", "allow-git", "allow-remote"],
+    ...["allow-scripts", "also", "audit-level", "auth-type", "before", "ca", "cache", "cache-max"],
+    ...["cache-min", "cafile", "call", "cert", "cidr", "cpu", "depth", "diff", "diff-dst-prefix"],
+    ...["diff-src-prefix", "diff-unified", "edit-dir", "editor", "expect-result-count", "expires"],
+    ...["extension-file", "fetch-retries", "fetch-retry-factor", "fetch-retry-maxtimeout"],
+    ...["fetch-retry-mintimeout", "fetch-timeout", "git", "global-ignore-file", "globalconfig"],
+    ...["heading", "https-proxy", "include", "init-author-email", "init-author-name"],
+    ...["init-author-url", "init-license", "init-module", "init-type", "init-version"],
+    ...["init.author.email", "init.author.name", "init.author.url", "init.license", "init.module"],
+    ...["init.version", "install-strategy", "key", "libc", "local-address", "location"],
+    ...["lockfile-version", "loglevel", "logs-dir", "logs-max", "maxsockets", "message"],
+    ...[
+      "min-release-age",
+      "min-release-age-exclude",
+      "name",
+      "node-gyp",
+      "node-options",
+      "noproxy",
+    ],
+    ...["omit", "only", "orgs", "orgs-permission", "os", "otp", "pack-destination", "package"],
+    ...["packages", "packages-and-scopes-permission", "password", "patches-dir", "prefix", "preid"],
+    ...["provenance-file", "proxy", "registry", "replace-registry-host", "save-prefix"],
+    ...["sbom-format", "sbom-type", "scope", "scopes", "script-shell", "searchexclude"],
+    ...["searchlimit", "searchopts", "searchstaleness", "shell", "tag", "tag-version-prefix", "to"],
+    ...["token-description", "umask", "user-agent", "userconfig", "viewer", "which", "workspace"],
+    // shorthands
+    ...["reg", "enjoy-by"],
+  ].map((name) => `--${name}`),
+  ...["-c", "-C", "-L", "-m", "-w", "-p"],
 ]);
-
-/**
- * Whether `npx` and `npm exec` read `option` as a switch, as npm's option parser does: with its dashes dropped
- * (`-ws` is `--ws`), it names a Boolean config option, a shorthand for a switch, or any option after `no-`, or it is
- * a cluster of single-letter switch shorthands (`-yq` is `--yes --loglevel warn`). No npm 12 option that takes a value
- * is spelled only in those letters.
- */
-function isNpmSwitch(option: string): boolean {
-  const name = option.replace(/^-+/, "");
-  return (
-    NPM_SWITCHES.has(name) ||
-    NPM_SWITCH_SHORTHANDS.has(name) ||
-    name.startsWith("no-") ||
-    (name !== "" && [...name].every((letter) => NPM_SWITCH_SHORTHANDS.has(letter)))
-  );
-}
 
 /** `bunx`'s switches (bun's `bunx` docs). */
 const BUNX_SWITCHES = new Set([
@@ -191,32 +119,26 @@ const BUNX_SWITCHES = new Set([
 ]);
 
 /**
- * pnpm's switches, before `dlx` and after it: the on/off options pnpm 10 reads there (its global, `add` and `install`
- * options), `dlx`'s `-c`, and the shorthands for a switch or for an option with its value (`-s` is
- * `--reporter=silent`). `--no-<option>` is one too.
+ * The options `pnpm dlx` (and `pnpm`'s own, before `dlx`) gives the next word as its value: those whose type doesn't
+ * include Boolean in pnpm 10's global, `add` and `install` option types (the ones its first pass reads to find `dlx`)
+ * and in `dlx`'s own, with their shorthands (`-C` is `--dir`, `-F` is `--filter`). pnpm reads any other option as a
+ * switch, one it doesn't know and every `--no-<option>` included.
  */
-const PNPM_SWITCHES = new Set([
+const PNPM_VALUE_OPTIONS = new Set([
   ...[
-    ...["aggregate-output", "color", "config", "dangerously-allow-all-builds", "dev"],
-    ...["engine-strict", "fail-if-no-match", "fix-lockfile", "force", "frozen-lockfile", "global"],
-    ...["help", "hoist", "ignore-pnpmfile", "ignore-scripts", "ignore-workspace"],
-    ...["ignore-workspace-root-check", "include-workspace-root", "link-workspace-packages"],
-    ...["lockfile", "lockfile-only", "merge-git-branch-lockfiles", "offline"],
-    ...["optimistic-repeat-install", "optional", "parseable", "prefer-frozen-lockfile"],
-    ...["prefer-offline", "production", "recursive", "resolution-only", "save", "save-dev"],
-    ...["save-exact", "save-optional", "save-peer", "save-prod", "save-workspace-protocol"],
-    ...["shamefully-flatten", "shamefully-hoist", "shared-workspace-lockfile"],
-    ...["side-effects-cache", "side-effects-cache-readonly", "stream", "strict-peer-dependencies"],
-    ...["unsafe-perm", "update-checksums", "use-running-store-server", "use-stderr"],
-    ...["use-store-server", "verify-store-integrity", "workspace", "workspace-root", "shell-mode"],
-    ...["version", "silent", "verbose", "quiet", "usage"],
-    ...["local", "porcelain", "prod", "development"],
+    ...["allow-build", "cache-dir", "changed-files-ignore-pattern", "child-concurrency", "cpu"],
+    ...["dir", "fetch-retries", "fetch-retry-factor", "fetch-retry-maxtimeout"],
+    ...["fetch-retry-mintimeout", "fetch-timeout", "filter", "filter-prod", "global-bin-dir"],
+    ...["global-dir", "global-pnpmfile", "hoist-pattern", "https-proxy", "libc", "lockfile-dir"],
+    ...["lockfile-directory", "loglevel", "merge-git-branch-lockfiles-branch-pattern"],
+    ...["modules-dir", "network-concurrency", "node-linker", "noproxy", "npm-path", "only", "os"],
+    ...["package", "package-import-method", "pnpmfile", "prefix", "proxy", "public-hoist-pattern"],
+    ...["registry", "reporter", "save-catalog-name", "save-prefix", "scripts-prepend-node-path"],
+    ...["store-dir", "test-pattern", "trust-policy", "trust-policy-exclude"],
+    ...["trust-policy-ignore-after", "use-node-version", "virtual-store-dir", "workspace-packages"],
   ].map((name) => `--${name}`),
-  ...["-s", "-d", "-dd", "-ddd", "-L", "-r", "-q", "-h", "-H", "-?", "-v", "-f", "-l", "-p", "-g"],
-  ...["-S", "-D", "-P", "-E", "-O", "-w", "-i", "-c"],
+  ...["-C", "-F"],
 ]);
-
-const isPnpmSwitch = (option: string) => PNPM_SWITCHES.has(option) || option.startsWith("--no-");
 
 /** `yarn dlx`'s switches (Yarn's `dlx` docs), `--no-quiet` as clipanion reads a Boolean option's negation. */
 const YARN_SWITCHES = new Set(["-q", "--quiet", "--no-quiet"]);
@@ -284,30 +206,28 @@ type Options = {
   clusters: boolean;
 };
 
-/** A command that refuses an option it doesn't know, so the ones that take a value can be listed (uv, pipx). */
+/**
+ * A command whose value options are listed: each takes the next word, whatever it starts with, and any other option is
+ * a switch. uv and pipx refuse an option they don't know; npm and pnpm read it as a switch.
+ */
 const valueOptions = (values: ReadonlySet<string>): Options => ({
   takesValue: (option) => values.has(option),
   clusters: false,
 });
 
 /**
- * A command whose switches are listed, or told by a function: any other option takes the next word as its value, unless that word starts
- * with `-`, as npx reads an option it doesn't know. An option added later, or one never listed, is read as taking a
- * value, as most of these commands' options do.
+ * A command whose switches are listed: any other option takes the next word as its value, whatever it starts with.
+ * docker, podman and yarn refuse an option they don't know, so an option a working config gives them that isn't
+ * listed is one that takes a value.
  */
-function switchOptions(
-  switches: ReadonlySet<string> | ((option: string) => boolean),
-  clusters = false,
-): Options {
-  const isSwitch =
-    typeof switches === "function" ? switches : (option: string) => switches.has(option);
+function switchOptions(switches: ReadonlySet<string>, clusters = false): Options {
   return {
-    takesValue: (option, next) => !isSwitch(option) && next !== undefined && !next.startsWith("-"),
+    takesValue: (option, next) => !switches.has(option) && next !== undefined,
     clusters,
   };
 }
 
-const NPM = switchOptions(isNpmSwitch);
+const NPM = valueOptions(NPM_VALUE_OPTIONS);
 const PYTHON = valueOptions(PYTHON_VALUE_OPTIONS);
 const CONTAINER = switchOptions(CONTAINER_SWITCHES, true);
 
@@ -330,7 +250,7 @@ const RUNNER_KINDS: readonly RunnerKind[] = [
     runners: [
       { words: ["npx"], options: NPM },
       { words: ["bunx"], options: switchOptions(BUNX_SWITCHES) },
-      { words: ["pnpm", "dlx"], options: switchOptions(isPnpmSwitch) },
+      { words: ["pnpm", "dlx"], options: valueOptions(PNPM_VALUE_OPTIONS) },
       { words: ["yarn", "dlx"], options: switchOptions(YARN_SWITCHES) },
       { words: ["npm", "exec"], options: NPM },
     ],
