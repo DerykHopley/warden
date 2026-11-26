@@ -102,12 +102,49 @@ describe("fixedEdit for guard/agent-can-read-env and guard/no-runtime-guard", ()
   });
 
   it("adds only the missing one when one is there already", async () => {
-    const before = { permissions: { deny: ["Bash(rm:*)", "Read(./.env)"] } };
-    const result = edited(await fixedEdit(NO_GUARD, file(SETTINGS), pretty(before), noRegistry));
+    const before = { permissions: { deny: ["Bash(rm:*)", "Read(./.env.*)"] } };
+    const result = edited(await fixedEdit(READ_ENV, file(SETTINGS), pretty(before), noRegistry));
     expect(JSON.parse(result.text)).toEqual({
-      permissions: { deny: ["Bash(rm:*)", "Read(./.env)", "Read(./.env.*)"] },
+      permissions: { deny: ["Bash(rm:*)", "Read(./.env.*)", "Read(./.env)"] },
     });
   });
+
+  // Bug #320: a file the scanner already clears the Rule for, through a looser match than the two exact entries, is
+  // already fixed, so it gets no Fix PR.
+  const preToolUse = { PreToolUse: [{ hooks: [{ type: "command", command: "./guard.sh" }] }] };
+  it.each([
+    [READ_ENV, "a deny of Read(**/.env)", { permissions: { deny: ["Read(**/.env)"] } }],
+    [READ_ENV, "a deny of the whole Read tool", { permissions: { deny: ["Read"] } }],
+    [READ_ENV, "a deny of Read(./.env) alone", { permissions: { deny: ["Read(./.env)"] } }],
+    [NO_GUARD, "any deny entry", { permissions: { deny: ["Bash(rm:*)"] } }],
+    [NO_GUARD, "a PreToolUse hook and no deny", { hooks: preToolUse }],
+  ])(
+    "%s refuses a file holding %s as already fixed, as its scanner clears it",
+    async (rule, _case, before) => {
+      expect(wholeRepoRules(SETTINGS, pretty(before))).not.toContain(rule);
+      const result = await fixedEdit(rule, file(SETTINGS), pretty(before), noRegistry);
+      expect(result).toEqual({
+        ok: false,
+        reason: "already fixed on the default branch; the next Scan marks it Fixed",
+      });
+    },
+  );
+
+  it.each([
+    [
+      READ_ENV,
+      "a deny that doesn't stop a read of .env",
+      { permissions: { deny: ["Bash(rm:*)"] } },
+    ],
+    [READ_ENV, "a PreToolUse hook and no deny", { hooks: preToolUse }],
+  ])(
+    "%s still edits a file holding %s, as its scanner still reports it",
+    async (rule, _case, before) => {
+      expect(wholeRepoRules(SETTINGS, pretty(before))).toContain(rule);
+      const result = edited(await fixedEdit(rule, file(SETTINGS), pretty(before), noRegistry));
+      expect(wholeRepoRules(SETTINGS, result.text)).toEqual([]);
+    },
+  );
 
   it("drops a leading byte order mark", async () => {
     const text = `${String.fromCharCode(0xfeff)}${pretty({ permissions: {} })}`;
