@@ -6,7 +6,7 @@
  * `refuseOwnerDatabase` refuses. */
 export const OWNER_PGPORT = "54329";
 
-/** Throws, before anything connects, when `port` is the owner's compose Postgres, `CI` is unset or empty, and
+/** Throws, before anything connects, when `port` is the owner's compose Postgres, `CI` doesn't mean true, and
  * `WARDEN_TEST_OWNER_DB` isn't `1`. The error names the port, how to start a throwaway Postgres on a spare port and
  * run `command` there, and the opt-in. */
 export function refuseOwnerDatabase(
@@ -14,7 +14,7 @@ export function refuseOwnerDatabase(
   command: string,
   env: Record<string, string | undefined> = process.env,
 ): void {
-  if (port !== OWNER_PGPORT || env.CI || env.WARDEN_TEST_OWNER_DB === "1") return;
+  if (port !== OWNER_PGPORT || inCI(env) || env.WARDEN_TEST_OWNER_DB === "1") return;
   throw new Error(
     [
       `The tests won't run against port ${OWNER_PGPORT}: that's the owner's compose Postgres, and outside CI they`,
@@ -29,4 +29,9 @@ export function refuseOwnerDatabase(
       "To run against your own compose database on purpose, set WARDEN_TEST_OWNER_DB=1.",
     ].join("\n"),
   );
+}
+
+/** Whether `CI` means true: `true` (any case) or `1`, as CI services set it. `CI=false` or `CI=0` is outside CI (#291). */
+function inCI(env: Record<string, string | undefined>): boolean {
+  return /^(true|1)$/i.test(env.CI ?? "");
 }
