@@ -765,8 +765,27 @@ const where = (count: number, line: number) =>
 // `.env.local` and the like.
 const DENIES_ENV = /^Read(?:\((?:\.\/|\/|\*\*\/|\.\/\*\*\/|\/\*\*\/|\/\/\*\*\/)?\.env\*?\))?$/;
 
+/** Whether a deny entry stops the agent reading `.env`, which clears `agent-can-read-env`. */
+const deniesEnv = (deny: readonly PermissionEntry[]) =>
+  deny.some(({ rule }) => DENIES_ENV.test(rule));
+
+/** Whether a guard is set up (a deny rule or a PreToolUse hook command), not whether it works. */
+const hasRuntimeGuard = (deny: readonly PermissionEntry[], hooks: readonly HookCommand[]) =>
+  deny.length > 0 || hooks.some(({ event }) => event === "PreToolUse");
+
+/**
+ * Whether one root settings file's `text` on its own clears the whole-repo Rule `ruleId`, by the match `end` uses on
+ * the root settings it merges; false for a file it doesn't read, and for any other Rule.
+ */
+export function settingsClear(ruleId: RuleId, text: string): boolean {
+  const { deny, hooks } = readClaudeSettings(text);
+  if (ruleId === AGENT_CAN_READ_ENV) return deniesEnv(deny);
+  if (ruleId === NO_RUNTIME_GUARD) return hasRuntimeGuard(deny, hooks);
+  return false;
+}
+
 function agentCanReadEnv(asset: Asset, deny: readonly PermissionEntry[]): Observation | undefined {
-  if (deny.some(({ rule }) => DENIES_ENV.test(rule))) return undefined;
+  if (deniesEnv(deny)) return undefined;
   return observation(
     asset,
     AGENT_CAN_READ_ENV,
@@ -776,13 +795,12 @@ function agentCanReadEnv(asset: Asset, deny: readonly PermissionEntry[]): Observ
   );
 }
 
-/** Whether a guard is set up (a deny rule or a PreToolUse hook command), not whether it works. */
 function noRuntimeGuard(
   asset: Asset,
   deny: readonly PermissionEntry[],
   hooks: readonly HookCommand[],
 ): Observation | undefined {
-  if (deny.length > 0 || hooks.some(({ event }) => event === "PreToolUse")) return undefined;
+  if (hasRuntimeGuard(deny, hooks)) return undefined;
   return observation(
     asset,
     NO_RUNTIME_GUARD,
