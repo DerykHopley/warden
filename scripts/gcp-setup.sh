@@ -602,7 +602,11 @@ main() {
       random_password | ${create[@]+"${create[@]}"}
     fi
   done
-  note "Each secret's replication: each should be user-managed, in $REGION only"
+  # docs/data.md's Secret Manager row: the four made by hand outside the GitHub apps use automatic replication
+  # (checked live, #65); this script's own, the read-only app's two and the write app's two are user-managed.
+  note "Each secret's replication: warden-db-password, warden-clerk-secret, warden-clerk-publishable and" \
+    "warden-clerk-jwt-key use automatic replication (made by hand); every other one should be user-managed," \
+    "in $REGION only"
   for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
     warden-github-app-client-secret warden-github-app-private-key ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
     run gcloud secrets describe "$secret" --format='yaml(name,replication)' --project="$project"
