@@ -14,6 +14,7 @@ import {
   packRule,
   PERMISSION_SKIP,
 } from "./default-pack.ts";
+import { isObject, readJsonObject } from "./json-config.ts";
 import type { RepoFile } from "./repo-reader.ts";
 
 /**
@@ -97,24 +98,17 @@ type ClaudeSettings = {
 
 const NO_SETTINGS: ClaudeSettings = { allow: [], deny: [], defaultMode: undefined, hooks: [] };
 
-const BYTE_ORDER_MARK = String.fromCharCode(0xfeff);
-
 /** How deep `valueLines` reads: down to a hook's `command`, at `hooks.<event>.<group>.hooks.<hook>.command`. */
 const SETTINGS_DEPTH = 6;
 
 /**
- * A settings file's permissions and hook commands. Text that starts with a byte order mark is read without it. A file
- * that still isn't valid JSON, and a field of another type, hold nothing.
+ * A settings file's permissions and hook commands, read through `readJsonObject`. A file it doesn't read, and a field
+ * of another type, hold nothing.
  */
 function readClaudeSettings(raw: string): ClaudeSettings {
-  const text = raw.startsWith(BYTE_ORDER_MARK) ? raw.slice(1) : raw;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return NO_SETTINGS;
-  }
-  if (!isObject(parsed)) return NO_SETTINGS;
+  const read = readJsonObject(raw);
+  if (read === undefined) return NO_SETTINGS;
+  const { text, config: parsed } = read;
   const lines = valueLines(text, SETTINGS_DEPTH);
   const lineOf = (...path: (string | number)[]) => lines.get(JSON.stringify(path)) ?? 1;
   const permissions = isObject(parsed.permissions) ? parsed.permissions : {};
@@ -146,9 +140,6 @@ function readClaudeSettings(raw: string): ClaudeSettings {
   };
 }
 
-const isObject = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
-
 const asArray = (value: unknown): readonly unknown[] => (Array.isArray(value) ? value : []);
 
 /**
@@ -157,7 +148,7 @@ const asArray = (value: unknown): readonly unknown[] => (Array.isArray(value) ? 
  * line, as `JSON.parse` keeps the last value. Deeper values are stepped over without recursion, so a deeply nested
  * file can't overflow the stack.
  */
-function valueLines(text: string, depth: number): Map<string, number> {
+export function valueLines(text: string, depth: number): Map<string, number> {
   const lines = new Map<string, number>();
   let i = 0;
   let line = 1;

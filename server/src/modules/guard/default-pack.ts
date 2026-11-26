@@ -1,6 +1,6 @@
 // The Default Pack (GLOSSARY: Pack), as data: the Rules a Guard Scan checks at Quick, each with its Severity, the
 // title a Finding shows, and a one-line fix. The fix goes in the evidence summary, as a new Finding field would change
-// the Finding format. Slice 5 adds the last two Rules.
+// the Finding format.
 import type { RuleId, Severity } from "@warden/contracts";
 
 export type PackRule = {
@@ -17,6 +17,7 @@ export const BLANKET_BASH_ALLOW = "guard/blanket-bash-allow";
 export const PERMISSION_SKIP = "guard/permission-skip";
 export const AGENT_CAN_READ_ENV = "guard/agent-can-read-env";
 export const NO_RUNTIME_GUARD = "guard/no-runtime-guard";
+export const MCP_SERVER_UNPINNED = "guard/mcp-server-unpinned";
 
 export const DEFAULT_PACK: readonly PackRule[] = [
   {
@@ -54,6 +55,12 @@ export const DEFAULT_PACK: readonly PackRule[] = [
     severity: "medium",
     title: "Nothing checks the agent's tool calls",
     fix: "Add permissions.deny rules for secret files and a PreToolUse guard hook to .claude/settings.json.",
+  },
+  {
+    ruleId: MCP_SERVER_UNPINNED,
+    severity: "medium",
+    title: "An MCP server runs without a pinned version",
+    fix: "Pin each MCP server to an exact version: a package's x.y.z, or an image's digest or version tag.",
   },
 ];
 

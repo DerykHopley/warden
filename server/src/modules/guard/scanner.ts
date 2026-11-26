@@ -10,6 +10,7 @@ import type { Logger } from "../../log.ts";
 import type { Scanner } from "../../scans.ts";
 import { agentConfigCheck, WHOLE_REPO_PATH } from "./agent-config.ts";
 import { DEFAULT_PACK_RULE_IDS } from "./default-pack.ts";
+import { mcpServerObservations } from "./mcp-servers.ts";
 import type { RepoAssets } from "./repo-assets.ts";
 import type { RepoReader } from "./repo-reader.ts";
 import { secretObservations } from "./secrets.ts";
@@ -70,7 +71,11 @@ export function guardScanner({
             unread += 1;
             continue;
           }
-          saw([...secretObservations(asset, file), ...agentConfig.see(file)]);
+          saw([
+            ...secretObservations(asset, file),
+            ...agentConfig.see(file),
+            ...mcpServerObservations(asset, file),
+          ]);
         }
         const wholeRepo = agentConfig.end();
         // With a root settings file unread, the whole-repo Findings, all at the root settings file, stay as they are.
