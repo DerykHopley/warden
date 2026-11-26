@@ -215,12 +215,12 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 | Cloud SQL | the databases `warden` and `warden_preview`; daily backups, 7 kept; point-in-time recovery with 6 days of logs (Cloud SQL's docs ask for fewer log days than backups); no authorized networks, connectors required, and encrypted connections only (`--ssl-mode=ENCRYPTED_ONLY`) |
 | Logging | the `_Default` log bucket keeps 30 days; Data Access audit logs (`DATA_READ`) for Secret Manager only, so each read of a secret is recorded |
 | Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-admin-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all eleven secrets' replication |
-| Database roles | run from your machine, as `postgres`, through the Cloud SQL Auth Proxy on a free local port: `server/src/roles.ts` makes the live roles (`warden_migrate`, `warden_app`, `warden_admin`) on `warden`, with their three passwords, then the preview roles (`warden_preview_migrate`, `warden_preview_app`, `warden_preview_admin`) on `warden_preview`, with the app and migrate passwords only: no preview Job runs, so `warden_preview_admin` can't log in. Each database lets only its own set connect. The passwords go from Secret Manager into that one process's environment only; the proxy is stopped when the script ends, also on failure. No service account reads the `postgres` password, so **rerun the script after a change to `createRoles`** |
+| Database roles | run from your machine, as `postgres`, through the Cloud SQL Auth Proxy on a free local port: `server/src/roles.ts` makes the live roles (`warden_migrate`, `warden_app`, `warden_admin`) on `warden`, with their three passwords, then the preview roles (`warden_preview_migrate`, `warden_preview_app`, `warden_preview_admin`) on `warden_preview`, with the app and migrate passwords only: no preview Job runs as it, so `warden_preview_admin` can't log in. Each database lets only its own set connect. The passwords go from Secret Manager into that one process's environment only; the proxy is stopped when the script ends, also on failure. No service account reads the `postgres` password, so **rerun the script after a change to `createRoles`** |
 | Service accounts | none has a key. See the table below |
 | Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches. The provider maps each token to its repository id and branch kind (`attribute.deploy`, such as `<repo-id>:main`): only this repository's `main` tokens may act as `warden-deploy`, and only its `preview/*` tokens as `warden-preview-deploy`, so a token from another repository can never match, even through another provider in the pool |
 | The services and the job | Cloud Run services `warden` (as `warden-run`, at most 2 instances) and `warden-preview` (as `warden-preview-run`, at most 1 instance), each public with Google's placeholder image, and the Cloud Run job `warden-migrate-preview` (as `warden-preview-migrate`, with Google's placeholder job image). The script makes them because the deploy accounts can't make a service public, and `warden-preview-deploy`'s roles are on the preview service and job themselves. Run again, it puts each one's service account, instance limit and public access back, keeping the image it runs. Sign-in is Clerk's job |
 | The daily Job and its trigger | the Cloud Run job `warden-daily-expiry` (as `warden-daily`, with Google's placeholder job image until a release gives it Warden's). The only account bound on the Job is `warden-scheduler` (`roles/run.invoker`, which holds `run.jobs.run`); accounts with `roles/run.developer` on the project, such as `warden-deploy`, and the project's owner can start it too, as Google's [Cloud Run IAM roles](https://docs.cloud.google.com/run/docs/reference/iam/roles) give each of them `run.jobs.run`. Then the Cloud Scheduler job `warden-daily-expiry` in `europe-west1`, which runs it daily at `0 4 * * *` (`Etc/UTC`, after the 03:00 backup) by a `POST` to the Job's `:run` URL with an OAuth token as `warden-scheduler`. Run again, it puts the Job's service account back, keeping its image, and updates the Scheduler job to these values. Cloud Scheduler is free for up to 3 jobs per billing account |
-| The Scan Job | the Cloud Run job `warden-scan` (as `warden-scan`, with Google's placeholder job image until a release gives it Warden's), which the `warden` service starts once per Scan with the Scan's id and Team as its only override (ADR 0009). `warden-run` gets `roles/run.jobsExecutorWithOverrides` on this Job only: `roles/run.invoker` can't pass an override. Run again, it puts the Job's service account back, keeping its image. An existing project gets the Job and its account by running the script again |
+| The Scan Jobs | the Cloud Run job `warden-scan` (as `warden-scan`, with Google's placeholder job image until a release gives it Warden's), which the `warden` service starts once per Scan with the Scan's id and Team as its only override (ADR 0009). `warden-run` gets `roles/run.jobsExecutorWithOverrides` on this Job only: `roles/run.invoker` can't pass an override. Then the owner previews' Scan Job `warden-scan-preview` (as `warden-preview-scan`, the placeholder image until a preview gives it Warden's), which `warden-preview-run` may start with an override and `warden-preview-deploy` may update: the only roles bound on it. No preview account has a role on `warden-scan`. No live account is bound on `warden-scan-preview` either, but `warden-deploy`'s `roles/run.developer` on the project reaches it, as it reaches the daily Job: it can start and update it (`run.jobs.run`, `run.jobs.update`), and the project's owner can too. This is accepted (threat model, R3): `warden-deploy` already updates every live Job, and narrowing its role would mean binding it Job by Job. Run again, it puts each Job's service account back, keeping its image. An existing project gets the Jobs and their accounts by running the script again |
 
 **The service accounts and what each may do:**
 
@@ -231,12 +231,15 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 | `warden-daily` | the daily expiry Job `warden-daily-expiry` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-db-admin-password`. The only account that reads the admin password, so the server can't list Teams |
 | `warden-scan` | the Scan Job `warden-scan` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-github-app-private-key`, to read the Team's repos as the GitHub app. Never the admin password: it works inside one Team and lists none. Never the GitHub app's client secret, so it can't sign anyone in to GitHub |
 | `warden-deploy` | GitHub Actions on `main` | Cloud Run developer on the project; writer on the `warden` repository; act as `warden-run`, `warden-migrate`, `warden-daily` and `warden-scan`. Reads no secret |
-| `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret` and `warden-clerk-jwt-key` |
+| `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (as `warden-run` does: previews share the live read-only GitHub app); start `warden-scan-preview` with an override (on that Job only) |
 | `warden-preview-migrate` | the `warden-migrate-preview` job | Cloud SQL client; read `warden-db-preview-migrate-password` only |
-| `warden-preview-deploy` | GitHub Actions on `preview/*` | Cloud Run developer on the `warden-preview` service and the `warden-migrate-preview` job only, never the project; writer on the `warden-preview` repository only; act as `warden-preview-run` and `warden-preview-migrate` only. Reads no secret |
+| `warden-preview-scan` | the preview Scan Job `warden-scan-preview` (the setup script makes it; each preview updates its image) | Cloud SQL client; read `warden-db-preview-app-password` and `warden-github-app-private-key`. Never a live password, the admin password or the GitHub app's client secret |
+| `warden-preview-deploy` | GitHub Actions on `preview/*` | Cloud Run developer on the `warden-preview` service and the `warden-migrate-preview` and `warden-scan-preview` jobs only, never the project; writer on the `warden-preview` repository only; act as `warden-preview-run`, `warden-preview-migrate` and `warden-preview-scan` only. Reads no secret |
 | `warden-scheduler` | Cloud Scheduler | start `warden-daily-expiry` (`roles/run.invoker` on that Job), nothing else; reads no secret. The only account bound on the Job; `roles/run.developer` on the project (`warden-deploy`) and the project's owner also hold `run.jobs.run` |
 
-Previews still share the one Clerk secret key with live for now.
+Previews still share the one Clerk secret key with live for now, and the read-only GitHub app's two secrets (#275):
+code on a preview branch can read every installation of that app, as the live service can (`docs/threat-model.md`,
+R3).
 
 **Run it.** Below, `<project-id>` is your project, `<instance>` your Cloud SQL instance, and `<owner>/<repo>` the
 GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-db` and `DerykHopley/warden`).
@@ -331,37 +334,70 @@ replace the preview.
 <name>`):
 
 1. **Check** (`scripts/preview-check.sh`), before anything is built: the name must follow the rule above, and the
-   repository variables `GCP_PROJECT_ID`, `GCP_PREVIEW_DEPLOY_SA`, `GCP_WIF_PROVIDER`, `CLOUD_SQL_CONNECTION` and
-   `VITE_CLERK_PUBLISHABLE_KEY` must be set. Without `GCP_PROJECT_ID` or `GCP_PREVIEW_DEPLOY_SA`, the run deploys
+   repository variables `GCP_PROJECT_ID`, `GCP_PREVIEW_DEPLOY_SA`, `GCP_WIF_PROVIDER`, `CLOUD_SQL_CONNECTION`,
+   `VITE_CLERK_PUBLISHABLE_KEY` and `WARDEN_GITHUB_APP_CLIENT_ID` must be set. Without `GCP_PROJECT_ID` or `GCP_PREVIEW_DEPLOY_SA`, the run deploys
    nothing and stays green, with a notice naming every missing variable. With those two but another missing, it
    fails, naming each.
 2. **Build** the image, with no Google credentials.
 3. Sign in to Google Cloud through Workload Identity Federation (no key) as `warden-preview-deploy`, and push the
    image to the `warden-preview` repository, tagged with the commit.
-4. **Migrate:** deploy the `warden-migrate-preview` job with the image, as `warden-preview-migrate`, run
-   `node server/src/migrate.ts`, then the CVE snapshot loader `node server/src/modules/patch/cve-snapshot.ts`, on
-   `warden_preview` in one execution, and wait for it. A failed migration or load stops the deploy before any
-   revision exists.
-5. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
+4. **Migrate:** first check that the preview Scan Job `warden-scan-preview` exists; if it doesn't, the run fails
+   before anything changes (rerun `scripts/gcp-setup.sh`). Then deploy the `warden-migrate-preview` job with the
+   image, as `warden-preview-migrate`, run `node server/src/migrate.ts`, then the CVE snapshot loader
+   `node server/src/modules/patch/cve-snapshot.ts`, on `warden_preview` in one execution, and wait for it. A failed
+   migration or load stops the deploy before any revision exists.
+5. **The Scan Job:** `warden-scan-preview` gets the image and its settings afresh, as a release does for
+   `warden-scan`, but as `warden-preview-scan` on `warden_preview` as `warden_preview_app`, with the preview app
+   password and the GitHub app's private key, both pinned (never its client secret). It comes before the revision, so
+   the revision's first Scan runs this image. If this fails, the run fails naming the Job and no revision is deployed:
+   push again.
+6. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
    `warden-preview-run`, tagged `<name>`, with **no traffic**. Every run sets the revision's env vars and secrets
-   afresh, so none carries over from an earlier revision.
-6. **Health gate:** call `/api/health` on the tag's URL for up to about 90 seconds (a cold start) until it answers
+   afresh, so none carries over from an earlier revision. Its `WARDEN_SCAN_JOB` names
+   `projects/<project-id>/locations/europe-west1/jobs/warden-scan-preview`, which "Scan now" and a GitHub link start,
+   and it gets the read-only GitHub app's settings as a release does: `GITHUB_APP_CLIENT_ID` from the repository
+   variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned.
+7. **Health gate:** call `/api/health` on the tag's URL for up to about 90 seconds (a cold start) until it answers
    200, or fail the run.
 
-**One at a time.** Previews share the database, so steps 3 to 6 run for one preview at a time, and a running one is
+**One Scan Job for every preview.** All previews share `warden-scan-preview`, which runs the image of the last
+preview deployed. Two previews of different code side by side both start Scans on the last-deployed one's image.
+
+**One at a time.** Previews share the database, so steps 3 to 7 run for one preview at a time, and a running one is
 never cancelled halfway. Builds run side by side. While one preview deploys, GitHub keeps only the newest waiting
 behind it: an older waiting preview is cancelled (the run shows it) and must be pushed again.
 
-**Its URL** is `https://<name>---warden-preview-<project-number>.europe-west1.run.app`. The run prints it at the end
-of the deploy step's log and on the run's summary page. Sign-in uses Clerk's development instance.
+**Its URL** is `https://<name>---warden-preview-<project-number>.europe-west1.run.app`, the same for every push to
+the branch. The run prints it at the end of the deploy step's log and on the run's summary page: open that one, and
+register that one on the GitHub app (below). Cloud Run also gives the revision a second, hashed URL; it serves the
+same revision, but its callback isn't registered, so linking GitHub fails there. Sign-in uses Clerk's development
+instance.
 
-**Secrets are pinned.** The revision and the job read their passwords and Clerk keys from Secret Manager by version
+**Linking GitHub on a preview.** Previews share the live read-only GitHub app. Its sign-in sends GitHub the page's
+own origin plus `/setup/github/callback` as `redirect_uri`, and GitHub refuses one that isn't among the app's
+callback URLs with `redirect_uri_mismatch`. GitHub's docs don't say where a GitHub App's refusal lands: it may show
+on GitHub, or on one of the app's registered callback pages (the live dashboard's or a preview's), which says
+"GitHub refused the sign-in (redirect_uri_mismatch)". So, once per preview name, add that preview's callback URL to
+the app (GitHub, Settings, Developer settings, GitHub Apps, the app, "Callback URL", "Add
+Callback URL"), keeping the live one. The Ready preview's default name is `guard`:
+
+```text
+https://guard---warden-preview-<project-number>.europe-west1.run.app/setup/github/callback
+```
+
+The app has one Setup URL, the live dashboard's, so GitHub sends you there after an install even when you started on a
+preview. Note the installation id in that address (`installation_id=<id>`), then open
+`<preview URL>/setup/github?installation_id=<id>` on the preview and sign in there. A repo linked on a preview is
+read into `warden_preview` only.
+
+**Secrets are pinned.** The revision and the jobs read their passwords and keys from Secret Manager by version
 number, never `latest`. The numbers live in `secret_version` in `scripts/lib/cloud-run.sh`. To move one: add the
 new version (`gcloud secrets versions add <secret> --data-file=-`), change its number there in a PR, merge it, then
 push a preview. Disable the old version only after no running revision reads it.
 
-**Logs:** the workflow run on GitHub (Actions, "Preview"); the migration job's executions
-(`gcloud run jobs executions list --job warden-migrate-preview --region europe-west1`) and their logs; and the
+**Logs:** the workflow run on GitHub (Actions, "Preview"); the migration job's and the Scan Job's executions
+(`gcloud run jobs executions list --job warden-migrate-preview --region europe-west1`, and the same for
+`warden-scan-preview`) and their logs; and the
 revision's own logs in Cloud Logging
 (`gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="warden-preview"'`).
 Warden's request lines hold no address, except on a refused sign-in (`clientAddress`, the address the sign-in limit
@@ -399,8 +435,8 @@ naming it before it changes anything.
    installation starts it too, for the first Scan of the linked repos, and uses one of the Team's hourly Scans; the
    link answers once the Job has started, which can take up to about 20 seconds. It also gets the GitHub app's
    settings: `GITHUB_APP_CLIENT_ID` from the repository variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and
-   `GITHUB_APP_PRIVATE_KEY`, pinned. A preview's revision has none of these, so its "Scan now" answers 503, and a
-   revision with no Scan Job starts no Scan when an installation is linked.
+   `GITHUB_APP_PRIVATE_KEY`, pinned. A preview's revision gets the same, naming `warden-scan-preview` instead (see
+   "Owner previews"). A revision with no Scan Job starts no Scan when an installation is linked.
 5. **Health gate:** call `/api/health` on the tag's URL (`https://candidate---warden-<project-number>.europe-west1.run.app`)
    for up to about 90 seconds until it answers 200. If it never does, the release fails and the revision gets no
    traffic.

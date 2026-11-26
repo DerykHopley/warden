@@ -59,6 +59,10 @@ test("an Admin installs the app, signs in with GitHub and links installation 42 
   expect(signInUrl?.searchParams.get("client_id")).toBe(APP.client_id);
   expect(signInUrl?.searchParams.get("state")).toBeTruthy();
   expect(signInUrl?.searchParams.get("code_challenge_method")).toBe("S256");
+  // GitHub sends the Admin back to the origin they started on, a preview's included (#275).
+  expect(signInUrl?.searchParams.get("redirect_uri")).toBe(
+    new URL("/setup/github/callback", baseURL).toString(),
+  );
   expect(linkCalls).toHaveLength(1);
   const sent = linkCalls[0] as { installation_id: number; code: string; code_verifier: string };
   expect(sent.installation_id).toBe(42);

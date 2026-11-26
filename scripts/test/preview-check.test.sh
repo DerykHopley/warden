@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The preview workflow's first step (scripts/preview-check.sh): the branch's name, then the five repository
+# The preview workflow's first step (scripts/preview-check.sh): the branch's name, then the six repository
 # variables, before anything is built. Stops at the first failed assertion, exiting 1.
 # Run from anywhere: scripts/test/preview-check.test.sh
 set -euo pipefail
@@ -29,7 +29,7 @@ assert_line() {
 scratch=$(mktemp -d)
 trap 'rm -rf "$scratch"' EXIT
 
-# run_check <branch> [VAR=value...]: the check with all five variables set, less any given empty, and its outputs
+# run_check <branch> [VAR=value...]: the check with all six variables set, less any given empty, and its outputs
 # file. Output in $out, exit code in $code, what it wrote to GITHUB_OUTPUT in $outputs.
 run_check() {
   local branch=$1
@@ -40,7 +40,7 @@ run_check() {
     GCP_PREVIEW_DEPLOY_SA=warden-preview-deploy@test-project.iam.gserviceaccount.com \
     GCP_WIF_PROVIDER=projects/1/locations/global/workloadIdentityPools/github/providers/warden \
     CLOUD_SQL_CONNECTION=test-project:europe-west1:test-db VITE_CLERK_PUBLISHABLE_KEY=pk_test_x \
-    "$@" bash "$check" "$branch" 2>&1)
+    WARDEN_GITHUB_APP_CLIENT_ID=Iv23liExampleClientId0 "$@" bash "$check" "$branch" 2>&1)
   code=$?
   set -e
   outputs=$(cat "$scratch/output")
@@ -83,5 +83,10 @@ assert_line "without GCP_WIF_PROVIDER and the publishable key: an error naming t
 run_check preview/demo CLOUD_SQL_CONNECTION=
 assert_equal "without CLOUD_SQL_CONNECTION: exit 1" 1 "$code"
 assert_line "without CLOUD_SQL_CONNECTION: an error naming it" "CLOUD_SQL_CONNECTION" "$(grep '::error::' <<<"$out")"
+# A preview's revision and Scan Job read the GitHub app's client id (#275).
+run_check preview/demo WARDEN_GITHUB_APP_CLIENT_ID=
+assert_equal "without WARDEN_GITHUB_APP_CLIENT_ID: exit 1" 1 "$code"
+assert_line "without WARDEN_GITHUB_APP_CLIENT_ID: an error naming it" "WARDEN_GITHUB_APP_CLIENT_ID" \
+  "$(grep '::error::' <<<"$out")"
 
 echo "preview-check: all passed"

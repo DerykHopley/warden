@@ -54,7 +54,7 @@ it("builds the install link from the slug", () => {
 });
 
 describe("startSignIn and takeAttempt", () => {
-  it("keeps the attempt and answers GitHub's sign-in URL with its state and S256 challenge, and no redirect_uri", async () => {
+  it("keeps the attempt and answers GitHub's sign-in URL with its state, S256 challenge and this origin's callback", async () => {
     const url = new URL(await startSignIn("Iv23li-client", 42));
 
     const kept = JSON.parse(sessionStorage.getItem(ATTEMPT_KEY)!) as Record<string, unknown>;
@@ -64,6 +64,7 @@ describe("startSignIn and takeAttempt", () => {
       state: kept.state,
       code_challenge: await challengeOf(kept.verifier as string),
       code_challenge_method: "S256",
+      redirect_uri: `${window.location.origin}/setup/github/callback`,
     });
     expect(kept.installationId).toBe(42);
   });
