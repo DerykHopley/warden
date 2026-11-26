@@ -76,6 +76,134 @@ test("an Admin installs the app, signs in with GitHub and links installation 42 
   await expect(page.getByRole("link", { name: "Back to Setup" })).toHaveAttribute("href", "/setup");
 });
 
+// Story 5 (#224): an Admin grants write access from Setup, with Warden's second GitHub app, the write app. The e2e
+// server has no write-app settings, so the write app's settings and the grant's answer are faked in the browser, as
+// story 1's are; GitHub's sign-in page is faked the same way.
+const WRITE_APP = { slug: "warden-writer", client_id: "Iv23li-e2e-writer" };
+type Sent = { installation_id: number; code: string; code_verifier: string };
+
+/**
+ * Fakes the write app's settings and GitHub's sign-in page, which echoes the sign-in's state back to its
+ * `redirect_uri`, and answers the grant with `grant`. Returns what GitHub and the grant were sent.
+ */
+async function fakeWriteApp(page: Page, grant: (sent: Sent) => { status: number; json: unknown }) {
+  const seen: { signInUrl?: URL; sent: Sent[] } = { sent: [] };
+  await page.route("**/api/github/write-app", (route) => route.fulfill({ json: WRITE_APP }));
+  await page.route("https://github.com/login/oauth/authorize**", (route) => {
+    const signInUrl = new URL(route.request().url());
+    seen.signInUrl = signInUrl;
+    const back = new URL(signInUrl.searchParams.get("redirect_uri") ?? "");
+    back.searchParams.set("code", "the-code");
+    back.searchParams.set("state", signInUrl.searchParams.get("state") ?? "");
+    return route.fulfill({
+      contentType: "text/html",
+      body: `<script>location.replace(${JSON.stringify(back.toString())})</script>`,
+    });
+  });
+  await page.route("**/api/github/write-installations", (route) => {
+    const sent = route.request().postDataJSON() as Sent;
+    seen.sent.push(sent);
+    return route.fulfill(grant(sent));
+  });
+  return seen;
+}
+
+const writeAccess = (page: Page) => page.getByRole("region", { name: "Grant write access" });
+
+test("an Admin installs the write app, signs in with GitHub and grants write access through installation 77 (story 5)", async ({
+  page,
+  signIn,
+  baseURL,
+}) => {
+  await signIn(ADA);
+  const seen = await fakeWriteApp(page, (sent) => ({
+    status: 201,
+    json: {
+      installation_id: sent.installation_id,
+      granted_by: "user_ada",
+      granted_at: "2026-11-26T09:14:00.000Z",
+    },
+  }));
+  // The Team's grant as the server would answer it: none until the grant is made.
+  await page.route("**/api/github/write-grant", (route) =>
+    route.fulfill({
+      json: {
+        installations: seen.sent.map((sent) => ({
+          installation_id: sent.installation_id,
+          granted_by: "user_ada",
+          granted_at: "2026-11-26T09:14:00.000Z",
+        })),
+      },
+    }),
+  );
+
+  await page.goto("/setup");
+  await expect(writeAccess(page).getByText("No write access granted.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Install the write app" })).toHaveAttribute(
+    "href",
+    "https://github.com/apps/warden-writer/installations/new",
+  );
+
+  // GitHub sends the Admin back to the write app's Setup URL once it is installed.
+  await page.goto("/setup/github/write?installation_id=77&setup_action=install");
+  await expect(page.getByRole("heading", { level: 1, name: "Grant write access" })).toBeVisible();
+  await expect(page.getByText("Grant write access through installation 77 to Acme")).toBeVisible();
+  await page.getByRole("button", { name: "Sign in with GitHub" }).click();
+
+  await expect(page.getByText("Write access granted through installation 77.")).toBeVisible();
+  const callback = new URL("/setup/github/write/callback", baseURL).toString();
+  expect(page.url()).toBe(callback);
+  expect(seen.signInUrl?.searchParams.get("client_id")).toBe(WRITE_APP.client_id);
+  expect(seen.signInUrl?.searchParams.get("state")).toBeTruthy();
+  expect(seen.signInUrl?.searchParams.get("code_challenge_method")).toBe("S256");
+  expect(seen.signInUrl?.searchParams.get("redirect_uri")).toBe(callback);
+  expect(seen.sent).toHaveLength(1);
+  expect(seen.sent[0]!.installation_id).toBe(77);
+  expect(seen.sent[0]!.code).toBe("the-code");
+  expect(s256(seen.sent[0]!.code_verifier)).toBe(
+    seen.signInUrl?.searchParams.get("code_challenge"),
+  );
+
+  await page.getByRole("link", { name: "Back to Setup" }).click();
+  await expect(
+    writeAccess(page).getByText(/^Write access granted: installation 77, /),
+  ).toBeVisible();
+});
+
+test("an Admin's grant refused by the server shows its words, and Setup still has no write access (story 5)", async ({
+  page,
+  signIn,
+}) => {
+  await signIn(ADA);
+  const seen = await fakeWriteApp(page, () => ({
+    status: 409,
+    json: { error: "This installation's permissions aren't the write app's" },
+  }));
+
+  await page.goto("/setup/github/write?installation_id=77&setup_action=install");
+  await page.getByRole("button", { name: "Sign in with GitHub" }).click();
+
+  await expect(page.getByRole("alert")).toHaveText(
+    "This installation's permissions aren't the write app's",
+  );
+  expect(seen.sent).toHaveLength(1);
+  // The Team's grant from the real server, which no grant reached.
+  await page.getByRole("link", { name: "Back to Setup" }).click();
+  await expect(writeAccess(page).getByText("No write access granted.")).toBeVisible();
+});
+
+test("a Member sees an Admin grants write access, with no install link, and the Team's empty grant (story 5)", async ({
+  page,
+  signIn,
+}) => {
+  await signIn(GRACE);
+  await page.goto("/setup");
+
+  await expect(writeAccess(page).getByText("An Admin grants write access.")).toBeVisible();
+  await expect(writeAccess(page).getByText("No write access granted.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Install the write app" })).toHaveCount(0);
+});
+
 /**
  * Each listed repo's row as [ref, last Scan words]. Read with `evaluate` on the list, never `evaluateAll`: Playwright
  * runs an `evaluateAll` locator in the page's own world, where naming the region (`ariaLabelledByElements`) crashes

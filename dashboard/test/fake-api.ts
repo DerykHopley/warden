@@ -22,6 +22,12 @@ export type Routes = {
   repos?: () => Answer;
   /** POST /api/github/installations, with the parsed body. */
   linkInstallation?: (body: unknown) => Answer;
+  /** GET /api/github/write-app: the write app's slug and client id. */
+  writeApp?: () => Answer;
+  /** GET /api/github/write-grant: the Team's write grants. */
+  writeGrant?: () => Answer;
+  /** POST /api/github/write-installations, with the parsed body. */
+  grantWrite?: (body: unknown) => Answer;
   /** POST /api/scans, with the parsed body. */
   startScan?: (body: unknown) => Answer;
   products?: () => Answer;
@@ -65,6 +71,15 @@ export function serve(routes: Routes) {
     if (url === "/api/repos" && method === "GET" && routes.repos) return routes.repos();
     if (url === "/api/github/installations" && method === "POST" && routes.linkInstallation) {
       return routes.linkInstallation(sentBody(init));
+    }
+    if (url === "/api/github/write-app" && method === "GET" && routes.writeApp) {
+      return routes.writeApp();
+    }
+    if (url === "/api/github/write-grant" && method === "GET" && routes.writeGrant) {
+      return routes.writeGrant();
+    }
+    if (url === "/api/github/write-installations" && method === "POST" && routes.grantWrite) {
+      return routes.grantWrite(sentBody(init));
     }
     if (url === "/api/scans" && method === "POST" && routes.startScan) {
       return routes.startScan(sentBody(init));

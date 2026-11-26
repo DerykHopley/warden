@@ -6,10 +6,14 @@ import {
   challengeOf,
   installationIdFrom,
   installUrl,
+  putBackAttempt,
   randomToken,
+  READ_APP,
   startSignIn,
   takeAttempt,
   tooManyTries,
+  WRITE_APP,
+  WRITE_ATTEMPT_KEY,
 } from "../src/github-setup.ts";
 
 afterEach(() => sessionStorage.clear());
@@ -55,7 +59,7 @@ it("builds the install link from the slug", () => {
 
 describe("startSignIn and takeAttempt", () => {
   it("keeps the attempt and answers GitHub's sign-in URL with its state, S256 challenge and this origin's callback", async () => {
-    const url = new URL(await startSignIn("Iv23li-client", 42));
+    const url = new URL(await startSignIn("Iv23li-client", 42, READ_APP));
 
     const kept = JSON.parse(sessionStorage.getItem(ATTEMPT_KEY)!) as Record<string, unknown>;
     expect(`${url.origin}${url.pathname}`).toBe("https://github.com/login/oauth/authorize");
@@ -70,16 +74,55 @@ describe("startSignIn and takeAttempt", () => {
   });
 
   it("answers the kept attempt once, then none", async () => {
-    await startSignIn("Iv23li-client", 42);
+    await startSignIn("Iv23li-client", 42, READ_APP);
 
-    expect(takeAttempt()).toMatchObject({ installationId: 42 });
-    expect(takeAttempt()).toBeUndefined();
+    expect(takeAttempt(READ_APP)).toMatchObject({ installationId: 42 });
+    expect(takeAttempt(READ_APP)).toBeUndefined();
     expect(sessionStorage.getItem(ATTEMPT_KEY)).toBeNull();
   });
 
   it("answers none for a kept value that isn't an attempt", () => {
     sessionStorage.setItem(ATTEMPT_KEY, "not json");
-    expect(takeAttempt()).toBeUndefined();
+    expect(takeAttempt(READ_APP)).toBeUndefined();
+  });
+});
+
+describe("the write app's sign-in (#224, story 5)", () => {
+  it("keeps its attempt under its own key, leaves ATTEMPT_KEY untouched, and sends this origin's write callback", async () => {
+    sessionStorage.setItem(ATTEMPT_KEY, "the read app's attempt");
+    const url = new URL(await startSignIn("Iv23li-writer", 42, WRITE_APP));
+
+    expect(WRITE_ATTEMPT_KEY).not.toBe(ATTEMPT_KEY);
+    const kept = JSON.parse(sessionStorage.getItem(WRITE_ATTEMPT_KEY)!) as Record<string, unknown>;
+    expect(`${url.origin}${url.pathname}`).toBe("https://github.com/login/oauth/authorize");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      client_id: "Iv23li-writer",
+      state: kept.state,
+      code_challenge: await challengeOf(kept.verifier as string),
+      code_challenge_method: "S256",
+      redirect_uri: `${window.location.origin}/setup/github/write/callback`,
+    });
+    expect(kept.installationId).toBe(42);
+    expect(sessionStorage.getItem(ATTEMPT_KEY)).toBe("the read app's attempt");
+  });
+
+  it("takes only its own app's attempt: neither app reads the other's", async () => {
+    await startSignIn("Iv23li-writer", 42, WRITE_APP);
+
+    expect(takeAttempt(READ_APP)).toBeUndefined();
+    expect(takeAttempt(WRITE_APP)).toMatchObject({ installationId: 42 });
+
+    await startSignIn("Iv23li-client", 7, READ_APP);
+    expect(takeAttempt(WRITE_APP)).toBeUndefined();
+    expect(takeAttempt(READ_APP)).toMatchObject({ installationId: 7 });
+  });
+
+  it("puts a taken attempt back under its own app's key", () => {
+    const attempt = { state: "s", verifier: "v".repeat(43), installationId: 42 };
+    putBackAttempt(attempt, WRITE_APP);
+
+    expect(sessionStorage.getItem(ATTEMPT_KEY)).toBeNull();
+    expect(takeAttempt(WRITE_APP)).toEqual(attempt);
   });
 });
 

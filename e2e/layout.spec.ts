@@ -421,17 +421,25 @@ test("at 1600px: five cards sit in one row, and the content stays within 1480px,
   expect(Math.abs(main!.x - right)).toBeLessThanOrEqual(1);
 });
 
-// Setup and its two GitHub pages, as an Admin sees them: the App's settings, the Team's repos with their last Scans
-// (one ref long enough to wrap) and a refused Scan now are faked in the browser, and the callback page, opened with no
-// sign-in kept, shows its refusal.
+// Setup and its GitHub pages, the read app's and the write app's (#224, story 5), as an Admin sees them: both apps'
+// settings, the Team's write grant, the Team's repos with their last Scans (one ref long enough to wrap) and a refused
+// Scan now are faked in the browser, and each callback page, opened with no sign-in kept, shows its refusal.
 const SETUP_PAGES: { path: string; ready: (page: Page) => Locator }[] = [
-  { path: "/setup", ready: (page) => page.getByRole("link", { name: "Install the GitHub app" }) },
+  { path: "/setup", ready: (page) => page.getByRole("link", { name: "Install the write app" }) },
   {
     path: "/setup/github?installation_id=42&setup_action=install",
     ready: (page) => page.getByRole("button", { name: "Sign in with GitHub" }),
   },
   {
     path: "/setup/github/callback?code=the-code&state=the-state",
+    ready: (page) => page.getByRole("link", { name: "Back to Setup" }),
+  },
+  {
+    path: "/setup/github/write?installation_id=42&setup_action=install",
+    ready: (page) => page.getByRole("button", { name: "Sign in with GitHub" }),
+  },
+  {
+    path: "/setup/github/write/callback?code=the-code&state=the-state",
     ready: (page) => page.getByRole("link", { name: "Back to Setup" }),
   },
 ];
@@ -445,6 +453,22 @@ for (const { path, ready } of SETUP_PAGES) {
         await signIn(ADA);
         await page.route("**/api/github/app", (route) =>
           route.fulfill({ json: { slug: "warden-reader", client_id: "Iv23li-e2e-client" } }),
+        );
+        await page.route("**/api/github/write-app", (route) =>
+          route.fulfill({ json: { slug: "warden-writer", client_id: "Iv23li-e2e-writer" } }),
+        );
+        await page.route("**/api/github/write-grant", (route) =>
+          route.fulfill({
+            json: {
+              installations: [
+                {
+                  installation_id: 77,
+                  granted_by: "user_ada",
+                  granted_at: "2026-11-26T09:14:00.000Z",
+                },
+              ],
+            },
+          }),
         );
         // Until Scan now is clicked, the long ref's last Scan failed and the other was never scanned; after it, the
         // long ref's is running.
@@ -470,6 +494,8 @@ for (const { path, ready } of SETUP_PAGES) {
           await expect(page.locator(".repo-list li")).toHaveCount(2);
           await expect(page.getByText(/^Failed, /)).toBeVisible();
           await expect(page.getByText("Never scanned")).toBeVisible();
+          await expect(page.getByRole("link", { name: "Install the GitHub app" })).toBeVisible();
+          await expect(page.getByText(/^Write access granted: installation 77, /)).toBeVisible();
         }
 
         await expectNoSidewaysScroll(page);
