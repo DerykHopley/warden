@@ -69,13 +69,13 @@ const clerkUsers = new Map([
 /** The signed-in person's user id. */
 const ME = "user_me";
 
-type Shown = { role?: Role | null; candidates?: Finding[]; assetName?: string | null };
+type Shown = { role?: Role | null; candidates?: Finding[]; productName?: string | null };
 
 /** Renders the card for `focused`, as a person with `role` (null: not loaded yet). */
 function show(
   focused: Finding,
   proposals: ProposalsResult | "loading" = listed([]),
-  { role = null, candidates = [], assetName = null }: Shown = {},
+  { role = null, candidates = [], productName = null }: Shown = {},
 ) {
   const calls = {
     onClear: vi.fn(),
@@ -97,7 +97,7 @@ function show(
       userId={ME}
       getToken={getToken}
       candidates={candidates}
-      assetName={assetName}
+      productName={productName}
       onClear={calls.onClear}
       onRetryProposals={calls.onRetry}
       onFindingChanged={calls.onFindingChanged}
@@ -142,7 +142,7 @@ describe("the detail card's Finding", () => {
 
   it("shows a Product Asset by the name the page gives, and by its ref without one", () => {
     const onProduct = finding(ID, { asset: { kind: "product", ref: OTHER } });
-    const named = show(onProduct, listed([]), { assetName: "Shop web" });
+    const named = show(onProduct, listed([]), { productName: "Shop web" });
     expect(fields(named.card).Asset).toBe("Product Shop web");
     named.unmount();
     expect(fields(show(onProduct).card).Asset).toBe(`Product ${OTHER}`);
@@ -154,7 +154,7 @@ describe("the detail card's Finding", () => {
 
   it("links a Product's name to its entry on Products; a ref the page names no Product for links nothing", () => {
     const onProduct = finding(ID, { asset: { kind: "product", ref: OTHER } });
-    const named = show(onProduct, listed([]), { assetName: "Shop web" });
+    const named = show(onProduct, listed([]), { productName: "Shop web" });
     const link = assetField(named.card).getByRole("link", { name: "Shop web" });
     expect(link).toHaveAttribute("href", `/products#product-${OTHER}`);
     named.unmount();

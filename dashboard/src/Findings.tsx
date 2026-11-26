@@ -126,7 +126,8 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
   // The Ask Warden panel talks about this view and the focused Finding; its detail card's ✕ clears the focus. A
   // decision in the card asks for the list again, so the card and the table show the new Status.
   const focusedFinding = findings?.find((f) => f.id === focused) ?? null;
-  const assetName = focusedFinding === null ? null : productName(focusedFinding.asset, products);
+  const focusedProductName =
+    focusedFinding === null ? null : productName(focusedFinding.asset, products);
   // Its Unconfirmed fix's candidates, in its order; one the list doesn't hold is left out.
   const candidates = useMemo(
     () =>
@@ -154,7 +155,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
       onFindingChanged: refresh,
       onFindingGone,
       candidates,
-      assetName,
+      productName: focusedProductName,
     });
   }, [
     setContext,
@@ -166,7 +167,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     refresh,
     onFindingGone,
     candidates,
-    assetName,
+    focusedProductName,
   ]);
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);

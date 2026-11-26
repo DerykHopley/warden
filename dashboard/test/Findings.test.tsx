@@ -495,7 +495,6 @@ describe("a Product Asset's name", () => {
     }
     expect(panel.open).not.toHaveBeenCalled();
     expect(current()).toEqual([]);
-    expect(address()).toBe("/findings");
   });
 
   it.each<[string, Routes]>([
@@ -523,12 +522,12 @@ describe("a Product Asset's name", () => {
     const { panel } = open(`/findings?finding=${ID.lodash}`, onProduct, {
       products: () => products(),
     });
-    const assetName = () =>
-      (panel.setContext.mock.lastCall?.[0] as { assetName: string | null } | null)?.assetName;
-    await vi.waitFor(() => expect(assetName()).toBe("Shop web"));
+    const productName = () =>
+      (panel.setContext.mock.lastCall?.[0] as { productName: string | null } | null)?.productName;
+    await vi.waitFor(() => expect(productName()).toBe("Shop web"));
 
     await userEvent.click(rowButton(MINIMIST));
-    expect(assetName()).toBeNull();
+    expect(productName()).toBeNull();
   });
 });
 

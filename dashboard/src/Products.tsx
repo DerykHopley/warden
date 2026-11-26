@@ -21,6 +21,7 @@ import {
 } from "react";
 import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
 import type { PageProps } from "./App.tsx";
+import { useLandOnAnchor } from "./land-on-anchor.ts";
 import {
   askProducts,
   deleteProductInTeam,
@@ -35,6 +36,10 @@ import {
   type TeamCheckRefused,
 } from "./products.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
+
+/** A Product's entry's name takes focus, once the page has brought the entry into view itself. */
+const focusEntryName = (entry: HTMLElement) =>
+  entry.querySelector<HTMLElement>(".product-name")?.focus({ preventScroll: true });
 
 /** The frameworks' display names by id, in the API's order: null when the frameworks couldn't be read in time. */
 type FrameworkNames = ReadonlyMap<string, string> | null;
@@ -275,19 +280,16 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   });
 
   // Opened at `#product-<id>` (a Product Asset's link on Findings, #210), that Product's entry comes into view and its
-  // name takes focus once the list first shows: the browser's own jump to the anchor came before the page rendered it.
-  // Only once, so a later read of the list never moves a page the person has scrolled. An anchor no listed Product has
-  // moves nothing.
-  const listShown = view !== null;
-  const landed = useRef(false);
-  useEffect(() => {
-    if (!listShown || landed.current) return;
-    landed.current = true;
-    const entry = document.getElementById(location.hash.slice(1));
-    if (entry === null || !entry.matches("li.product")) return;
-    entry.scrollIntoView();
-    entry.querySelector<HTMLElement>(".product-name")?.focus({ preventScroll: true });
-  }, [listShown]);
+  // name takes focus once the list first shows. An anchor no listed Product has moves nothing.
+  const listed = view?.products;
+  const findEntry = useCallback(
+    (anchor: string) =>
+      listed?.some(({ id }) => productAnchor(id) === anchor)
+        ? document.getElementById(anchor)
+        : null,
+    [listed],
+  );
+  useLandOnAnchor(view !== null, findEntry, focusEntryName);
 
   function openForm(
     product: Product | null,

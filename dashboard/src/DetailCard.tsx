@@ -133,8 +133,8 @@ export function DetailCard(props: {
   getToken: GetToken;
   /** The focused Finding's Unconfirmed-fix candidates the page's list holds: Mark moved's choices. */
   candidates: Finding[];
-  /** The Asset's Product's name from the page, shown as a link to its entry on Products; null shows the Asset's ref. */
-  assetName: string | null;
+  /** The Asset's Product name from the page (`productName`), a link to Products; null shows the Asset's ref. */
+  productName: string | null;
   /** The card's ✕: clears the page's focus. */
   onClear: () => void;
   /** Asks for the Proposals again, after they couldn't load. */
@@ -480,7 +480,7 @@ export function DetailCard(props: {
         <dt>Asset</dt>
         <dd>
           {ASSET_KIND_WORDS[finding.asset.kind]}{" "}
-          <AssetRef asset={finding.asset} productName={props.assetName} />
+          <AssetRef asset={finding.asset} productName={props.productName} />
         </dd>
         <dt>Location</dt>
         <dd>
