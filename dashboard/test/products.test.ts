@@ -159,7 +159,7 @@ describe("saveProduct", () => {
     answers(json(201, { ...product, usage: "everywhere" }));
     expect(await saveProduct(getToken, null, input)).toEqual({
       kind: "maybe-saved",
-      answered: true,
+      reason: "unreadable",
     });
   });
 
@@ -167,7 +167,7 @@ describe("saveProduct", () => {
     fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
     expect(await saveProduct(getToken, null, input)).toEqual({
       kind: "maybe-saved",
-      answered: false,
+      reason: "not-answering",
     });
   });
 });
