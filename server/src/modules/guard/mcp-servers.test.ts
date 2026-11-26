@@ -122,6 +122,15 @@ describe("guard/mcp-server-unpinned", () => {
       "bunx --bun pkg",
       "npx --made-up-option --yes pkg",
       "npx -- pkg",
+      // npm's shorthands (`-ws`, `-iwr`) and its single-letter ones written together (`-yq`) are switches.
+      "npx -ws pkg",
+      "npx -iwr pkg",
+      "npx -yq pkg",
+      // pnpm's on/off options and every `--no-<option>` are switches, before `dlx` and after it; yarn's too.
+      "pnpm --no-color dlx pkg",
+      "pnpm --stream dlx pkg",
+      "pnpm dlx --prefer-offline pkg",
+      "yarn dlx --no-quiet pkg",
       // A container runner does the same, and reads a short-option cluster letter by letter.
       "docker run --cidfile /tmp/c mcp/github",
       "podman run --made-up-option x mcp/github",
@@ -230,6 +239,8 @@ describe("guard/mcp-server-unpinned", () => {
       "npx -y --registry https://registry.example.com pkg@1.2.3",
       "npx --made-up-option ./x pkg@1.2.3",
       "npm exec --prefix ./tools -- pkg@1.2.3",
+      "npx -ws pkg@1.2.3 serve",
+      "pnpm dlx --use-stderr pkg@1.2.3 serve",
       "docker run -i --rm --security-opt no-new-privileges mcp/github:1.0",
       "docker run --ipc host mcp/github:1.0",
       "podman run --made-up-option x mcp/github:1.0",
