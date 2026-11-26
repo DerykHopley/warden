@@ -97,6 +97,22 @@ describe("start-up", () => {
     expect(res.status).toBe(401);
   });
 
+  // The review route is mounted with the review store wired (spec #341, slice 3).
+  it("mounts Vouch's review route: POST .../controls/:ref/reviews asks for a sign-in", async () => {
+    const server = await startWithoutDatabase();
+
+    const res = await fetch(
+      `http://127.0.0.1:${server.port}/api/vouch/catalogues/vda-isa-2027.1/controls/1.3.3/reviews`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outcome: "confirm" }),
+      },
+    );
+
+    expect(res.status).toBe(401);
+  });
+
   it("exits 0 on SIGTERM", async () => {
     const server = await startWithoutDatabase();
 

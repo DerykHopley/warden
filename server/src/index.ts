@@ -28,6 +28,7 @@ import { patchRoutes } from "./modules/patch/routes.ts";
 import { createSaveLimit } from "./modules/patch/save-limit.ts";
 import { createPatchScan } from "./modules/patch/scan.ts";
 import { VDA_ISA_2027_1 } from "./modules/vouch/catalogue.ts";
+import { createControlReviews } from "./modules/vouch/control-reviews.ts";
 import { vouchRoutes } from "./modules/vouch/routes.ts";
 import { createTeamAssets } from "./modules/vouch/team-assets.ts";
 import { createTeamCatalogues } from "./modules/vouch/team-catalogues.ts";
@@ -174,6 +175,7 @@ const appDeps: AppDeps = {
       catalogues: [VDA_ISA_2027_1],
       findings,
       teamAssets: createTeamAssets({ repoAssets, products }),
+      controlReviews: createControlReviews({ withTeam }),
     }),
   ],
   startScanJob,

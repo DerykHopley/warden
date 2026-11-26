@@ -11,6 +11,9 @@ import { kindOf, workOutVerdict, type WorkedOutVerdict } from "./verdict.ts";
 /** The Findings reads a Control's Verdict needs, and nothing that writes. */
 export type VouchReads = Pick<Findings, "listByRules" | "coverageSince" | "lastSpotRunAt">;
 
+/** A judged Control with its worked-out Verdict, reason and evidence: what the API answers, before its reviews join. */
+export type JudgedControl = Omit<ControlVerdict, "review_state" | "reviewed_verdict">;
+
 const DAY = 24 * 3600_000;
 
 /** The Rules that evidence Control `ref`, in `RULE_CONTROLS`' order. */
@@ -25,7 +28,7 @@ export async function judgeControls(
   team: string,
   controls: readonly Control[],
   now: Date,
-): Promise<ControlVerdict[]> {
+): Promise<JudgedControl[]> {
   const since = new Date(now.getTime() - OVERVIEW_PERIOD_DAYS * DAY);
   const rules = [...new Set(controls.flatMap(({ id }) => rulesOf(id)))];
   const spotRun = controls.some(({ id }) => JUDGE_SPOT_RUN_CONTROLS.includes(id));
