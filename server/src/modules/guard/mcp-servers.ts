@@ -73,45 +73,174 @@ const PYTHON_VALUE_OPTIONS = new Set([
   "--backend",
 ]);
 
-/** `docker run` / `podman run` options whose value, given as a separate argument, comes before the image. */
-const CONTAINER_VALUE_OPTIONS = new Set([
-  "-e",
-  "--env",
-  "--env-file",
-  "-v",
-  "--volume",
-  "--mount",
-  "--name",
-  "--network",
-  "-p",
-  "--publish",
+/**
+ * npm's switches, as `npx` and `npm exec` read them: npm's Boolean config options (npm 12's `@npmcli/config`
+ * definitions), the shorthands that stand for a whole option, and the ones `npx` adds. `--no-<switch>` is one too.
+ */
+const NPM_SWITCHES = new Set([
+  ...[
+    "all",
+    "allow-same-version",
+    "allow-scripts-pending",
+    "allow-scripts-pin",
+    "allow-unused-patches",
+    "audit",
+    "bin-links",
+    "browser",
+    "bypass-2fa",
+    "color",
+    "commit-hooks",
+    "dangerously-allow-all-scripts",
+    "description",
+    "dev",
+    "diff-ignore-all-space",
+    "diff-name-only",
+    "diff-no-prefix",
+    "diff-text",
+    "dry-run",
+    "engine-strict",
+    "expect-results",
+    "force",
+    "foreground-scripts",
+    "format-package-lock",
+    "fund",
+    "git-tag-version",
+    "global",
+    "global-style",
+    "if-present",
+    "ignore-existing",
+    "ignore-extension",
+    "ignore-patch-failures",
+    "ignore-scripts",
+    "include-attestations",
+    "include-staged",
+    "include-workspace-root",
+    "init-private",
+    "install-links",
+    "json",
+    "keep-edit-dir",
+    "legacy-bundling",
+    "legacy-peer-deps",
+    "link",
+    "long",
+    "offline",
+    "omit-lockfile-registry-resolved",
+    "optional",
+    "package-lock",
+    "package-lock-only",
+    "packages-all",
+    "parseable",
+    "prefer-dedupe",
+    "prefer-offline",
+    "prefer-online",
+    "production",
+    "progress",
+    "provenance",
+    "read-only",
+    "rebuild-bundle",
+    "save",
+    "save-bundle",
+    "save-dev",
+    "save-exact",
+    "save-optional",
+    "save-peer",
+    "save-prod",
+    "sign-git-commit",
+    "sign-git-tag",
+    "strict-allow-scripts",
+    "strict-npmrc",
+    "strict-peer-deps",
+    "strict-ssl",
+    "timing",
+    "unicode",
+    "update-notifier",
+    "usage",
+    "version",
+    "versions",
+    "workspaces",
+    "workspaces-update",
+    "yes",
+    // Long shorthands for a whole option.
+    "quiet",
+    "silent",
+    "verbose",
+    "desc",
+    "help",
+    "porcelain",
+    "readonly",
+    "iwr",
+    "ws",
+    "local",
+    "no-install",
+  ].map((name) => `--${name}`),
+  ...["-d", "-dd", "-ddd", "-q", "-s", "-a", "-f", "-g", "-l", "-S", "-B", "-D", "-E", "-O", "-P"],
+  ...["-?", "-H", "-h", "-v", "-y"],
+]);
+
+const isNpmSwitch = (option: string) =>
+  NPM_SWITCHES.has(option) || NPM_SWITCHES.has(option.replace(/^--no-/, "--"));
+
+/** `bunx`'s switches (bun's `bunx` docs). */
+const BUNX_SWITCHES = new Set([
+  ...["--bun", "--no-install", "--use-system-ca", "--use-openssl-ca", "--use-bundled-ca"],
+  ...["--trust", "--verbose", "--silent"],
+]);
+
+/** pnpm's switches, before `dlx` and after it (pnpm 10's `pnpm dlx --help` and CLI docs). */
+const PNPM_SWITCHES = new Set([
+  "-c",
+  "--shell-mode",
+  "-s",
+  "--silent",
+  "-r",
+  "--recursive",
   "-w",
-  "--workdir",
-  "-u",
-  "--user",
-  "--platform",
-  "--entrypoint",
-  "--add-host",
-  "-l",
-  "--label",
-  "--label-file",
-  "-h",
-  "--hostname",
-  "--cap-add",
-  "--cap-drop",
-  "--log-driver",
-  "--log-opt",
-  "--pull",
-  "--device",
-  "-m",
-  "--memory",
-  "--cpus",
-  "--restart",
-  "--tmpfs",
-  "--ulimit",
-  "--dns",
-  "--gpus",
-  "--shm-size",
+  "--workspace-root",
+]);
+
+/** `yarn dlx`'s switches (Yarn's `dlx` docs). */
+const YARN_SWITCHES = new Set(["-q", "--quiet"]);
+
+/** `docker run`'s and `podman run`'s switches, their Boolean options (docker 29's and podman 6's `run --help`). */
+const CONTAINER_SWITCHES = new Set([
+  ...[
+    "-d",
+    "--detach",
+    "-i",
+    "--interactive",
+    "-t",
+    "--tty",
+    "-P",
+    "--publish-all",
+    "-q",
+    "--quiet",
+  ],
+  ...["--rm", "--init", "--privileged", "--read-only", "--help", "--no-healthcheck"],
+  ...["--oom-kill-disable", "--sig-proxy", "--use-api-socket", "--disable-content-trust"],
+  // podman's own
+  ...["--env-host", "--http-proxy", "--no-hostname", "--no-hosts", "--passwd", "--read-only-tmpfs"],
+  ...["--replace", "--rmi", "--rootfs", "--tls-verify", "--unsetenv-all"],
+]);
+
+/** `docker`'s own switches, before its subcommand words. */
+const DOCKER_SWITCHES = new Set([
+  "-D",
+  "--debug",
+  "--tls",
+  "--tlsverify",
+  "-v",
+  "--version",
+  "--help",
+]);
+/** `podman`'s own switches, before its subcommand words. */
+const PODMAN_SWITCHES = new Set([
+  "-r",
+  "--remote",
+  "--syslog",
+  "--transient-store",
+  "-v",
+  "--version",
+  "--help",
 ]);
 
 /** A package at an exact version, `name@1.2.3` or `@scope/name@1.2.3-beta.1`: no tag and no range. */
@@ -127,38 +256,92 @@ const SUMMARY_KEY_MAX = 64;
 /** The most unpinned servers a summary names by key before counting the rest. */
 const SUMMARY_KEYS_MAX = 3;
 
-/** One kind of runner: the command words that start it, what it starts, and when that is at an exact version. */
+/** How a command reads its options. */
+type Options = {
+  /** Whether `option`, written without `=`, takes `next`, the word after it, as its value. */
+  takesValue(option: string, next: string | undefined): boolean;
+  /** Whether a short-option cluster (`-it`) is read letter by letter, as docker and podman read it. */
+  clusters: boolean;
+};
+
+/** A command that refuses an option it doesn't know, so the ones that take a value can be listed (uv, pipx). */
+const valueOptions = (values: ReadonlySet<string>): Options => ({
+  takesValue: (option) => values.has(option),
+  clusters: false,
+});
+
+/**
+ * A command whose switches are listed: any other option takes the next word as its value, unless that word starts
+ * with `-`, as npx reads an option it doesn't know. An option added later, or one never listed, is read as taking a
+ * value, as most of these commands' options do.
+ */
+const switchOptions = (isSwitch: (option: string) => boolean, clusters = false): Options => ({
+  takesValue: (option, next) => !isSwitch(option) && next !== undefined && !next.startsWith("-"),
+  clusters,
+});
+
+const switches = (names: ReadonlySet<string>) => (option: string) => names.has(option);
+
+const NPM = switchOptions(isNpmSwitch);
+const PYTHON = valueOptions(PYTHON_VALUE_OPTIONS);
+const CONTAINER = switchOptions(switches(CONTAINER_SWITCHES), true);
+
+/**
+ * A runner's command and subcommand words (`["pnpm", "dlx"]`), with the command's own options (`globals`, else
+ * `options`) allowed between them, and how it reads its options before the package or image.
+ */
+type Runner = { words: readonly string[]; options: Options; globals?: Options };
+
+/** One kind of runner: the runners that start it, the options that name what it starts, and when that is pinned. */
 type RunnerKind = {
-  runners: readonly (readonly string[])[];
-  /** The package or image it starts, from the words after the runner; undefined when there is none. */
-  target(rest: readonly string[]): string | undefined;
+  runners: readonly Runner[];
+  /** Options whose value is the package (`-p x`, `--package=x`), given before it. */
+  fromOptions: readonly string[];
   pinned(target: string): boolean;
 };
 
 const RUNNER_KINDS: readonly RunnerKind[] = [
   {
-    runners: [["npx"], ["bunx"], ["pnpm", "dlx"], ["yarn", "dlx"], ["npm", "exec"]],
-    target: (rest) => runnerTarget(rest, ["-p", "--package"], new Set()),
+    runners: [
+      { words: ["npx"], options: NPM },
+      { words: ["bunx"], options: switchOptions(switches(BUNX_SWITCHES)) },
+      { words: ["pnpm", "dlx"], options: switchOptions(switches(PNPM_SWITCHES)) },
+      { words: ["yarn", "dlx"], options: switchOptions(switches(YARN_SWITCHES)) },
+      { words: ["npm", "exec"], options: NPM },
+    ],
+    fromOptions: ["-p", "--package"],
     pinned: (pkg) => NPM_PINNED.test(pkg),
   },
   {
-    runners: [["uvx"], ["uv", "tool", "run"], ["pipx", "run"]],
-    target: (rest) => runnerTarget(rest, ["--from", "--spec"], PYTHON_VALUE_OPTIONS),
+    runners: [
+      { words: ["uvx"], options: PYTHON },
+      { words: ["uv", "tool", "run"], options: PYTHON },
+      { words: ["pipx", "run"], options: PYTHON },
+    ],
+    fromOptions: ["--from", "--spec"],
     pinned: (pkg) => PYTHON_PINNED.test(pkg),
   },
   {
-    runners: [
-      ["docker", "run"],
-      ["podman", "run"],
-    ],
-    target: (rest) => runnerTarget(rest, [], CONTAINER_VALUE_OPTIONS),
+    runners: ["run", "container run"].flatMap((subcommand) => [
+      {
+        words: ["docker", ...subcommand.split(" ")],
+        options: CONTAINER,
+        globals: switchOptions(switches(DOCKER_SWITCHES), true),
+      },
+      {
+        words: ["podman", ...subcommand.split(" ")],
+        options: CONTAINER,
+        globals: switchOptions(switches(PODMAN_SWITCHES), true),
+      },
+    ]),
+    fromOptions: [],
     pinned: imagePinned,
   },
 ];
 
 /** The commands that start a runner, by `commandName`. */
 const RUNNER_COMMANDS = new Set(
-  RUNNER_KINDS.flatMap(({ runners }) => runners.map(([first]) => first)),
+  RUNNER_KINDS.flatMap(({ runners }) => runners.map(({ words: [first] }) => first)),
 );
 
 /** A command's name: its last path segment, without a Windows `.cmd` or `.exe` ending (in any case). */
@@ -186,35 +369,62 @@ function commandLine(command: string, args: unknown): string[] {
   return isCmd(words[0]) && /^\/c$/i.test(words[1] ?? "") ? words.slice(2) : words;
 }
 
-/** The words after `runner` when `words` start with it: its command by `commandName`, the words after it exactly. */
-function argsAfterRunner(
-  words: readonly string[],
-  runner: readonly string[],
-): string[] | undefined {
-  const [command, ...subcommand] = runner;
+/**
+ * How many words the option at `words[i]` takes: 2 when its value is the next word, else 1. `--opt=value` is one word.
+ * A short-option cluster (`-ie`) is read letter by letter, when `options` read them: switches while the letters are
+ * switches; a letter that takes a value takes the rest of the word, or the next word when it's the last letter.
+ */
+function optionWidth(words: readonly string[], i: number, options: Options): 1 | 2 {
+  const word = words[i]!;
+  if (word.includes("=")) return 1;
+  if (options.clusters && /^-[^-]{2,}$/.test(word)) {
+    for (let k = 1; k < word.length - 1; k += 1) {
+      if (options.takesValue(`-${word[k]}`, word.slice(k + 1))) return 1;
+    }
+    return options.takesValue(`-${word.at(-1)}`, words[i + 1]) ? 2 : 1;
+  }
+  return options.takesValue(word, words[i + 1]) ? 2 : 1;
+}
+
+/** The index of the first word from `i` on that isn't an option or an option's value, `--` included. */
+function afterOptions(words: readonly string[], i: number, options: Options): number {
+  let at = i;
+  while (words[at]?.startsWith("-") && words[at] !== "--") at += optionWidth(words, at, options);
+  return at;
+}
+
+/**
+ * The words after `runner` when `words` start with it: its command by `commandName`, then each subcommand word
+ * exactly, with the command's own options allowed before each.
+ */
+function argsAfterRunner(words: readonly string[], runner: Runner): string[] | undefined {
+  const [command, ...subcommand] = runner.words;
   if (words[0] === undefined || commandName(words[0]) !== command) return undefined;
-  return subcommand.every((word, i) => words[i + 1] === word)
-    ? words.slice(runner.length)
-    : undefined;
+  let at = 1;
+  for (const word of subcommand) {
+    at = afterOptions(words, at, runner.globals ?? runner.options);
+    if (words[at] !== word) return undefined;
+    at += 1;
+  }
+  return words.slice(at);
 }
 
 /**
  * What a runner starts: the value of one of `fromOptions` (`-p x`, `--package=x`) given before the first argument, else
- * that first argument, an argument that isn't an option or the separate value of one of `valueOptions`. What comes
- * after it is the server's own.
+ * that first argument: the word after `--`, or a word that isn't an option or an option's value. What comes after it
+ * is the server's own.
  */
 function runnerTarget(
   rest: readonly string[],
   fromOptions: readonly string[],
-  valueOptions: ReadonlySet<string>,
+  options: Options,
 ): string | undefined {
-  for (let i = 0; i < rest.length; i += 1) {
+  for (let i = 0; i < rest.length; i += optionWidth(rest, i, options)) {
     const word = rest[i]!;
-    if (fromOptions.includes(word)) return rest[i + 1];
+    if (word === "--" || fromOptions.includes(word)) return rest[i + 1];
     const from = fromOptions.find((name) => name.startsWith("--") && word.startsWith(`${name}=`));
     if (from !== undefined) return word.slice(from.length + 1);
     if (!word.startsWith("-")) return word;
-    if (valueOptions.has(word)) i += 1;
   }
   return undefined;
 }
@@ -237,13 +447,13 @@ function runsUnpinned(entry: unknown): boolean {
   // Claude Code reads an entry with a `type` other than stdio as a remote server, whatever else it holds.
   if (typeof entry.type === "string" && entry.type !== "stdio") return false;
   const words = commandLine(entry.command, entry.args);
-  for (const { runners, target, pinned } of RUNNER_KINDS) {
-    const rest = runners
-      .map((runner) => argsAfterRunner(words, runner))
-      .find((args) => args !== undefined);
-    if (rest === undefined) continue;
-    const started = target(rest);
-    return started !== undefined && !LOCAL_PATH.test(started) && !pinned(started);
+  for (const { runners, fromOptions, pinned } of RUNNER_KINDS) {
+    for (const runner of runners) {
+      const rest = argsAfterRunner(words, runner);
+      if (rest === undefined) continue;
+      const started = runnerTarget(rest, fromOptions, runner.options);
+      return started !== undefined && !LOCAL_PATH.test(started) && !pinned(started);
+    }
   }
   return false;
 }
