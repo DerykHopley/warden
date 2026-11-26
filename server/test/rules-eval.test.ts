@@ -6,10 +6,15 @@
 // `pnpm --filter @warden/server eval:rules`.
 import { readFileSync } from "node:fs";
 import { Observation, problemKey, type RuleId } from "@warden/contracts";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { ScanRecorder } from "../src/findings/index.ts";
 import { createLogger } from "../src/log.ts";
-import { DEFAULT_PACK_RULE_IDS } from "../src/modules/guard/default-pack.ts";
+import {
+  isClaudeCodePath,
+  ROOT_SETTINGS,
+  WHOLE_REPO_PATH,
+} from "../src/modules/guard/agent-config.ts";
+import { DEFAULT_PACK_RULE_IDS, UNAPPROVED_AI_TOOL } from "../src/modules/guard/default-pack.ts";
 import type { RepoFile, RepoReader } from "../src/modules/guard/repo-reader.ts";
 import { guardScanner } from "../src/modules/guard/scanner.ts";
 import { AWS_KEY } from "./secret-fixtures.ts";
@@ -32,6 +37,8 @@ type RuleScore = {
   falsePositives: Place[];
   /** The labels no Observation found. */
   falseNegatives: Place[];
+  /** The Observations of a problem an earlier Observation already reported: each one lowers precision. */
+  repeats: Place[];
   /** True positives over Observations; 1 for none. */
   precision: number;
   /** True positives over labels; 1 for none. */
@@ -48,9 +55,16 @@ const keyOf = ({ repo, rule, path }: Label) =>
 /** A share, with 0 of 0 as 1: a Rule that neither reports nor misses anything is right. */
 const share = (part: number, whole: number) => (whole === 0 ? 1 : part / whole);
 
+/** Where an Observation sits: its repo, and its file's path, or its Location's kind in brackets when not a file. */
+const placeOf = ({ asset, location }: Observation): Place => ({
+  repo: asset.ref,
+  path: location.kind === "file" ? location.path : `(${location.kind})`,
+});
+
 /**
  * Each Rule's score, for every Rule a label or an Observation names, in the order first named: labels found (true
- * positives), Observations with no label (false positives) and labels not found (false negatives).
+ * positives), Observations with no label (false positives), labels not found (false negatives) and Observations of a
+ * problem already reported (repeats).
  */
 function scoreRules(labels: readonly Label[], observations: readonly Observation[]): RuleScore[] {
   const labelled = new Set(labels.map(keyOf));
@@ -66,10 +80,14 @@ function scoreRules(labels: readonly Label[], observations: readonly Observation
     const falseNegatives = ruleLabels.filter((label) => !observed.has(keyOf(label))).map(place);
     const falsePositives = ruleObservations
       .filter((observation) => !labelled.has(problemKey(observation)))
-      .map(({ asset, location }) => ({
-        repo: asset.ref,
-        path: location.kind === "file" ? location.path : location.kind,
-      }));
+      .map(placeOf);
+    const repeats = ruleObservations
+      .filter(
+        (observation, i) =>
+          ruleObservations.findIndex((earlier) => problemKey(earlier) === problemKey(observation)) <
+          i,
+      )
+      .map(placeOf);
     return {
       rule,
       labels: ruleLabels.length,
@@ -77,6 +95,7 @@ function scoreRules(labels: readonly Label[], observations: readonly Observation
       truePositives,
       falsePositives,
       falseNegatives,
+      repeats,
       precision: share(truePositives.length, ruleObservations.length),
       recall: share(truePositives.length, ruleLabels.length),
     };
@@ -85,9 +104,10 @@ function scoreRules(labels: readonly Label[], observations: readonly Observation
 
 /** One line per miss, naming its Rule, repo and path: what fails the eval. */
 const misses = (scores: readonly RuleScore[]) =>
-  scores.flatMap(({ rule, falseNegatives, falsePositives }) => [
+  scores.flatMap(({ rule, falseNegatives, falsePositives, repeats }) => [
     ...falseNegatives.map(({ repo, path }) => `${rule} missed the label in ${repo} at ${path}`),
     ...falsePositives.map(({ repo, path }) => `${rule} reported ${repo} at ${path}, with no label`),
+    ...repeats.map(({ repo, path }) => `${rule} reported ${repo} at ${path} more than once`),
   ]);
 
 /** The per-Rule table the eval prints, in the Default Pack's order. */
@@ -122,9 +142,9 @@ type FixtureRepo = Pick<SeededRepo, "ref" | "files">;
 
 /**
  * Scans `repos` with every Default Pack Rule through a fake RepoReader, as one Scan of them all, and answers each
- * Observation the recorder was given, parsed as Observation v1, and each path it was told was unread.
+ * Observation the recorder was given, parsed as Observation v1.
  */
-async function scanRepos(repos: readonly FixtureRepo[]) {
+async function scanRepos(repos: readonly FixtureRepo[]): Promise<Observation[]> {
   const files = new Map(repos.map((repo) => [repo.ref, repo.files]));
   const reader: RepoReader = {
     async *readRepo(_, { ref }) {
@@ -148,10 +168,9 @@ async function scanRepos(repos: readonly FixtureRepo[]) {
     logger: createLogger(() => {}),
   });
   const observations: Observation[] = [];
-  const unread: Place[] = [];
   const recorder: ScanRecorder = {
     saw: (observation) => observations.push(Observation.parse(observation)),
-    unread: (asset, path) => unread.push({ repo: asset.ref, path }),
+    unread: () => {},
   };
   await scanner.scan(
     {
@@ -161,17 +180,11 @@ async function scanRepos(repos: readonly FixtureRepo[]) {
     },
     recorder,
   );
-  return { observations, unread };
+  return observations;
 }
 
 const labelsOf = (repos: readonly SeededRepo[]): Label[] =>
   repos.flatMap(({ ref, labels }) => labels.map(({ rule, path }) => ({ repo: ref, rule, path })));
-
-/** A sign the repo uses Claude Code, as the agent-config Rules read one: a `.claude` folder, a `CLAUDE.md` or `.mcp.json`. */
-const CLAUDE_CODE_PATH = /(?:^|\/)(?:\.claude\/|(?:CLAUDE\.md|\.mcp\.json)$)/;
-
-/** The root settings files: one left unread holds back the whole-repo Rules, which the eval doesn't measure. */
-const ROOT_SETTINGS = [".claude/settings.json", ".claude/settings.local.json"];
 
 describe("the Seeded org", () => {
   it.each(DEFAULT_PACK_RULE_IDS)("has two labels for %s in different repos", (rule) => {
@@ -204,7 +217,7 @@ describe("the Seeded org", () => {
           ({ path }) =>
             !files.some((file) => file.path === path || file.path.startsWith(`${path}/`)) &&
             // A whole-repo Rule's label sits at the root settings file, which a repo with no settings doesn't hold.
-            path !== ROOT_SETTINGS[0],
+            path !== WHOLE_REPO_PATH,
         )
         .map(({ rule, path }) => `${name}: ${rule} at ${path}`),
     );
@@ -215,10 +228,11 @@ describe("the Seeded org", () => {
   it("has a repo with no label at all, and one with no Claude Code path", () => {
     expect(SEEDED_ORG.filter(({ labels }) => labels.length === 0)).not.toEqual([]);
     expect(
-      SEEDED_ORG.filter(({ files }) => !files.some(({ path }) => CLAUDE_CODE_PATH.test(path))),
+      SEEDED_ORG.filter(({ files }) => !files.some(({ path }) => isClaudeCodePath(path))),
     ).not.toEqual([]);
   });
 
+  // A root settings file left unread holds back the whole-repo Rules, which the eval then doesn't measure.
   it("names each repo once, under the Seeded org, and leaves no root settings file unread", () => {
     expect(new Set(SEEDED_ORG.map(({ name }) => name)).size).toBe(SEEDED_ORG.length);
     expect(SEEDED_ORG.map(({ name, ref }) => [name, ref])).toEqual(
@@ -232,8 +246,13 @@ describe("the Seeded org", () => {
 });
 
 describe("the rules eval", () => {
-  it("finds every label and nothing else, for every Default Pack Rule", async () => {
-    const { observations } = await scanRepos(SEEDED_ORG);
+  /** The Observations of one Scan of the whole Seeded org, which each test below reads. */
+  let observations: Observation[] = [];
+  beforeAll(async () => {
+    observations = await scanRepos(SEEDED_ORG);
+  });
+
+  it("finds every label and nothing else, for every Default Pack Rule", () => {
     const scores = scoreRules(labelsOf(SEEDED_ORG), observations);
 
     console.log(`Rules eval over the Seeded org (${SEEDED_ORG.length} repos):\n${table(scores)}`);
@@ -241,27 +260,20 @@ describe("the rules eval", () => {
     expect(misses(scores)).toEqual([]);
   });
 
-  it("finds the other AI tool behind a file under .cursor/ it couldn't read, at the folder", async () => {
+  it("finds the other AI tool behind a file under .cursor/ it couldn't read, at the folder", () => {
     const [repo] = SEEDED_ORG.filter(({ files }) =>
       files.some((file) => "unread" in file && file.path.startsWith(".cursor/")),
     );
     if (repo === undefined) throw new Error("no seeded repo holds an unread file under .cursor/");
-    const { observations, unread } = await scanRepos(SEEDED_ORG);
     const scores = scoreRules(labelsOf(SEEDED_ORG), observations);
 
-    expect(
-      scores.find(({ rule }) => rule === "guard/unapproved-ai-tool")?.truePositives,
-    ).toContainEqual({
+    expect(scores.find(({ rule }) => rule === UNAPPROVED_AI_TOOL)?.truePositives).toContainEqual({
       repo: repo.ref,
       path: ".cursor",
     });
-    expect(unread.filter((place) => place.repo === repo.ref).map(({ path }) => path)).toEqual(
-      repo.files.filter((file) => "unread" in file).map(({ path }) => path),
-    );
   });
 
-  it("puts no planted secret's value in any Observation", async () => {
-    const { observations } = await scanRepos(SEEDED_ORG);
+  it("puts no planted secret's value in any Observation", () => {
     const planted = SEEDED_ORG.flatMap(({ files }) =>
       PLANTED_SECRETS.filter((secret) =>
         files.some((file) => "text" in file && file.text.includes(secret)),
@@ -285,11 +297,11 @@ describe("the rules eval", () => {
         text: readFileSync(new URL(`./${name}`, import.meta.url), "utf8"),
       }),
     );
-    const { observations } = await scanRepos([
+    const ownObservations = await scanRepos([
       { ref: "https://github.com/example/warden", files: own },
     ]);
 
-    expect(observations).toEqual([]);
+    expect(ownObservations).toEqual([]);
   });
 });
 
@@ -306,7 +318,7 @@ describe("scoreRules", () => {
   ];
 
   it("names the Rule, the repo and the path of a missed label and of an Observation with no label", async () => {
-    const { observations } = await scanRepos(repos);
+    const observations = await scanRepos(repos);
     const scores = scoreRules(labels, observations);
 
     expect(misses(scores)).toEqual([
@@ -344,11 +356,8 @@ describe("scoreRules", () => {
 
   it("matches a label to an Observation on any line of its file, scoring 1 and 1", async () => {
     const file = { path: "src/aws.ts", text: `// AWS\n\nexport const key = "${AWS_KEY}";\n` };
-    const { observations } = await scanRepos([{ ref: app, files: [file] }]);
+    const observations = await scanRepos([{ ref: app, files: [file] }]);
 
-    expect(observations.map(({ location }) => location)).toEqual([
-      { kind: "file", path: "src/aws.ts", line: 3 },
-    ]);
     expect(
       scoreRules([{ repo: app, rule: "guard/secret-in-repo", path: "src/aws.ts" }], observations),
     ).toEqual([
@@ -359,9 +368,30 @@ describe("scoreRules", () => {
         truePositives: [{ repo: app, path: "src/aws.ts" }],
         falsePositives: [],
         falseNegatives: [],
+        repeats: [],
         precision: 1,
         recall: 1,
       },
+    ]);
+  });
+
+  it("names a Rule that reports one labelled problem twice, on two lines of its file", async () => {
+    const file = { path: "src/aws.ts", text: `// AWS\n\nexport const key = "${AWS_KEY}";\n` };
+    const observations = await scanRepos([{ ref: app, files: [file] }]);
+    const [first] = observations;
+    if (first === undefined) throw new Error("no Observation for the planted key");
+    const twice = [
+      first,
+      { ...first, location: { kind: "file" as const, path: "src/aws.ts", line: 5 } },
+    ];
+    const scores = scoreRules(
+      [{ repo: app, rule: "guard/secret-in-repo", path: "src/aws.ts" }],
+      twice,
+    );
+
+    expect(scores.map(({ precision }) => precision)).toEqual([0.5]);
+    expect(misses(scores)).toEqual([
+      `guard/secret-in-repo reported ${app} at src/aws.ts more than once`,
     ]);
   });
 });

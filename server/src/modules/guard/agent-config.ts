@@ -33,10 +33,10 @@ export interface AgentConfigCheck {
   end(): Observation[] | undefined;
 }
 
-/** The root settings files, which Claude Code merges into the repo's agent config. */
 /** Where each whole-repo Observation sits, with no line: the root settings file a fix goes in. */
 export const WHOLE_REPO_PATH = ".claude/settings.json";
-const ROOT_SETTINGS = [WHOLE_REPO_PATH, ".claude/settings.local.json"];
+/** The root settings files, which Claude Code merges into the repo's agent config. */
+export const ROOT_SETTINGS: readonly string[] = [WHOLE_REPO_PATH, ".claude/settings.local.json"];
 const ROOT_CONFIG = ROOT_SETTINGS.join(" or ");
 
 export function agentConfigCheck(asset: Asset): AgentConfigCheck {
@@ -70,7 +70,7 @@ export function agentConfigCheck(asset: Asset): AgentConfigCheck {
 }
 
 /** A sign the repo uses Claude Code: a `.claude` folder, or a `CLAUDE.md` or `.mcp.json`, in any folder. */
-function isClaudeCodePath(path: string): boolean {
+export function isClaudeCodePath(path: string): boolean {
   return /(?:^|\/)(?:\.claude\/|(?:CLAUDE\.md|\.mcp\.json)$)/.test(path);
 }
 

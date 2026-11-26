@@ -7,6 +7,17 @@
 // Every planted secret comes from `secret-fixtures.ts`, and the skip flag and the bypass mode are joined from parts
 // here, so neither this file nor the eval holds a whole secret or flag for a Guard Scan of Warden to report.
 import type { RuleId } from "@warden/contracts";
+import { WHOLE_REPO_PATH } from "../src/modules/guard/agent-config.ts";
+import {
+  AGENT_CAN_READ_ENV,
+  BLANKET_BASH_ALLOW,
+  MCP_SERVER_UNPINNED,
+  NO_RUNTIME_GUARD,
+  PERMISSION_SKIP,
+  SECRET_IN_AGENT_SETTINGS,
+  SECRET_IN_REPO,
+  UNAPPROVED_AI_TOOL,
+} from "../src/modules/guard/default-pack.ts";
 import type { RepoFile, UnreadFile } from "../src/modules/guard/repo-reader.ts";
 import {
   ANTHROPIC_KEY,
@@ -36,15 +47,6 @@ export const PLANTED_SECRETS: readonly string[] = [
   SLACK_TOKEN,
 ];
 
-const SECRET_IN_REPO = "guard/secret-in-repo";
-const SECRET_IN_AGENT_SETTINGS = "guard/secret-in-agent-settings";
-const BLANKET_BASH_ALLOW = "guard/blanket-bash-allow";
-const PERMISSION_SKIP = "guard/permission-skip";
-const AGENT_CAN_READ_ENV = "guard/agent-can-read-env";
-const NO_RUNTIME_GUARD = "guard/no-runtime-guard";
-const MCP_SERVER_UNPINNED = "guard/mcp-server-unpinned";
-const UNAPPROVED_AI_TOOL = "guard/unapproved-ai-tool";
-
 const join = (...parts: string[]) => parts.join("");
 /** The flag that starts Claude Code with its permission checks off. */
 const FLAG = join("--dangerously", "-skip-permissions");
@@ -52,7 +54,7 @@ const FLAG = join("--dangerously", "-skip-permissions");
 const BYPASS = join("bypass", "Permissions");
 
 /** Where every whole-repo Observation sits: the root settings file a fix goes in. */
-const SETTINGS = ".claude/settings.json";
+const SETTINGS = WHOLE_REPO_PATH;
 const LOCAL_SETTINGS = ".claude/settings.local.json";
 
 /** A JSON config file's text, pretty-printed as Claude Code writes it. */
