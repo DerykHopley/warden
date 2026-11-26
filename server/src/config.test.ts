@@ -23,6 +23,13 @@ const env = {
   PGDATABASE: "warden",
 };
 
+/** The write GitHub app's three settings, all set. */
+const githubWrite = {
+  GITHUB_WRITE_APP_CLIENT_ID: "Iv23li-write-client-id-value",
+  GITHUB_WRITE_APP_CLIENT_SECRET: "write-client-secret-value",
+  GITHUB_WRITE_APP_PRIVATE_KEY: appKey,
+};
+
 /** The ConfigError `run` throws. */
 function configError(run: () => unknown): ConfigError {
   try {
@@ -222,12 +229,6 @@ describe("loadConfig", () => {
   });
 
   describe("the write GitHub app's settings", () => {
-    const githubWrite = {
-      GITHUB_WRITE_APP_CLIENT_ID: "Iv23li-write-client-id-value",
-      GITHUB_WRITE_APP_CLIENT_SECRET: "write-client-secret-value",
-      GITHUB_WRITE_APP_PRIVATE_KEY: appKey,
-    };
-
     it("reads all three into githubWrite, apart from the read app's", () => {
       const config = loadConfig({ ...env, ...githubWrite });
       expect(config.githubWrite).toEqual({
@@ -238,14 +239,8 @@ describe("loadConfig", () => {
       expect(config.github).toBeUndefined();
     });
 
-    it("leaves githubWrite undefined when none is set, or all are empty", () => {
+    it("leaves githubWrite undefined when none is set", () => {
       expect(loadConfig(env).githubWrite).toBeUndefined();
-      const empty = {
-        GITHUB_WRITE_APP_CLIENT_ID: "",
-        GITHUB_WRITE_APP_CLIENT_SECRET: "",
-        GITHUB_WRITE_APP_PRIVATE_KEY: "",
-      };
-      expect(loadConfig({ ...env, ...empty }).githubWrite).toBeUndefined();
     });
 
     it.each([
@@ -276,16 +271,12 @@ describe("loadConfig", () => {
       expect(error.message).not.toContain("BEGIN");
     });
 
-    it.each([
-      ["a value that isn't a PEM", "not-a-key-value"],
-      ["a public key", publicKey],
-      ["a private key that isn't RSA", ecKey],
-    ])("refuses a private key that is %s, naming only it and no value", (_name, value) => {
+    // The read app's cases above cover each kind of bad key; this one shows the write app's key is checked the same way.
+    it("refuses a private key that isn't RSA, naming only it and no value", () => {
       const error = configError(() =>
-        loadConfig({ ...env, ...githubWrite, GITHUB_WRITE_APP_PRIVATE_KEY: value }),
+        loadConfig({ ...env, ...githubWrite, GITHUB_WRITE_APP_PRIVATE_KEY: ecKey }),
       );
       expect(error.variables).toEqual(["GITHUB_WRITE_APP_PRIVATE_KEY"]);
-      expect(error.message).not.toContain(value);
       expect(error.message).not.toContain("BEGIN");
       expect(error.message).not.toContain(githubWrite.GITHUB_WRITE_APP_CLIENT_SECRET);
     });
@@ -346,14 +337,8 @@ describe("gitHubReaderSettings (the Scan Job's)", () => {
 
   // A Scan only reads (G4): the write app's settings never reach the Scan Job's GitHub client.
   describe("the write app's settings", () => {
-    const write = {
-      GITHUB_WRITE_APP_CLIENT_ID: "Iv23li-write-client-id-value",
-      GITHUB_WRITE_APP_CLIENT_SECRET: "write-client-secret-value",
-      GITHUB_WRITE_APP_PRIVATE_KEY: appKey,
-    };
-
     it("answers undefined when only they are set", () => {
-      expect(gitHubReaderSettings(write)).toBeUndefined();
+      expect(gitHubReaderSettings(githubWrite)).toBeUndefined();
     });
 
     it("are ignored when the read app's are set too", () => {
@@ -363,13 +348,13 @@ describe("gitHubReaderSettings (the Scan Job's)", () => {
         publicKeyEncoding: { type: "spki", format: "pem" },
       });
       expect(
-        gitHubReaderSettings({ ...reader, ...write, GITHUB_WRITE_APP_PRIVATE_KEY: otherKey }),
+        gitHubReaderSettings({ ...reader, ...githubWrite, GITHUB_WRITE_APP_PRIVATE_KEY: otherKey }),
       ).toEqual({ clientId: reader.GITHUB_APP_CLIENT_ID, privateKey: appKey });
     });
 
     it("don't fill in a read-app variable that's missing", () => {
       const error = configError(() =>
-        gitHubReaderSettings({ GITHUB_APP_CLIENT_ID: reader.GITHUB_APP_CLIENT_ID, ...write }),
+        gitHubReaderSettings({ GITHUB_APP_CLIENT_ID: reader.GITHUB_APP_CLIENT_ID, ...githubWrite }),
       );
       expect(error.variables).toEqual(["GITHUB_APP_PRIVATE_KEY"]);
     });

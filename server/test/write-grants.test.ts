@@ -5,6 +5,7 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, it, inject } from "vitest";
 import { InstallationLinkedElsewhere } from "../src/modules/guard/repo-assets.ts";
 import { createWriteGrants, type WriteGrants } from "../src/modules/guard/write-grants.ts";
+import type { WriteGrantEvent } from "../src/schema.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { ADMIN, newInstallation, newTeam } from "./helpers.ts";
@@ -30,7 +31,7 @@ const rows = (team: string) =>
 /** Writes a row straight into the table, as slice 2's `revoked` will, under the Team. */
 const insertRow = (
   team: string,
-  row: { installationId: number; event: string; causedBy?: string; teamId?: string },
+  row: { installationId: number; event: WriteGrantEvent; causedBy?: string; teamId?: string },
 ) =>
   withTeam(team, (tx) =>
     tx
@@ -38,7 +39,7 @@ const insertRow = (
       .values({
         team_id: row.teamId ?? team,
         installation_id: row.installationId,
-        event: row.event as "granted",
+        event: row.event,
         caused_by: row.causedBy ?? ADMIN,
       })
       .execute(),
@@ -68,6 +69,20 @@ describe("grant and list", () => {
     expect(second).toEqual(first);
     expect(await rows(team)).toHaveLength(1);
     expect(await writeGrants.list(team)).toEqual([first]);
+  });
+
+  it("writes one row for grants of one installation made at once, and answers each the same grant", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+
+    const grants = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        writeGrants.grant(team, { installationId, grantedBy: ADMIN }),
+      ),
+    );
+
+    expect(await rows(team)).toHaveLength(1);
+    for (const grant of grants) expect(grant).toEqual(grants[0]);
   });
 
   it("lists a Team's installations by installation id", async () => {
@@ -174,17 +189,24 @@ describe("Teams apart (ADR 0006)", () => {
 });
 
 describe("the table's checks", () => {
-  it.each([
-    ["an event other than granted or revoked", { event: "suspended" }, /event_check/],
-    ["a blank caused_by", { event: "granted", causedBy: " " }, /caused_by_check/],
-    ["an empty caused_by", { event: "granted", causedBy: "" }, /caused_by_check/],
-    ["an installation id of 0", { event: "granted", installationId: 0 }, /installation_id_check/],
+  it.each<[string, { event: WriteGrantEvent; causedBy?: string; installationId?: number }, RegExp]>(
     [
-      "a negative installation id",
-      { event: "granted", installationId: -5 },
-      /installation_id_check/,
+      // The type allows only the two events, so the case that the table refuses another needs the cast.
+      [
+        "an event other than granted or revoked",
+        { event: "suspended" as WriteGrantEvent },
+        /event_check/,
+      ],
+      ["a blank caused_by", { event: "granted", causedBy: " " }, /caused_by_check/],
+      ["an empty caused_by", { event: "granted", causedBy: "" }, /caused_by_check/],
+      ["an installation id of 0", { event: "granted", installationId: 0 }, /installation_id_check/],
+      [
+        "a negative installation id",
+        { event: "granted", installationId: -5 },
+        /installation_id_check/,
+      ],
     ],
-  ])("refuses %s, and adds no row", async (_name, row, constraint) => {
+  )("refuses %s, and adds no row", async (_name, row, constraint) => {
     const team = await newTeam(withTeam);
 
     await expect(insertRow(team, { installationId: newInstallation(), ...row })).rejects.toThrow(

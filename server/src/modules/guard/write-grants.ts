@@ -2,7 +2,7 @@
 // through, that an Admin granted. Kept as an append-only record of `granted` and `revoked` events; the newest row per
 // installation says whether the grant holds. Every call runs inside `withTeam`, so row-level security keeps each Team to
 // its own rows (ADR 0006); an installation belongs to one Team only, across every Team.
-import type { Selectable } from "kysely";
+import { sql, type Selectable } from "kysely";
 import { isPgError } from "../../database.ts";
 import type { Database } from "../../schema.ts";
 import type { WithTeam } from "../../with-team.ts";
@@ -36,6 +36,12 @@ export function createWriteGrants({ withTeam }: { withTeam: WithTeam }): WriteGr
   return {
     grant(team, { installationId, grantedBy }) {
       return withTeam(team, async (tx) => {
+        // One write per installation at a time: a grant made at once with this one reads the row this one wrote, so a
+        // second grant writes nothing, and the newest row by id is the last committed. Any writer of `revoked` rows
+        // (#224's slice 2) must take this same lock before it reads.
+        await sql`select pg_advisory_xact_lock(hashtextextended(${`github_write_grants:${installationId}`}, 0))`.execute(
+          tx,
+        );
         const newest = await tx
           .selectFrom("github_write_grants")
           .selectAll()
