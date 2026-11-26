@@ -109,11 +109,16 @@ export function serve(routes: Routes) {
 export const callsTo = (path: string) =>
   fetchMock.mock.calls.filter(([input]) => String(input) === path);
 
-/** A promise the test resolves when it chooses, for an answer that arrives late. */
+/**
+ * A promise the test resolves when it chooses, for an answer that arrives late; or rejects, for a call that ends with
+ * no answer at all.
+ */
 export function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }

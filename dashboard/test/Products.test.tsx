@@ -779,6 +779,29 @@ describe("ProductsPage's Product form", () => {
     },
   );
 
+  it("a save that gets no answer after a Team switch and back leaves the list as it is, with no server-down notice; the form opened since left as it is", async () => {
+    let down = false;
+    const { answer, onSessionEnded } = await saveThenAwayAndBack(
+      { team: "org_b" },
+      { team: "org_a" },
+      () =>
+        down ? Promise.reject(new TypeError("Failed to fetch")) : productsAnswer([CHAT, SEARCH]),
+    );
+    const reads = listReads().length;
+    down = true;
+    await act(async () => {
+      answer.reject(new TypeError("Failed to fetch"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+
+    expect(listReads()).toHaveLength(reads);
+    expect(screen.queryByText(/isn't answering/)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 2, name: "Chat assistant" })).toBeInTheDocument();
+    expect(onSessionEnded).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(form().getByRole("textbox", { name: "Name" })).toHaveFocus();
+  });
+
   it.each([
     ["a Team switch", { team: "org_b" }, { team: "org_a" }],
     ["a Role lowered to Member", { role: "member" as Role }, { role: "admin" as Role }],
