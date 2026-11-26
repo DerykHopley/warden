@@ -87,6 +87,16 @@ describe("guard/mcp-server-unpinned", () => {
       ["-y", "some-mcp-server"],
     ],
     ["uvx.exe some-server", "uvx.exe", ["some-server"]],
+    // A runner's command name is matched in any case, as Windows and macOS find it (#266).
+    ["NPX some-mcp-server", "NPX", ["some-mcp-server"]],
+    ["Uvx some-server", "Uvx", ["some-server"]],
+    ["PNPM dlx some-mcp-server", "PNPM", ["dlx", "some-mcp-server"]],
+    ["Docker run ghcr.io/x/server", "Docker", ["run", "ghcr.io/x/server"]],
+    [
+      "C:\\Program Files\\nodejs\\NPX.CMD -y some-mcp-server",
+      "C:\\Program Files\\nodejs\\NPX.CMD",
+      ["-y", "some-mcp-server"],
+    ],
     [
       "C:\\Windows\\System32\\cmd.exe /c npx -y some-mcp-server",
       "C:\\Windows\\System32\\cmd.exe",
@@ -291,6 +301,7 @@ describe("guard/mcp-server-unpinned", () => {
 
   it.each([
     ["one command string", { command: "npx -y some-mcp-server" }],
+    ["one command string in capitals", { command: "NPX -y some-mcp-server" }],
     ["one command string with args after it", { command: "npx -y", args: ["some-mcp-server"] }],
     ["cmd /c with separate args", server("cmd", ["/c", "npx", "-y", "some-mcp-server"])],
     ["cmd /c in one command string", { command: "cmd /c npx -y some-mcp-server" }],
