@@ -66,13 +66,18 @@ export const DEMO_OBSERVATIONS = {
   },
   envSettings: readsEnv(".claude/settings.json"),
   envLocal: readsEnv(".claude/settings.local.json"),
+  // The Default Pack's broad-Bash-allow Rule. Its place (Asset and location) and the seed's reason for it stay as they
+  // were under its older demo Rule id, so a rerun on a Team seeded before still finds the seed's decision.
   push: {
     asset: REPO,
-    rule_id: "guard/agent-can-push-main",
+    rule_id: "guard/blanket-bash-allow",
     location: { kind: "file", path: ".claude/settings.json" },
     severity: "low",
-    title: "The agent may push to main",
-    evidence: { summary: "permissions.allow lets the agent run git push origin main" },
+    title: "A broad Bash allow gets round the agent's deny rules",
+    evidence: {
+      summary:
+        "permissions.allow in .claude/settings.json holds Bash(*), so the agent can run any command, git push origin main among them",
+    },
   },
   disk: {
     asset: DEVICE,
@@ -155,7 +160,7 @@ const GUARD_COVERAGE = {
   rules: [
     "guard/secret-in-repo",
     "guard/agent-can-read-env",
-    "guard/agent-can-push-main",
+    "guard/blanket-bash-allow",
     "guard/disk-not-encrypted",
   ],
 } as const;

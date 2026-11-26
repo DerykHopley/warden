@@ -823,7 +823,7 @@ describe("a Lead's decision", () => {
     const refused = [
       finding(id(1), { status: "fixed" }),
       finding(id(2), { status: "fixed", moved_to: ID }),
-      finding(id(3), { rule_id: "guard/agent-can-push-main" }),
+      finding(id(3), { rule_id: "guard/blanket-bash-allow" }),
       finding(id(4), { asset: { kind: "repo", ref: "https://github.com/acme/other" } }),
       finding(id(5), { asset: { kind: "product", ref: "https://github.com/acme/shop-web" } }),
       finding(id(6), { module: "patch" }),

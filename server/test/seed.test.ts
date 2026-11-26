@@ -3,7 +3,7 @@
 // Scan. Each case uses a Team of its own in the suite's shared database, which holds the CVE snapshot; the cases with
 // no snapshot use a database of their own. Some run the script as its own process.
 import { randomUUID } from "node:crypto";
-import type { Finding, Product } from "@warden/contracts";
+import { fingerprint, type Finding, type Product } from "@warden/contracts";
 import {
   DEMO_OBSERVATIONS,
   DEMO_OUTCOME,
@@ -71,16 +71,20 @@ async function demoFinding(team: string, name: DemoKey): Promise<Finding> {
   return finding;
 }
 
-/** Gives the Team's secret Finding the Rule id and fingerprint a seed before 7cfe35b wrote. */
-async function asSeededBeforeRename(team: string) {
-  const { id } = await demoFinding(team, "secret");
+/** The demo Rule ids an older seed wrote: the secret's before 7cfe35b, the broad Bash allow's before #226. */
+const OLD_RULE_ID = {
+  secret: "guard/committed-secret",
+  push: "guard/agent-can-push-main",
+} as const satisfies Partial<Record<DemoKey, string>>;
+
+/** Gives the Team's demo Finding `name` (the secret, unless named) the Rule id and fingerprint an older seed wrote. */
+async function asSeededBeforeRename(team: string, name: keyof typeof OLD_RULE_ID = "secret") {
+  const { id, location } = await demoFinding(team, name);
+  const rule = OLD_RULE_ID[name];
   await withTeam(team, (tx) =>
     tx
       .updateTable("findings")
-      .set({
-        rule_id: "guard/committed-secret",
-        fingerprint: "guard/committed-secret|file:config/payments.ts",
-      })
+      .set({ rule_id: rule, fingerprint: fingerprint(rule, location) })
       .where("id", "=", id)
       .execute(),
   );
@@ -400,18 +404,21 @@ describe("seedDemo", () => {
     expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("already_seeded");
   });
 
-  it("on a rerun, a Team whose secret Finding has the old Rule id is already seeded, and nothing changes", async () => {
-    const team = await teamWith([["user_admin", "admin"]]);
-    await seedDemo({ pool, team, now: NOW });
-    await asSeededBeforeRename(team);
-    const before = await stateOf(team);
+  it.each(["secret", "push"] as const)(
+    "on a rerun, a Team whose %s Finding has the old Rule id is already seeded, and nothing changes",
+    async (name) => {
+      const team = await teamWith([["user_admin", "admin"]]);
+      await seedDemo({ pool, team, now: NOW });
+      await asSeededBeforeRename(team, name);
+      const before = await stateOf(team);
 
-    expect(await seedDemo({ pool, team, now: NOW })).toEqual({
-      kind: "already_seeded",
-      findings: before.findings.length,
-    });
-    expect(await stateOf(team)).toEqual(before);
-  });
+      expect(await seedDemo({ pool, team, now: NOW })).toEqual({
+        kind: "already_seeded",
+        findings: before.findings.length,
+      });
+      expect(await stateOf(team)).toEqual(before);
+    },
+  );
 
   it("on a rerun, adds the demo Product to a Team seeded without it whose secret Finding has the old Rule id", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
