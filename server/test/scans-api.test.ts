@@ -3,7 +3,7 @@
 // Through the real app on the suite's shared database, each case with Teams of its own, a fake scanner and a fake
 // starter.
 import { randomUUID } from "node:crypto";
-import { assetKey, ScanBody, type Asset, type ScanState } from "@warden/contracts";
+import { assetKey, NUL_MESSAGE, ScanBody, type Asset, type ScanState } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
@@ -445,6 +445,23 @@ describe("POST /api/scans: a Guard Scan names only the Team's Repo Assets (stori
     });
     expect(await rows(team)).toEqual([]);
     expect(await rows(other)).toEqual([]);
+    expect(starter.calls).toEqual([]);
+  });
+
+  // Postgres can't store a NUL, so Guard's check of the ref was a 500 (#304).
+  it("refuses an Asset ref holding a NUL with 400 naming it, queuing nothing and starting nothing", async () => {
+    const team = await newTeam();
+    const starter = fakeStarter();
+    const { app, repoAssets } = checkedApp(starter.start);
+    await linkRepos(repoAssets, team, [repo(1).ref], LEAD);
+
+    const res = await start(app, team, {
+      module: "guard",
+      assets: [repo(1), { kind: "repo", ref: `${repo(2).ref}\0` }],
+    });
+
+    expect(res).toMatchObject({ status: 400, body: { error: `assets.1.ref: ${NUL_MESSAGE}` } });
+    expect(await rows(team)).toEqual([]);
     expect(starter.calls).toEqual([]);
   });
 });
