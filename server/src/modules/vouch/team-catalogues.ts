@@ -14,6 +14,10 @@ export type TeamCatalogueChoice = {
   setAt: Date;
 };
 
+/** Whether the Team whose `choices` these are has `catalogue` on: one it never set is off. */
+export const isOn = (choices: readonly TeamCatalogueChoice[], catalogue: CatalogueId): boolean =>
+  choices.find((choice) => choice.catalogue === catalogue)?.on ?? false;
+
 export interface TeamCatalogues {
   /** Every Catalogue the Team has set, on or off. One it never set isn't listed: it is off. */
   list(team: string): Promise<TeamCatalogueChoice[]>;

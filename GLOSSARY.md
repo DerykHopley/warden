@@ -79,7 +79,8 @@ _Avoid_: finding (for this)
 
 **Gap**:
 A Control whose reviewed Verdict is not evidenced or only partly evidenced. Findings flow up to Vouch as evidence, and
-Vouch recomputes Gaps from them. A Gap has no Status of its own: risk is accepted on its Findings.
+Vouch recomputes Gaps from them. A Gap has no Status of its own: risk is accepted on its Findings. A Control waiting for
+a review (not reviewed, or changed since review) isn't a Gap yet. Only Findings on Assets the Team holds count.
 _Avoid_: missing control, Finding (for this)
 
 **Asset**:
@@ -162,12 +163,12 @@ A named bundle of Rules, such as Default, Fintech or Games.
 _Avoid_: baseline pack, industry pack
 
 **Baseline**:
-The set of Rules one team is held to. At Quick it's the Default Pack. At Audit-ready it's built from Vouch's
+The set of Rules one team is held to. At Quick it's the Default Pack. A later Vouch spec builds it from the Team's
 Policy.
 _Avoid_: ruleset, policy (for this)
 
 **Policy**:
-A team's own written security rules, held in Vouch. A Policy shapes the Baseline at Audit-ready.
+A team's own written security rules, held in Vouch. A Policy will shape the Baseline (a later Vouch spec).
 
 **Catalogue**:
 A published, versioned set of Controls, such as VDA ISA2027 or ISO 27001:2022. A Team chooses the Catalogues it's
@@ -175,7 +176,7 @@ assessed against. Verdicts and Gaps are per Catalogue.
 _Avoid_: standard, framework (for this)
 
 **Control**:
-A requirement in one Catalogue, such as ISA2027 1.3.3. A Finding names one only once Vouch maps it. Controls in
+A requirement in one Catalogue, such as ISA2027 1.3.3. Vouch maps a Finding to Controls by its Rule. Controls in
 different Catalogues, or different versions of one, aren't linked.
 
 **Agent session**:
@@ -213,7 +214,8 @@ A pull request Warden opens to fix a Finding. It needs the Team's write grant, a
 The second Level: adds the dashboard, the agent hook and the Judge.
 
 **Audit-ready**:
-The third Level: adds a baseline taken from Vouch's policy, and sends evidence into Vouch.
+The third Level: a Catalogue is on, and a Lead has reviewed every one of its Controls. A Baseline built from Vouch's
+Policy comes in a later Vouch spec.
 
 **Privacy tier**:
 How much of an Agent session's content the hook sends to Warden: Metadata (tool names and outcomes), Details (adds

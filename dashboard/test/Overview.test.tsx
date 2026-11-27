@@ -22,6 +22,7 @@ const scannedOn = new Date(SCANNED).toLocaleDateString(undefined, { dateStyle: "
 const overview = (fields: Partial<OverviewBody> = {}): OverviewBody => ({
   team: TEAM,
   level: "quick",
+  audit: { answer: "no_catalogue", gaps: 0, waiting: 0, controls: [] },
   last_scan_at: SCANNED,
   has_findings: true,
   period_days: 30,

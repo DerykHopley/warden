@@ -11,6 +11,7 @@ import {
   RoleChangeBody,
   StartScanBody,
   type Actor,
+  type AuditAnswer,
   type Finding,
   type FindingsBody,
   type HealthBody,
@@ -36,7 +37,7 @@ import {
   ProposalPending,
   type Findings,
 } from "./findings/index.ts";
-import { teamLevel } from "./level.ts";
+import { auditReadyOfAnswer, teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
 import type { Members, RoleChanged, TeamMemberRow } from "./members.ts";
 import { idParam, pathId } from "./path-id.ts";
@@ -65,6 +66,8 @@ export type AppDeps = {
   scanners: Scanners;
   /** Each module's check of a start's Assets, as the start-up file wires them: a start one refuses is 400. */
   assetChecks: AssetChecks;
+  /** Vouch's answer and the Audit-ready fact the Overview and the Level read, as the start-up file wires them. */
+  audit: AuditReads;
   /** Starts the Scan Job for a queued Scan; without one (none wired here), a start answers 503. */
   startScanJob?: ScanJobStarter;
   /**
@@ -79,6 +82,16 @@ export type AppDeps = {
   frontendApiHost: string;
   /** The built dashboard's folder; without one (in development, where Vite serves it) only the API answers. */
   dashboardDir: string | undefined;
+};
+
+/**
+ * What the app reads from Vouch (spec #341, slice 4), built by the Vouch module (ADR 0005): the Team's answer to "Are we
+ * ready for the audit?" as of `now`, and whether it is Audit-ready, from the switches and reviews alone, for a read
+ * such as `GET /api/me` that has no answer in hand. The Overview works it out from its answer (`auditReadyOfAnswer`).
+ */
+export type AuditReads = {
+  answer(team: string, now: Date): Promise<AuditAnswer>;
+  auditReady(team: string): Promise<boolean>;
 };
 
 /** What a handler behind requireRole reads from the context: the session, its Team and the person's Role there. */
@@ -218,7 +231,8 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     if (opened instanceof Response) return opened;
     const { session, team } = opened;
     const role = team === null ? null : opened.role;
-    const level = team === null ? null : teamLevel();
+    const level =
+      team === null ? null : teamLevel({ auditReady: await deps.audit.auditReady(team) });
     return c.json({ userId: session.userId, team, role, level } satisfies MeBody);
   });
 
@@ -372,13 +386,17 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     return c.json({ team, findings: list } satisfies FindingsBody);
   });
 
-  // Any person in the Team reads its Level and trend (story 10): the Overview.
+  // Any person in the Team reads its Level and trend (story 10), and Vouch's answer to "Are we ready for the audit?"
+  // (spec #341, story 8): the Overview. A read that throws answers the logged 500, never part of an answer.
   app.get("/api/overview", requireRole("member"), async (c) => {
     const team = c.get("team");
     const numbers = await findings.overview(team, OVERVIEW_PERIOD_DAYS);
+    const audit = await deps.audit.answer(team, new Date());
     return c.json({
       team,
-      level: teamLevel(),
+      // From the answer in hand, so the Level and the answer can't disagree and Vouch is read once.
+      level: teamLevel({ auditReady: auditReadyOfAnswer(audit) }),
+      audit,
       period_days: OVERVIEW_PERIOD_DAYS,
       ...numbers,
     } satisfies OverviewBody);

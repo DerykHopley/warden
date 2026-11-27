@@ -56,6 +56,7 @@ describe("journeyCards", () => {
 const body = (fields: Partial<OverviewBody>): OverviewBody => ({
   team: "org_a",
   level: "quick",
+  audit: { answer: "no_catalogue", gaps: 0, waiting: 0, controls: [] },
   last_scan_at: SCANNED,
   has_findings: true,
   period_days: 30,

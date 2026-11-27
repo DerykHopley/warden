@@ -172,6 +172,42 @@ export const ControlsBody = z.object({
 });
 export type ControlsBody = z.infer<typeof ControlsBody>;
 
+/**
+ * "Are we ready for the audit?" (spec #341, slice 4): yes, every judged Control of every Catalogue the Team has on is
+ * reviewed with no Gap; not yet, a Control waits for a review or is a Gap; or no Catalogue is on to be ready for.
+ */
+export const ReadyForAudit = z.enum(["yes", "not_yet", "no_catalogue"]);
+export type ReadyForAudit = z.infer<typeof ReadyForAudit>;
+
+/**
+ * One judged Control of a Catalogue the Team has on, as the Overview answers it: its Verdict worked out now and its
+ * review state, as `ControlVerdict` has them, and whether it is a Gap (GLOSSARY: Gap): reviewed, at not evidenced or
+ * partly evidenced. A Control waiting for a review (not reviewed, or changed since review) is never a Gap.
+ */
+export const AuditControl = z.object({
+  catalogue: CatalogueId,
+  ref: CatalogueControl.shape.ref,
+  question: CatalogueControl.shape.question,
+  verdict: Verdict,
+  review_state: ReviewState,
+  reviewed_verdict: ReviewedVerdict.nullable(),
+  gap: z.boolean(),
+});
+export type AuditControl = z.infer<typeof AuditControl>;
+
+/**
+ * `GET /api/overview`'s `audit`: the answer, its Gaps, the Controls waiting for a review, and one row per judged
+ * Control of each Catalogue the Team has on, the Catalogues in the order `GET /api/vouch/catalogues` lists them and
+ * each one's Controls in the order it shows them. Worked out on read, never stored.
+ */
+export const AuditAnswer = z.object({
+  answer: ReadyForAudit,
+  gaps: z.number().int().nonnegative(),
+  waiting: z.number().int().nonnegative(),
+  controls: z.array(AuditControl),
+});
+export type AuditAnswer = z.infer<typeof AuditAnswer>;
+
 /** `PUT /api/vouch/catalogues/:id`'s body (Admin): turn the Catalogue on or off for the Team. Nothing else. */
 export const CatalogueSwitchBody = z.strictObject({ on: z.boolean() });
 export type CatalogueSwitchBody = z.infer<typeof CatalogueSwitchBody>;

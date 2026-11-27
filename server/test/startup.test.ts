@@ -4,8 +4,9 @@ import { randomUUID } from "node:crypto";
 import type { CryptoKey } from "jose";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type pg from "pg";
-import { ControlsBody, FindingsBody } from "@warden/contracts";
+import { ControlsBody, FindingsBody, OverviewBody } from "@warden/contracts";
 import { createRepoAssets } from "../src/modules/guard/repo-assets.ts";
+import { createTeamCatalogues } from "../src/modules/vouch/team-catalogues.ts";
 import { createWithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
@@ -220,6 +221,41 @@ describe("the start-up file's wiring", () => {
       ),
     );
     expect([...held].sort()).toEqual(["product 1", "repo 1"]);
+  });
+
+  // Spec #341, slice 4: the Overview's answer to "Are we ready for the audit?" comes from the Vouch module the start-up
+  // file wires as the app's `audit`, so a Team with ISA2027 on reads its four Controls there.
+  it("answers the Overview with Vouch's answer for a Team with ISA2027 on", async () => {
+    const database = inject("testDatabase");
+    const pool = poolAs("warden_app", database);
+    const withTeam = createWithTeam(pool);
+    const team = `org_${randomUUID()}`;
+    try {
+      await seedTeam(withTeam, team, [[ADMIN, "admin"]]);
+      await createTeamCatalogues({ withTeam }).set(team, {
+        catalogue: "vda-isa-2027.1",
+        on: true,
+        setBy: ADMIN,
+      });
+    } finally {
+      await pool.end();
+    }
+    const { privateKey, publicPem } = await testKey();
+    const server = await startWith(
+      { ...pgConnection(), PGUSER: "warden_app", PGDATABASE: database },
+      { CLERK_JWT_KEY: publicPem },
+    );
+    const token = await sessionToken(privateKey, ADMIN, 60, activeOrganization(team, "admin"));
+
+    const res = await fetch(`http://127.0.0.1:${server.port}/api/overview`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(res.status).toBe(200);
+    const { audit, level } = OverviewBody.parse(await res.json());
+    expect(audit.answer).toBe("not_yet");
+    expect(audit.controls.map(({ ref }) => ref)).toEqual(["1.3.3", "1.3.4", "4.1.3", "5.2.4"]);
+    expect(level).toBe("quick");
   });
 
   // Story 3 end to end: the start-up file gives Patch's routes the Patch Scan, so a saved Product's CVEs are Findings.
