@@ -253,6 +253,31 @@ export async function asAdmin(team: Team) {
   return { origin, headers: { Authorization: `Bearer ${token}` } };
 }
 
+/** Calls the API at `path` as `team`'s Admin with `body` as JSON; throws unless it answers 2xx. */
+export async function sendAsAdmin(
+  team: Team,
+  method: "PUT" | "POST",
+  path: string,
+  body: object,
+): Promise<void> {
+  const { origin, headers } = await asAdmin(team);
+  const res = await fetch(`${origin}${path}`, {
+    method,
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`${method} ${path} in ${team.name}: ${res.status} ${await res.text()}`);
+  }
+}
+
+/** Where VDA ISA 2027.1 is turned on or off, and its Controls reviewed under `/controls/<ref>/reviews`. */
+export const ISA_PATH = "/api/vouch/catalogues/vda-isa-2027.1";
+
+/** Turns VDA ISA 2027.1 on or off for `team`, as its Admin, before a test reads Setup or the Overview. */
+export const switchCatalogue = (team: Team, on: boolean) =>
+  sendAsAdmin(team, "PUT", ISA_PATH, { on });
+
 /** `team`'s Products, asked with the Admin call the caller already made, so its token is minted once. */
 async function listProducts(team: Team, { origin, headers }: Awaited<ReturnType<typeof asAdmin>>) {
   const res = await fetch(`${origin}/api/products`, { headers });

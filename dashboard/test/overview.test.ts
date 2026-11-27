@@ -1,10 +1,17 @@
 // The Overview's rules below the page (story 10, and spec #341's stories 8 and 9): each journey card's state from the
 // Team's Level, Quick's bar and next step from its latest Scan, Standard's while Warden has no Standard rule,
-// Audit-ready's from the Controls reviewed, the trend line's four wordings, and the audit answer's line.
-import type { OverviewBody } from "@warden/contracts";
+// Audit-ready's from the Controls with a review, the trend line's four wordings, and the audit answer's line, its rows
+// by Catalogue and the Verdict each row shows.
+import type { CatalogueId, OverviewBody } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { auditAnswerLine, journeyCards, trendLine } from "../src/overview.ts";
-import { auditRow, isaOn, ISA_REFS, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
+import {
+  auditAnswerLine,
+  controlsByCatalogue,
+  journeyCards,
+  shownVerdict,
+  trendLine,
+} from "../src/overview.ts";
+import { auditRow, ISA, isaOn, ISA_REFS, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
 
 const SCANNED = "2026-11-24T09:14:00Z";
 const scannedOn = new Date(SCANNED).toLocaleDateString(undefined, { dateStyle: "medium" });
@@ -88,11 +95,26 @@ describe("journeyCards at Audit-ready", () => {
     });
   });
 
-  it("gives Audit-ready Current, a full bar, and the Controls reviewed", () => {
+  it("gives Audit-ready Current, a full bar, and the Controls with a review", () => {
     expect(auditReady).toMatchObject({
       state: "current",
       progress: 100,
-      notes: ["4 of 4 Controls reviewed"],
+      notes: ["4 of 4 Controls have a review"],
+    });
+  });
+
+  it("names the Controls changed since review, which the answer counts as waiting", () => {
+    const audit = isaOn({
+      answer: "not_yet",
+      waiting: 1,
+      controls: [
+        ...ISA_REFS.slice(0, 3).map((ref) => reviewedRow(ref)),
+        auditRow("5.2.4", { review_state: "changed_since_review" }),
+      ],
+    });
+    expect(journeyCards("audit_ready", SCANNED, audit)[2]).toMatchObject({
+      state: "current",
+      notes: ["4 of 4 Controls have a review, 1 changed since"],
     });
   });
 });
@@ -109,15 +131,29 @@ describe("the Audit-ready card before it is reached", () => {
     });
   });
 
-  it("with ISA2027 on and nothing reviewed, says 0 of 4 Controls reviewed", () => {
+  it("with ISA2027 on and nothing reviewed, says 0 of 4 Controls have a review", () => {
     expect(auditReadyAtQuick(isaOn())).toMatchObject({
       state: "not-started",
       progress: 0,
-      notes: ["0 of 4 Controls reviewed"],
+      notes: ["0 of 4 Controls have a review"],
     });
   });
 
-  it("counts a Control changed since review as reviewed, as the Level does: 3 of 4", () => {
+  it("with one Control judged, says it in the singular", () => {
+    expect(auditReadyAtQuick(isaOn({ waiting: 1, controls: [auditRow("1.3.3")] }))).toMatchObject({
+      notes: ["0 of 1 Control has a review"],
+    });
+  });
+
+  it("with a Catalogue on that judges no Control, says there are none to review, as the answer line does", () => {
+    expect(auditReadyAtQuick(isaOn({ waiting: 0, controls: [] }))).toMatchObject({
+      state: "not-started",
+      progress: 0,
+      notes: ["No Controls to review"],
+    });
+  });
+
+  it("counts a Control changed since review as having one, as the Level does, and names it: 3 of 4", () => {
     const audit = isaOn({
       waiting: 2,
       controls: [
@@ -130,8 +166,69 @@ describe("the Audit-ready card before it is reached", () => {
     expect(auditReadyAtQuick(audit)).toMatchObject({
       state: "not-started",
       progress: 0,
-      notes: ["3 of 4 Controls reviewed"],
+      notes: ["3 of 4 Controls have a review, 1 changed since"],
     });
+  });
+});
+
+describe("shownVerdict", () => {
+  it("is the reviewed Verdict while the Control is reviewed", () => {
+    expect(
+      shownVerdict(
+        auditRow("1.3.3", {
+          verdict: "evidenced",
+          review_state: "reviewed",
+          reviewed_verdict: "not_applicable",
+        }),
+      ),
+    ).toBe("not_applicable");
+  });
+
+  it.each(["not_reviewed", "changed_since_review"] as const)(
+    "is the worked-out Verdict while %s",
+    (review_state) => {
+      expect(shownVerdict(auditRow("1.3.4", { verdict: "partly_evidenced", review_state }))).toBe(
+        "partly_evidenced",
+      );
+    },
+  );
+
+  it("is the worked-out Verdict for a reviewed row with no reviewed Verdict", () => {
+    expect(
+      shownVerdict(auditRow("4.1.3", { verdict: "evidenced", review_state: "reviewed" })),
+    ).toBe("evidenced");
+  });
+});
+
+describe("controlsByCatalogue", () => {
+  // Warden has one Catalogue today: the second's id stands for the next one it gets.
+  const second = { ...ISA, id: "a-second-catalogue" as CatalogueId, name: "A second Catalogue" };
+  const ofSecond = (ref: string) => auditRow(ref, { catalogue: second.id });
+
+  it("gives each listed Catalogue, in the answer's order, its own rows in order", () => {
+    const audit = isaOn({
+      catalogues: [second, ISA],
+      controls: [auditRow("1.3.3"), ofSecond("9.1"), auditRow("1.3.4"), ofSecond("9.2")],
+    });
+    expect(
+      controlsByCatalogue(audit).map(({ catalogue, controls }) => [
+        catalogue.name,
+        controls.map(({ ref }) => ref),
+      ]),
+    ).toEqual([
+      ["A second Catalogue", ["9.1", "9.2"]],
+      ["VDA ISA 2027.1", ["1.3.3", "1.3.4"]],
+    ]);
+  });
+
+  it("keeps a listed Catalogue with no row, its list empty", () => {
+    expect(controlsByCatalogue(isaOn({ controls: [] }))).toEqual([
+      { catalogue: ISA, controls: [] },
+    ]);
+  });
+
+  it("drops the rows of a Catalogue the answer doesn't list", () => {
+    expect(controlsByCatalogue(isaOn({ catalogues: [] }))).toEqual([]);
   });
 });
 

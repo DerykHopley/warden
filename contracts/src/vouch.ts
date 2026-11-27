@@ -35,6 +35,12 @@ export type ReviewedVerdict = z.infer<typeof ReviewedVerdict>;
 export const ReviewState = z.enum(["not_reviewed", "reviewed", "changed_since_review"]);
 export type ReviewState = z.infer<typeof ReviewState>;
 
+/**
+ * Whether a Control at `state` has a review: reviewed, or changed since review, which still has its newest review. The
+ * Level counts both (GLOSSARY: Audit-ready), on the server and on the Overview's Audit-ready card.
+ */
+export const hasReview = (state: ReviewState): boolean => state !== "not_reviewed";
+
 /** What a review did: kept the worked-out Verdict, or put another in its place. */
 export const ReviewOutcome = z.enum(["confirmed", "overridden"]);
 export type ReviewOutcome = z.infer<typeof ReviewOutcome>;

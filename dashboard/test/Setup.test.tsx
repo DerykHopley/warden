@@ -98,14 +98,20 @@ const cataloguesOf =
   () =>
     json(200, { catalogues: listed });
 
+/** What Setup's sections ask for when it opens, as `renderSetup` answers each unless a test says otherwise. */
+const SETUP_ROUTES = {
+  githubApp: app,
+  repos: () => json(200, { repos: [] }),
+  writeApp,
+  writeGrant: noGrants,
+  catalogues: cataloguesOf(CATALOGUE),
+} satisfies Routes;
+
 function renderSetup(role: Role, routes: Routes = {}) {
   serve({
     // The Team check a Catalogue switch asks before its PUT: the session is in Acme, as `props` says.
     me: () => json(200, { userId: "user_1", team: "org_a", role, level: "quick" }),
-    githubApp: app,
-    repos: () => json(200, { repos: [] }),
-    ...writeRoutes,
-    catalogues: cataloguesOf(CATALOGUE),
+    ...SETUP_ROUTES,
     ...routes,
   });
   const given = props(role);
@@ -1176,6 +1182,42 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
         screen.getByRole("heading", { level: 2, name: "Catalogues" }),
       );
     });
+
+    const write = () => within(screen.getByRole("region", { name: "Grant write access" }));
+    /** What each section above the Catalogues shows once its call has answered, as `SETUP_ROUTES` answers it. */
+    const ANSWERED_BY = {
+      githubApp: () => github().findByRole("link", { name: "Install the GitHub app" }),
+      writeApp: () => write().findByRole("link", { name: "Install the write app" }),
+      writeGrant: () => write().findByText("No write access granted."),
+      repos: () => repos().findByText("No repos linked yet."),
+    };
+
+    it.each([
+      ["the GitHub app", "githubApp", "/api/github/app"],
+      ["the write app", "writeApp", "/api/github/write-app"],
+      ["the write grants", "writeGrant", "/api/github/write-grant"],
+      ["the Repos", "repos", "/api/repos"],
+    ] as const)(
+      "waits for %s above it, answering after the list, so the heading isn't pushed away",
+      async (_section, route, path) => {
+        window.history.replaceState(null, "", "/setup#setup-catalogues");
+        const late = deferred<Response>();
+        renderSetup("admin", { [route]: () => late.promise });
+
+        await shown();
+        for (const [other, answered] of Object.entries(ANSWERED_BY)) {
+          if (other !== route) await answered();
+        }
+        expect(callsTo(path)).toHaveLength(1);
+        expect(scrolled).not.toHaveBeenCalled();
+        late.resolve(SETUP_ROUTES[route]());
+
+        await vi.waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
+        expect(scrolled.mock.contexts[0]).toBe(
+          screen.getByRole("heading", { level: 2, name: "Catalogues" }),
+        );
+      },
+    );
 
     it("scrolls nothing at #setup-repos once only the Catalogues have answered", async () => {
       window.history.replaceState(null, "", "/setup#setup-repos");

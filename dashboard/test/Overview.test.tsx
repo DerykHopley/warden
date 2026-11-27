@@ -1,12 +1,14 @@
 // The Overview page (story 10, and spec #341's stories 8 and 9): the journey cards with their states in words and their
 // bars, the trend line, the audit section with its answer, Setup pointer, Control rows and credit, and each answer GET
 // /api/overview can get. It renders OverviewPage alone with spy props, Warden's server faked. Which card is in which
-// state, and the trend's and the answer's wordings, are tested below the page, in overview.test.ts.
+// state, the trend's and the answer's wordings, and which rows a Catalogue shows with which Verdict, are tested below
+// the page, in overview.test.ts.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OverviewBody, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OverviewPage } from "../src/Overview.tsx";
+import { journeyCards } from "../src/overview.ts";
 import { auditRow, ISA, isaOn, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { TEAM } from "./findings-fixture.ts";
@@ -200,7 +202,7 @@ describe("the audit section with ISA2027 on (spec #341, story 8)", () => {
     expect(first.getByText("Not reviewed")).toBeInTheDocument();
   });
 
-  it("shows the reviewed Verdict while reviewed, and the worked-out one otherwise", async () => {
+  it("shows the row's Verdict by shownVerdict: an overridden one, not the worked-out one", async () => {
     open({
       audit: isaOn({
         controls: [
@@ -209,25 +211,12 @@ describe("the audit section with ISA2027 on (spec #341, story 8)", () => {
             review_state: "reviewed",
             reviewed_verdict: "not_applicable",
           }),
-          auditRow("1.3.4", {
-            verdict: "partly_evidenced",
-            review_state: "changed_since_review",
-            reviewed_verdict: null,
-          }),
-          auditRow("4.1.3", { verdict: "evidenced" }),
         ],
       }),
     });
     const overridden = await rowOf("1.3.3");
-    expect(overridden.getByText("Not applicable")).toBeInTheDocument();
-    expect(overridden.getByText("Reviewed")).toBeInTheDocument();
-    expect(overridden.queryByText("Evidenced")).toBeNull();
-    const changed = await rowOf("1.3.4");
-    expect(changed.getByText("Partly evidenced")).toBeInTheDocument();
-    expect(changed.getByText("Changed since review")).toBeInTheDocument();
-    const notReviewed = await rowOf("4.1.3");
-    expect(notReviewed.getByText("Evidenced")).toBeInTheDocument();
-    expect(notReviewed.getByText("Not reviewed")).toBeInTheDocument();
+    expect(overridden.getByText("Not applicable")).toHaveClass("audit-verdict");
+    expect(overridden.getByText("Reviewed")).toHaveClass("audit-review");
   });
 
   it("shows Gap in a pill on a Gap's row only", async () => {
@@ -273,20 +262,15 @@ describe("the audit section with ISA2027 on (spec #341, story 8)", () => {
     }
     expect(audit.getAllByRole("link").map((link) => link.textContent)).toEqual(["CC BY-ND 4.0"]);
   });
-
-  it("shows only the rows of the Catalogues the answer lists", async () => {
-    open({ audit: isaOn({ catalogues: [] }) });
-    const audit = await auditSection();
-    expect(audit.getByText("Not yet: 4 Controls waiting for review.")).toBeInTheDocument();
-    expect(audit.queryAllByRole("listitem")).toEqual([]);
-  });
 });
 
 describe("the journey with a Catalogue on (spec #341, story 9)", () => {
-  it("gives the Audit-ready card the answer's count of Controls reviewed", async () => {
-    open({ audit: isaOn({ waiting: 3, controls: [reviewedRow("1.3.3"), auditRow("1.3.4")] }) });
+  it("gives the Audit-ready card the note journeyCards works out from the answer", async () => {
+    const audit = isaOn({ waiting: 3, controls: [reviewedRow("1.3.3"), auditRow("1.3.4")] });
+    open({ audit });
     await screen.findByRole("list", { name: "The journey" });
-    expect(cardOf("Audit-ready").getByText("1 of 2 Controls reviewed")).toBeInTheDocument();
+    const [note] = journeyCards("quick", SCANNED, audit)[2]!.notes;
+    expect(cardOf("Audit-ready").getByText(note!)).toHaveClass("journey-note");
   });
 });
 

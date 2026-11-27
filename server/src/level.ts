@@ -1,5 +1,5 @@
 // A Team's Level on the journey (GLOSSARY.md), read from what it has set up: the one place the server decides it.
-import type { AuditAnswer, Level, ReviewState } from "@warden/contracts";
+import { hasReview, type AuditAnswer, type Level, type ReviewState } from "@warden/contracts";
 
 /** What the Level reads of a Team: whether it is Audit-ready (Vouch: a Catalogue on, every Control reviewed). */
 export type TeamFacts = { auditReady: boolean };
@@ -19,21 +19,19 @@ export function teamLevel(facts: TeamFacts): Level {
  * the Overview from Vouch's answer (`auditReadyOfAnswer`).
  */
 export function auditReadyOf(on: readonly (readonly ReviewState[])[]): boolean {
-  return (
-    on.length > 0 &&
-    on.every((states) => states.length > 0 && states.every((state) => state !== "not_reviewed"))
-  );
+  return on.length > 0 && on.every((states) => states.length > 0 && states.every(hasReview));
 }
 
 /**
  * Audit-ready from Vouch's answer in hand, by `auditReadyOf`: never with no Catalogue on; otherwise once no row of any
- * Catalogue waits for its first review. A Catalogue on that judges no Control has no row, so it is never ready.
+ * Catalogue it lists waits for its first review. Each listed Catalogue starts with no row, so one on that judges no
+ * Control keeps the Team from being ready.
  */
 export function auditReadyOfAnswer(audit: AuditAnswer): boolean {
   if (audit.answer === "no_catalogue") return false;
-  const byCatalogue = new Map<string, ReviewState[]>();
+  const byCatalogue = new Map<string, ReviewState[]>(audit.catalogues.map(({ id }) => [id, []]));
   for (const { catalogue, review_state } of audit.controls) {
-    byCatalogue.set(catalogue, [...(byCatalogue.get(catalogue) ?? []), review_state]);
+    byCatalogue.get(catalogue)?.push(review_state);
   }
   return auditReadyOf([...byCatalogue.values()]);
 }

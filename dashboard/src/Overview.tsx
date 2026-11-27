@@ -6,9 +6,11 @@ import type { AuditAnswer, AuditCatalogue, AuditControl, Role } from "@warden/co
 import type { PageProps } from "./App.tsx";
 import {
   auditAnswerLine,
+  controlsByCatalogue,
   JOURNEY_STATE_WORDS,
   journeyCards,
   NO_CATALOGUE_LINE,
+  shownVerdict,
   trendLine,
   useOverview,
   type JourneyCardView,
@@ -88,12 +90,8 @@ function AuditSection({ audit, role }: { audit: AuditAnswer; role: Role | null }
       ) : (
         <p className="audit-answer">{auditAnswerLine(audit)}</p>
       )}
-      {audit.catalogues.map((catalogue) => (
-        <AuditCatalogueBlock
-          key={catalogue.id}
-          catalogue={catalogue}
-          controls={audit.controls.filter((control) => control.catalogue === catalogue.id)}
-        />
+      {controlsByCatalogue(audit).map(({ catalogue, controls }) => (
+        <AuditCatalogueBlock key={catalogue.id} catalogue={catalogue} controls={controls} />
       ))}
     </section>
   );
@@ -138,19 +136,15 @@ function AuditCatalogueBlock({
 }
 
 /**
- * One judged Control, every state a word: its ref and question, its Verdict (the reviewed one while reviewed, the one
- * worked out now otherwise), its review state, and Gap when it is one.
+ * One judged Control, every state a word: its ref and question, the Verdict it shows (`shownVerdict`), its review
+ * state, and Gap when it is one.
  */
 function AuditControlRow({ control }: { control: AuditControl }) {
-  const verdict =
-    control.review_state === "reviewed" && control.reviewed_verdict !== null
-      ? control.reviewed_verdict
-      : control.verdict;
   return (
     <li className="audit-control">
       <span className="audit-ref">{control.ref}</span>
       <span className="audit-question">{control.question}</span>
-      <span className="audit-verdict">{VOUCH_VERDICT_WORDS[verdict]}</span>
+      <span className="audit-verdict">{VOUCH_VERDICT_WORDS[shownVerdict(control)]}</span>
       <span className="audit-review">{REVIEW_STATE_WORDS[control.review_state]}</span>
       {control.gap && <span className="audit-gap">Gap</span>}
     </li>

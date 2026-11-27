@@ -1172,19 +1172,22 @@ button[aria-busy="true"],
   font-size: 0.875rem;
 }
 
-.trend-line {
-  margin: 24px 0 0;
+/* The Overview's one-line answers, the trend and "Are we ready for the audit?", in the heading font. */
+.trend-line,
+.audit-answer {
   font-family: var(--font-head);
   font-size: 1.375rem;
 }
 
-/* "Are we ready for the audit?" (spec #341, slice 6): the answer in one line in the heading font, as the trend line;
-   then each Catalogue on under an h3, its Controls one row each, and its credit last. Every state is a word; the rows
-   take no focus or click. */
+.trend-line {
+  margin: 24px 0 0;
+}
+
+/* "Are we ready for the audit?" (spec #341, slice 6): the answer in one line, as the trend line; then each Catalogue on
+   under an h3, its Controls one row each, and its credit last. Every state is a word; the rows take no focus or
+   click. */
 .audit-answer {
   margin: 0;
-  font-family: var(--font-head);
-  font-size: 1.375rem;
 }
 
 .audit h3 {

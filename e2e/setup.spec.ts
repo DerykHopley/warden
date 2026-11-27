@@ -9,13 +9,13 @@ import type { Page } from "@playwright/test";
 import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
 import {
   ADA,
-  asAdmin,
   CEDAR,
   CEDAR_REPOS,
   expect,
   GRACE,
   HEDY,
   KATHERINE,
+  switchCatalogue,
   test,
 } from "./session.ts";
 
@@ -409,16 +409,7 @@ const isa = (page: Page) =>
 const ON_WORDS = "On: Vouch checks 4 Controls: 1.3.3, 1.3.4, 4.1.3, 5.2.4.";
 
 test.describe("Catalogues", () => {
-  test.beforeEach(async () => {
-    const { origin, headers } = await asAdmin(CEDAR);
-    const res = await fetch(`${origin}/api/vouch/catalogues/vda-isa-2027.1`, {
-      method: "PUT",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ on: false }),
-    });
-    if (!res.ok)
-      throw new Error(`turning Cedar's Catalogue off: ${res.status} ${await res.text()}`);
-  });
+  test.beforeEach(() => switchCatalogue(CEDAR, false));
 
   test("an Admin turns VDA ISA 2027.1 on, then off, and a reload shows the stored state each time (#341 story 1)", async ({
     page,
