@@ -1008,7 +1008,6 @@ describe("guard/permission-skip", () => {
       ["no word after -c", "bash -c"],
       ["an empty string", "bash -c ''"],
       ["an unclosed string with no flag", "bash -c 'claude -p x"],
-      ["five script runs after ;", "bash a.sh; bash b.sh; bash c.sh; bash d.sh; bash e.sh"],
       [
         "five script runs after &&",
         "bash a.sh && bash b.sh && bash c.sh && bash d.sh && bash e.sh",

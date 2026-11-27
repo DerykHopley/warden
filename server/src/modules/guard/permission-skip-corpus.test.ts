@@ -212,7 +212,8 @@ function corpus(): string[] {
     }
   }
   // Several places in one command: two runs after each separator, both kinds in one run, a run in a shell's string
-  // beside one among its arguments, and a fifth shell beside a run.
+  // beside one among its arguments, a run after five script runs (which spend none of the shell budget), and runs
+  // beside a string nested too deep to read, so a place that skips and one that may are worded apart.
   for (const separator of ["; ", " && ", " || ", " | ", " & ", "\n"]) {
     for (const first of CORE) for (const second of CORE) commands.add(first + separator + second);
   }
@@ -220,7 +221,9 @@ function corpus(): string[] {
   for (const run of CORE) {
     commands.add(`bash -c ${sq(run)} $(${run})`);
     commands.add(`bash a.sh; bash b.sh; bash c.sh; bash d.sh; bash e.sh; ${run}`);
+    commands.add(`${run}; ${nested(run, 5, 0, "")}`);
   }
+  commands.add(`claude {FLAG}; claude {MODE} {BYPASS}; ${nested("claude {FLAG}", 5, 0, "")}`);
   // Nesting depth: 1 to 6 shells, each maybe wrapped.
   for (const run of CORE) {
     for (let depth = 1; depth <= 6; depth++) {
@@ -235,9 +238,12 @@ function corpus(): string[] {
 /** A command's places, as its Finding names them: how many, and their kinds in its order. */
 type Places = { places: number; kinds: string[] };
 
-/** A Finding's summary: its count, then its kinds, joined by `, ` (the too-deep kind holds one itself). */
+/**
+ * A Finding's summary: its count, then its kinds, joined by `, ` (the too-deep kind holds one itself), then maybe the
+ * count and kinds of the places that may skip, worded apart from the ones that do.
+ */
 const SUMMARY = new RegExp(
-  String.raw`^(\d+) places? (?:may )?skips? the agent's permission checks \((.*)\) in ${path.replaceAll(".", "\\.")}, `,
+  String.raw`^(\d+) places? (?:may )?skips? the agent's permission checks \((.*?)\)(?: and (\d+) more may \((.*?)\))? in ${path.replaceAll(".", "\\.")}, `,
 );
 const KIND = /[^,]*, nested too deep to check|[^,]+/g;
 
@@ -254,9 +260,12 @@ function placesOf(template: string): Places {
       `Can't read the places of ${JSON.stringify(fromPlaceholders(template))}: ${summary}`,
     );
   }
+  const [, count, kinds, mayCount = "0", mayKinds] = match;
   return {
-    places: Number(match[1]),
-    kinds: Array.from(match[2]!.matchAll(KIND), ([kind]) => toPlaceholders(kind.trim())),
+    places: Number(count) + Number(mayCount),
+    kinds: [kinds!, mayKinds ?? ""].flatMap((text) =>
+      Array.from(text.matchAll(KIND), ([kind]) => toPlaceholders(kind.trim())),
+    ),
   };
 }
 
