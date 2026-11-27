@@ -7,7 +7,7 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { AuditAnswer, OverviewBody, Role } from "@warden/contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "../src/App.tsx";
 import { OverviewPage } from "../src/Overview.tsx";
 import { journeyCards } from "../src/overview.ts";
@@ -59,7 +59,7 @@ function open(
     me: { userId: "user_ada", team: TEAM, role, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
-    panel: { setContext: vi.fn(), open: vi.fn() },
+    panel: { setContext: vi.fn(), open: vi.fn(), uncover: vi.fn() },
   };
   render(<OverviewPage {...props} />);
   return props;
@@ -289,7 +289,7 @@ describe("the audit section with ISA2027 on (spec #341, story 8)", () => {
         me={{ userId: "user_ada", team: TEAM, role: "admin", level: "quick" }}
         onSessionEnded={vi.fn()}
         refreshMe={vi.fn()}
-        panel={{ setContext, open: vi.fn() }}
+        panel={{ setContext, open: vi.fn(), uncover: vi.fn() }}
       />,
     );
     await vi.waitFor(() =>
@@ -546,7 +546,13 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
         ...routes,
       });
       render(<App />);
-      return vi.waitFor(() => cardOf("1.3.3")!);
+      // The card once it shows; null once the notice has replaced it (a read newer than the row asks again at once),
+      // which closes a floating panel.
+      return vi.waitFor(() => {
+        const card = card133();
+        if (card === null && screen.queryByRole("alert") === null) throw new Error("Not yet");
+        return card!;
+      });
     }
 
     /** The notice reads `words` exactly, as the page's alert above the journey, and 1.3.3's card is gone. */
@@ -636,6 +642,25 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
         await expectNotice(words);
       },
     );
+
+    // Which shown states cover the page is the panel reducer's "uncover", in panel.test.ts.
+    it.each<[number, string, "floating" | "pinned", string | null]>([
+      [390, "closes the full-screen panel", "floating", null],
+      [1024, "closes the floating panel", "floating", null],
+      [1600, "closes the floating panel", "floating", null],
+      [1600, "leaves the panel pinned beside the page", "pinned", "pinned"],
+    ])("at %ipx the notice %s, so it can be read", async (width, _, chosen, shownAfter) => {
+      window.innerWidth = width;
+      onTestFinished(() => {
+        window.innerWidth = 1024;
+      });
+      localStorage.setItem("warden.askWardenPanel", JSON.stringify({ mode: chosen, width: 400 }));
+      await confirmIn(await openThen(NO_CATALOGUE));
+      await expectNotice(
+        "Confirmed. Your review of 1.3.3 is stored, but VDA ISA 2027.1 is off now, so the Overview doesn't show it.",
+      );
+      await vi.waitFor(() => expect(panel()?.dataset.shown ?? null).toBe(shownAfter));
+    });
 
     it("a review's 201 that lands after the focus moved to 1.3.4, then an answer without 1.3.3: no notice, and 1.3.4's card stays", async () => {
       const late = deferred<Response>();

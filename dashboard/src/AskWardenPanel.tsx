@@ -78,6 +78,8 @@ export type PanelControls = {
   commit: () => void;
   /** Opens the panel floating when it's closed, without storing it; an open or pinned panel stays as it is. */
   openFloating: () => void;
+  /** Closes a panel over the page at the window's width now, without storing it; a pinned one beside it stays. */
+  uncover: () => void;
 };
 
 /**
@@ -99,7 +101,11 @@ export function usePanelState(): PanelControls {
   const resize = useCallback((width: number) => dispatch({ type: "resize", width }), []);
   const commit = useCallback(() => dispatch({ type: "commit" }), []);
   const openFloating = useCallback(() => dispatch({ type: "open" }), []);
-  return { state: shown, choose, show, resize, commit, openFloating };
+  const uncover = useCallback(
+    () => dispatch({ type: "uncover", windowWidth: window.innerWidth }),
+    [],
+  );
+  return { state: shown, choose, show, resize, commit, openFloating, uncover };
 }
 
 /** Not asked: the Proposals load while the detail card shows. */
