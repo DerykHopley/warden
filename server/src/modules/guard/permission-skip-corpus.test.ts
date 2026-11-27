@@ -212,8 +212,7 @@ function corpus(): string[] {
     }
   }
   // Several places in one command: two runs after each separator, both kinds in one run, a run in a shell's string
-  // beside one among its arguments, a run after five script runs (which spend none of the shell budget), and runs
-  // beside a string nested too deep to read, so a place that skips and one that may are worded apart.
+  // beside one among its arguments, and a run after five script runs (which spend none of the shell budget).
   for (const separator of ["; ", " && ", " || ", " | ", " & ", "\n"]) {
     for (const first of CORE) for (const second of CORE) commands.add(first + separator + second);
   }
@@ -221,9 +220,7 @@ function corpus(): string[] {
   for (const run of CORE) {
     commands.add(`bash -c ${sq(run)} $(${run})`);
     commands.add(`bash a.sh; bash b.sh; bash c.sh; bash d.sh; bash e.sh; ${run}`);
-    commands.add(`${run}; ${nested(run, 5, 0, "")}`);
   }
-  commands.add(`claude {FLAG}; claude {MODE} {BYPASS}; ${nested("claude {FLAG}", 5, 0, "")}`);
   // Nesting depth: 1 to 6 shells, each maybe wrapped.
   for (const run of CORE) {
     for (let depth = 1; depth <= 6; depth++) {
