@@ -7,11 +7,12 @@ import type { Context } from "hono";
 import { z } from "zod";
 import type { AppEnv, MountRoutes } from "../../app.ts";
 import { createAttemptLimit } from "../../attempt-limit.ts";
+import { setNewest } from "../../capped-map.ts";
 import { refusedBody } from "../../refused-body.ts";
-import { clientAddress, limitKey } from "../../sign-in-limit.ts";
+import { clientAddress, createSignInLimit } from "../../sign-in-limit.ts";
 import type { AgentSessions } from "./agent-sessions.ts";
 import type { HookSettings } from "./hook-settings.ts";
-import { HOOK_EVENTS_PATH, managedSettings } from "./managed-settings.ts";
+import { HOOK_EVENTS, HOOK_EVENTS_PATH } from "./managed-settings.ts";
 import { developerOf, pseudonym } from "./pseudonym.ts";
 import { filterToTier } from "./tier-filter.ts";
 
@@ -30,11 +31,7 @@ const MINUTE_MS = 60_000;
 const MAX_REFUSED_SESSIONS = 10_000;
 
 /** The events the managed-settings block sends at any tier: the only ones stored. */
-const STORED_EVENTS: ReadonlySet<string> = new Set(
-  Object.keys(
-    managedSettings({ url: "http://warden.invalid", token: null, tier: "content" }).hooks,
-  ),
-);
+const STORED_EVENTS: ReadonlySet<string> = new Set(HOOK_EVENTS);
 
 /** What the endpoint reads of an event before the tier filter: its session and its name. */
 const EventShape = z.object({
@@ -94,12 +91,8 @@ function createRefusedCounts() {
     add(team: string, session: string, n = 1) {
       const key = keyOf(team, session);
       const count = counts.get(key);
-      if (count !== undefined) return void counts.set(key, count + n);
-      if (counts.size >= MAX_REFUSED_SESSIONS) {
-        const oldest = counts.keys().next().value;
-        if (oldest !== undefined) counts.delete(oldest);
-      }
-      counts.set(key, n);
+      if (count !== undefined) counts.set(key, count + n);
+      else setNewest(counts, key, n, MAX_REFUSED_SESSIONS);
     },
     /** The session's refusals, forgotten here: the caller stores them, or adds them back when it can't. */
     take(team: string, session: string): number {
@@ -130,7 +123,8 @@ export function hookEventRoutes({
   now?: () => number;
 }): MountRoutes {
   // Each kept in this instance's memory: each Cloud Run instance counts on its own (as threat A5 accepts for sign-in).
-  const refusedTokens = createAttemptLimit({
+  // Refused hook tokens are counted as `signIn` counts failed session tokens, with a count of their own.
+  const refusedTokens = createSignInLimit({
     max: HOOK_REFUSALS_PER_MINUTE,
     windowMs: MINUTE_MS,
     now,
@@ -140,34 +134,23 @@ export function hookEventRoutes({
 
   /** The Team the request's hook token names, or the answer that refuses it: 429 held back, 401 for a bad token. */
   async function teamOf(c: Context<AppEnv>): Promise<string | Response> {
-    const address = limitKey(
-      clientAddress(
-        {
-          forwardedFor: c.req.header("X-Forwarded-For"),
-          socketAddress: c.env?.incoming?.socket.remoteAddress,
-        },
-        behindCloudRun,
-      ),
+    const address = clientAddress(
+      {
+        forwardedFor: c.req.header("X-Forwarded-For"),
+        socketAddress: c.env?.incoming?.socket.remoteAddress,
+      },
+      behindCloudRun,
     );
-    // Counted before the check, so tokens sent at once count too; held back, the token reaches no database.
-    const retryAfter = refusedTokens.attempt(address);
-    if (retryAfter !== undefined) {
-      c.header("Retry-After", String(retryAfter));
+    // Held back, the token reaches no database. Only the Authorization header, never a query string.
+    const checked = await refusedTokens.check(address, c.req.header("Authorization"), (token) =>
+      hookSettings.teamFor(token),
+    );
+    if ("heldFor" in checked) {
+      c.header("Retry-After", String(checked.heldFor));
       return error(c, "Too many refused hook tokens", 429);
     }
-    // An auth scheme's name is case-insensitive (RFC 9110, 11.1), as `signIn` reads it. Never a query string.
-    const token = /^Bearer (\S+)$/i.exec(c.req.header("Authorization") ?? "")?.[1];
-    let team: string | undefined;
-    try {
-      team = token === undefined ? undefined : await hookSettings.teamFor(token);
-    } catch (thrown) {
-      // The token couldn't be checked, so it wasn't found bad.
-      refusedTokens.takeBack(address);
-      throw thrown;
-    }
-    if (team === undefined) return error(c, "Not a valid hook token", 401);
-    refusedTokens.takeBack(address);
-    return team;
+    if ("refused" in checked) return error(c, "Not a valid hook token", 401);
+    return checked.found;
   }
 
   return (app) => {
@@ -177,11 +160,11 @@ export function hookEventRoutes({
 
       const retryAfter = teamEvents.attempt(team);
       if (retryAfter !== undefined) {
-        // Counted on its session when its body names one within the size limit.
+        // Counted on its session when, read within the size limit, it's an event that would have been stored.
         const body = await boundedBody(c);
-        const session = body === TOO_LARGE ? undefined : jsonObject(body)?.session_id;
-        if (EventShape.shape.session_id.safeParse(session).success) {
-          refused.add(team, session as string);
+        const shape = EventShape.safeParse(body === TOO_LARGE ? undefined : jsonObject(body));
+        if (shape.success && STORED_EVENTS.has(shape.data.hook_event_name)) {
+          refused.add(team, shape.data.session_id);
         }
         c.header("Retry-After", String(retryAfter));
         return error(c, "Too many hook events", 429);

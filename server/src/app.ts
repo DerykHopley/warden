@@ -161,28 +161,22 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
       },
       deps.behindCloudRun,
     );
-    const retryAfter = signInLimit.attempt(address);
-    if (retryAfter !== undefined) {
+    // Clerk not answering throws on: the token wasn't found bad, so it doesn't count.
+    const checked = await signInLimit.check(
+      address,
+      c.req.header("Authorization"),
+      deps.verifySessionToken,
+    );
+    if ("heldFor" in checked) {
       c.set("refusedSignInAddress", address);
-      c.header("Retry-After", String(retryAfter));
+      c.header("Retry-After", String(checked.heldFor));
       return c.json({ error: "Too many sign-in attempts" }, 429);
     }
-    // An auth scheme's name is case-insensitive (RFC 9110, 11.1): `bearer` and `BEARER` are `Bearer`.
-    const token = /^Bearer (\S+)$/i.exec(c.req.header("Authorization") ?? "")?.[1];
-    let session: Session | null;
-    try {
-      session = token === undefined ? null : await deps.verifySessionToken(token);
-    } catch (error) {
-      // Clerk couldn't be asked: the token wasn't found bad, so it doesn't count.
-      signInLimit.takeBack(address);
-      throw error;
-    }
-    if (session === null) {
+    if ("refused" in checked) {
       c.set("refusedSignInAddress", address);
       return c.json({ error: "Not signed in" }, 401);
     }
-    signInLimit.takeBack(address);
-    return session;
+    return checked.found;
   }
 
   /**

@@ -154,6 +154,8 @@ const tablesAsText = (team: string) =>
 
 const nothingStored = { sessions: [], events: [] };
 
+const MINUTE_MS = 60_000;
+
 describe("POST /api/hook/events: the token (threats H1, H2)", () => {
   it("stores an event sent with the Team's token, answering 204 with an empty body", async () => {
     const { team, token } = await teamWithToken();
@@ -327,13 +329,8 @@ describe("POST /api/hook/events: the Team comes from the token alone (story 15, 
 });
 
 describe("POST /api/hook/events: the per-Team limit (threat H6)", () => {
-  it(`answers the Team's ${HOOK_EVENTS_PER_MINUTE + 1}st event in a minute 429, and counts it on its session`, async () => {
-    const { team, token } = await teamWithToken();
-    const other = await teamWithToken();
-    const clock = fakeClock();
-    const { app, flush } = eventsApp({ now: clock.now });
-    const session = newSession();
-
+  /** Sends the Team's whole minute of events, each taken. */
+  async function fillMinute(app: App, token: string) {
     // Events the endpoint takes but doesn't store still count: the limit is on what the Team sends.
     for (let sent = 0; sent < HOOK_EVENTS_PER_MINUTE; sent += 20) {
       const batch = await Promise.all(
@@ -343,6 +340,16 @@ describe("POST /api/hook/events: the per-Team limit (threat H6)", () => {
       );
       expect(batch.map((res) => res.status)).toEqual(Array<number>(20).fill(204));
     }
+  }
+
+  it(`answers the Team's ${HOOK_EVENTS_PER_MINUTE + 1}st event in a minute 429, and counts it on its session`, async () => {
+    const { team, token } = await teamWithToken();
+    const other = await teamWithToken();
+    const clock = fakeClock();
+    const { app, flush } = eventsApp({ now: clock.now });
+    const session = newSession();
+
+    await fillMinute(app, token);
     clock.advance(10_000);
     const refused = await post(app, { token, body: event(session, "PostToolUse") });
     const otherSession = newSession();
@@ -366,6 +373,28 @@ describe("POST /api/hook/events: the per-Team limit (threat H6)", () => {
     const { sessions, events } = await tables(team);
     expect(sessions.map((row) => [row.session_id, row.refused_events])).toEqual([[session, 1]]);
     expect(events).toHaveLength(1);
+  });
+
+  it("counts a refused event on its session only when it's one the endpoint stores", async () => {
+    const { team, token } = await teamWithToken();
+    const clock = fakeClock();
+    const { app, flush } = eventsApp({ now: clock.now });
+    const session = newSession();
+
+    await fillMinute(app, token);
+    const refused = [
+      await post(app, { token, body: event(session, "PreToolUse") }),
+      await post(app, { token, body: { session_id: session } }),
+      await post(app, { token, body: event(session, "SessionStart") }),
+    ];
+    clock.advance(MINUTE_MS);
+    const next = await post(app, { token, body: event(session, "PostToolUse") });
+    flush();
+
+    expect(refused.map((res) => res.status)).toEqual([429, 429, 429]);
+    expect(next.status).toBe(204);
+    const { sessions } = await tables(team);
+    expect(sessions.map((row) => [row.session_id, row.refused_events])).toEqual([[session, 1]]);
   });
 });
 
@@ -477,19 +506,17 @@ describe("POST /api/hook/events: the shape", () => {
     expect(await tables(team)).toEqual(nothingStored);
   });
 
-  it.each(["SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd", "UserPromptSubmit"])(
-    "stores a %s event",
-    async (name) => {
-      const { team, token } = await teamWithToken();
-      const { app, flush } = eventsApp();
+  // Which events the block sends is managed-settings.test.ts's; this one is sent at the content tier only.
+  it("stores a UserPromptSubmit event", async () => {
+    const { team, token } = await teamWithToken();
+    const { app, flush } = eventsApp();
 
-      const res = await post(app, { token, body: event(newSession(), name) });
-      flush();
+    const res = await post(app, { token, body: event(newSession(), "UserPromptSubmit") });
+    flush();
 
-      expect(res.status).toBe(204);
-      expect((await tables(team)).events.map((row) => row.name)).toEqual([name]);
-    },
-  );
+    expect(res.status).toBe(204);
+    expect((await tables(team)).events.map((row) => row.name)).toEqual(["UserPromptSubmit"]);
+  });
 });
 
 describe("POST /api/hook/events: only the Metadata fields are stored (story 8, in part)", () => {
