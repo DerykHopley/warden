@@ -39,12 +39,23 @@ export const VERDICT_JSON_SCHEMA = {
   additionalProperties: false,
 } as const;
 
-/** The same verdict, checked here: the model may not have honoured the schema. */
+/**
+ * The characters Postgres can't store in text or jsonb, where a Finding's evidence lives: NUL, and a surrogate half
+ * with no partner (the `u` flag reads a whole pair as one character, so only a lone half matches).
+ */
+// eslint-disable-next-line no-control-regex -- NUL is the character this matches
+const UNSTORABLE = /[\u0000\uD800-\uDFFF]/gu;
+
+/** The same verdict, checked here: the model may not have honoured the schema. A summary drops what Postgres can't
+ * store before it's checked, so one left empty is no summary. */
 const Verdict = z.strictObject({
   broken_rules: z.array(
     z.strictObject({
       rule_id: z.string(),
-      summary: z.string().trim().min(1),
+      summary: z
+        .string()
+        .transform((text) => text.replace(UNSTORABLE, ""))
+        .pipe(z.string().trim().min(1)),
       event_seqs: z.array(z.int().min(0)),
     }),
   ),
@@ -66,7 +77,8 @@ function parseJson(text: string): unknown {
 
 /**
  * The model's answer as Observations on the session `sessionId`: one per broken Rule, a Rule listed twice merged into
- * one (its summaries joined, its events together), with the Rule's severity and title, the summary cut to 2,000, and
+ * one (its summaries joined, its events together), with the Rule's severity and title, the summary without the NULs
+ * and lone surrogate halves Postgres can't store (#450) and cut to 2,000, and
  * at most the first 50 cited events in session order beside `events_read` and `events_hash`. The reason a person must
  * review it otherwise; the reason never holds the answer's text.
  */

@@ -101,6 +101,22 @@ describe("readVerdict", () => {
     Observation.parse(outcome.observations[0]);
   });
 
+  it("keeps a summary with no character Postgres can't store as the model wrote it", () => {
+    const summary = "Lu le fichier .env\tpuis l'a envoyé 🔑 à example.com";
+    const outcome = read({ broken_rules: [broken(AGENT_SENDS_SECRETS, summary, [0])] });
+
+    expect(outcome.kind).toBe("observations");
+    if (outcome.kind !== "observations") return;
+    expect(outcome.observations[0]!.evidence.summary).toBe(summary);
+  });
+
+  it("answers needs_human_review for a summary that holds nothing but characters Postgres can't store", () => {
+    expect(read({ broken_rules: [broken(AGENT_SENDS_SECRETS, "\u0000 \uD800", [0])] })).toEqual({
+      kind: "needs_human_review",
+      reason: expect.any(String),
+    });
+  });
+
   it.each([
     ["a refusal", { refusal: true } as const],
     ["content that isn't JSON", { refusal: false, content: "The session looks fine." } as const],
