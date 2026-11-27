@@ -1920,6 +1920,11 @@
           outline-color: transparent;
         }
       }
+      .e-wsum .cnt {
+        display: block;
+        font-size: 13px;
+        margin-top: 2px;
+      }
       .e-wsum .top {
         display: -webkit-box;
         -webkit-line-clamp: 2;
@@ -2388,7 +2393,10 @@
         ePin: {
           ov: !matchMedia("(max-width: 899px)").matches,
           wait: !matchMedia("(max-width: 899px)").matches,
+          sum: !matchMedia("(max-width: 899px)").matches,
         },
+        // Warden's pinned summary: one merged section, or the two sections (&summary=split) to compare.
+        esummary: q.get("summary") === "split" ? "split" : "merged",
         eref: null,
       };
       const VARIANTS = { A: "Board", B: "Lanes", C: "Desk", D: "Joined lanes", E: "Module agents" };
@@ -2403,6 +2411,7 @@
         );
         if (S.variant === "E") {
           if (S.theme) p.set("theme", S.theme);
+          if (S.esummary === "split") p.set("summary", "split");
           history.replaceState(null, "", "?" + p);
           if (S.theme) document.documentElement.dataset.theme = S.theme;
           else delete document.documentElement.dataset.theme;
@@ -3169,6 +3178,14 @@
           now["w" + m] = byMod(m)
             .map((w) => w.ref)
             .join(",");
+        // The merged summary's own keys: one totals line, and per module its counts and top item.
+        const crit = open.filter((f) => f.sev === "critical").length;
+        const openOf = (m) =>
+          m === "vouch"
+            ? `${C.filter((c) => c.gap).length} Gaps`
+            : `${open.filter((f) => f.mod === m).length} open Findings`;
+        now.mtot = `<b>${open.length} open Findings</b>, ${crit} Critical · <b>${wl.length} waiting on a Lead</b>${setup.length ? `, ${setup.length === 1 ? "one of them a Setup step" : `${setup.length} of them Setup steps`} for an Admin` : ""}.`;
+        for (const m of ["guard", "patch", "vouch"]) now["m" + m] = `${openOf(m)}|${now["w" + m]}`;
         const prev = ePrevCounts;
         ePrevCounts = now;
         const chg = (k) => (prev && prev[k] !== now[k] ? " chg" : "");
@@ -3181,6 +3198,17 @@
         };
         const head = (key, title, sum, cls) =>
           `<button class="ph" data-epin="${key}" aria-expanded="${S.ePin[key]}"><h2>${title}</h2><span class="sum">${sum}</span><span class="chev" aria-hidden="true">${S.ePin[key] ? "▲ Hide" : "▼ Show"}</span></button>`;
+        if (S.esummary !== "split") {
+          const mcard = (m) => {
+            const l = byMod(m);
+            const top = l[0];
+            return `<button class="ag-${m}${chg("m" + m)}" data-agent="${m}" ${top ? `data-eref="${top.ref}"` : ""}><b>${eAvatar(m, "sm")}${AGENTS[m].name}${l.length ? `<span class="wbadge">${l.length} waiting</span>` : ""}</b><span class="muted cnt">${openOf(m)}</span><span class="top">${top ? `<span class="st wait">${ICON.wait}${esc(top.k)}</span> ${esc(top.t)}` : `<span class="muted">Nothing waits</span>`}</span></button>`;
+          };
+          return `<div class="e-pinned">
+          <section class="e-pin sum">${head("sum", "Summary", `${open.length} open · ${crit} Critical · ${wl.length} waiting`)}
+            ${S.ePin.sum ? `<div class="pb"><div class="e-tot${chg("mtot")}">${now.mtot}${setup.length ? ` <a href="#" data-agent="setup" data-eref="${setup[0].ref}" style="color:var(--accent)">Open Setup →</a>` : ""}</div><div class="e-sum e-wsum">${mcard("guard")}${mcard("patch")}${mcard("vouch")}</div></div>` : ""}</section>
+        </div>`;
+        }
         return `<div class="e-pinned">
           <section class="e-pin ov">${head("ov", "Findings", `${open.length} open · ${open.filter((f) => f.sev === "critical").length} Critical`)}
             ${S.ePin.ov ? `<div class="pb"><div class="e-tot${chg("tot")}">${now.tot}</div><div class="e-sum">${card("guard")}${card("patch")}${card("vouch")}</div></div>` : ""}</section>
@@ -3190,7 +3218,7 @@
       }
       function eWardenFeed() {
         return `<div class="e-day">Today, Nov 27</div>
-          ${msg("warden", "9:20 AM", `Morning. The Findings and what waits on a Lead are pinned above; they change as Guard, Patch and Vouch act.`)}
+          ${msg("warden", "9:20 AM", `Morning. The Findings and what waits on a Lead are summed up above; they change as Guard, Patch and Vouch act.`)}
           ${msg("warden", "9:21 AM", `The most urgent fix: <b>${esc(F[0].title)}</b> (Critical, Guard). Guard can open a Fix PR for it, in its feed.`)}
           ${eLogMsgs("warden")}
           ${EASK.map(eAskMsgs).join("")}`;
