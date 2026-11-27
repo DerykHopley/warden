@@ -6,8 +6,18 @@
 // The global setup holds each Scan Job a few seconds before it runs, so the new Scan reads queued first.
 import { createHash } from "node:crypto";
 import type { Page } from "@playwright/test";
-import { expectNoSidewaysScroll, expectTargets } from "./a11y.ts";
-import { ADA, CEDAR, CEDAR_REPOS, expect, GRACE, HEDY, KATHERINE, test } from "./session.ts";
+import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
+import {
+  ADA,
+  asAdmin,
+  CEDAR,
+  CEDAR_REPOS,
+  expect,
+  GRACE,
+  HEDY,
+  KATHERINE,
+  test,
+} from "./session.ts";
 
 const APP = { slug: "warden-reader", client_id: "Iv23li-e2e-client" };
 const repo = (name: string) => ({
@@ -387,6 +397,100 @@ for (const width of [390, 1024, 1600]) {
     await expectNoSidewaysScroll(page);
   });
 }
+
+// Story 1 of #341 (#379): an Admin turns VDA ISA 2027.1 on or off on Setup, on the real server; nothing is faked in the
+// browser. Each test starts with Cedar's Catalogue off, turned off through the API as Hedy, whatever a test before it
+// left; each test that turns it on turns it off again before it ends, so other specs' Overview find it off.
+const catalogues = (page: Page) => page.getByRole("region", { name: "Catalogues" });
+const isa = (page: Page) =>
+  catalogues(page)
+    .getByRole("listitem")
+    .filter({ hasText: /^VDA ISA 2027\.1, published / });
+const ON_WORDS = "On: Vouch checks 4 Controls: 1.3.3, 1.3.4, 4.1.3, 5.2.4.";
+
+test.describe("Catalogues", () => {
+  test.beforeEach(async () => {
+    const { origin, headers } = await asAdmin(CEDAR);
+    const res = await fetch(`${origin}/api/vouch/catalogues/vda-isa-2027.1`, {
+      method: "PUT",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ on: false }),
+    });
+    if (!res.ok)
+      throw new Error(`turning Cedar's Catalogue off: ${res.status} ${await res.text()}`);
+  });
+
+  test("an Admin turns VDA ISA 2027.1 on, then off, and a reload shows the stored state each time (#341 story 1)", async ({
+    page,
+    signIn,
+  }) => {
+    await signIn(HEDY, CEDAR);
+    await page.goto("/setup");
+
+    const headings = page.getByRole("heading", { level: 2 });
+    await expect(headings).toHaveText(["GitHub", "Grant write access", "Repos", "Catalogues"]);
+    await expect(isa(page).getByText("VDA ISA 2027.1, published Sep 30, 2026")).toBeVisible();
+    await expect(isa(page).getByText("Off.", { exact: true })).toBeVisible();
+
+    await isa(page).getByRole("button", { name: "Turn on" }).click();
+    await expect(isa(page).getByText(ON_WORDS, { exact: true })).toBeVisible();
+    await expect(isa(page).getByText(/^Turned on /)).toBeVisible();
+    await expect(isa(page).getByRole("button", { name: "Turn off" })).toBeEnabled();
+
+    await page.reload();
+    await expect(isa(page).getByText(ON_WORDS, { exact: true })).toBeVisible();
+    await expect(isa(page).getByText(/^Turned on /)).toBeVisible();
+
+    await isa(page).getByRole("button", { name: "Turn off" }).click();
+    await expect(isa(page).getByText("Off.", { exact: true })).toBeVisible();
+    await expect(isa(page).getByText(/^Turned off /)).toBeVisible();
+    await expect(isa(page).getByRole("button", { name: "Turn on" })).toBeEnabled();
+
+    await page.reload();
+    await expect(isa(page).getByText("Off.", { exact: true })).toBeVisible();
+    await expect(isa(page).getByText(/^Turned off /)).toBeVisible();
+    await expect(isa(page).getByRole("button", { name: "Turn on" })).toBeEnabled();
+  });
+
+  test("a Member sees VDA ISA 2027.1 and its state, and that an Admin turns it on or off, with no button (#341 story 1)", async ({
+    page,
+    signIn,
+  }) => {
+    await signIn(KATHERINE, CEDAR);
+    await page.goto("/setup");
+
+    await expect(isa(page).getByText("VDA ISA 2027.1, published Sep 30, 2026")).toBeVisible();
+    await expect(isa(page).getByText("Off.", { exact: true })).toBeVisible();
+    await expect(isa(page).getByText("An Admin turns a Catalogue on or off.")).toBeVisible();
+    await expect(catalogues(page).getByRole("button")).toHaveCount(0);
+  });
+
+  for (const width of [390, 1024, 1600]) {
+    test(`at ${width}px, an Admin's Catalogue section, off and on, scrolls nothing sideways, with 44px targets and rings (#379)`, async ({
+      page,
+      signIn,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await signIn(HEDY, CEDAR);
+      await page.goto("/setup");
+
+      const licence = isa(page).getByRole("link", { name: "CC BY-ND 4.0" });
+      for (const [button, next] of [
+        ["Turn on", "Turn off"],
+        ["Turn off", "Turn on"],
+      ] as const) {
+        const turn = isa(page).getByRole("button", { name: button });
+        await expect(turn).toBeEnabled();
+        await expectNoSidewaysScroll(page);
+        await expectTargets([turn, licence]);
+        await expectRings(page, [turn, licence]);
+        await turn.click();
+        await expect(isa(page).getByRole("button", { name: next })).toBeEnabled();
+      }
+      await expect(isa(page).getByText("Off.", { exact: true })).toBeVisible();
+    });
+  }
+});
 
 test("a Member sees an Admin connects GitHub, with no install link", async ({ page, signIn }) => {
   await signIn(GRACE);

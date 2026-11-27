@@ -176,6 +176,7 @@ button:focus-visible,
 .level-line a:focus-visible,
 .setup-line a:focus-visible,
 .setup-link a:focus-visible,
+.catalogue-licence a:focus-visible,
 .how-to summary:focus-visible,
 .repo-urls a:focus-visible,
 .asset-link:focus-visible,
@@ -1051,6 +1052,52 @@ button[aria-busy="true"],
 
 .repo-list li:last-child {
   border-bottom: 0;
+}
+
+/* Setup's Catalogues (spec #341, slice 5): one entry per Catalogue in the repo list's box. Its state is words, an
+   Admin's switch a Button under it, and its licence link a 44px-high target dressed as the Level line's; long words
+   (the credit, a licence URL) wrap rather than pushing the page sideways. */
+.catalogue-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.catalogue {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  overflow-wrap: anywhere;
+}
+
+.catalogue:last-child {
+  border-bottom: 0;
+}
+
+.catalogue p {
+  margin: 0 0 8px;
+}
+
+.catalogue p:last-child {
+  margin-bottom: 0;
+}
+
+.catalogue-name {
+  font-weight: 600;
+}
+
+.catalogue-switch {
+  margin: 0 0 8px;
+}
+
+.catalogue-licence a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  color: var(--accent);
+  border-radius: var(--radius);
 }
 
 /* The Overview (story 10): the journey as three cards, the trend line, and "Are we ready for the audit?". Nothing here
