@@ -17,10 +17,13 @@ const TIMEOUT_SECONDS = 5;
 const EVERY_TIER = ["SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"] as const;
 const CONTENT_ONLY = ["UserPromptSubmit"] as const;
 
+type HookEvent = (typeof EVERY_TIER)[number] | (typeof CONTENT_ONLY)[number];
+
+/** Every event the block sends, at one tier or another: the only ones the hook endpoint stores. */
+export const HOOK_EVENTS: readonly HookEvent[] = [...EVERY_TIER, ...CONTENT_ONLY];
+
 /** Events whose matcher is the tool's name: `*` matches every tool. */
 const TOOL_EVENTS: ReadonlySet<string> = new Set(["PostToolUse", "PostToolUseFailure"]);
-
-type HookEvent = (typeof EVERY_TIER)[number] | (typeof CONTENT_ONLY)[number];
 
 /** Claude Code's `http` hook handler. */
 type HttpHook = {
@@ -60,8 +63,7 @@ export function managedSettings({
     allowedEnvVars: ["USER"],
     timeout: TIMEOUT_SECONDS,
   };
-  const events: HookEvent[] =
-    tier === "content" ? [...EVERY_TIER, ...CONTENT_ONLY] : [...EVERY_TIER];
+  const events: readonly HookEvent[] = tier === "content" ? HOOK_EVENTS : EVERY_TIER;
   return {
     hooks: Object.fromEntries(
       events.map((event) => [

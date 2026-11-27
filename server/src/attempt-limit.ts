@@ -1,6 +1,7 @@
 // A fixed-window limit on attempts per key: `max` attempts let through in a window that begins at a key's first attempt,
 // then the key is held back for the rest of it. Each key is counted exactly as given. The count lives in this server
 // instance's memory, so each Cloud Run instance keeps its own (threat A5 accepts this).
+import { setNewest } from "./capped-map.ts";
 
 export type AttemptLimit = {
   /**
@@ -53,12 +54,7 @@ export function createAttemptLimit(options: {
         window.attempts++;
         return undefined;
       }
-      windows.delete(key);
-      if (windows.size >= maxKeys) {
-        const oldest = windows.keys().next().value;
-        if (oldest !== undefined) windows.delete(oldest);
-      }
-      windows.set(key, { start: at, attempts: 1 });
+      setNewest(windows, key, { start: at, attempts: 1 }, maxKeys);
       return undefined;
     },
     takeBack(key) {

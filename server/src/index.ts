@@ -11,10 +11,12 @@ import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } f
 import { createFindings } from "./findings/index.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
+import { createAgentSessions } from "./modules/guard/agent-sessions.ts";
 import { fixPrRoutes } from "./modules/guard/fix-pr-routes.ts";
 import { createFixPrs } from "./modules/guard/fix-prs.ts";
 import { createGitHubWriter } from "./modules/guard/github-writer.ts";
 import { createGitHub } from "./modules/guard/github.ts";
+import { hookEventRoutes } from "./modules/guard/hook-event-routes.ts";
 import { hookRoutes } from "./modules/guard/hook-routes.ts";
 import { createHookSettings } from "./modules/guard/hook-settings.ts";
 import { createPackageRegistry } from "./modules/guard/package-registry.ts";
@@ -162,6 +164,13 @@ const appDeps: AppDeps = {
         : { findings, repoAssets, writeGrants, fixPrs },
     ),
     hookRoutes({ hookSettings }),
+    // Without WARDEN_PSEUDONYM_KEY, the hook endpoint answers 503 and stores nothing.
+    hookEventRoutes({
+      hookSettings,
+      agentSessions: createAgentSessions({ withTeam }),
+      pseudonymKey: config.pseudonymKey,
+      behindCloudRun: config.behindCloudRun,
+    }),
     patchRoutes({
       products,
       scan: createPatchScan({ findings, logger }),

@@ -298,6 +298,32 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("the pseudonym key (WARDEN_PSEUDONYM_KEY)", () => {
+    const hex = "0123456789abcdefFEDCBA9876543210".repeat(2);
+
+    it("leaves pseudonymKey undefined when unset or empty", () => {
+      expect(loadConfig(env).pseudonymKey).toBeUndefined();
+      expect(loadConfig({ ...env, WARDEN_PSEUDONYM_KEY: "" }).pseudonymKey).toBeUndefined();
+    });
+
+    it("reads 64 hex digits as the key's 32 bytes", () => {
+      const key = loadConfig({ ...env, WARDEN_PSEUDONYM_KEY: hex }).pseudonymKey;
+      expect(key).toEqual(Buffer.from(hex, "hex"));
+      expect(key?.length).toBe(32);
+    });
+
+    it.each([
+      ["63 hex digits", hex.slice(1)],
+      ["65 hex digits", `${hex}0`],
+      ["a digit that isn't hex", `${hex.slice(1)}g`],
+      ["spaces around it", ` ${hex} `],
+    ])("refuses %s, naming only WARDEN_PSEUDONYM_KEY and never its value", (_name, value) => {
+      const error = configError(() => loadConfig({ ...env, WARDEN_PSEUDONYM_KEY: value }));
+      expect(error.variables).toEqual(["WARDEN_PSEUDONYM_KEY"]);
+      expect(error.message).not.toContain(value.trim());
+    });
+  });
+
   it.each([
     ["a path", "https://warden.example/app"],
     ["no scheme", "warden.example"],

@@ -55,6 +55,12 @@ const Env = z.object({
   WARDEN_SCAN_JOB: optional.refine((value) => value === undefined || JOB_NAME.test(value), {
     message: "isn't projects/<project>/locations/<region>/jobs/<job>",
   }),
+  /** The key every Team's pseudonym key is derived from (docs/data.md, "The pseudonym"): 64 hex digits. */
+  WARDEN_PSEUDONYM_KEY: optional
+    .refine((value) => value === undefined || /^[0-9a-f]{64}$/i.test(value), {
+      message: "isn't 64 hex digits",
+    })
+    .transform((value) => (value === undefined ? undefined : Buffer.from(value, "hex"))),
 });
 
 /** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
@@ -137,6 +143,8 @@ export type Config = {
   github: GitHubAppSettings | undefined;
   /** The write GitHub App, which Fix PRs go through with a Team's write grant; unset, none can be opened. */
   githubWrite: GitHubAppSettings | undefined;
+  /** The pseudonym key's 32 bytes, which the hook endpoint derives each Team's key from; unset, it answers 503. */
+  pseudonymKey: Buffer | undefined;
 };
 
 /** A GitHub App's settings: its client id and secret, and the private key it signs its JWTs with. */
@@ -183,6 +191,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     },
     github: github.settings,
     githubWrite: githubWrite.settings,
+    pseudonymKey: data.WARDEN_PSEUDONYM_KEY,
   };
 }
 

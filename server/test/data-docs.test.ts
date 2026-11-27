@@ -80,6 +80,22 @@ describe("docs/data.md", () => {
     }
   });
 
+  it("marks the Agent events and Agent session records rows built (#183), naming their tables", () => {
+    const events = row("Cloud SQL: Agent events");
+    const sessions = row("Cloud SQL: Agent session records");
+    expect(events).toMatch(/Built: [^|]*`agent_events`[^|]*Metadata fields[^|]*#183/);
+    expect(sessions).toMatch(/Built: [^|]*`agent_sessions`[^|]*refused[^|]*#183/);
+    expect(events).not.toMatch(/\| Designed: Guard spec \|$/);
+    expect(sessions).not.toMatch(/\| Designed: Guard spec \|$/);
+  });
+
+  it("names one Warden pseudonym key, each Team's key derived from it, in The pseudonym", () => {
+    const section = /^## The pseudonym\n([\s\S]*?)(?=^## )/m.exec(data)?.[1] ?? "";
+    expect(section).toContain("`WARDEN_PSEUDONYM_KEY`");
+    expect(section).toMatch(/each Team's key is derived from it/);
+    expect(section).not.toMatch(/a key per Team kept in Secret Manager/);
+  });
+
   it("has a server image row naming the VDA ISA 2027.1 text and its licence", () => {
     const isa = row("Warden's server image: the VDA ISA Catalogue");
     for (const said of ["VDA ISA 2027.1", "CC BY-ND 4.0", "NOTICE.md"]) expect(isa).toContain(said);
