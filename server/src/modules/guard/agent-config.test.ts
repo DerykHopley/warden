@@ -807,6 +807,8 @@ describe("guard/permission-skip", () => {
     // A shell without `c` among its options runs a script, not a string.
     ["runs a shell without -c on a script path", `bash -e 'claude ${FLAG}'`],
     ["runs a shell script with the flag as its argument", `bash script.sh '${FLAG}'`],
+    // A shell's `-c` string inside an agent run's arguments is read, and keeps the rules above too.
+    ["runs a shell inside an agent run's arguments", `claude -p x $(bash -c 'echo hi')`],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
   });
@@ -876,6 +878,8 @@ describe("guard/permission-skip", () => {
       `sudo bash <(claude ${FLAG} -p x)`,
       `exec bash script.sh $(claude ${FLAG} -p x)`,
       `time bash script.sh \`claude ${FLAG} -p x\``,
+      // A shell's -c string inside an agent run's arguments is read as any other shell's.
+      `claude -p x $(bash -c 'claude ${FLAG}')`,
     ])("reports a run of the agent among a shell's arguments: %s", (command) => {
       expect(skips(command)).toEqual(onePlaceIn(command));
     });
@@ -1000,6 +1004,20 @@ describe("guard/permission-skip", () => {
       expect(skips(command)).toEqual(
         findingIn(
           command,
+          (line) =>
+            `1 place may skip the agent's permission checks (${TOO_DEEP}) in ${path}, on line ${line}`,
+        ),
+      );
+    });
+
+    // Shells inside one agent run's arguments are among that command's words too, so they share its limit.
+    it("reports a fifth shell's string inside an agent run's arguments as too deep to check", () => {
+      const runs = (count: number) => `claude -p x${" $(bash -c 'x')".repeat(count)}`;
+
+      expect(skips(runs(4))).toEqual([]);
+      expect(skips(runs(5))).toEqual(
+        findingIn(
+          runs(5),
           (line) =>
             `1 place may skip the agent's permission checks (${TOO_DEEP}) in ${path}, on line ${line}`,
         ),
