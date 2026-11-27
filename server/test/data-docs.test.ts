@@ -35,6 +35,10 @@ describe("docs/data.md", () => {
     }
   });
 
+  it("names the agent hook's local pseudonym key in the keyring row (#185)", () => {
+    expect(row("The local keyring (development only)")).toContain("`warden-pseudonym-key`");
+  });
+
   it("has a Fix PRs row naming its table and what a Fix PR holds", () => {
     const fixPrs = row("Cloud SQL: Fix PRs");
     expect(fixPrs).toContain("`fix_prs`");
