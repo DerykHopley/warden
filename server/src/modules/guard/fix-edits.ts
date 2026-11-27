@@ -271,8 +271,8 @@ type Outcome = { key: string; pinned: string } | { key: string; left: string };
 
 /**
  * Pins each `mcpServers` server an npm or a Python runner starts unpinned to its registry's latest version, where its
- * package word sits. Container images, packages their registry doesn't hold, and packages that name a range or tag
- * are left and listed.
+ * package word sits. Container images, servers whose runner is pointed at another registry, packages their registry
+ * doesn't hold, and packages that name a range or tag are left and listed.
  */
 async function pinServers(
   path: string,
@@ -334,6 +334,10 @@ async function pinServer(
 ): Promise<{ pinned: string } | { left: string }> {
   const { source } = start;
   if (source === "container") return { left: "a container image gets no Fix PR" };
+  // The public registry's latest version of a name its runner installs from somewhere else could be anyone's (#348).
+  if (start.customRegistry !== undefined) {
+    return { left: `uses a private registry (${code(start.customRegistry)})` };
+  }
   const { label, read } = PACKAGES[source];
   const pkg = read(start);
   if (pkg === undefined) return { left: notPinnable(label) };

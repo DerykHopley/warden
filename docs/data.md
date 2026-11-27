@@ -127,7 +127,8 @@ Each outside service, what Warden sends it, and when.
 - **npm and PyPI:** a package's name only, when a Fix PR for `guard/mcp-server-unpinned` is opened, to read the
   package's latest version from the public registry (`registry.npmjs.org` for an npm runner's package, `pypi.org`
   for a Python runner's), with no key, no repo name and no Team. A name that isn't a valid package name is never
-  sent. Built (#310, the lookup), called by the Fix PR route (built, #313).
+  sent, nor the name of a server's package whose runner is pointed at another registry or index by its options or
+  its `env` (#348). Built (#310, the lookup), called by the Fix PR route (built, #313).
 - **CVE data:** none. Warden makes no outside call for CVE data: nothing is fetched from NVD, CISA KEV, EPSS or OSV.
   Patch reads only the snapshot that ships with Warden, loaded into the CVE reference data tables (built, Patch spec
   #101, #112).
