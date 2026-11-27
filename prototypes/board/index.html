@@ -4,12 +4,14 @@
   Question: does a "board" layout like Vercel Board's acme-db inspector (a rail of places, a dense status list,
   a detail pane with its one decision on top and the conversation under it) suit Warden, with a little more colour,
   on a phone, a laptop and a wide desktop window?
-  Four variants on one page, switched with ?variant=A|B|C|D (or the bar at the bottom, or ← →):
+  Five variants on one page, switched with ?variant=A|B|C|D|E (or the bar at the bottom, or ← →):
     A Board  - three panes: rail · list with status tabs · detail + Ask Warden
     B Lanes  - the same rail, the list split into status lanes (columns)
     C Desk   - no rail: a "Waiting on you" strip of every decision across modules, then list + detail
     D Joined - owner's mix: B's lanes with square corners and no gaps between cards, A and B's rail,
                A's Findings filter bar (status tabs filter the lanes). C's "Waiting on you" was tried and dropped
+    E Agents - a separate direction: Guard, Patch and Vouch each act as an agent with a feed of its Findings,
+               Proposals and decisions (actions inline); Warden on top sums them up. ?variant=E&agent=warden|guard|patch|vouch
   Pages: ?page=findings|overview|setup. Data: the demo seed's Findings and VDA ISA 2027.1 Controls, in memory only.
   Run: pnpm prototype:board  (serves this folder on http://127.0.0.1:5181)
 -->
@@ -1320,6 +1322,530 @@
           }
         }
       }
+
+      /* ---------- variant E: each module is an agent (owner's direction, 2026-11-27) ---------- */
+      :root {
+        --agent-warden: #c2560c;
+        --tint-warden: #fde6d3;
+        --agent-vouch: #2f55b8;
+        --tint-vouch-agent: #e1e8fa;
+        --agent-patch: #7440c4;
+        --tint-patch-agent: #ede3fb;
+        --agent-guard: #2c7a2f;
+        --tint-guard-agent: #e0f1dc;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --agent-warden: #f29a5a;
+          --tint-warden: #3d2717;
+          --agent-vouch: #8fa9f0;
+          --tint-vouch-agent: #1f2840;
+          --agent-patch: #c3a0f5;
+          --tint-patch-agent: #2e2340;
+          --agent-guard: #8fd28c;
+          --tint-guard-agent: #1f3320;
+        }
+      }
+      :root[data-theme="dark"] {
+        --agent-warden: #f29a5a;
+        --tint-warden: #3d2717;
+        --agent-vouch: #8fa9f0;
+        --tint-vouch-agent: #1f2840;
+        --agent-patch: #c3a0f5;
+        --tint-patch-agent: #2e2340;
+        --agent-guard: #8fd28c;
+        --tint-guard-agent: #1f3320;
+      }
+      .e-app {
+        --radius: 0;
+        display: grid;
+        height: 100vh;
+        grid-template-columns: 280px minmax(0, 1fr) 250px 60px;
+      }
+      .e-app * {
+        border-radius: 0 !important;
+      }
+      .e-agents {
+        background: var(--rail);
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .e-agents .brand {
+        padding: 14px 16px 6px;
+      }
+      .e-agents .team {
+        margin: 0 12px 12px;
+      }
+      .e-list {
+        overflow: auto;
+        flex: 1;
+      }
+      .e-ag {
+        display: grid;
+        grid-template-columns: 44px minmax(0, 1fr) auto;
+        gap: 2px 12px;
+        align-items: center;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        border-left: 4px solid transparent;
+        background: none;
+        padding: 12px 14px 12px 12px;
+        min-height: 64px;
+        border-bottom: 1px solid var(--line);
+      }
+      .e-ag:hover {
+        background: var(--rail-hover);
+      }
+      .e-ag.sel {
+        background: var(--surface);
+        border-left-color: var(--ag);
+      }
+      .e-ag .nm {
+        font-weight: 700;
+      }
+      .e-ag .last {
+        grid-column: 2 / 4;
+        color: var(--muted);
+        font-size: 13px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .e-ag .tm {
+        font-size: 12px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .e-ag .av2 {
+        grid-row: 1 / 3;
+      }
+      .e-ag.top {
+        grid-template-columns: 56px minmax(0, 1fr) auto;
+        background: var(--tint-warden);
+        min-height: 84px;
+      }
+      .e-ag.top.sel {
+        background: var(--surface);
+      }
+      .av2 {
+        width: 44px;
+        height: 44px;
+        background: var(--ag);
+        display: grid;
+        place-items: center;
+        position: relative;
+        flex: none;
+      }
+      .av2::before,
+      .av2::after {
+        content: "";
+        position: absolute;
+        top: 36%;
+        width: 7px;
+        height: 7px;
+        background: var(--surface);
+      }
+      .av2::before {
+        left: 26%;
+      }
+      .av2::after {
+        right: 26%;
+      }
+      .av2.big {
+        width: 56px;
+        height: 56px;
+      }
+      .av2.sm {
+        width: 32px;
+        height: 32px;
+      }
+      .av2.sm::before,
+      .av2.sm::after {
+        width: 5px;
+        height: 5px;
+      }
+      .ag-warden {
+        --ag: var(--agent-warden);
+        --agt: var(--tint-warden);
+      }
+      .ag-vouch {
+        --ag: var(--agent-vouch);
+        --agt: var(--tint-vouch-agent);
+      }
+      .ag-patch {
+        --ag: var(--agent-patch);
+        --agt: var(--tint-patch-agent);
+      }
+      .ag-guard {
+        --ag: var(--agent-guard);
+        --agt: var(--tint-guard-agent);
+      }
+      .wbadge {
+        background: var(--tint-wait);
+        color: var(--st-wait);
+        font-size: 12px;
+        font-weight: 700;
+        padding: 1px 7px;
+        white-space: nowrap;
+      }
+      .e-main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+        background: var(--bg);
+      }
+      .e-head {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 22px;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+        border-top: 4px solid var(--ag);
+      }
+      .e-head h1 {
+        font-size: 22px;
+      }
+      .e-head .sub {
+        color: var(--muted);
+        font-size: 13.5px;
+      }
+      .e-feed {
+        overflow: auto;
+        flex: 1;
+        min-height: 0;
+        padding: 18px 22px 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+      }
+      .e-day {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--muted);
+        font-size: 12.5px;
+      }
+      .e-day::before,
+      .e-day::after {
+        content: "";
+        flex: 1;
+        height: 1px;
+        background: var(--line);
+      }
+      .e-msg {
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr);
+        gap: 10px;
+        max-width: 860px;
+      }
+      .e-msg .bub {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--ag);
+        padding: 10px 14px;
+      }
+      .e-msg .who {
+        font-weight: 700;
+        font-size: 13.5px;
+        margin-bottom: 4px;
+      }
+      .e-msg .who span {
+        color: var(--muted);
+        font-weight: 400;
+        margin-left: 6px;
+      }
+      .e-msg.person {
+        grid-template-columns: minmax(0, 1fr) 32px;
+        margin-left: auto;
+      }
+      .e-msg.person .bub {
+        background: var(--chip);
+        border-left: 1px solid var(--line);
+        border-right: 3px solid var(--accent);
+      }
+      .e-msg.person .av {
+        grid-column: 2;
+        grid-row: 1;
+      }
+      .e-msg.wait .bub {
+        background: var(--tint-wait);
+        border-color: var(--st-wait);
+        border-left-width: 3px;
+      }
+      .e-item {
+        margin-top: 8px;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        padding: 10px 12px;
+        cursor: pointer;
+      }
+      .e-item:hover {
+        background: var(--focus-bg);
+      }
+      .e-item .t {
+        font-weight: 600;
+        margin: 4px 0 2px;
+      }
+      .e-item .meta {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .e-item .more {
+        margin-top: 8px;
+        font-size: 14px;
+      }
+      .e-msg .acts {
+        margin-top: 10px;
+      }
+      .e-sum {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        margin-top: 10px;
+        border: 1px solid var(--line);
+      }
+      .e-sum button {
+        text-align: left;
+        border: 0;
+        border-right: 1px solid var(--line);
+        background: var(--bg);
+        padding: 10px 12px;
+        border-top: 4px solid var(--ag);
+      }
+      .e-sum button:last-child {
+        border-right: 0;
+      }
+      .e-sum button:hover {
+        background: var(--focus-bg);
+      }
+      .e-sum b {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .e-composer {
+        border-top: 1px solid var(--line);
+        padding: 10px 22px 14px;
+        background: var(--surface);
+      }
+      .e-composer .mock {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--st-wait);
+        background: var(--tint-wait);
+        padding: 1px 6px;
+        margin-right: 6px;
+      }
+      .e-composer .box {
+        display: flex;
+        gap: 8px;
+        margin-top: 6px;
+      }
+      .e-composer input {
+        flex: 1;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        padding: 0 12px;
+        background: var(--bg);
+      }
+      .e-quick {
+        border-left: 1px solid var(--line);
+        background: var(--surface);
+        padding: 16px 14px;
+        overflow: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .e-quick h2 {
+        font-family: var(--font-body);
+        font-size: 12.5px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin: 6px 0 2px;
+      }
+      .e-quick .qa {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 44px;
+        padding: 0 12px;
+        border: 1px solid var(--line);
+        background: var(--bg);
+        text-align: left;
+        font-weight: 600;
+      }
+      .e-quick .qa:hover {
+        background: var(--focus-bg);
+      }
+      .e-quick .qa .ic {
+        width: 10px;
+        height: 10px;
+        background: var(--ag);
+        flex: none;
+      }
+      .e-quick .facts {
+        font-size: 13.5px;
+        display: grid;
+        gap: 4px;
+      }
+      .e-strip {
+        border-left: 1px solid var(--line);
+        background: var(--rail);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 10px;
+        padding: 14px 0;
+      }
+      .e-strip button {
+        border: 0;
+        background: none;
+        padding: 4px;
+        position: relative;
+        min-width: 44px;
+        min-height: 44px;
+        display: grid;
+        place-items: center;
+      }
+      .e-strip button.sel {
+        outline: 2px solid var(--ag);
+        outline-offset: -2px;
+      }
+      .e-strip .dotw {
+        position: absolute;
+        right: 0;
+        top: 0;
+        background: var(--st-wait);
+        color: #fff;
+        font-size: 10.5px;
+        font-weight: 700;
+        min-width: 16px;
+        height: 16px;
+        display: grid;
+        place-items: center;
+      }
+      .e-mobtabs {
+        display: none;
+      }
+      .e-quickrow {
+        display: none;
+      }
+      @media (max-width: 1279px) {
+        .e-app {
+          grid-template-columns: 240px minmax(0, 1fr);
+        }
+        .e-quick,
+        .e-strip {
+          display: none;
+        }
+        .e-quickrow {
+          display: flex;
+          gap: 6px;
+          padding: 8px 22px;
+          overflow-x: auto;
+          border-bottom: 1px solid var(--line);
+          background: var(--surface);
+          scrollbar-width: none;
+        }
+        .e-quickrow .qa {
+          flex: none;
+          min-height: 36px;
+          padding: 0 12px;
+          border: 1px solid var(--line);
+          background: var(--bg);
+          font-size: 13.5px;
+          font-weight: 600;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .e-quickrow .qa .ic {
+          width: 8px;
+          height: 8px;
+          background: var(--ag);
+        }
+      }
+      @media (max-width: 899px) {
+        .e-app {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: auto minmax(0, 1fr);
+        }
+        .e-agents {
+          display: none;
+        }
+        .e-mobtabs {
+          display: flex;
+          background: var(--rail);
+          border-bottom: 1px solid var(--line);
+          overflow-x: auto;
+          scrollbar-width: none;
+        }
+        .e-mobtabs button {
+          flex: 1 0 auto;
+          border: 0;
+          background: none;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 4px;
+          padding: 8px 10px 6px;
+          min-width: 76px;
+          border-bottom: 3px solid transparent;
+          font-size: 12.5px;
+          font-weight: 600;
+          position: relative;
+        }
+        .e-mobtabs button.sel {
+          border-bottom-color: var(--ag);
+          background: var(--surface);
+        }
+        .e-mobtabs .wbadge {
+          position: absolute;
+          top: 4px;
+          right: 6px;
+          padding: 0 5px;
+        }
+        .e-head {
+          padding: 10px 16px;
+        }
+        .e-head .sub {
+          display: none;
+        }
+        .e-feed {
+          padding: 14px 16px 80px;
+        }
+        .e-quickrow {
+          padding: 8px 16px;
+        }
+        .e-msg {
+          grid-template-columns: 28px minmax(0, 1fr);
+          gap: 8px;
+        }
+        .e-msg.person {
+          grid-template-columns: minmax(0, 1fr) 28px;
+        }
+        .e-sum {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .e-sum button {
+          border-right: 0;
+          border-bottom: 1px solid var(--line);
+        }
+        .e-composer {
+          padding: 8px 16px 64px;
+        }
+        .e-composer .ctx .why {
+          display: none;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1634,13 +2160,27 @@
         overriding: false,
         fixBusy: false,
         theme: q.get("theme") || "",
+        agent: q.get("agent") || "warden",
+        esel: null,
+        eref: null,
       };
-      const VARIANTS = { A: "Board", B: "Lanes", C: "Desk", D: "Joined lanes" };
+      const VARIANTS = { A: "Board", B: "Lanes", C: "Desk", D: "Joined lanes", E: "Module agents" };
       if (S.variant === "D" && !q.get("tab")) S.tab = "all";
       if (!S.sel && window.innerWidth >= 1280)
         S.sel = S.page === "findings" ? "19b131ca" : S.page === "overview" ? "1.3.3" : "write";
       function sync() {
-        const p = new URLSearchParams({ variant: S.variant, page: S.page });
+        const p = new URLSearchParams(
+          S.variant === "E"
+            ? { variant: "E", agent: S.agent }
+            : { variant: S.variant, page: S.page },
+        );
+        if (S.variant === "E") {
+          if (S.theme) p.set("theme", S.theme);
+          history.replaceState(null, "", "?" + p);
+          if (S.theme) document.documentElement.dataset.theme = S.theme;
+          else delete document.documentElement.dataset.theme;
+          return;
+        }
         if (S.page === "findings") p.set("tab", S.tab);
         if (S.sel) p.set("sel", S.sel);
         if (S.theme) p.set("theme", S.theme);
@@ -2026,6 +2566,7 @@
       let lastSel = null;
       function render() {
         sync();
+        if (S.variant === "E") return renderE();
         const main =
           { findings: findingsMain, overview: overviewMain, setup: setupMain }[S.page]?.() ??
           stubMain(S.page[0].toUpperCase() + S.page.slice(1));
@@ -2211,6 +2752,313 @@
               (chatFor(id).at(-1).w = 1));
         }
       }
+      // ---------------- variant E: each module is an agent; Warden sums them up ----------------
+      const AGENTS = {
+        warden: {
+          name: "Warden",
+          role: "Sums up Guard, Patch and Vouch, and points to what waits on a Lead",
+        },
+        guard: {
+          name: "Guard",
+          role: "Watches how software is made: AI coding agents, their configuration and Agent sessions",
+        },
+        patch: {
+          name: "Patch",
+          role: "Watches what ships: Products and their dependencies, matched against known vulnerabilities",
+        },
+        vouch: {
+          name: "Vouch",
+          role: "Proves compliance: Controls, Verdicts and Gaps in VDA ISA 2027.1",
+        },
+      };
+      const AG_ORDER = ["warden", "vouch", "patch", "guard"];
+      const ELOG = { guard: [], patch: [], vouch: [], warden: [] };
+      const sayBase = say;
+      say = function (id, who, kind, text) {
+        sayBase(id, who, kind, text);
+        const f = F.find((x) => x.id === id),
+          c = C.find((x) => x.ref === id);
+        const mod = f ? f.mod : c ? "vouch" : null;
+        if (mod && (kind === "decision" || kind === "fix"))
+          ELOG[mod].push({ who, kind, text, ref: id, agent: who === "Warden" ? mod : null });
+      };
+      const eAvatar = (a, size = "") =>
+        `<span class="av2 ${size} ag-${a}" aria-hidden="true"></span>`;
+      const eWait = (a) =>
+        a === "warden"
+          ? waitingF().length + waitingC().length + STEPS.filter((s) => s.state === "wait").length
+          : a === "vouch"
+            ? waitingC().length
+            : F.filter((f) => f.mod === a && (f.proposal || f.unconfirmed)).length;
+      function eLast(a) {
+        if (a === "warden") {
+          const n = eWait("warden");
+          return n ? `${n} things wait on a Lead` : "Nothing waits on a Lead";
+        }
+        if (a === "vouch")
+          return `${C.filter((c) => c.gap).length} Gaps · ${waitingC().length} Control${waitingC().length === 1 ? "" : "s"} to review`;
+        const open = F.filter((f) => f.mod === a && f.status === "open");
+        return `${open.length} open Findings · last Scan Nov 27`;
+      }
+      function eItemF(f) {
+        return `<div class="e-item" data-esel="${f.id}" tabindex="0"><div class="meta">${sevp(f.sev)}${st(fstate(f))}<span class="mono muted">${f.id}</span></div>
+          <div class="t">${esc(f.title)}</div><div class="meta"><span class="tag mono">${f.rule}</span><span class="tag">${f.asset}: ${esc(f.ref)}</span></div>
+          ${S.esel === f.id ? `<div class="more"><dl class="kv"><dt>Location</dt><dd class="mono">${esc(f.loc)}</dd><dt>Evidence</dt><dd>${esc(f.ev)}</dd>${f.secret ? `<dt>Secret</dt><dd class="mono">${esc(f.secret)}</dd>` : ""}${f.control ? `<dt>Control</dt><dd>${f.control}</dd>` : ""}${f.patch ? `<dt>Your version</dt><dd><b>${f.patch.verdict}</b>: ${esc(f.patch.why)}</dd><dt>Fixed in</dt><dd class="mono">${esc(f.patch.fixedIn)}</dd>` : ""}${f.until ? `<dt>Reopens on</dt><dd>${f.until}</dd>` : ""}</dl></div>` : ""}</div>`;
+      }
+      function eActsF(f) {
+        if (f.proposal)
+          return `<div class="acts"><button class="btn primary" data-act="approve" data-id="${f.id}">Approve</button><button class="btn" data-act="reject" data-id="${f.id}">Reject</button></div>`;
+        if (f.unconfirmed)
+          return `<div class="acts"><button class="btn primary" data-act="confirmfix" data-id="${f.id}">Confirm fix</button><button class="btn" data-act="moved" data-id="${f.id}">Mark moved</button></div>`;
+        if (f.status !== "open") return "";
+        if (f.fix === "open")
+          return `<p style="margin:10px 0 0">${ICON.pr.replace("<svg", '<svg width="14" height="14"')} Fix PR <a href="#" style="color:var(--accent)">acme/shop-web#14</a> is open. A person merges it; my next Scan marks this Fixed.</p>`;
+        return `<div class="acts">${f.mod === "guard" && f.fix === "none" ? `<button class="btn primary" data-act="openpr" data-id="${f.id}" ${S.fixBusy ? 'aria-busy="true" disabled' : ""}>${S.fixBusy ? "Opening…" : "Open a Fix PR"}</button>` : ""}<button class="btn" data-act="accept" data-id="${f.id}">Accept…</button><button class="btn" data-act="fpmark" data-id="${f.id}">Mark False positive</button></div>`;
+      }
+      function eLine(f) {
+        if (f.proposal)
+          return `<b>${esc(f.proposal.by === "Warden (agent)" ? "I" : f.proposal.by)}</b> ${f.proposal.by === "Warden (agent)" ? "propose" : "proposes"} <b>${f.proposal.kind}</b>: “${esc(f.proposal.reason)}”${f.proposal.until ? ` Reopens on ${f.proposal.until}.` : ""} It waits for a Lead.`;
+        if (f.unconfirmed)
+          return `My last Scan no longer sees this, but it opened <span class="mono">${f.unconfirmed}</span> with the same Rule on this Repo. It may have moved: confirm the fix, or mark it moved.`;
+        if (f.status === "fixed") return "My last Scan no longer sees this, so it's Fixed.";
+        if (f.status === "accepted") return "A Lead accepted the risk.";
+        if (f.status === "fp") return "A Lead marked this a False positive.";
+        if (f.patch)
+          return `I matched a known vulnerability. Your version: <b>${f.patch.verdict}</b>. Fixed in <span class="mono">${esc(f.patch.fixedIn)}</span>.`;
+        return f.mod === "guard" && f.fix === "none"
+          ? "I opened a Finding. I can open a Fix PR for it."
+          : "I opened a Finding.";
+      }
+      const msg = (a, at, body, cls = "") =>
+        `<div class="e-msg ag-${a} ${cls}">${eAvatar(a, "sm")}<div class="bub"><div class="who">${AGENTS[a].name}<span>${at}</span></div>${body}</div></div>`;
+      const pmsg = (who, at, body, a) =>
+        `<div class="e-msg person ag-${a}"><div class="bub"><div class="who">${esc(who)}<span>${at}</span></div>${body}</div><span class="av">${esc(who[0])}</span></div>`;
+      function eLogMsgs(a) {
+        return ELOG[a]
+          .map((m) =>
+            m.agent
+              ? msg(a, "now", `<span class="kind ${m.kind}">${m.kind}</span>${esc(m.text)}`)
+              : pmsg(
+                  m.who,
+                  "now",
+                  `<span class="kind decision">decision</span>${esc(m.text)} <span class="mono muted">${esc(m.ref)}</span>`,
+                  a,
+                ),
+          )
+          .join("");
+      }
+      function eModuleFeed(a) {
+        const mine = F.filter((f) => f.mod === a);
+        const order = (f) => (f.proposal || f.unconfirmed ? 2 : f.status === "open" ? 1 : 0);
+        const done = mine.filter((f) => order(f) === 0),
+          open = mine.filter((f) => order(f) === 1),
+          wait = mine.filter((f) => order(f) === 2);
+        const scan = msg(
+          a,
+          "Nov 24, 9:14 AM",
+          a === "guard"
+            ? `I ran the Default Pack over <span class="mono">github.com/acme/shop-web</span>, ada-laptop and 1 Agent session.`
+            : `I checked Shop web and shop against the CVE snapshot.`,
+        );
+        return `<div class="e-day">Nov 24</div>${scan}
+          ${done.map((f) => msg(a, "Nov 24", eLine(f) + eItemF(f))).join("")}
+          <div class="e-day">Nov 27</div>
+          ${msg(a, "Nov 27, 9:14 AM", `Today's Scan: <b>${mine.filter((f) => f.status === "open").length} open Findings</b>, ${mine.filter((f) => f.status === "open" && f.sev === "critical").length} Critical.${wait.length ? ` ${wait.length} wait on a Lead, at the bottom.` : ""}`)}
+          ${open.map((f) => msg(a, "Nov 27", eLine(f) + eItemF(f) + eActsF(f))).join("")}
+          ${wait.map((f) => msg(a, f.proposal ? f.proposal.at + " ago" : "Nov 27", eLine(f) + eItemF(f) + eActsF(f), "wait")).join("")}
+          ${eLogMsgs(a)}`;
+      }
+      function eVouchFeed() {
+        const ctl = (
+          c,
+        ) => `<div class="e-item" data-esel="${c.ref}" tabindex="0"><div class="meta"><span class="mono">${c.ref}</span><span class="st ${vclass(c.verdict)}">${c.verdict}</span>${st(cstate(c))}</div><div class="t" style="font-weight:500">${esc(c.q)}</div>
+          ${S.esel === c.ref ? `<div class="more"><b>Evidence</b><ul style="margin:4px 0 0;padding-left:18px">${c.ev.map((e) => `<li>${esc(e)}</li>`).join("")}</ul></div>` : ""}</div>`;
+        const reviewed = C.filter((c) => c.review === "Reviewed"),
+          waiting = waitingC();
+        return `<div class="e-day">Nov 24</div>${msg("vouch", "Nov 24, 9:20 AM", `VDA ISA 2027.1 is on. I check 4 Controls: 1.3.3, 1.3.4, 4.1.3 and 5.2.4.`)}
+          ${reviewed.map((c) => msg("vouch", "Nov 24", `${c.gap ? `This Control is a <b>Gap</b>: its Open Findings need fixing or accepting.` : "Evidenced, and reviewed."} ${c.by ? `Reviewed by ${esc(c.by)}${c.reason ? `: “${esc(c.reason)}”` : ""}.` : ""}` + ctl(c))).join("")}
+          <div class="e-day">Nov 27</div>
+          ${waiting
+            .map((c) =>
+              msg(
+                "vouch",
+                "Nov 27",
+                `I worked out <b>${c.verdict}</b>. A Lead confirms it, or overrides it with a reason.` +
+                  ctl(c) +
+                  (S.overriding && S.esel === c.ref
+                    ? `<div class="form"><label>Verdict<select id="ovv"><option>Evidenced</option><option>Partly evidenced</option><option>Not evidenced</option><option>Not applicable</option></select></label><label>Reason<textarea id="ovr" rows="3" placeholder="Why the Verdict is different"></textarea></label><div class="acts"><button class="btn primary" data-act="saveoverride" data-id="${c.ref}">Save override</button><button class="btn" data-act="canceloverride">Cancel</button></div></div>`
+                    : `<div class="acts"><button class="btn primary" data-act="confirm" data-id="${c.ref}">Confirm</button><button class="btn" data-eoverride="${c.ref}">Override…</button></div>`),
+                "wait",
+              ),
+            )
+            .join("")}
+          ${eLogMsgs("vouch")}
+          ${msg("vouch", "now", `Are we ready for the audit? ${C.filter((c) => c.gap).length || waiting.length ? `Not yet: ${[C.filter((c) => c.gap).length && `${C.filter((c) => c.gap).length} Gaps`, waiting.length && `${waiting.length} Control${waiting.length > 1 ? "s" : ""} waiting for review`].filter(Boolean).join(", ")}.` : "Yes: every Control is reviewed, with no Gaps."}`)}`;
+      }
+      function eWardenFeed() {
+        const open = F.filter((f) => f.status === "open");
+        const waitList = [
+          ...F.filter((f) => f.proposal || f.unconfirmed).map((f) => ({
+            a: f.mod,
+            ref: f.id,
+            t: f.title,
+            k: f.proposal ? `Proposal: ${f.proposal.kind}` : "Unconfirmed fix",
+          })),
+          ...waitingC().map((c) => ({
+            a: "vouch",
+            ref: c.ref,
+            t: `${c.ref}: ${c.verdict}`,
+            k: "Control to review",
+          })),
+          ...STEPS.filter((s) => s.state === "wait").map((s) => ({
+            a: "warden",
+            ref: s.id,
+            t: s.title,
+            k: "Setup, for an Admin",
+          })),
+        ];
+        const card = (a, line) =>
+          `<button class="ag-${a}" data-agent="${a}"><b>${eAvatar(a, "sm")}${AGENTS[a].name}${eWait(a) ? `<span class="wbadge">${eWait(a)} waiting</span>` : ""}</b><span class="muted" style="font-size:13px">${line}</span></button>`;
+        return `<div class="e-day">Today, Nov 27</div>
+          ${msg(
+            "warden",
+            "9:20 AM",
+            `Here's where Elm stands. <b>${open.length} open Findings</b>, ${open.filter((f) => f.sev === "critical").length} Critical. Level: Quick.
+            <div class="e-sum">${card("guard", eLast("guard"))}${card("patch", eLast("patch"))}${card("vouch", eLast("vouch"))}</div>`,
+          )}
+          ${msg(
+            "warden",
+            "9:20 AM",
+            waitList.length
+              ? `<b>${waitList.length} things wait on a Lead.</b> Each one sits in its module's feed, with its buttons:
+            ${waitList.map((w) => `<div class="e-item ag-${w.a}" data-agent="${w.a === "warden" ? "setup" : w.a}" data-eref="${w.ref}" tabindex="0" style="border-left:4px solid var(--ag)"><div class="meta"><span class="st wait">${ICON.wait}${esc(w.k)}</span><span class="muted" style="margin-left:auto;font-size:12.5px">in ${w.a === "warden" ? "Setup" : AGENTS[w.a].name} →</span></div><div class="t">${esc(w.t)}</div></div>`).join("")}`
+              : "Nothing waits on a Lead. Every decision is made.",
+            waitList.length ? "wait" : "",
+          )}
+          ${msg("warden", "9:21 AM", `The most urgent fix: <b>${esc(F[0].title)}</b> (Critical, Guard). Guard can open a Fix PR for it, in its feed.`)}`;
+      }
+      function eQuick(a) {
+        const items = {
+          warden: [
+            ["Open Setup", "setup"],
+            ["Show the journey", "overview"],
+            ["Products", "products"],
+            ["People", "people"],
+          ],
+          guard: [
+            ["Scan now", "mock"],
+            ["Show Guard's Findings as a table", "findings"],
+            ["Repos on Setup", "setup"],
+            ["Show the hook token", "mock"],
+          ],
+          patch: [
+            ["Add a Product", "products"],
+            ["Show Patch's Findings as a table", "findings"],
+            ["Refresh CVEs", "mock"],
+          ],
+          vouch: [
+            ["Show every Control", "overview"],
+            ["Catalogues on Setup", "setup"],
+            ["Export evidence", "mock"],
+          ],
+        }[a];
+        return items
+          .map(
+            ([w, to]) =>
+              `<button class="qa" data-equick="${to}" data-ew="${esc(w)}"><span class="ic"></span>${w}</button>`,
+          )
+          .join("");
+      }
+      function renderE() {
+        const a = S.agent;
+        const feed = a === "warden" ? eWardenFeed() : a === "vouch" ? eVouchFeed() : eModuleFeed(a);
+        const facts =
+          a === "warden"
+            ? `<div>Team: <b>Elm</b> · Admin</div><div>Level: Quick</div><div class="live">Last Scan Nov 27, 9:14 AM</div>`
+            : a === "vouch"
+              ? `<div>Catalogue: VDA ISA 2027.1</div><div>${C.filter((c) => c.gap).length} Gaps</div><div>${waitingC().length} to review</div>`
+              : `<div>${F.filter((f) => f.mod === a && f.status === "open").length} open Findings</div><div>${F.filter((f) => f.mod === a && f.status === "fixed").length} Fixed</div><div class="live">Last Scan Nov 27</div>`;
+        document.getElementById("root").innerHTML = `<div class="e-app">
+          <aside class="e-agents"><div class="brand"><b>Warden</b></div><div class="team"><div class="who"><b>Elm</b><div class="muted" style="font-size:12.5px">Level: Quick</div></div><span class="pill role">Admin</span></div>
+            <div class="e-list" role="list">${AG_ORDER.map((x) => `<button role="listitem" class="e-ag ag-${x} ${x === "warden" ? "top" : ""} ${a === x ? "sel" : ""}" data-agent="${x}" ${a === x ? 'aria-current="true"' : ""}>${eAvatar(x, x === "warden" ? "big" : "")}<span class="nm">${AGENTS[x].name}</span><span class="tm">${eWait(x) ? `<span class="wbadge">${eWait(x)} waiting</span>` : "9:14 AM"}</span><span class="last">${eLast(x)}</span></button>`).join("")}</div>
+            <div class="foot" style="border-top:1px solid var(--line);padding:10px 16px 14px;font-size:13px;color:var(--muted)">Signed in as Elm's Admin · <a href="#" style="color:var(--accent)">Sign out</a></div></aside>
+          <nav class="e-mobtabs" aria-label="Agents">${AG_ORDER.map((x) => `<button class="ag-${x} ${a === x ? "sel" : ""}" data-agent="${x}">${eAvatar(x, "sm")}${AGENTS[x].name}${eWait(x) ? `<span class="wbadge">${eWait(x)}</span>` : ""}</button>`).join("")}</nav>
+          <main class="e-main ag-${a}"><header class="e-head">${eAvatar(a)}<div><h1>${AGENTS[a].name}</h1><div class="sub">${AGENTS[a].role}</div></div><span style="flex:1"></span>${eWait(a) ? `<span class="wbadge">${eWait(a)} waiting on a Lead</span>` : ""}</header>
+            <div class="e-quickrow ag-${a}">${eQuick(a)}</div>
+            <div class="e-feed" id="efeed">${feed}</div>
+            <div class="e-composer"><div class="ctx"><span class="mock">MOCK</span><span class="why">Not connected: there is no chat with a model in this prototype.</span></div><div class="box"><input aria-label="Message ${AGENTS[a].name} (mock)" placeholder="Message ${AGENTS[a].name}… (mock)"><button class="btn primary" data-emock>Send</button></div></div></main>
+          <aside class="e-quick ag-${a}" aria-label="Quick actions"><h2>Quick actions</h2>${eQuick(a)}<h2>${AGENTS[a].name}</h2><div class="facts">${facts}</div></aside>
+          <nav class="e-strip" aria-label="Agents">${AG_ORDER.map((x) => `<button class="ag-${x} ${a === x ? "sel" : ""}" data-agent="${x}" aria-label="${AGENTS[x].name}">${eAvatar(x, "sm")}${eWait(x) ? `<span class="dotw">${eWait(x)}</span>` : ""}</button>`).join("")}</nav>
+        </div>
+        <div class="switcher" role="toolbar" aria-label="Prototype variants"><button data-sw="-1" aria-label="Previous variant">←</button><span class="lbl">${S.variant} (${VARIANTS[S.variant]})</span><button data-sw="1" aria-label="Next variant">→</button><button class="theme" data-theme-t>${S.theme || "auto"} theme</button></div>`;
+        if (S.eref) {
+          const el = document.querySelector(`[data-esel="${S.eref}"]`);
+          if (el) el.scrollIntoView({ block: "center" });
+          S.eref = null;
+        } else if (S.agent !== eLastAgent) {
+          // A feed opens at its newest message, as a chat does: what waits on a Lead is at the bottom.
+          const fd = document.getElementById("efeed");
+          fd.scrollTop = fd.scrollHeight;
+        }
+        eLastAgent = S.agent;
+      }
+      let eLastAgent = null;
+      document.addEventListener("click", (e) => {
+        if (S.variant !== "E") return;
+        const t = e.target.closest(
+          "[data-agent],[data-esel],[data-equick],[data-eoverride],[data-emock]",
+        );
+        if (!t) return;
+        if (t.dataset.agent) {
+          if (t.dataset.agent === "setup") {
+            S.variant = "D";
+            S.page = "setup";
+            S.sel = t.dataset.eref;
+            return render();
+          }
+          S.agent = t.dataset.agent;
+          S.esel = t.dataset.eref || null;
+          S.eref = t.dataset.eref || null;
+          S.overriding = false;
+          return render();
+        }
+        if (t.dataset.eoverride) {
+          S.esel = t.dataset.eoverride;
+          S.overriding = true;
+          return render();
+        }
+        if (t.dataset.esel) {
+          S.esel = S.esel === t.dataset.esel ? null : t.dataset.esel;
+          return render();
+        }
+        if (t.dataset.emock !== undefined) {
+          const i = t.parentElement.querySelector("input");
+          i.value = "";
+          i.placeholder = "Mock: Warden's chat isn't connected.";
+          return;
+        }
+        if (t.dataset.equick) {
+          const to = t.dataset.equick;
+          if (to === "mock") {
+            ELOG[S.agent === "warden" ? "warden" : S.agent].push({
+              who: "Warden",
+              kind: "",
+              text: `${t.dataset.ew}: mock, the real app starts it here.`,
+              ref: "",
+              agent: true,
+            });
+            return render();
+          }
+          S.variant = "D";
+          S.page = to;
+          if (to === "findings" && S.agent !== "warden") {
+            S.mod = S.agent;
+            S.tab = "all";
+          }
+          S.sel = null;
+          return render();
+        }
+      });
       render();
     </script>
   </body>
