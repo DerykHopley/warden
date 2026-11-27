@@ -318,9 +318,8 @@ WARDEN_PSEUDONYM_KEY=warden-preview-pseudonym-key" \
 assert_equal "each of the revision's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
 # The pseudonym key (#185): a preview has its own, so its pseudonyms can't be matched against live ones.
-assert_equal "the revision's pseudonym key is the preview's own, pinned at version 1" \
-  "WARDEN_PSEUDONYM_KEY=warden-preview-pseudonym-key:1" \
-  "$(grep '^WARDEN_PSEUDONYM_KEY=' <<<"$service_secrets")"
+assert_equal "the revision's pseudonym key is pinned at version 1" "1" \
+  "$(grep '^WARDEN_PSEUDONYM_KEY=' <<<"$service_secrets" | sed 's/.*://')"
 assert_no_match "no call of a preview names the live pseudonym key" 'warden-pseudonym-key' "$calls"
 assert_no_match "no job of a preview (migration or Scan) gets a pseudonym key" 'pseudonym|PSEUDONYM' \
   "$(grep -F 'gcloud run jobs ' <<<"$calls")"
@@ -503,9 +502,8 @@ GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
 GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key
 WARDEN_PSEUDONYM_KEY=warden-pseudonym-key" \
   "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
-assert_equal "release: the revision's pseudonym key is the live one, pinned at version 1 (#185)" \
-  "WARDEN_PSEUDONYM_KEY=warden-pseudonym-key:1" \
-  "$(grep '^WARDEN_PSEUDONYM_KEY=' <<<"$service_secrets")"
+assert_equal "release: the revision's pseudonym key is pinned at version 1 (#185)" "1" \
+  "$(grep '^WARDEN_PSEUDONYM_KEY=' <<<"$service_secrets" | sed 's/.*://')"
 assert_no_match "release: no job (migration, Scan or daily) gets a pseudonym key" 'pseudonym|PSEUDONYM' \
   "$(grep -F 'gcloud run jobs ' <<<"$calls")"
 assert_equal "release: the GitHub app's secrets are pinned at version 1, as #132 makes them" \

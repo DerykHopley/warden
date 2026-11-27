@@ -450,7 +450,7 @@ done
 #   no-write-app  as fresh, but without the write app's two secrets (an owner who never registered it)
 #   one-write-secret  as fresh, but without the write app's private key
 #   pseudonym-keys  as fresh, but with both pseudonym keys already made (#185)
-#   denied     every secret refuses with PERMISSION_DENIED
+#   denied      every secret refuses with PERMISSION_DENIED
 #   no-adc      as fresh, but with no application-default credentials
 # Each describe that finds nothing fails the way that gcloud command does. A secret's value is what was piped into
 # `secrets create`, or fake-<name> for one made by hand. FAKE_SA_CREATE makes a service-account create fail:

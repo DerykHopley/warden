@@ -300,7 +300,7 @@ The Guard spec's tickets carry each line as a criterion. Each line names the spe
 - [ ] Judge traces in Langfuse hold metadata only, with a test (J7; Guard spec).
 - [ ] A flagged session's Finding keeps only the masked events and the hash of the redacted events (J8; Guard
       spec).
-- [ ] No hook is ever pointed at a preview revision (`data.md`; Guard spec).
+- [ ] Only the owner's own test sessions point a hook at a preview revision, never a Team's laptops (`data.md`; Guard spec).
 - [ ] `/security-review` has run on the hook's code (Guard spec).
 
 ## Secure defaults, where each is met
