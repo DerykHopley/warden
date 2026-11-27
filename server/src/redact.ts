@@ -9,7 +9,10 @@ const SECRET_KEYS = new Set(["authorization", "proxy-authorization", "cookie", "
 const PATTERNS: [RegExp, string][] = [
   [/\bsk_(test|live)_[A-Za-z0-9]+/g, `sk_$1_${MASK}`],
   [/\bBearer\s+[^\s"',;]+/gi, `Bearer ${MASK}`],
-  [/\beyJ[\w-]*\.[\w-]*\.[\w-]*/g, MASK],
+  // A JWT starts at the first `eyJ` of its part: a later one in the same part (after a `-`) would fail or match just
+  // as the first did, so it isn't tried again. Without that, text such as `eyJ-eyJ-…` is rescanned from every `eyJ`
+  // in it, and 1 MiB takes minutes (#434). The lookbehind looks back only as far as the nearest earlier `eyJ`.
+  [/\beyJ(?<!\beyJ[\w-]*?eyJ)[\w-]*\.[\w-]*\.[\w-]*/g, MASK],
   // A URL's password runs to the URL's last @, so a password holding an @ (with a /, ? or # after it, too) is masked
   // whole. The URL ends at whitespace, a quote or the next URL's `://`, and the password never runs into a second
   // URL. An @ in the path or query (`?user=a@b`) would mask the host too: over-masking, never a leak.
