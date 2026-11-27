@@ -24,7 +24,8 @@ const PATTERNS: [RegExp, string][] = [
  * carries, such as a client's config, is left out. */
 const ERROR_FIELDS = ["code", "errno", "syscall", "address", "port"] as const;
 
-function redactString(text: string): string {
+/** `text` with each of the patterns above masked: what `redact` makes of a string. */
+export function redactString(text: string): string {
   return PATTERNS.reduce((out, [pattern, replacement]) => out.replace(pattern, replacement), text);
 }
 

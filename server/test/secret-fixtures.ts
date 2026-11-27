@@ -23,3 +23,18 @@ export const RSA_PRIVATE_KEY = [
 
 /** A made-up Slack bot token. */
 export const SLACK_TOKEN = ["xox", "b-", "4821936507-", "Tq8Wn3Zr6Kd1Hm9Xc"].join("");
+
+const join = (...parts: string[]) => parts.join("");
+
+/** One made-up secret of each of Guard's nine types, by the type's name (a private key by its header line). */
+export const SECRET_OF_EACH_TYPE = {
+  "AWS access key id": AWS_KEY,
+  "GitHub token": GITHUB_TOKEN,
+  "private key": join("-----BEGIN ", "RSA PRIVATE KEY-----"),
+  "Stripe live secret key": join("sk", "_live_", "4eC39HqLyjWDarjtT1zdp7dc"),
+  "Slack token": join("xox", "b-", "123456789012-1234567890123-", "AbCdEfGhIjKlMnOpQrStUvWx"),
+  "Anthropic key": join("sk-", "ant-api03-", "Ab3".repeat(31)),
+  "OpenRouter key": join("sk-", "or-v1-", "0123456789abcdef".repeat(4)),
+  "OpenAI key": join("sk-", "proj-", "Zx9_Yw8-Vu7".repeat(4)),
+  "Google API key": join("AIza", "SyD3x9Kq2Lm8Np4Rs6Tv1Wx5Yz7Ab0Cd2Ef"),
+} as const;
