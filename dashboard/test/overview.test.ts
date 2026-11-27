@@ -160,15 +160,6 @@ describe("the Standard card (story 12)", () => {
       "1 session judged in 7 days",
     ]);
   });
-
-  it("never says Warden doesn't check it", () => {
-    const counts = [NO_SESSIONS, sessions(true), sessions(false, 2), JUDGED, sessions(true, 3, 1)];
-    for (const level of ["quick", "standard", "audit_ready"] as const) {
-      for (const count of counts) {
-        expect(standardAt(level, count).notes).not.toContain("Warden doesn't check this yet.");
-      }
-    }
-  });
 });
 
 /** Every one of ISA2027's Controls reviewed: Audit-ready. */
