@@ -86,7 +86,10 @@ test("Elm's Overview answers from ISA2027's Controls as Mary reviews them, and i
   await expect(card(page, "Audit-ready")).toHaveAttribute("aria-current", "step");
   await expect(card(page, "Audit-ready").locator(".journey-state")).toHaveText("Current");
   await expect(card(page, "Audit-ready")).toContainText("4 of 4 Controls have a review");
-  await expect(card(page, "Quick").locator(".journey-state")).toHaveText("Done");
+  // The Level passed Quick on reviews alone; with no Scan, Quick's card isn't Done.
+  await expect(card(page, "Quick").locator(".journey-state")).toHaveText("Not started");
+  await expect(card(page, "Quick")).toContainText("Next: the first Scan");
+  await expect(card(page, "Quick")).not.toHaveAttribute("aria-current");
   await expect(card(page, "Standard").locator(".journey-state")).toHaveText("Not started");
   await expect(card(page, "Standard")).toContainText("Warden doesn't check this yet.");
 

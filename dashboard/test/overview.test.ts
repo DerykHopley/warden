@@ -65,6 +65,15 @@ describe("journeyCards", () => {
     expect(auditReady!.progress).toBe(0);
   });
 
+  it("at Standard with no Scan, Quick is not started, its bar empty, its next step the first Scan", () => {
+    const [quick] = journeyCards("standard", null, NO_CATALOGUE);
+    expect(quick).toMatchObject({
+      state: "not-started",
+      progress: 0,
+      notes: ["Next: the first Scan"],
+    });
+  });
+
   it("at Quick and at Standard, the Standard card has no note, its bar empty", () => {
     for (const level of ["quick", "standard"] as const) {
       const [, standard] = journeyCards(level, SCANNED, NO_CATALOGUE);
@@ -101,6 +110,21 @@ describe("journeyCards at Audit-ready", () => {
       progress: 100,
       notes: ["4 of 4 Controls have a review"],
     });
+  });
+
+  it("with no Scan, gives Quick Not started and the first Scan as its next step, Standard and Audit-ready as with one", () => {
+    const [noScanQuick, noScanStandard, noScanAuditReady] = journeyCards(
+      "audit_ready",
+      null,
+      allReviewed,
+    );
+    expect(noScanQuick).toMatchObject({
+      state: "not-started",
+      progress: 0,
+      notes: ["Next: the first Scan"],
+    });
+    expect(noScanStandard).toEqual(standard);
+    expect(noScanAuditReady).toEqual(auditReady);
   });
 
   it("names the Controls changed since review, which the answer counts as waiting", () => {
