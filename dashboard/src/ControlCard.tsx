@@ -99,7 +99,7 @@ export function ControlCard(props: {
   const { result, setResult, refresh } = useWardenCall(call, props.onSessionEnded);
   // A read newer than the Overview's row asks for the row again, once per read, so the two say the same. A review's
   // answer asks for the row itself, so the read it brings (its 201's, or the one asked after no answer) asks nothing.
-  const { refreshRow } = focus;
+  const { refreshRow, onReviewed } = focus;
   const compared = useRef<ControlResult | null>(null);
   const rowAskedFor = useRef(false);
   useEffect(() => {
@@ -208,7 +208,7 @@ export function ControlCard(props: {
         setForm(null);
         setLine({ kind: "done", text: done });
         focusNext.current = "line";
-        focus.onReviewed(done);
+        onReviewed(done);
         refreshRow();
         return;
       }

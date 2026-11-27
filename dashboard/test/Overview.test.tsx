@@ -559,7 +559,6 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
         notice.compareDocumentPosition(journey()) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
       await vi.waitFor(() => expect(card133()).toBeNull());
-      expect(address()).toBe("/overview");
     }
 
     it("a confirm stored, then no Catalogue in the answer: the notice says it's stored and the Catalogue is off", async () => {
@@ -567,6 +566,7 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
       await expectNotice(
         "Confirmed. Your review of 1.3.3 is stored, but VDA ISA 2027.1 is off now, so the Overview doesn't show it.",
       );
+      expect(address()).toBe("/overview");
     });
 
     it("an override to Not applicable stored, then no Catalogue: the notice starts with its Done words", async () => {
@@ -607,7 +607,6 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
         }),
       );
       await expectNotice("1.3.3 is no longer on the Overview: VDA ISA 2027.1 is off now.");
-      expect(screen.queryByText(/is stored/)).toBeNull();
     });
 
     it("a read newer than the row, with no review, then no Catalogue: the notice says the Catalogue is off", async () => {

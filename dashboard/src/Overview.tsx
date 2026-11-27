@@ -59,16 +59,21 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
   // holds the focused Control (#395). The card goes with its row, and the notice says what became of it, until a row
   // is selected. The focus that last answer showed is gone only while still selected: ✕ and another row change the
   // selection, so they say nothing, and a link the first answer doesn't hold was never shown.
-  const [reviewed, setReviewed] = useState<{ catalogue: string; ref: string; done: string } | null>(
-    null,
-  );
-  const [gone, setGone] = useState<string | null>(null);
-  const [answered, setAnswered] = useState(focused);
-  if (audit !== null && focused !== answered) {
-    setAnswered(focused);
-    if (answered !== null && focused === null && namesControl(selected, answered)) {
-      const done = reviewed !== null && namesControl(reviewed, answered) ? reviewed.done : null;
-      setGone(controlGoneNotice(answered, audit, done));
+  const [reviewed, setReviewed] = useState<
+    (NonNullable<ControlInAddress> & { done: string }) | null
+  >(null);
+  const [goneNotice, setGoneNotice] = useState<string | null>(null);
+  const [lastShownFocus, setLastShownFocus] = useState(focused);
+  if (audit !== null && focused !== lastShownFocus) {
+    setLastShownFocus(focused);
+    if (
+      lastShownFocus !== null &&
+      focused === null &&
+      namesControl(selected, lastShownFocus.control)
+    ) {
+      const done =
+        reviewed !== null && namesControl(reviewed, lastShownFocus.control) ? reviewed.done : null;
+      setGoneNotice(controlGoneNotice(lastShownFocus, audit, done));
     }
   }
 
@@ -131,10 +136,8 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
   const select = useCallback(
     (control: AuditControl) => {
       setSelected({ catalogue: control.catalogue, ref: control.ref });
-      setGone(null);
-      setReviewed((was) =>
-        was?.catalogue === control.catalogue && was.ref === control.ref ? was : null,
-      );
+      setGoneNotice(null);
+      setReviewed((was) => (namesControl(was, control) ? was : null));
       openPanel();
     },
     [openPanel],
@@ -143,9 +146,9 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
   return (
     <>
       <h1>Overview</h1>
-      {gone !== null && (
+      {goneNotice !== null && (
         <p className="notice" role="alert">
-          {gone}
+          {goneNotice}
         </p>
       )}
       {call.result === "loading" && <p className="muted">Loading Overview…</p>}
@@ -260,7 +263,7 @@ function AuditCatalogueBlock({
           <AuditControlRow
             key={control.ref}
             control={control}
-            selected={selected?.catalogue === catalogue.id && selected.ref === control.ref}
+            selected={namesControl(selected, control)}
             onSelect={onSelect}
           />
         ))}
