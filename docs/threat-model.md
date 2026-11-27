@@ -324,7 +324,7 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 | Redaction on output and in logs; secret values never stored, only masked | L1, A3, H8; `data.md`, Data minimisation | Built: logs and 500 bodies (slice 1a, #4); evidence (slice 6, #11); events, redacted on arrival (#184) |
 | A retention period and a way to delete | H9; `data.md`, Retention and deletion | Decided: slice 2 (this document). Designed: the drop job (Guard spec); Team deletion (not yet planned) |
 | `docs/data.md` lists what leaves the machine | `data.md`, What leaves the machine | Built: slice 2 (this document) |
-| A local-model option for the Judge | J6, J9; `data.md`, What leaves the machine | Built: the Team's own model, set by an Admin through `PUT /api/judge/model` (#461); its Setup page section: #464 |
+| A local-model option for the Judge | J6, J9; `data.md`, What leaves the machine | Built: the Team's own model, set by an Admin on Setup's "Judge's model" section (#464), through `PUT /api/judge/model` (#461) |
 | Append-only history enforced in Postgres, with a test | D6 | Built: Status history (slice 7, #22), Role history (slice 5a, #27) and Vouch's review log (`control_reviews`, Vouch spec #341, #366) |
 | Secrets: keyring and `.envrc` locally, Secret Manager on the host | R1, R2 | Built: keyring and `.envrc` (slice 1a, #4); the secrets in Secret Manager and which account may read each (slice 1b-ii, the setup script, #16). Built for previews (slice 1b-ii, the owner preview, #65): checked live, the preview revision and its migration job read their secrets from Secret Manager as `secretKeyRef`s pinned to version 1, with no secret in a plain value. The live service reads them the same way from #24's first release |
 

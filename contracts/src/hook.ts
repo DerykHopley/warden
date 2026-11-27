@@ -65,7 +65,8 @@ export type JudgeModelBody = z.infer<typeof JudgeModelBody>;
 
 /**
  * `PUT /api/judge/model`'s body: the Team's own model, or null to clear it. The model name is 1 to 200 characters, not
- * only spaces, with no control character; the server checks the URL against its URL rule.
+ * only spaces, with no control character, each refusal in plain words, as Setup shows them (#464); the server checks
+ * the URL against its URL rule.
  */
 export const JudgeModelChange = z.strictObject({
   local_model: z
@@ -73,8 +74,9 @@ export const JudgeModelChange = z.strictObject({
       url: z.string(),
       model: z
         .string()
-        .min(1)
-        .max(200)
+        // An empty name is only that: not "only spaces" as well.
+        .min(1, { message: "is empty", abort: true })
+        .max(200, { message: "is over 200 characters" })
         .regex(/\S/, { message: "is only spaces" })
         .regex(/^\P{Cc}*$/u, { message: "holds a control character" }),
     })

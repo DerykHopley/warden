@@ -3,14 +3,13 @@
 // answers is shown once and held only in this component's state, never in storage or the address.
 import { PrivacyTier, type HookSettingsBody } from "@warden/contracts";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn } from "./api.ts";
+import { refusalWords, type ChangeRefused } from "./change-refused.ts";
 import { dayAndTimeWords } from "./date-words.ts";
 import {
   blockText,
   fetchHookSettings,
   issueHookToken,
   setPrivacyTier,
-  type ChangeRefused,
   type HookSettingsResult,
 } from "./hook.ts";
 import { useReportAnswered, type SectionProps } from "./setup-section.ts";
@@ -39,25 +38,6 @@ const TIER_WORDS: Record<PrivacyTier, string> = {
 type FocusTarget = "cancel" | "rotate" | "copy-token";
 /** What a Copy button copies. */
 type CopyWhat = "token" | "block";
-
-/** A refused change in words, or null for a session that ended (the shell signs out). */
-function refusalWords(result: ChangeRefused): string | null {
-  switch (result.kind) {
-    case "forbidden":
-      return ONLY_ADMIN;
-    case "refused":
-      return result.words;
-    case "team-not-opened":
-      return TEAM_NOT_OPENED;
-    case "too-many-attempts":
-    case "too-many-sign-ins":
-      return tryAgainIn(result.retryAfter);
-    case "not-answering":
-      return NOT_ANSWERING;
-    case "session-ended":
-      return null;
-  }
-}
 
 /** Writes `text` to the clipboard: whether it took it. A browser with none, or one that refuses, didn't. */
 async function copied(text: string): Promise<boolean> {
@@ -157,7 +137,7 @@ function HookSettings({
   /** A refused change: a 403 asks the shell for the Role again, an ended session signs out, and `say` says the rest. */
   function refused(result: ChangeRefused, say: (words: string) => void) {
     if (result.kind === "forbidden") refreshMe();
-    const words = refusalWords(result);
+    const words = refusalWords(result, ONLY_ADMIN);
     if (words === null) return onSessionEnded();
     say(words);
   }

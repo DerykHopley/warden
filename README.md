@@ -244,22 +244,10 @@ owner previews each read their own from Secret Manager ("Setting up Google Cloud
 
 By default the Judge calls OpenRouter. An Admin can point the Team's Judge at a model the Team runs itself instead:
 an OpenAI-compatible base URL and a model name. Then the Judge sends the Team's events to that URL, with no key, and
-sends nothing to OpenRouter. Until Setup has a section for it (#464), set it through the API, from the browser's
-console on the dashboard, signed in as the Team's Admin:
-
-```js
-await fetch("/api/judge/model", {
-  method: "PUT",
-  headers: {
-    Authorization: `Bearer ${await Clerk.session.getToken()}`,
-    "Content-Type": "application/json",
-  },
-  body: JSON.stringify({ local_model: { url: "https://models.example.com/v1", model: "qwen3.8:27b" } }),
-}).then((res) => res.json());
-```
-
-`GET /api/judge/model` reads it, and `{ "local_model": null }` clears it, putting the Team back on OpenRouter. The URL
-must be https, with no user name, query or fragment, on a host whose every address is public; a refusal says why.
+sends nothing to OpenRouter. Set it on Setup's "Judge's model" section, signed in as the Team's Admin: type the URL
+and the model name, and Save. "Use OpenRouter" clears it, putting the Team back on OpenRouter. The URL
+must be https, with no user name, query or fragment, at most 2,048 characters, on a host whose every
+address is public; a refusal says why.
 Each call connects only to the address it checked, and never follows a redirect.
 
 **Locally,** with Ollama on the same machine, `.envrc` sets `WARDEN_JUDGE_LOCALHOST=1`, which also accepts

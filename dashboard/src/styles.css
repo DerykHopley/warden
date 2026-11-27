@@ -1103,8 +1103,10 @@ button[aria-busy="true"],
 
 /* Setup's Agent hook (story 7): the token lines, the token shown once in a box on --surface, Issue or Rotate (with
    its confirm, dressed as Products' delete confirm), the Privacy tier picker (the Role picker) and the block. The
-   token and the block are mono and wrap rather than pushing the page sideways; each Copy has its line beside it. */
-.hook-settings p {
+   token and the block are mono and wrap rather than pushing the page sideways; each Copy has its line beside it. The
+   Judge's model (below) shares its lines, its mono values and its action row. */
+.hook-settings p,
+.judge-model p {
   margin: 0 0 8px;
 }
 
@@ -1124,7 +1126,8 @@ button[aria-busy="true"],
   margin-bottom: 0;
 }
 
-.hook-token-value {
+.hook-token-value,
+.judge-model-value {
   overflow-wrap: anywhere;
 }
 
@@ -1140,7 +1143,8 @@ button[aria-busy="true"],
   margin: 0;
 }
 
-.hook-actions {
+.hook-actions,
+.judge-model-actions {
   margin: 8px 0 12px;
 }
 
@@ -1183,6 +1187,35 @@ button[aria-busy="true"],
   font-size: 0.8125rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* Setup's Judge's model (spec #225, story 10): the setting, laid out as the Agent hook's lines (grouped with its rules
+   above), its URL and model name mono and wrapping rather than pushing the page sideways; then the form, its fields
+   full width, Save under them. */
+.judge-model-setting {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 0 8px;
+}
+
+.judge-model-setting dt {
+  font-weight: 600;
+}
+
+.judge-model-setting dd {
+  margin: 0;
+}
+
+.judge-model-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0 0;
+}
+
+.judge-model-form p {
+  margin: 0;
 }
 
 /* The Overview (story 10): the journey as three cards, the trend line, and "Are we ready for the audit?". Nothing here

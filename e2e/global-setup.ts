@@ -350,6 +350,8 @@ export default async function globalSetup() {
           E2E_FAKE_GITHUB_LOG: githubLog,
           // A key made for this run, so the hook endpoint stores events (story 7): no other copy of it exists.
           WARDEN_PSEUDONYM_KEY: randomBytes(32).toString("hex"),
+          // The Judge's model URL rule lets an Admin name localhost, so Setup can save one (#464). Nothing is called.
+          WARDEN_JUDGE_LOCALHOST: "1",
           // Handed on to each Scan Job: the fake in both, and the delay, which holds a Scan Job before it runs and
           // lets the server run at once.
           NODE_OPTIONS: [
