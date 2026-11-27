@@ -545,26 +545,26 @@ const PIP_INDEX_OPTIONS = ["-i", "--index-url", "--extra-index-url", "-f", "--fi
 /** uv's and pipx's such options: pip's, and uv's own `--index` and `--default-index`. */
 const PYTHON_INDEX_OPTIONS = new Set([...PIP_INDEX_OPTIONS, "--index", "--default-index"]);
 /** The env keys uv and pip read as an index or a place to find packages, or as a config file that can set one. */
-const PYTHON_INDEX_ENV = new Set([
+const PYTHON_REGISTRY_ENV = new Set([
   ...["UV_INDEX", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_FIND_LINKS"],
   ...["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_FIND_LINKS"],
   ...["UV_CONFIG_FILE", "PIP_CONFIG_FILE"],
 ]);
+/** pip's index options as pip reads them in `--pip-args`: a short one's value can be attached (`-ivalue`). */
+const PIP_INDEX = valueOptions(new Set(PIP_INDEX_OPTIONS), true);
 
 /**
- * Whether a `--pip-args` value, split on white space with any quotes around it dropped, holds an index option: a long
- * one alone or with `=value`, a short one with its value attached or not (`-ivalue`).
+ * Whether a `--pip-args` value, split on white space with any quotes around it dropped, holds an index option: alone,
+ * with `=value`, or a short one with its value attached (`-ivalue`).
  */
 const pipArgsHaveIndex = (value: string | undefined) =>
   (value ?? "")
     .split(/\s+/)
     .map((word) => word.replace(/^["']|["']$/g, ""))
-    .some((word) =>
-      PIP_INDEX_OPTIONS.some((option) =>
-        option.startsWith("--")
-          ? word === option || word.startsWith(`${option}=`)
-          : word.startsWith(option),
-      ),
+    .some(
+      (word) =>
+        PIP_INDEX_OPTIONS.some((option) => word === option || word.startsWith(`${option}=`)) ||
+        attachedOption(word, PIP_INDEX) !== undefined,
     );
 
 /** What points each registry's runners somewhere else: one of their options, and an env key Claude Code passes them. */
@@ -579,7 +579,7 @@ const CUSTOM_REGISTRY: Record<
   pypi: {
     option: ({ name, value }) =>
       PYTHON_INDEX_OPTIONS.has(name) || (name === "--pip-args" && pipArgsHaveIndex(value)),
-    envKey: (key) => PYTHON_INDEX_ENV.has(key),
+    envKey: (key) => PYTHON_REGISTRY_ENV.has(key),
   },
 };
 
