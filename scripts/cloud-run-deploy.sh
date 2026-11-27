@@ -41,9 +41,10 @@ readonly NAME_RULE="1 to 20 lowercase letters, digits and hyphens, starting with
 source "$(dirname "${BASH_SOURCE[0]}")/lib/cloud-run.sh"
 
 # One table of names per mode: the service and its account, the migration job and its account, the Scan Job and its
-# account, the database, its role set and roles, the two password secrets, the revision suffix's start, and which of
-# the service's URLs a Clerk session token may be made for (PARTIES_FROM: the tag's, for a preview reached only there;
-# the service's own, for a release that takes the traffic).
+# account, the database, its role set and roles, the two password secrets, the hook's pseudonym key (#185: a preview
+# has its own, so its pseudonyms can't be matched against live ones), the revision suffix's start, and which of the
+# service's URLs a Clerk session token may be made for (PARTIES_FROM: the tag's, for a preview reached only there; the
+# service's own, for a release that takes the traffic).
 names_for() {
   case $1 in
     preview)
@@ -59,6 +60,7 @@ names_for() {
       MIGRATE_USER=warden_preview_migrate
       APP_PASSWORD_SECRET=warden-db-preview-app-password
       MIGRATE_PASSWORD_SECRET=warden-db-preview-migrate-password
+      PSEUDONYM_KEY_SECRET=warden-preview-pseudonym-key
       SUFFIX_START=pre-$TAG
       PARTIES_FROM=tagged
       ;;
@@ -75,6 +77,7 @@ names_for() {
       MIGRATE_USER=warden_migrate
       APP_PASSWORD_SECRET=warden-db-app-password
       MIGRATE_PASSWORD_SECRET=warden-db-migrate-password
+      PSEUDONYM_KEY_SECRET=warden-pseudonym-key
       SUFFIX_START=rel
       PARTIES_FROM=service
       ;;
@@ -112,18 +115,23 @@ migrate() {
 }
 
 deploy_revision() {
-  local parties=$1 password clerk_secret clerk_jwt github_secret github_key write_secret write_key env secrets
+  local parties=$1 password clerk_secret clerk_jwt github_secret github_key pseudonym_key write_secret write_key env
+  local secrets
   password=$(pinned "$APP_PASSWORD_SECRET") || exit 1
   clerk_secret=$(pinned "$CLERK_SECRET") || exit 1
   clerk_jwt=$(pinned "$CLERK_JWT_SECRET") || exit 1
   github_secret=$(pinned "$GITHUB_APP_CLIENT_SECRET") || exit 1
   github_key=$(pinned "$GITHUB_APP_PRIVATE_KEY") || exit 1
+  pseudonym_key=$(pinned "$PSEUDONYM_KEY_SECRET") || exit 1
   # The revision starts Scans on its mode's Scan Job, and links GitHub installations with the read-only app.
   env=("PGHOST=/cloudsql/$CLOUD_SQL_CONNECTION" "PGUSER=$APP_USER" "PGDATABASE=$DATABASE"
     "VITE_CLERK_PUBLISHABLE_KEY=$VITE_CLERK_PUBLISHABLE_KEY" "CLERK_AUTHORIZED_PARTIES=$parties"
     "WARDEN_SCAN_JOB=$(scan_job_name "$MODE_SCAN_JOB")" "GITHUB_APP_CLIENT_ID=$WARDEN_GITHUB_APP_CLIENT_ID")
+  # The pseudonym key always: gcp-setup.sh makes it, so it's never optional like the write app's. Without it the
+  # revision's hook endpoint would answer 503; with the secret missing, Cloud Run refuses the revision instead.
   secrets=("PGPASSWORD=$password" "CLERK_SECRET_KEY=$clerk_secret" "CLERK_JWT_KEY=$clerk_jwt"
-    "GITHUB_APP_CLIENT_SECRET=$github_secret" "GITHUB_APP_PRIVATE_KEY=$github_key")
+    "GITHUB_APP_CLIENT_SECRET=$github_secret" "GITHUB_APP_PRIVATE_KEY=$github_key"
+    "WARDEN_PSEUDONYM_KEY=$pseudonym_key")
   # The write app, only when its client id is set: without it the revision runs with Fix PRs off. An empty value is
   # unset, as .envrc and loadConfig read it. The Scan Jobs never get it (update_scan_job).
   if [[ -n ${WARDEN_GITHUB_WRITE_APP_CLIENT_ID:-} ]]; then

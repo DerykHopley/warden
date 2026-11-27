@@ -93,7 +93,7 @@ assert_write_secrets_services_only() {
   done
 }
 
-assert_equal "warden-run gets Cloud SQL client, seven secrets and the Scan Job's executor with overrides, nothing else" \
+assert_equal "warden-run gets Cloud SQL client, eight secrets and the Scan Job's executor with overrides, nothing else" \
   "projects $project roles/cloudsql.client
 run warden-scan roles/run.jobsExecutorWithOverrides
 secrets warden-clerk-jwt-key roles/secretmanager.secretAccessor
@@ -102,8 +102,16 @@ secrets warden-db-app-password roles/secretmanager.secretAccessor
 secrets warden-github-app-client-secret roles/secretmanager.secretAccessor
 secrets warden-github-app-private-key roles/secretmanager.secretAccessor
 secrets warden-github-write-app-client-secret roles/secretmanager.secretAccessor
-secrets warden-github-write-app-private-key roles/secretmanager.secretAccessor" \
+secrets warden-github-write-app-private-key roles/secretmanager.secretAccessor
+secrets warden-pseudonym-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-run)"
+# The pseudonym keys (#185): the live service reads the live key, a preview its own, and nothing else reads either.
+assert_equal "only warden-run reads warden-pseudonym-key" \
+  "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
+  "$(grep -F "add-iam-policy-binding warden-pseudonym-key " <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
+assert_equal "only warden-preview-run reads warden-preview-pseudonym-key" \
+  "--member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com" \
+  "$(grep -F "add-iam-policy-binding warden-preview-pseudonym-key " <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
 assert_write_secrets_services_only "a dry run" "$output"
 assert_equal "a dry run prints the write app's steps under one note that they need both its secrets" \
   "# DRY_RUN: the write app's replication, grants and variable line below print as they would when both of the write app's secrets exist" \
@@ -169,7 +177,7 @@ assert_equal "only warden-daily reads the admin password" \
   "--member=serviceAccount:warden-daily@$project.iam.gserviceaccount.com" \
   "$(grep -F 'add-iam-policy-binding warden-db-admin-password' <<<"$output" | grep -o -- '--member=[^ ]*')"
 
-assert_equal "warden-preview-run gets Cloud SQL client, the preview app password, the Clerk and GitHub app secrets and the preview Scan Job's executor with overrides, nothing else" \
+assert_equal "warden-preview-run gets Cloud SQL client, the preview app password, the Clerk and GitHub app secrets, the preview pseudonym key and the preview Scan Job's executor with overrides, nothing else" \
   "projects $project roles/cloudsql.client
 run warden-scan-preview roles/run.jobsExecutorWithOverrides
 secrets warden-clerk-jwt-key roles/secretmanager.secretAccessor
@@ -178,7 +186,8 @@ secrets warden-db-preview-app-password roles/secretmanager.secretAccessor
 secrets warden-github-app-client-secret roles/secretmanager.secretAccessor
 secrets warden-github-app-private-key roles/secretmanager.secretAccessor
 secrets warden-github-write-app-client-secret roles/secretmanager.secretAccessor
-secrets warden-github-write-app-private-key roles/secretmanager.secretAccessor" \
+secrets warden-github-write-app-private-key roles/secretmanager.secretAccessor
+secrets warden-preview-pseudonym-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-preview-run)"
 
 # The preview Scan Job (#275): the live one's twin on the preview database, as its own account.
@@ -279,7 +288,7 @@ assert_equal "the only Data Access logs turned on are Secret Manager's reads" \
   "$(grep -F 'DATA_READ' <<<"$output")"
 assert_line "the edited policy is written back" "gcloud projects set-iam-policy $project"
 
-generated="warden-db-app-password warden-db-migrate-password warden-db-preview-app-password warden-db-preview-migrate-password warden-db-admin-password"
+generated="warden-db-app-password warden-db-migrate-password warden-db-preview-app-password warden-db-preview-migrate-password warden-db-admin-password warden-pseudonym-key warden-preview-pseudonym-key"
 for secret in $generated; do
   assert_line "$secret is made from a random value piped in, in europe-west1 only" \
     "<random value> | gcloud secrets create $secret --replication-policy=user-managed --locations=europe-west1 --data-file=- --project=$project"
@@ -440,6 +449,7 @@ done
 #   no-github-app as fresh, but without the GitHub app's two secrets (#132 not done yet)
 #   no-write-app  as fresh, but without the write app's two secrets (an owner who never registered it)
 #   one-write-secret  as fresh, but without the write app's private key
+#   pseudonym-keys  as fresh, but with both pseudonym keys already made (#185)
 #   denied      every secret refuses with PERMISSION_DENIED
 #   no-adc      as fresh, but with no application-default credentials
 # Each describe that finds nothing fails the way that gcloud command does. A secret's value is what was piped into
@@ -494,6 +504,7 @@ case "$*" in
       warden-github-write-app-client-secret) [[ $FAKE_STATE != no-write-app ]] && exit 0 ;;
       warden-github-write-app-private-key)
         [[ $FAKE_STATE != no-write-app && $FAKE_STATE != one-write-secret ]] && exit 0 ;;
+      warden-pseudonym-key | warden-preview-pseudonym-key) [[ $FAKE_STATE == pseudonym-keys ]] && exit 0 ;;
     esac
     not_found secrets.describe "NOT_FOUND: Secret [projects/1/secrets/$3] not found or has no versions." ;;
   "sql instances describe"*)
@@ -833,7 +844,7 @@ for secret in $generated; do
   assert_no_line "$secret: its value isn't on a command line" "$value" "$calls"
 done
 [[ $(sort "$scratch"/fresh/secret-* | uniq -d) == "" ]] || fail "two of the passwords are the same"
-pass "the five passwords differ"
+pass "the five passwords and the two pseudonym keys differ"
 assert_equal "the roles script runs twice, as postgres through the proxy: live on warden, then preview on warden_preview" \
   "live warden postgres 127.0.0.1:$(cut -d= -f2 <<<"$(grep -o -- '--port=[0-9]*' "$scratch/fresh/proxy-calls")")
 preview warden_preview postgres 127.0.0.1:$(cut -d= -f2 <<<"$(grep -o -- '--port=[0-9]*' "$scratch/fresh/proxy-calls")")" \
@@ -866,6 +877,16 @@ assert_line "a first run makes the Scan Job" "run jobs create warden-scan " "$ca
 assert_line "a first run makes the preview Scan Job" "run jobs create warden-scan-preview " "$calls"
 assert_line "a first run makes the daily Job's Scheduler job" "scheduler jobs create http warden-daily-expiry " "$calls"
 assert_write_app "a first run with the write app's secrets"
+
+# Both pseudonym keys already made (#185): neither is made again, as a new key would give every developer a new
+# pseudonym; the passwords still missing are made.
+real_run pseudonym-keys pseudonym-keys
+[[ $code == 0 ]] || fail "a run with both pseudonym keys made failed: $out"
+for secret in warden-pseudonym-key warden-preview-pseudonym-key; do
+  assert_no_line "both pseudonym keys made: $secret isn't made again" "secrets create $secret " "$calls"
+done
+assert_line "both pseudonym keys made: a missing password is still made" \
+  "secrets create warden-db-app-password " "$calls"
 
 # An empty DRY_RUN is a real run too.
 real_run empty-dry-run fresh DRY_RUN=
