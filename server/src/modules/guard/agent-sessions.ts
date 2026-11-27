@@ -1,6 +1,7 @@
 // A Team's Agent sessions and their Agent events (spec #225, slice 1, #183): what the hook endpoint stores from each
 // event Claude Code posts (0019_agent_sessions), and what the Judge reads of an ended session then drops (slice 5a,
-// #443), claiming it first so one run judges it at a time (slice 7a). Every call runs inside `withTeam`, so row-level
+// #443), claiming it first so one run judges it at a time (slice 7a), and what the daily Job deletes and sweeps (slice
+// 8a, #499). Every call runs inside `withTeam`, so row-level
 // security keeps each Team's rows to itself (ADR 0006); the Team is always the hook token's or the Job's, never the
 // event's.
 import { sql, type Generated } from "kysely";
@@ -87,6 +88,9 @@ export const OUTCOME_ORDER: readonly SessionOutcome[] = ["clean", "needs_human_r
  */
 export const JUDGE_CLAIM_MINUTES = 10;
 
+/** How long an Agent event is kept, judged or not (docs/data.md): the daily Job deletes older ones (#499). */
+export const AGENT_EVENT_RETENTION_DAYS = 7;
+
 /**
  * What a claim got: the session, until the instant `until` (its `judging_until`, as Postgres's text, which round-trips
  * exactly), or nothing, as another run holds it or there's no ended session to judge.
@@ -130,6 +134,17 @@ export interface AgentSessions {
     claim: HeldClaim,
     judged: { outcome: SessionOutcome; rowSeqs: readonly string[] },
   ): Promise<SessionOutcome>;
+  /**
+   * Deletes the Team's Agent events received more than AGENT_EVENT_RETENTION_DAYS ago, judged or not, and answers how
+   * many (slice 8a, #499). A session's row stays: its times, outcome and refused count are what Insights reads.
+   */
+  deleteExpiredEvents(team: string): Promise<number>;
+  /**
+   * The Team's missed sessions, at most `limit`, oldest end first: each ended more than JUDGE_CLAIM_MINUTES ago (so
+   * its own run had its chance), holds an event still, and no claim in force holds it. A start that failed, a limited
+   * run, a run that died and events that came late all leave a session so.
+   */
+  listMissed(team: string, limit: number): Promise<string[]>;
 }
 
 export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): AgentSessions {
@@ -265,6 +280,46 @@ export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): Agent
           .where(sql<boolean>`seq = any(${[...rowSeqs]}::bigint[])`)
           .execute();
         return (marked?.outcome as SessionOutcome | null | undefined) ?? outcome;
+      });
+    },
+
+    deleteExpiredEvents(team) {
+      return withTeam(team, async (tx) => {
+        const deleted = await tx
+          .$extendTables<AgentSessionTables>()
+          .deleteFrom("agent_events")
+          .where(
+            "received_at",
+            "<",
+            sql<Date>`now() - make_interval(days => ${AGENT_EVENT_RETENTION_DAYS})`,
+          )
+          .executeTakeFirst();
+        return Number(deleted.numDeletedRows);
+      });
+    },
+
+    listMissed(team, limit) {
+      return withTeam(team, async (tx) => {
+        const rows = await tx
+          .$extendTables<AgentSessionTables>()
+          .selectFrom("agent_sessions")
+          .select("session_id")
+          .where("ended_at", "<=", sql<Date>`now() - make_interval(mins => ${JUDGE_CLAIM_MINUTES})`)
+          .where((where) =>
+            where.or([
+              where("judging_until", "is", null),
+              where("judging_until", "<=", sql<Date>`now()`),
+            ]),
+          )
+          .where(
+            sql<boolean>`exists (select 1 from agent_events e
+              where e.team_id = agent_sessions.team_id and e.session_id = agent_sessions.session_id)`,
+          )
+          .orderBy("ended_at")
+          .orderBy("session_id")
+          .limit(limit)
+          .execute();
+        return rows.map((row) => row.session_id);
       });
     },
   };

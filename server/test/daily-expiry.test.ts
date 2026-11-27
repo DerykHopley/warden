@@ -2,18 +2,44 @@
 // `expireAcceptances` per Team, then `runDailyExpiry` over every Team, on the real `withAdmin` (warden_admin, which
 // may list Team ids and nothing else) and `withTeam` (warden_app). Each test gets a fresh database of its own, so the
 // Teams the Job lists are only the ones it made.
+import { randomBytes, randomUUID } from "node:crypto";
 import { fingerprint, type Finding } from "@warden/contracts";
+import { sql } from "kysely";
 import { afterEach, describe, expect, inject, it } from "vitest";
+import { judgeSettings } from "../src/config.ts";
 import { checkAdminRole, runDailyExpiry, type DailyStep } from "../src/daily-expiry.ts";
 import { createPool, DATABASE_ROLE_NAMES } from "../src/database.ts";
 import { applyExpiry } from "../src/findings/expiry.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { toRow } from "../src/findings/rows.ts";
-import { createLogger } from "../src/log.ts";
+import { createLogger, type Logger } from "../src/log.ts";
+import {
+  createAgentSessions,
+  JUDGE_CLAIM_MINUTES,
+  type AgentSessionTables,
+} from "../src/modules/guard/agent-sessions.ts";
+import { createGuardDailyStep, JUDGE_SWEEP_LIMIT } from "../src/modules/guard/daily-step.ts";
+import { hookEventRoutes } from "../src/modules/guard/hook-event-routes.ts";
+import { createHookSettings } from "../src/modules/guard/hook-settings.ts";
+import { HOOK_EVENTS_PATH } from "../src/modules/guard/managed-settings.ts";
+import { dailyJudgeJobStarterFor } from "../src/scan-job-starters.ts";
+import { runJudgeJob } from "../src/scan-job.ts";
+import type { JudgeJobStarter } from "../src/scans.ts";
+import { createSpending, TEAM_DAILY_SPENDING_LIMIT_USD } from "../src/spending.ts";
+import { judge } from "../src/wiring.ts";
 import { createWithAdmin, type WithAdmin } from "../src/with-admin.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createMigratedTestDatabase, poolAs, testName } from "./databases.ts";
-import { patchRefresh, seedPatchFinding, seedProduct } from "./helpers.ts";
+import { fakeOpenRouter, verdict } from "./fake-openrouter.ts";
+import {
+  ADMIN,
+  patchRefresh,
+  seedPatchFinding,
+  seedProduct,
+  seedTeam,
+  testApp,
+  testKey,
+} from "./helpers.ts";
 
 const ends: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -412,6 +438,423 @@ describe("runDailyExpiry's per-Team steps", () => {
     expect(errors.length).toBeGreaterThan(0);
     expect(JSON.stringify(errors)).toContain("cve_snapshot");
     expect(JSON.stringify(errors)).toContain("load-cves");
+  }, 30_000);
+});
+
+// Story 11 (#499): Guard's step deletes Agent events received more than 7 days ago, then starts a Judge run for each
+// missed session, through a recording fake starter. A session's state is reached by the path that leaves it so where
+// that is cheap (the hook endpoint, a Judge run with a fake model, a claim), and its times are moved back in the
+// database, as the days and JUDGE_CLAIM_MINUTES passing would.
+describe("Guard's daily step (story 11)", () => {
+  /** A Judge starter that records each start, and throws for the sessions in `failsFor`. */
+  function recordingStarter(failsFor: readonly string[] = []) {
+    const started: { sessionId: string; team: string }[] = [];
+    const start: JudgeJobStarter = async (input) => {
+      if (failsFor.includes(input.sessionId)) throw new Error("jobs.run answered HTTP 503");
+      started.push(input);
+    };
+    return { started, start };
+  }
+
+  const guardStep = (
+    withTeam: WithTeam,
+    startJudgeJob: JudgeJobStarter | undefined,
+    logger: Logger,
+  ) =>
+    createGuardDailyStep({
+      agentSessions: createAgentSessions({ withTeam }),
+      startJudgeJob,
+      logger,
+    });
+
+  /** A Team with a hook token, and the hook endpoint's app for it, as the server mounts it, with no Judge starter. */
+  async function teamWithHook(withTeam: WithTeam, team: string, startJudgeJob?: JudgeJobStarter) {
+    await seedTeam(withTeam, team, [[ADMIN, "admin"]]);
+    const hookSettings = createHookSettings({ withTeam });
+    const { token } = await hookSettings.issueToken(team, { issuedBy: ADMIN });
+    const { publicPem } = await testKey();
+    const routes = hookEventRoutes({
+      hookSettings,
+      agentSessions: createAgentSessions({ withTeam }),
+      pseudonymKey: randomBytes(32),
+      behindCloudRun: true,
+      startJudgeJob,
+      logger: createLogger(() => {}),
+    });
+    const { app } = testApp({ publicPem, withTeam, moduleRoutes: [routes] });
+    /** Posts one event of Claude Code's shape for the session, expecting 204. */
+    return async (sessionId: string, name: string) => {
+      const res = await app.request(
+        new Request(new URL(HOOK_EVENTS_PATH, "http://warden.test"), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Forwarded-For": "198.51.100.7",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ session_id: sessionId, hook_event_name: name }),
+        }),
+      );
+      expect(res.status).toBe(204);
+    };
+  }
+
+  const newSession = () => `sess-${randomUUID()}`;
+
+  /** Stores one event for the session, as the hook endpoint does. */
+  const store = (withTeam: WithTeam, team: string, sessionId: string, name: string) =>
+    createAgentSessions({ withTeam }).store(team, {
+      sessionId,
+      name,
+      tool: null,
+      fields: { hook_event_name: name },
+      developer: null,
+      ended: name === "SessionEnd",
+      refusedEvents: 0,
+    });
+
+  /** Sets the session's row's times to `minutes` minutes before now (`ended_at`, or `judging_until`). */
+  const moveSession = (
+    withTeam: WithTeam,
+    team: string,
+    sessionId: string,
+    column: "ended_at" | "judging_until",
+    minutes: number,
+  ) =>
+    withTeam(team, (tx) =>
+      tx
+        .$extendTables<AgentSessionTables>()
+        .updateTable("agent_sessions")
+        .set({ [column]: sql<Date>`now() - make_interval(mins => ${minutes})` })
+        .where("session_id", "=", sessionId)
+        .execute(),
+    );
+
+  /** Moves the session's events named `name` back `days` days. */
+  const ageEvents = (
+    withTeam: WithTeam,
+    team: string,
+    sessionId: string,
+    name: string,
+    days: number,
+  ) =>
+    withTeam(team, (tx) =>
+      tx
+        .$extendTables<AgentSessionTables>()
+        .updateTable("agent_events")
+        .set({ received_at: sql<Date>`now() - make_interval(days => ${days})` })
+        .where("session_id", "=", sessionId)
+        .where("name", "=", name)
+        .execute(),
+    );
+
+  /** The Team's session rows and its events' names by session, read as the Team. */
+  const agentTables = (withTeam: WithTeam, team: string) =>
+    withTeam(team, async (tx) => {
+      const db = tx.$extendTables<AgentSessionTables>();
+      return {
+        sessions: await db.selectFrom("agent_sessions").selectAll().orderBy("session_id").execute(),
+        events: await db
+          .selectFrom("agent_events")
+          .select(["session_id", "name"])
+          .orderBy("seq")
+          .execute(),
+      };
+    });
+
+  /** The Job's log lines, parsed, and its closing line. */
+  const parsed = (lines: string[]) => {
+    const logged = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    return { logged, done: logged.at(-1)! };
+  };
+
+  const MISSED_AGO = JUDGE_CLAIM_MINUTES + 5;
+
+  it("deletes an event received 8 days ago and keeps one received 6 days ago in the same unjudged session, whose record stays as it was", async () => {
+    const db = await freshDatabase();
+    const team = "org_guard_retention";
+    const post = await teamWithHook(db.withTeam, team);
+    const sessionId = newSession();
+    await post(sessionId, "UserPromptSubmit");
+    await post(sessionId, "PostToolUse");
+    await post(sessionId, "SessionEnd");
+    await ageEvents(db.withTeam, team, sessionId, "UserPromptSubmit", 8);
+    await ageEvents(db.withTeam, team, sessionId, "PostToolUse", 6);
+    await ageEvents(db.withTeam, team, sessionId, "SessionEnd", 6);
+    const before = await agentTables(db.withTeam, team);
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+    const starter = recordingStarter();
+
+    const code = await runDailyExpiry({
+      ...db,
+      steps: [guardStep(db.withTeam, starter.start, logger)],
+      logger,
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    const after = await agentTables(db.withTeam, team);
+    expect(after.events).toEqual([
+      { session_id: sessionId, name: "PostToolUse" },
+      { session_id: sessionId, name: "SessionEnd" },
+    ]);
+    expect(after.sessions).toEqual(before.sessions);
+    expect(after.sessions[0]).toMatchObject({ judged_at: null, refused_events: 0 });
+    expect(parsed(lines).done.steps).toMatchObject({
+      guard: { eventsDeleted: 1, teamsFailed: 0 },
+    });
+  }, 30_000);
+
+  it("after a Judge run (fake model), keeps none of the events it read; an event stored after its read survives the delete and is swept", async () => {
+    const db = await freshDatabase();
+    const team = "org_guard_judged";
+    const post = await teamWithHook(db.withTeam, team);
+    const sessionId = newSession();
+    await post(sessionId, "UserPromptSubmit");
+    await post(sessionId, "PostToolUse");
+    await post(sessionId, "SessionEnd");
+    // The late event arrives while the model answers, so the run never read it.
+    const fake = fakeOpenRouter(async () => {
+      await post(sessionId, "PostToolUseFailure");
+      return verdict([]);
+    });
+    const silent = createLogger(() => {});
+    expect(
+      await runJudgeJob({
+        team,
+        sessionId,
+        judge: judge({
+          withTeam: db.withTeam,
+          settings: judgeSettings({ OPENROUTER_API_KEY: `sk-or-v1-${randomUUID()}` }),
+          fetch: fake.fetch,
+          logger: silent,
+        }),
+        logger: silent,
+      }),
+    ).toBe(0);
+    await moveSession(db.withTeam, team, sessionId, "ended_at", MISSED_AGO);
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+    const starter = recordingStarter();
+
+    const code = await runDailyExpiry({
+      ...db,
+      steps: [guardStep(db.withTeam, starter.start, logger)],
+      logger,
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    const after = await agentTables(db.withTeam, team);
+    expect(after.events).toEqual([{ session_id: sessionId, name: "PostToolUseFailure" }]);
+    expect(after.sessions[0]).toMatchObject({ judged_at: expect.any(Date), outcome: "clean" });
+    expect(starter.started).toEqual([{ sessionId, team }]);
+    expect(parsed(lines).done.steps).toMatchObject({
+      guard: { eventsDeleted: 0, judgeRunsStarted: 1, judgeStartsFailed: 0 },
+    });
+  }, 30_000);
+
+  it("starts one Judge run for each missed session, and none for one still open, just ended, claimed, holding no events, or another Team's", async () => {
+    const db = await freshDatabase();
+    const team = "org_guard_sweep";
+    const other = "org_guard_sweep_other";
+    const post = await teamWithHook(db.withTeam, team, () =>
+      Promise.reject(new Error("jobs.run answered HTTP 503")),
+    );
+    const sessions = createAgentSessions({ withTeam: db.withTeam });
+    const ended = async (sessionId: string) => {
+      await store(db.withTeam, team, sessionId, "PostToolUse");
+      await store(db.withTeam, team, sessionId, "SessionEnd");
+    };
+
+    // Missed: its SessionEnd's run couldn't be started (the endpoint still answered 204).
+    const startFailed = newSession();
+    await post(startFailed, "PostToolUse");
+    await post(startFailed, "SessionEnd");
+    // Missed: a run at the Team's daily spending limit left it unjudged, and released its claim.
+    const limited = newSession();
+    await ended(limited);
+    await createSpending({ withTeam: db.withTeam }).record(team, {
+      path: "judge",
+      model: "earlier/model",
+      inputTokens: null,
+      outputTokens: null,
+      costUsd: TEAM_DAILY_SPENDING_LIMIT_USD,
+      costBasis: "stated",
+    });
+    const silent = createLogger(() => {});
+    const unreachable = fakeOpenRouter(() => {
+      throw new Error("a limited run made a model call");
+    });
+    await runJudgeJob({
+      team,
+      sessionId: limited,
+      judge: judge({
+        withTeam: db.withTeam,
+        settings: judgeSettings({ OPENROUTER_API_KEY: `sk-or-v1-${randomUUID()}` }),
+        fetch: unreachable.fetch,
+        logger: silent,
+      }),
+      logger: silent,
+    });
+    // Missed: a run claimed it and died; its claim has run out.
+    const claimExpired = newSession();
+    await ended(claimExpired);
+    expect(await sessions.claim(team, claimExpired)).toMatchObject({ kind: "claimed" });
+    await moveSession(db.withTeam, team, claimExpired, "judging_until", 1);
+    // Missed: judged, then an event arrived late.
+    const lateEvents = newSession();
+    await ended(lateEvents);
+    const judged = async (sessionId: string) => {
+      const claim = await sessions.claim(team, sessionId);
+      if (claim.kind !== "claimed") throw new Error("expected a claim");
+      const read = (await sessions.readEnded(team, sessionId))!;
+      await sessions.markJudged(team, sessionId, claim, {
+        outcome: "clean",
+        rowSeqs: read.map((e) => e.rowSeq),
+      });
+    };
+    await judged(lateEvents);
+    await store(db.withTeam, team, lateEvents, "PostToolUseFailure");
+
+    // Not missed: still open.
+    const open = newSession();
+    await store(db.withTeam, team, open, "PostToolUse");
+    // Not missed: ended under JUDGE_CLAIM_MINUTES ago, so its own run may still claim it.
+    const justEnded = newSession();
+    await ended(justEnded);
+    // Not missed: a run's claim holds it.
+    const claimed = newSession();
+    await ended(claimed);
+    expect(await sessions.claim(team, claimed)).toMatchObject({ kind: "claimed" });
+    // Not missed: judged, with no event left.
+    const noEvents = newSession();
+    await ended(noEvents);
+    await judged(noEvents);
+    // Not this Team's: another Team's missed session.
+    await seedTeam(db.withTeam, other, [[ADMIN, "admin"]]);
+    const othersMissed = newSession();
+    await store(db.withTeam, other, othersMissed, "SessionEnd");
+    await moveSession(db.withTeam, other, othersMissed, "ended_at", MISSED_AGO);
+
+    // Ended in this order, oldest first, each long enough ago but `justEnded` (and `open`, which hasn't ended).
+    const order = [startFailed, limited, claimExpired, lateEvents, claimed, noEvents];
+    for (const [i, sessionId] of order.entries()) {
+      await moveSession(db.withTeam, team, sessionId, "ended_at", MISSED_AGO + order.length - i);
+    }
+    await moveSession(db.withTeam, team, justEnded, "ended_at", JUDGE_CLAIM_MINUTES - 1);
+    const starter = recordingStarter();
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+
+    const code = await runDailyExpiry({
+      ...db,
+      steps: [guardStep(db.withTeam, starter.start, logger)],
+      logger,
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    // The other Team's session is started only for that Team, when the Job comes to it.
+    expect(starter.started).toEqual([
+      ...[startFailed, limited, claimExpired, lateEvents].map((sessionId) => ({ sessionId, team })),
+      { sessionId: othersMissed, team: other },
+    ]);
+    expect(parsed(lines).done.steps).toEqual({
+      guard: { eventsDeleted: 0, judgeRunsStarted: 5, judgeStartsFailed: 0, teamsFailed: 0 },
+    });
+  }, 30_000);
+
+  it(`with 51 missed sessions, starts ${JUDGE_SWEEP_LIMIT}, oldest ended first`, async () => {
+    const db = await freshDatabase();
+    const team = "org_guard_limit";
+    await seedTeam(db.withTeam, team, [[ADMIN, "admin"]]);
+    const missed: string[] = [];
+    for (let i = 0; i < JUDGE_SWEEP_LIMIT + 1; i++) {
+      const sessionId = newSession();
+      await store(db.withTeam, team, sessionId, "SessionEnd");
+      // Newest first, so the order isn't the stored order.
+      await moveSession(db.withTeam, team, sessionId, "ended_at", MISSED_AGO + i);
+      missed.push(sessionId);
+    }
+    const starter = recordingStarter();
+    const logger = createLogger(() => {});
+
+    expect(await guardStep(db.withTeam, starter.start, logger).run(team)).toEqual({
+      failed: false,
+      counts: { eventsDeleted: 0, judgeRunsStarted: JUDGE_SWEEP_LIMIT, judgeStartsFailed: 0 },
+    });
+
+    expect(starter.started.map((s) => s.sessionId)).toEqual(missed.slice(1).reverse());
+  }, 60_000);
+
+  it("logs a start that throws with the Team and no session id, still starts the others, counts it, and the Job exits 1", async () => {
+    const db = await freshDatabase();
+    const team = "org_guard_failing";
+    await seedTeam(db.withTeam, team, [[ADMIN, "admin"]]);
+    const missed = [newSession(), newSession(), newSession()];
+    for (const [i, sessionId] of missed.entries()) {
+      await store(db.withTeam, team, sessionId, "SessionEnd");
+      await moveSession(db.withTeam, team, sessionId, "ended_at", MISSED_AGO + missed.length - i);
+    }
+    const starter = recordingStarter([missed[1]!]);
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+
+    const code = await runDailyExpiry({
+      ...db,
+      steps: [guardStep(db.withTeam, starter.start, logger)],
+      logger,
+      now: NOW,
+    });
+
+    expect(code).toBe(1);
+    expect(starter.started.map((s) => s.sessionId)).toEqual([missed[0], missed[2]]);
+    const { logged, done } = parsed(lines);
+    expect(logged).toContainEqual(
+      expect.objectContaining({
+        severity: "ERROR",
+        team,
+        error: expect.objectContaining({ message: "jobs.run answered HTTP 503" }),
+      }),
+    );
+    for (const sessionId of missed) expect(lines.join("\n")).not.toContain(sessionId);
+    expect(done.steps).toEqual({
+      guard: { eventsDeleted: 0, judgeRunsStarted: 2, judgeStartsFailed: 1, teamsFailed: 1 },
+    });
+  }, 30_000);
+
+  it("in a Cloud Run Job with no WARDEN_SCAN_JOB, starts nothing, logs WARDEN_SCAN_JOB once, and fails the step in part for a Team with a missed session", async () => {
+    const db = await freshDatabase();
+    const missedTeams = ["org_guard_nostart_a", "org_guard_nostart_b"];
+    const cleanTeam = "org_guard_nostart_c";
+    for (const team of [...missedTeams, cleanTeam])
+      await seedTeam(db.withTeam, team, [[ADMIN, "admin"]]);
+    for (const team of missedTeams) {
+      const sessionId = newSession();
+      await store(db.withTeam, team, sessionId, "SessionEnd");
+      await moveSession(db.withTeam, team, sessionId, "ended_at", MISSED_AGO);
+    }
+    const lines: string[] = [];
+    const logger = createLogger((line) => lines.push(line));
+    // As main() chooses it, in the daily Job on Cloud Run with WARDEN_SCAN_JOB missing.
+    const startJudgeJob = dailyJudgeJobStarterFor({ CLOUD_RUN_JOB: "warden-daily" }, { logger });
+
+    const code = await runDailyExpiry({
+      ...db,
+      steps: [guardStep(db.withTeam, startJudgeJob, logger)],
+      logger,
+      now: NOW,
+    });
+
+    expect(code).toBe(1);
+    const { logged, done } = parsed(lines);
+    expect(logged.filter((e) => String(e.message).includes("WARDEN_SCAN_JOB"))).toHaveLength(1);
+    expect(logged.filter((e) => e.step === "guard").map((e) => e.team)).toEqual(missedTeams);
+    expect(done.steps).toEqual({
+      guard: { eventsDeleted: 0, judgeRunsStarted: 0, judgeStartsFailed: 2, teamsFailed: 2 },
+    });
   }, 30_000);
 });
 

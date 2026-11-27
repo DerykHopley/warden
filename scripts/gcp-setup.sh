@@ -776,10 +776,13 @@ main() {
     --http-method=POST --oauth-service-account-email="$scheduler_sa" --project="$project"
   # The Scan Job (ADR 0009): a release gives it Warden's image and settings. The service starts each execution with
   # the Scan's id and Team as an env override, which run.invoker can't pass: warden-run gets
-  # run.jobsExecutorWithOverrides on this Job only.
+  # run.jobsExecutorWithOverrides on this Job only. The daily Job's Guard step (#499) starts a Judge run the same way
+  # for each missed Agent session, so warden-daily gets it too, on this Job only, never a preview Job's.
   ensure_job "$project" "$SCAN_JOB" "$scan_sa"
   run_retrying gcloud run jobs add-iam-policy-binding "$SCAN_JOB" --region="$REGION" \
     --member="serviceAccount:$run_sa" --role=roles/run.jobsExecutorWithOverrides --project="$project"
+  run_retrying gcloud run jobs add-iam-policy-binding "$SCAN_JOB" --region="$REGION" \
+    --member="serviceAccount:$daily_sa" --role=roles/run.jobsExecutorWithOverrides --project="$project"
   # The preview Scan Job (#275): a preview deploy gives it the preview's image and settings, so warden-preview-deploy
   # gets run.developer on it; the preview service starts its executions as warden-preview-run.
   ensure_job "$project" "$PREVIEW_SCAN_JOB" "$preview_scan_sa"

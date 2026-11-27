@@ -138,14 +138,16 @@ update_job() {
     --project="$GCP_PROJECT_ID"
 }
 
-# <image>: the daily Job (ADR 0009) runs that image. The Cloud Scheduler job that starts it is left alone. Returns
-# gcloud's status.
+# <image>: the daily Job (ADR 0009) runs that image. The Cloud Scheduler job that starts it is left alone. Guard's step
+# in it starts a Judge run as an execution of the live Scan Job for each missed Agent session (#499), so it names that
+# Job in WARDEN_SCAN_JOB; it keeps no model or Langfuse key, as the run reads its own. Returns gcloud's status.
 update_daily_job() {
   local app_password admin_password
   app_password=$(pinned warden-db-app-password) || exit 1
   admin_password=$(pinned warden-db-admin-password) || exit 1
   update_job "$DAILY_JOB" "$1" "$DAILY_ACCOUNT" server/src/daily-expiry.ts warden warden_app \
-    "$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")"
+    "$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")" \
+    "WARDEN_SCAN_JOB=$(scan_job_name "$SCAN_JOB")"
 }
 
 # <job>: a Scan Job's resource name, as a revision's WARDEN_SCAN_JOB holds it.

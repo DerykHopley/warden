@@ -95,6 +95,15 @@ describe("docs/data.md", () => {
     expect(sessions).not.toMatch(/\| Designed: Guard spec \|$/);
   });
 
+  it("marks the daily delete and sweep of Agent events built (#499), with no designed wording left for them", () => {
+    const events = row("Cloud SQL: Agent events");
+    expect(events).toMatch(/daily delete and the daily sweep \(#499\)[^|]*7 days[^|]*50/);
+    expect(events).not.toMatch(/not built yet/);
+    expect(data).toMatch(/never kept past 7 days \(built, #499/);
+    expect(data).not.toMatch(/designed, Guard spec slice 8/);
+    expect(data).toMatch(/The daily Job deletes the rest \(built, #499\)/);
+  });
+
   it("marks the OpenRouter row built: the Judge's call (#443), started on each SessionEnd (#444)", () => {
     const openRouter = row("OpenRouter and the model providers behind it");
     expect(openRouter).toMatch(/Built: [^|]*`zdr`[^|]*`data_collection: "deny"`[^|]*#443/);

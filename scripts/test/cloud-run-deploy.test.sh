@@ -551,13 +551,14 @@ assert_equal "release: the daily Job runs node server/src/daily-expiry.ts" "node
 assert_equal "release: the daily Job has the Cloud SQL instance attached" "$connection" \
   "$(flag set-cloudsql-instances "$daily")"
 assert_equal "release: the daily Job retries once" 1 "$(flag max-retries "$daily")"
-assert_equal "release: the daily Job's plain values: as warden_app on warden" \
+assert_equal "release: the daily Job's plain values: as warden_app on warden, starting Judge runs as warden-scan (#499)" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_app
-PGDATABASE=warden" \
+PGDATABASE=warden
+WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan" \
   "$(gcloud_dict "$(flag set-env-vars "$daily")")"
 daily_secrets=$(gcloud_dict "$(flag set-secrets "$daily")")
-assert_equal "release: the daily Job's secrets: the app password and the admin password" \
+assert_equal "release: the daily Job's secrets: the app password and the admin password, no model or Langfuse key" \
   "PGPASSWORD=warden-db-app-password
 WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
   "$(sed 's/:[^:]*$//' <<<"$daily_secrets")"

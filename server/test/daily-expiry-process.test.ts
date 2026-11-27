@@ -175,7 +175,11 @@ describe("the daily Job's process", () => {
       teamsVisited: 2,
       teamsFailed: 0,
       findingsReopened: 2,
-      steps: { "patch-refresh": { productsScanned: 2, productsFailed: 0 } },
+      steps: {
+        "patch-refresh": { productsScanned: 2, productsFailed: 0 },
+        // Guard's step is wired (#499): no Agent session in either Team, so nothing deleted or started.
+        guard: { eventsDeleted: 0, judgeRunsStarted: 0, judgeStartsFailed: 0, teamsFailed: 0 },
+      },
     });
   }, 60_000);
 

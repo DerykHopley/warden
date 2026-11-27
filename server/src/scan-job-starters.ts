@@ -49,3 +49,19 @@ export function judgeJobStarterFor(
     local: localJudgeJobStarter,
   });
 }
+
+/**
+ * The daily Job's Judge run starter (#499), for Guard's sweep of missed sessions. The Job loads no server config, so
+ * the same choice is made from its own environment: WARDEN_SCAN_JOB names the Cloud Run Job (an empty value counts as
+ * unset, as in `loadConfig`), and CLOUD_RUN_JOB, which Cloud Run sets in every Job's task, says it runs there. The Job
+ * keeps no model key: the run it starts reads its own.
+ */
+export function dailyJudgeJobStarterFor(
+  env: Record<string, string | undefined>,
+  deps: StarterDeps,
+): JudgeJobStarter | undefined {
+  return judgeJobStarterFor(
+    { scanJob: env.WARDEN_SCAN_JOB || undefined, behindCloudRun: Boolean(env.CLOUD_RUN_JOB) },
+    deps,
+  );
+}
