@@ -2,6 +2,7 @@
 // Esc, full screen on a phone, pinning and the divider, a person's choice kept over a reload, and stories 9 and 3 end
 // to end: a Member's detail card for a chosen Finding, and the Proposal she made in it.
 import type { Page } from "@playwright/test";
+import { isOnTop } from "./on-top.ts";
 import { ACME, expect, GRACE, sessionToken, signingKey, test } from "./session.ts";
 
 const panel = (page: Page) => page.getByRole("complementary", { name: "Ask Warden" });
@@ -54,14 +55,7 @@ test("opened at 1024px, the panel floats over the page below the header; Esc clo
   // Below the header: Sign out is still the element under its own centre, and takes a click.
   const header = (await page.getByRole("banner").boundingBox())!;
   expect(box.y).toBeGreaterThanOrEqual(header.y + header.height);
-  const signOut = page.getByRole("button", { name: "Sign out" });
-  const at = (await signOut.boundingBox())!;
-  expect(
-    await signOut.evaluate((el, point) => document.elementFromPoint(point.x, point.y) === el, {
-      x: at.x + at.width / 2,
-      y: at.y + at.height / 2,
-    }),
-  ).toBe(true);
+  expect(await isOnTop(page.getByRole("button", { name: "Sign out" }))).toBe(true);
 
   await page.keyboard.press("Escape");
   await expect(panel(page)).toHaveCount(0);
