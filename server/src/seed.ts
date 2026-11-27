@@ -108,6 +108,12 @@ function fileExistsOnDisk(path: string): boolean {
   return statSync(path, { throwIfNoEntry: false }) !== undefined;
 }
 
+/** How a refusal shows a variable's value: its value, or "unset" or "empty" rather than "undefined" or a blank (#480). */
+function shown(value: string | undefined): string {
+  if (value === undefined) return "unset";
+  return value === "" ? "empty" : value;
+}
+
 /**
  * What makes the database the PG* variables name count as hosted, one phrase per signal; empty when it's local. The
  * Cloud SQL Auth Proxy listens on 127.0.0.1, so a password from anywhere pg looks counts too: PGPASSWORD, PGPASSFILE's
@@ -121,7 +127,7 @@ function hostedSignals(
 ): string[] {
   const signals: string[] = [];
   if (env.PGHOST !== undefined && !LOCAL_HOSTS.has(env.PGHOST)) {
-    signals.push(`PGHOST is ${env.PGHOST}`);
+    signals.push(`PGHOST is ${shown(env.PGHOST)}`);
   }
   if (env.PGPASSWORD) signals.push("PGPASSWORD is set");
   if (env.PGPASSFILE) signals.push("PGPASSFILE is set");
@@ -155,6 +161,9 @@ export function seedRefusal(
   const why = `(it counts as hosted: ${signals.join(", ")})`;
   if (env.PGDATABASE === LIVE_DATABASE) {
     return `The demo seed never writes to the live database, ${LIVE_DATABASE} ${why}`;
+  }
+  if (!env.PGDATABASE) {
+    return `On a hosted database, WARDEN_SEED_DEMO must name the database, and PGDATABASE is ${shown(env.PGDATABASE)}: set it to the database WARDEN_SEED_DEMO names ${why}`;
   }
   if (asked !== env.PGDATABASE) {
     return `On a hosted database, WARDEN_SEED_DEMO must name the database, ${env.PGDATABASE} ${why}`;

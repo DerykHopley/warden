@@ -272,6 +272,27 @@ describe("seedRefusal", () => {
     expectHosted({ PGPASSWORD: "x" }, noPgpass, /PGPASSWORD is set/);
   });
 
+  // #480: the refusal names an unset or empty variable as such, never "undefined" or a blank.
+  it("on a hosted database with PGDATABASE unset or empty, says so rather than 'undefined' or a blank", () => {
+    for (const [PGDATABASE, shown] of [
+      [undefined, "unset"],
+      ["", "empty"],
+    ] as const) {
+      const refusal = seedRefusal(
+        { PGHOST: "127.0.0.1", PGPASSWORD: "x", PGDATABASE, WARDEN_SEED_DEMO: "warden_preview" },
+        noPgpass,
+      );
+      expect(refusal).toMatch(/WARDEN_SEED_DEMO must name the database/);
+      expect(refusal).toMatch(new RegExp(`PGDATABASE is ${shown}`));
+      expect(refusal).not.toMatch(/undefined/);
+      expect(refusal).toMatch(/PGPASSWORD is set/);
+    }
+  });
+
+  it("counts an empty PGHOST as hosted and shows it as 'PGHOST is empty'", () => {
+    expectHosted({ PGHOST: "" }, noPgpass, /PGHOST is empty/);
+  });
+
   // The Cloud SQL Auth Proxy listens on 127.0.0.1, and pg finds a password in PGPASSFILE's file, PGSERVICE's entry or
   // ~/.pgpass as well as PGPASSWORD: any of them makes the database count as hosted (#396).
   describe("on 127.0.0.1 with a password from a file or a service", () => {
