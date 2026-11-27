@@ -1164,6 +1164,14 @@ button[aria-busy="true"],
   margin: 0;
 }
 
+/* What each tier sends, under the picker: the options hold only the tiers' names, which a phone's closed select
+   shows whole, and these lines wrap (#422). */
+.hook-tier-words {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .hook-settings h3 {
   margin: 16px 0 8px;
   font-size: 1rem;
