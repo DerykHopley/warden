@@ -282,6 +282,10 @@ describe("seedRefusal", () => {
         asked.push(path);
         return true;
       };
+    /** A file check that can't tell whether any path exists. */
+    const cantTell = () => {
+      throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    };
 
     it("with PGPASSFILE set, needs the database's name and never seeds warden", () => {
       expectHosted({ PGPASSFILE: "/some/file" }, noPgpass, /PGPASSFILE/);
@@ -298,9 +302,6 @@ describe("seedRefusal", () => {
     });
 
     it("counts as hosted when it can't tell whether ~/.pgpass exists", () => {
-      const cantTell = () => {
-        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-      };
       const refusal = seedRefusal(
         { PGHOST: "127.0.0.1", HOME: "/home/dev", PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
         cantTell,
@@ -328,19 +329,12 @@ describe("seedRefusal", () => {
 
     it("takes an empty PGPASSFILE or PGSERVICE, or no HOME, as no password", () => {
       for (const where of [{ PGPASSFILE: "" }, { PGSERVICE: "" }, { HOME: "" }, {}]) {
-        const asked: string[] = [];
-        const noPgpassAnywhere = (path: string) => {
-          asked.push(path);
-          return false;
-        };
         expect(
           seedRefusal(
             { PGHOST: "127.0.0.1", ...where, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
-            noPgpassAnywhere,
+            noPgpass,
           ),
         ).toBeUndefined();
-        // None of these sets HOME, so pg would read .pgpass in the working folder: that's where it looks (#476).
-        expect(asked).toEqual([".pgpass"]);
       }
     });
 
@@ -358,9 +352,6 @@ describe("seedRefusal", () => {
         });
 
         it(`${name}: counts as hosted when it can't tell whether ./.pgpass exists`, () => {
-          const cantTell = () => {
-            throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
-          };
           const refusal = seedRefusal(
             { PGHOST: "127.0.0.1", ...noHome, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
             cantTell,

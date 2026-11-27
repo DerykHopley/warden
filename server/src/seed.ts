@@ -126,13 +126,13 @@ function hostedSignals(
   if (env.PGPASSWORD) signals.push("PGPASSWORD is set");
   if (env.PGPASSFILE) signals.push("PGPASSFILE is set");
   if (env.PGSERVICE) signals.push("PGSERVICE is set");
-  const [pgpass, named] = env.HOME
+  const [pgpass, shownAs] = env.HOME
     ? [join(env.HOME, ".pgpass"), "~/.pgpass"]
     : [".pgpass", "./.pgpass"];
   try {
-    if (fileExists(pgpass)) signals.push(`${named} exists`);
+    if (fileExists(pgpass)) signals.push(`${shownAs} exists`);
   } catch {
-    signals.push(`${named} couldn't be checked`);
+    signals.push(`${shownAs} couldn't be checked`);
   }
   return signals;
 }
