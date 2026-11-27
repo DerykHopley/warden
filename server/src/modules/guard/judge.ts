@@ -40,14 +40,17 @@ async function appliedRunFlagged(
   );
 }
 
+/**
+ * `modelFor` gives the Team's model, asked only when there is a session to judge: its own (slice 6a) or OpenRouter's.
+ */
 export function createJudge({
   agentSessions,
   findings,
-  model,
+  modelFor,
 }: {
   agentSessions: Pick<AgentSessions, "readEnded" | "markJudged">;
   findings: Pick<Findings, "report" | "listByRules">;
-  model: JudgeModel;
+  modelFor: (team: string) => Promise<JudgeModel>;
 }): Judge {
   return {
     async run(team, sessionId) {
@@ -57,6 +60,7 @@ export function createJudge({
       const events = maskEvents(read);
       const eventsHash = await agentEventsHash(events);
       const { system, user } = judgePrompt(events);
+      const model = await modelFor(team);
       const answer = await model.complete(
         [
           { role: "system", content: system },

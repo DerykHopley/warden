@@ -175,9 +175,10 @@ settled on ticket #5.
 | J3 | A change quietly breaks J1 or J2 | T | A bug in Warden | Steering starts working again | An injection fixture, with a test that the app ignores it | Guard spec | Designed | SD injection fixture |
 | J4 | The Judge decides what a person must decide | E | Text written to steer the Judge; a bug | A Finding closed without a person | The Judge is a Spot run: through `report` it can only open Findings. It can't mark one Fixed, Accepted or False positive. Agents only propose | Guard spec (on slice 7's `report`) | Built: the Judge run opens Findings only through `report`, as a Spot run (#443) | ADR 0005, Glossary (Actor, Spot run) |
 | J5 | Spending runs away | D | An outside attacker; a developer; a looping run | The month's budget gone | Three limits: the $15 cap on the OpenRouter key; per-Team limits that count every spending path (chat, Judge, retries, Scans), with a test for each path; a call budget per run | Guard spec | Designed | SD spending cap, per-Team limits, call budget |
-| J6 | Event content kept or trained on by a model provider | I | The model provider | A Team's content outside Warden's retention | Routing only to Zero Data Retention endpoints, with training off, on the account and per request; the local-model option sends nothing to OpenRouter (`data.md`) | Guard spec | Built in part: per request, each Judge call asks for `zdr` and `data_collection: "deny"` (#443). Designed: the account's own settings, set by the owner (#445), and the local-model option (Guard spec) | SD local-model option, SD data.md lists what leaves |
+| J6 | Event content kept or trained on by a model provider | I | The model provider | A Team's content outside Warden's retention | Routing only to Zero Data Retention endpoints, with training off, on the account and per request; the local-model option sends nothing to OpenRouter (`data.md`) | Guard spec | Built in part: per request, each Judge call asks for `zdr` and `data_collection: "deny"` (#443); the local-model option, a Team's own model set by its Admin, which the Judge calls with no key and sends OpenRouter nothing (#461). Designed: the account's own settings, set by the owner (#445) | SD local-model option, SD data.md lists what leaves |
 | J7 | The Judge's input kept in Langfuse | I | Anyone with Langfuse access | Event content kept beyond 7 days | A Judge call's trace holds metadata only: model, tokens, cost, timing, outcome | Guard spec | Designed | ADR 0007, #5 d2 |
 | J8 | A flagged session's evidence questioned later | R | A developer; an assessor | The Finding can't be checked against what the Judge saw | The Finding keeps the masked events the Judge used and a SHA-256 hash of the redacted events it read, in order | Slice 6, #11 (format); Guard spec (keeping it) | Built: the evidence format, the masked events and the events hash in `SessionEvidence` (slice 6, #11); kept on each Finding the Judge run opens (#443) | ADR 0007, #5 d4 |
+| J9 | The Judge's call to a Team's own model aimed inside Warden's network | I, E | An Admin; whoever controls the URL's DNS | The metadata server, the database or another internal service reached from the Judge | The URL rule (question 6, closed): https only, no user name, query or fragment, at most 2048 characters, and every address the host resolves to public. The call is pinned: its connection resolves the host again and connects only to the address it just checked, never following a redirect. Localhost only with `WARDEN_JUDGE_LOCALHOST=1`, refused on Cloud Run | Guard spec, #461 | Built: `checkJudgeUrl` on `PUT /api/judge/model`, and `pinnedFetch` on each call (#461) | Owner, 2026-11-27 (Q5) |
 
 ### Dashboard and API (built in part, #4; Roles in slice 5)
 
@@ -323,7 +324,7 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 | Redaction on output and in logs; secret values never stored, only masked | L1, A3, H8; `data.md`, Data minimisation | Built: logs and 500 bodies (slice 1a, #4); evidence (slice 6, #11); events, redacted on arrival (#184) |
 | A retention period and a way to delete | H9; `data.md`, Retention and deletion | Decided: slice 2 (this document). Designed: the drop job (Guard spec); Team deletion (not yet planned) |
 | `docs/data.md` lists what leaves the machine | `data.md`, What leaves the machine | Built: slice 2 (this document) |
-| A local-model option for the Judge | J6; `data.md`, What leaves the machine | Designed: Guard spec |
+| A local-model option for the Judge | J6, J9; `data.md`, What leaves the machine | Built: the Team's own model, set by an Admin through `PUT /api/judge/model` (#461); its Setup page section: #464 |
 | Append-only history enforced in Postgres, with a test | D6 | Built: Status history (slice 7, #22), Role history (slice 5a, #27) and Vouch's review log (`control_reviews`, Vouch spec #341, #366) |
 | Secrets: keyring and `.envrc` locally, Secret Manager on the host | R1, R2 | Built: keyring and `.envrc` (slice 1a, #4); the secrets in Secret Manager and which account may read each (slice 1b-ii, the setup script, #16). Built for previews (slice 1b-ii, the owner preview, #65): checked live, the preview revision and its migration job read their secrets from Secret Manager as `secretKeyRef`s pinned to version 1, with no secret in a plain value. The live service reads them the same way from #24's first release |
 
@@ -340,7 +341,14 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 4. **How long agent checkpoints are kept** (the chat agent spec, not yet planned).
 5. **How a Real-world run's Findings are held** (Guard spec): a Team per repo owner, as `data.md` assumes, or
    another way that keeps them to the owner.
-6. **Where the Judge's local model runs** (Guard spec), and how a Team turns it on.
+6. **Closed: where the Judge's local model runs** (Guard spec; #461). Wherever the Team runs it: an Admin sets an
+   OpenAI-compatible base URL and a model name with `PUT /api/judge/model`, and clearing it puts the Team back on
+   OpenRouter. The URL rule accepts https only, with no user name, query or fragment, at most 2048 characters, and
+   only when every address the host resolves to is public (no loopback, private, shared, link-local, unspecified or
+   multicast address, nor an IPv4-mapped form of one). Each call is pinned to the address it checks: its connection
+   resolves the host through the same rule and connects to that address, so a DNS change after the save is refused at
+   the call, and a redirect is never followed (J9). `WARDEN_JUDGE_LOCALHOST=1`, for local development only and a
+   ConfigError on Cloud Run, also lets the URL be `localhost`, `127.0.0.1` or `[::1]` over http.
 7. **Closed: how the endpoint checks a token** (#100, question 4; built in #153). Not from Secret Manager: Cloud SQL
    keeps a SHA-256 hash per token issued, one append-only row each. The token names its Team, so the check reads that
    Team's two newest rows through `withTeam`, with no cross-Team read, and compares the hashes in constant time. The

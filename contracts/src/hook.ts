@@ -53,3 +53,31 @@ export const HookTokenBody = z.strictObject({
   managed_settings: ManagedSettings,
 });
 export type HookTokenBody = z.infer<typeof HookTokenBody>;
+
+/**
+ * `GET /api/judge/model` and `PUT`'s answer (spec #225, slice 6a, story 10): the Team's own Judge model, its
+ * OpenAI-compatible base URL and model name and when it was set, or null when the Team is judged on OpenRouter.
+ */
+export const JudgeModelBody = z.strictObject({
+  local_model: z.strictObject({ url: z.string(), model: z.string(), set_at: DateTime }).nullable(),
+});
+export type JudgeModelBody = z.infer<typeof JudgeModelBody>;
+
+/**
+ * `PUT /api/judge/model`'s body: the Team's own model, or null to clear it. The model name is 1 to 200 characters, not
+ * only spaces, with no control character; the server checks the URL against its URL rule.
+ */
+export const JudgeModelChange = z.strictObject({
+  local_model: z
+    .strictObject({
+      url: z.string(),
+      model: z
+        .string()
+        .min(1)
+        .max(200)
+        .regex(/\S/, { message: "is only spaces" })
+        .regex(/^\P{Cc}*$/u, { message: "holds a control character" }),
+    })
+    .nullable(),
+});
+export type JudgeModelChange = z.infer<typeof JudgeModelChange>;

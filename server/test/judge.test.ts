@@ -201,7 +201,10 @@ describe("a Judge run", () => {
       createJudge({
         agentSessions: failingOnce,
         findings,
-        model: openRouterModel({ apiKey: KEY, model: settings.model, fetch: fake.fetch }),
+        modelFor: () =>
+          Promise.resolve(
+            openRouterModel({ apiKey: KEY, model: settings.model, fetch: fake.fetch }),
+          ),
       }).run(team, sessionId);
 
     await expect(run()).rejects.toThrow("the database went away");
@@ -242,7 +245,10 @@ describe("a Judge run", () => {
       createJudge({
         agentSessions: failingOnce,
         findings,
-        model: openRouterModel({ apiKey: KEY, model: settings.model, fetch: fake.fetch }),
+        modelFor: () =>
+          Promise.resolve(
+            openRouterModel({ apiKey: KEY, model: settings.model, fetch: fake.fetch }),
+          ),
       }).run(team, sessionId);
 
     await expect(run()).rejects.toThrow("the database went away");

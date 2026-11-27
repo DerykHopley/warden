@@ -8,16 +8,19 @@
 // the server shares, so the API's Rules and the Job's scanner can't drift apart.
 //
 // Started with WARDEN_SESSION_ID in place of WARDEN_SCAN_ID (#443), it runs Guard's Judge for that ended Agent session
-// instead (`runJudgeJob`), with the Judge `wiring.ts` builds: one model call on OpenRouter, a Guard Spot run reported,
-// then the session marked judged and the events it read dropped. A run that throws leaves the session unjudged with
-// its events, and a retry over the same events reports the same Spot run, which changes nothing.
+// instead (`runJudgeJob`), with the Judge `wiring.ts` builds: one model call, to the Team's own model when it set one
+// (slice 6a) or else on OpenRouter, a Guard Spot run reported, then the session marked judged and the events it read
+// dropped. A run that throws leaves the session unjudged with its events, and a retry over the same events reports the
+// same Spot run, which changes nothing.
 //
 // As its own process (the local starter spawns it; the Cloud Run Job runs it from slice 1b):
 // - WARDEN_SCAN_ID and WARDEN_TEAM name the Scan; either missing or blank exits 1 before connecting.
 // - WARDEN_SESSION_ID and WARDEN_TEAM name a session to judge instead. Both WARDEN_SCAN_ID and WARDEN_SESSION_ID set,
 //   or a session id outside the hook's session pattern, exits 1 before connecting, naming the variables, not their
-//   values. OPENROUTER_API_KEY and WARDEN_JUDGE_MODEL give the Judge its model; with the key unset, a session to
-//   judge exits 1 naming it, before any call.
+//   values. OPENROUTER_API_KEY and WARDEN_JUDGE_MODEL give the Judge its model on OpenRouter; with the key unset, a
+//   session to judge there exits 1 naming it, before any call. A Team's own model needs no key. WARDEN_JUDGE_LOCALHOST=1
+//   (local development only) lets that model be on localhost; any other value, or 1 on Cloud Run, exits 1 before
+//   connecting, naming it.
 // - The pool is the PG* variables', as the app role, with the server's role check on connect: a role that can get
 //   around row-level security exits 1, naming the role and why.
 // - GITHUB_APP_CLIENT_ID and GITHUB_APP_PRIVATE_KEY give Guard its RepoReader; one without the other, or a key that
@@ -29,6 +32,7 @@ import {
   gitHubReaderSettings,
   judgeSettings,
   type GitHubReaderSettings,
+  type JudgeSettings,
 } from "./config.ts";
 import { createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings, type Findings } from "./findings/index.ts";
@@ -262,7 +266,16 @@ async function judgeMain(
     );
     return 1;
   }
-  const settings = judgeSettings(env);
+  let settings: JudgeSettings;
+  try {
+    settings = judgeSettings(env);
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    logger.error(`scan job failed before connecting: ${error.message}`, {
+      variables: error.variables,
+    });
+    return 1;
+  }
   const pool = jobPool(logger);
   try {
     await pool.query("select 1");

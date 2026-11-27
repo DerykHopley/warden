@@ -2,7 +2,8 @@
 // id and Team, the server's own PG* variables and HOME, and Node's options, so it connects as the server does, and the
 // GitHub App's client id and key, which it reads repos with. Nothing else of the server's environment is handed on: no
 // Clerk key, no admin password, no GitHub client secret. It isn't waited on; its exit is logged. The Judge run's
-// starter runs the same child with the session's id in place of the Scan's, and the Judge's key and model (#444).
+// starter runs the same child with the session's id in place of the Scan's, and the Judge's key, model and localhost
+// setting (#444, #461).
 import { spawn as nodeSpawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -44,8 +45,15 @@ function jobVariables(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   );
 }
 
-/** The Judge run's own two, handed on only to it, and only when the server has them (#444). */
-const JUDGE_VARIABLES = ["OPENROUTER_API_KEY", "WARDEN_JUDGE_MODEL"] as const;
+/**
+ * The Judge run's own three, handed on only to it, and only when the server has them (#444): its key and model, and
+ * the localhost setting a Team's own model on localhost needs (slice 6a).
+ */
+const JUDGE_VARIABLES = [
+  "OPENROUTER_API_KEY",
+  "WARDEN_JUDGE_MODEL",
+  "WARDEN_JUDGE_LOCALHOST",
+] as const;
 
 type StarterDeps = { logger: Logger; env?: NodeJS.ProcessEnv; spawn?: Spawn };
 

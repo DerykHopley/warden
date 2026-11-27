@@ -330,6 +330,32 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("the Judge's localhost setting (WARDEN_JUDGE_LOCALHOST)", () => {
+    const onCloudRun = { K_SERVICE: "warden", CLERK_AUTHORIZED_PARTIES: "https://w.example" };
+
+    it("is on with 1, and off unset or empty", () => {
+      expect(loadConfig({ ...env, WARDEN_JUDGE_LOCALHOST: "1" }).judgeLocalhost).toBe(true);
+      expect(loadConfig(env).judgeLocalhost).toBe(false);
+      expect(loadConfig({ ...env, WARDEN_JUDGE_LOCALHOST: "" }).judgeLocalhost).toBe(false);
+    });
+
+    it("refuses any other value, naming the variable", () => {
+      const error = configError(() => loadConfig({ ...env, WARDEN_JUDGE_LOCALHOST: "yes" }));
+      expect(error.variables).toEqual(["WARDEN_JUDGE_LOCALHOST"]);
+    });
+
+    it.each([
+      ["K_SERVICE", onCloudRun],
+      ["CLOUD_RUN_JOB", { CLOUD_RUN_JOB: "warden-scan" }],
+    ])("refuses 1 on Cloud Run (%s set), naming the variable", (_name, cloudRun) => {
+      const error = configError(() =>
+        loadConfig({ ...env, ...cloudRun, WARDEN_JUDGE_LOCALHOST: "1" }),
+      );
+      expect(error.variables).toEqual(["WARDEN_JUDGE_LOCALHOST"]);
+      expect(loadConfig({ ...env, ...cloudRun }).judgeLocalhost).toBe(false);
+    });
+  });
+
   it.each([
     ["a path", "https://warden.example/app"],
     ["no scheme", "warden.example"],
@@ -429,14 +455,41 @@ describe("judgeSettings (the Scan Job's, for a Judge run)", () => {
   it("reads the key and the model", () => {
     expect(
       judgeSettings({ OPENROUTER_API_KEY: "sk-or-v1-abc", WARDEN_JUDGE_MODEL: "test/model" }),
-    ).toEqual({ apiKey: "sk-or-v1-abc", model: "test/model" });
+    ).toEqual({ apiKey: "sk-or-v1-abc", model: "test/model", allowLocalhost: false });
   });
 
   it.each([
     ["unset", {}],
-    ["empty", { OPENROUTER_API_KEY: "", WARDEN_JUDGE_MODEL: "" }],
-  ])("leaves the key undefined and takes Claude Haiku 5.5 when they're %s", (_name, env) => {
-    expect(judgeSettings(env)).toEqual({ apiKey: undefined, model: DEFAULT_JUDGE_MODEL });
-    expect(DEFAULT_JUDGE_MODEL).toBe("anthropic/claude-haiku-5.5");
+    ["empty", { OPENROUTER_API_KEY: "", WARDEN_JUDGE_MODEL: "", WARDEN_JUDGE_LOCALHOST: "" }],
+  ])(
+    "leaves the key undefined, takes Claude Haiku 5.5 and keeps localhost off when they're %s",
+    (_name, env) => {
+      expect(judgeSettings(env)).toEqual({
+        apiKey: undefined,
+        model: DEFAULT_JUDGE_MODEL,
+        allowLocalhost: false,
+      });
+      expect(DEFAULT_JUDGE_MODEL).toBe("anthropic/claude-haiku-5.5");
+    },
+  );
+
+  it("turns localhost on with WARDEN_JUDGE_LOCALHOST=1", () => {
+    expect(judgeSettings({ WARDEN_JUDGE_LOCALHOST: "1" }).allowLocalhost).toBe(true);
   });
+
+  it("refuses WARDEN_JUDGE_LOCALHOST=yes, naming the variable", () => {
+    expect(configError(() => judgeSettings({ WARDEN_JUDGE_LOCALHOST: "yes" })).variables).toEqual([
+      "WARDEN_JUDGE_LOCALHOST",
+    ]);
+  });
+
+  it.each(["K_SERVICE", "CLOUD_RUN_JOB"])(
+    "refuses WARDEN_JUDGE_LOCALHOST=1 with %s set, naming the variable",
+    (cloudRun) => {
+      const error = configError(() =>
+        judgeSettings({ WARDEN_JUDGE_LOCALHOST: "1", [cloudRun]: "warden-scan" }),
+      );
+      expect(error.variables).toEqual(["WARDEN_JUDGE_LOCALHOST"]);
+    },
+  );
 });
