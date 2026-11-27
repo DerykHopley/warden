@@ -10,11 +10,12 @@ import {
   startsScans,
   type ListedRepoBody,
   type ScanBody,
+  type TeamCatalogue,
 } from "@warden/contracts";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { NOT_ANSWERING, TEAM_NOT_OPENED } from "./api.ts";
+import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn } from "./api.ts";
 import type { PageProps } from "./App.tsx";
-import { dayAndTimeWords } from "./date-words.ts";
+import { calendarDayWords, dayAndTimeWords } from "./date-words.ts";
 import {
   fetchGitHubApp,
   fetchRepos,
@@ -34,6 +35,13 @@ import {
 } from "./github-setup.ts";
 import { useLandOnAnchor } from "./land-on-anchor.ts";
 import { goTo } from "./navigate.ts";
+import {
+  cataloguesChanged,
+  fetchCatalogues,
+  switchCatalogue,
+  watchCatalogues,
+  type CataloguesResult,
+} from "./vouch.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 /** How long after each answer the repo list is read again while a listed Scan is queued or running. */
@@ -117,6 +125,10 @@ export function SetupPage(props: PageProps) {
       <section className="setup-section" aria-labelledby={REPOS_ANCHOR}>
         <h2 id={REPOS_ANCHOR}>Repos</h2>
         <RepoList {...props} />
+      </section>
+      <section className="setup-section" aria-labelledby="setup-catalogues">
+        <h2 id="setup-catalogues">Catalogues</h2>
+        <CatalogueSection {...props} />
       </section>
     </>
   );
@@ -436,6 +448,186 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
         ))}
       </ul>
     </>
+  );
+}
+
+const ONLY_ADMIN_SWITCHES = "Only an Admin turns a Catalogue on or off.";
+
+/** A Catalogue's state in words, never colour alone: on, with the Controls Vouch checks in its order, or off. */
+function catalogueStateWords({ on, controls }: TeamCatalogue): string {
+  if (!on) return "Off.";
+  if (controls.length === 0) return "On: Vouch checks no Controls.";
+  const refs = controls.map((control) => control.ref).join(", ");
+  return `On: Vouch checks ${controls.length} ${controls.length === 1 ? "Control" : "Controls"}: ${refs}.`;
+}
+
+/** The list with `catalogue` in place of the one with its id: what a switch answered, shown at once. */
+function withCatalogue(
+  list: CataloguesResult | "loading",
+  catalogue: TeamCatalogue,
+): CataloguesResult | "loading" {
+  if (list === "loading" || list.kind !== "catalogues") return list;
+  return {
+    ...list,
+    catalogues: list.catalogues.map((old) => (old.id === catalogue.id ? catalogue : old)),
+  };
+}
+
+/**
+ * Setup's Catalogues (spec #341, slice 5): every Catalogue Warden has, whether it's on for the Team, its credit and
+ * licence. Everyone in the Team sees it; only an Admin turns one on or off.
+ */
+function CatalogueSection(props: PageProps) {
+  const { getToken, me, onSessionEnded } = props;
+  const ask = useCallback(() => fetchCatalogues(getToken), [getToken]);
+  const list = useWardenCall<CataloguesResult>(ask, onSessionEnded);
+  const { refresh, setResult } = list;
+  // A switch a Team switch dropped (its page gone before the answer) that changed the Team shown now reads the
+  // Catalogues again, whether this page sent it or one the switch replaced.
+  const { team } = me;
+  useEffect(
+    () =>
+      watchCatalogues((changedIn) => {
+        if (changedIn === team) refresh();
+      }),
+    [team, refresh],
+  );
+  const showSwitched = useCallback(
+    (catalogue: TeamCatalogue) => setResult((old) => withCatalogue(old, catalogue)),
+    [setResult],
+  );
+
+  if (list.result === "loading") {
+    return <p className="muted">Loading the Team's Catalogues…</p>;
+  }
+  if (list.result.kind !== "catalogues") {
+    return (
+      <>
+        <CallRefused result={list.result} onRetry={list.retry} />
+        <TeamRefused result={list.result} />
+      </>
+    );
+  }
+  if (list.result.catalogues.length === 0) {
+    return <p className="muted">No Catalogues on this Warden.</p>;
+  }
+  return (
+    <ul className="catalogue-list">
+      {list.result.catalogues.map((catalogue) => (
+        <CatalogueEntry
+          key={catalogue.id}
+          {...props}
+          catalogue={catalogue}
+          onSwitched={showSwitched}
+        />
+      ))}
+    </ul>
+  );
+}
+
+type CatalogueEntryProps = PageProps & {
+  catalogue: TeamCatalogue;
+  onSwitched: (catalogue: TeamCatalogue) => void;
+};
+
+/** One Catalogue: its name and date, its state, when it was last set, an Admin's switch, and its credit and licence. */
+function CatalogueEntry({
+  catalogue,
+  onSwitched,
+  getToken,
+  me,
+  onSessionEnded,
+  refreshMe,
+}: CatalogueEntryProps) {
+  const [switching, setSwitching] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  /**
+   * The switch under way, by an object of its own, set at the click so a second click sends nothing. The page leaving
+   * forgets it (a Team switch unmounts Setup), so its answer never shows on another Team's Setup.
+   */
+  const switchCall = useRef<object | null>(null);
+  useEffect(
+    () => () => {
+      switchCall.current = null;
+    },
+    [],
+  );
+
+  async function turn(on: boolean) {
+    if (switchCall.current !== null) return;
+    const call = {};
+    switchCall.current = call;
+    const sentIn = me.team;
+    setSwitching(true);
+    setRefusal(null);
+    const result = await switchCatalogue(getToken, catalogue.id, on);
+    // The page that sent it is gone: the Setup shown now for the Team it was sent in reads its Catalogues again.
+    if (switchCall.current !== call) {
+      if (result.kind === "switched") cataloguesChanged(sentIn);
+      return;
+    }
+    switchCall.current = null;
+    setSwitching(false);
+    switch (result.kind) {
+      // Turning a Catalogue on or off can change the Team's Level (#374), which the shell reads from /api/me.
+      case "switched":
+        onSwitched(result.catalogue);
+        return refreshMe();
+      case "forbidden":
+        setRefusal(ONLY_ADMIN_SWITCHES);
+        return refreshMe();
+      case "refused":
+        return setRefusal(result.words);
+      case "team-not-opened":
+        return setRefusal(TEAM_NOT_OPENED);
+      case "too-many-attempts":
+        return setRefusal(tryAgainIn(result.retryAfter));
+      case "not-answering":
+        return setRefusal(NOT_ANSWERING);
+      case "session-ended":
+        return onSessionEnded();
+    }
+  }
+
+  return (
+    <li className="catalogue">
+      <p className="catalogue-name">
+        {catalogue.name}, published {calendarDayWords(catalogue.date)}
+      </p>
+      <p>{catalogueStateWords(catalogue)}</p>
+      {catalogue.set_at !== null && (
+        <p className="muted">
+          {catalogue.on ? "Turned on" : "Turned off"} {dayAndTimeWords(catalogue.set_at)}
+        </p>
+      )}
+      {me.role === "admin" ? (
+        <div className="catalogue-switch">
+          <button
+            type="button"
+            className={catalogue.on ? "secondary" : "primary"}
+            disabled={switching}
+            aria-busy={switching}
+            onClick={() => void turn(!catalogue.on)}
+          >
+            {catalogue.on ? "Turn off" : "Turn on"}
+          </button>
+        </div>
+      ) : (
+        <p className="muted">An Admin turns a Catalogue on or off.</p>
+      )}
+      {refusal !== null && (
+        <p className="notice" role="alert">
+          {refusal}
+        </p>
+      )}
+      <p className="muted">{catalogue.credit}</p>
+      <p className="muted catalogue-licence">
+        Licence:{" "}
+        <a href={catalogue.licence_url} target="_blank" rel="noreferrer">
+          {catalogue.licence}
+        </a>
+      </p>
+    </li>
   );
 }
 

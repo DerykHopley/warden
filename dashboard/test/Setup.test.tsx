@@ -72,8 +72,39 @@ const writeApp = () => json(200, { slug: "warden-writer", client_id: "Iv23li-wri
 const noGrants = () => json(200, { installations: [] });
 const writeRoutes: Routes = { writeApp, writeGrant: noGrants };
 
+/** VDA ISA 2027.1 as `GET /api/vouch/catalogues` answers it (spec #341, slice 5): off, as no Admin ever set it. */
+const SET_AT = "2026-11-26T09:14:00.000Z";
+const SET_BY = "user_admin_secret_id";
+const CATALOGUE = {
+  id: "vda-isa-2027.1",
+  name: "VDA ISA 2027.1",
+  date: "2026-09-30",
+  credit: "© 2026 ENX Association, registered in France.",
+  licence: "CC BY-ND 4.0",
+  licence_url: "https://creativecommons.org/licenses/by-nd/4.0/",
+  on: false,
+  set_by: null as string | null,
+  set_at: null as string | null,
+  controls: ["1.3.3", "1.3.4", "4.1.3", "5.2.4"].map((ref) => ({
+    ref,
+    question: `Question ${ref}?`,
+    iso_27001: "A.5.1",
+  })),
+};
+const catalogueSet = (on: boolean) => ({ ...CATALOGUE, on, set_by: SET_BY, set_at: SET_AT });
+const cataloguesOf =
+  (...listed: (typeof CATALOGUE)[]) =>
+  () =>
+    json(200, { catalogues: listed });
+
 function renderSetup(role: Role, routes: Routes = {}) {
-  serve({ githubApp: app, repos: () => json(200, { repos: [] }), ...writeRoutes, ...routes });
+  serve({
+    githubApp: app,
+    repos: () => json(200, { repos: [] }),
+    ...writeRoutes,
+    catalogues: cataloguesOf(CATALOGUE),
+    ...routes,
+  });
   const given = props(role);
   const { rerender, unmount } = render(<SetupPage {...given} />);
   return { ...given, rerender, unmount };
@@ -216,6 +247,7 @@ describe("SetupPage: Grant write access (#224, story 5)", () => {
       "GitHub",
       "Grant write access",
       "Repos",
+      "Catalogues",
     ]);
     expect(write().getByText("Asking Warden's server about the write app…")).toBeInTheDocument();
     expect(await write().findByRole("link", { name: "Install the write app" })).toHaveAttribute(
@@ -807,6 +839,256 @@ describe("SetupPage: Scan now (story 2)", () => {
 
       expect(callsTo("/api/repos")).toHaveLength(1);
     });
+  });
+});
+
+describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
+  const catalogues = () => within(screen.getByRole("region", { name: "Catalogues" }));
+  const entry = () => within(catalogues().getByRole("listitem"));
+  /** The entry, once the list has answered. */
+  const shown = async () => within(await catalogues().findByRole("listitem"));
+  const PATH = "/api/vouch/catalogues/vda-isa-2027.1";
+  const ON_WORDS = "On: Vouch checks 4 Controls: 1.3.3, 1.3.4, 4.1.3, 5.2.4.";
+  const ADMIN_DOES = "An Admin turns a Catalogue on or off.";
+  const sent = () =>
+    callsTo(PATH).map(([, init]) => [init?.method, JSON.parse(String(init?.body))]);
+  /** A switch route that answers the Catalogue as the body set it. */
+  const switched = (_id: string, body: unknown) =>
+    json(200, catalogueSet((body as { on: boolean }).on));
+
+  it("shows an Admin the Catalogue by name and date, off, with Turn on", async () => {
+    renderSetup("admin");
+
+    expect(catalogues().getByText("Loading the Team's Catalogues…")).toBeInTheDocument();
+    expect(
+      await (await shown()).findByText("VDA ISA 2027.1, published Sep 30, 2026"),
+    ).toBeInTheDocument();
+    expect(entry().getByText("Off.")).toBeInTheDocument();
+    expect(entry().queryByText(/^Turned/)).toBeNull();
+    expect(entry().getByRole("button", { name: "Turn on" })).toHaveClass("primary");
+  });
+
+  it("turns it on with { on: true }, then off with { on: false }, showing each answer at once, and sends nothing else", async () => {
+    renderSetup("admin", { switchCatalogue: switched });
+
+    await userEvent.click(await (await shown()).findByRole("button", { name: "Turn on" }));
+
+    expect(await (await shown()).findByText(ON_WORDS)).toBeInTheDocument();
+    expect(entry().getByText(`Turned on ${dayAndTimeWords(SET_AT)}`)).toHaveClass("muted");
+    const turnOff = entry().getByRole("button", { name: "Turn off" });
+    expect(turnOff).toHaveClass("secondary");
+
+    await userEvent.click(turnOff);
+
+    expect(await (await shown()).findByText("Off.")).toBeInTheDocument();
+    expect(entry().getByText(`Turned off ${dayAndTimeWords(SET_AT)}`)).toBeInTheDocument();
+    expect(entry().getByRole("button", { name: "Turn on" })).toBeInTheDocument();
+    expect(sent()).toEqual([
+      ["PUT", { on: true }],
+      ["PUT", { on: false }],
+    ]);
+    expect(callsTo("/api/vouch/catalogues")).toHaveLength(1);
+  });
+
+  it("is busy and disabled from the click until the answer, and a second click sends no second PUT", async () => {
+    const answer = deferred<Response>();
+    renderSetup("admin", { switchCatalogue: () => answer.promise });
+    const button = await (await shown()).findByRole("button", { name: "Turn on" });
+
+    await userEvent.click(button);
+    await userEvent.click(button);
+
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
+    expect(callsTo(PATH)).toHaveLength(1);
+    await act(async () => answer.resolve(json(200, catalogueSet(true))));
+    const turnOff = await (await shown()).findByRole("button", { name: "Turn off" });
+    expect(turnOff).toBeEnabled();
+    expect(turnOff).not.toHaveAttribute("aria-busy", "true");
+  });
+
+  it("asks the shell for /api/me again once after a switched answer", async () => {
+    const { refreshMe } = renderSetup("admin", { switchCatalogue: switched });
+
+    await userEvent.click(await (await shown()).findByRole("button", { name: "Turn on" }));
+
+    await (await shown()).findByText(ON_WORDS);
+    expect(refreshMe).toHaveBeenCalledOnce();
+  });
+
+  it("on a 403, says only an Admin turns it on or off, asks /api/me again, and keeps the entry's state", async () => {
+    const { refreshMe } = renderSetup("admin", {
+      switchCatalogue: () => json(403, { error: "Only an Admin can do this" }),
+    });
+
+    await userEvent.click(await (await shown()).findByRole("button", { name: "Turn on" }));
+
+    expect(await (await shown()).findByRole("alert")).toHaveTextContent(
+      "Only an Admin turns a Catalogue on or off.",
+    );
+    expect(refreshMe).toHaveBeenCalledOnce();
+    expect(entry().getByText("Off.")).toBeInTheDocument();
+  });
+
+  it.each([
+    [
+      "a 400, in the server's words",
+      () => json(400, { error: "on: Expected boolean" }),
+      "on: Expected boolean",
+    ],
+    ["a 400 with no words", () => json(400, {}), "Nothing was changed."],
+    [
+      "a 404, in the server's words",
+      () => json(404, { error: "No such Catalogue" }),
+      "No such Catalogue",
+    ],
+    [
+      "a 404 with no words",
+      () => new Response("Not Found", { status: 404 }),
+      "Nothing was changed.",
+    ],
+    ["a 409", () => json(409, { error: "not opened" }), TEAM_NOT_OPENED],
+    [
+      "a 429 with Retry-After: 120",
+      () => json(429, { error: "too many" }, { "Retry-After": "120" }),
+      "Too many sign-in attempts. Try again in 120 seconds.",
+    ],
+    [
+      "no answer",
+      (): Response => {
+        throw new TypeError("Failed to fetch");
+      },
+      NOT_ANSWERING,
+    ],
+    ["a 200 that isn't a Catalogue", () => json(200, { on: true }), NOT_ANSWERING],
+  ])(
+    "shows %s as an alert, keeps the entry, gives the button back, and clears it at the next click",
+    async (_name, refusal, words) => {
+      const next = deferred<Response>();
+      let answers = 0;
+      const { refreshMe } = renderSetup("admin", {
+        switchCatalogue: () => (answers++ === 0 ? refusal() : next.promise),
+      });
+
+      await userEvent.click(await (await shown()).findByRole("button", { name: "Turn on" }));
+
+      expect(await (await shown()).findByRole("alert")).toHaveTextContent(words);
+      expect(entry().getByText("Off.")).toBeInTheDocument();
+      const button = entry().getByRole("button", { name: "Turn on" });
+      expect(button).toBeEnabled();
+      expect(button).not.toHaveAttribute("aria-busy", "true");
+      expect(refreshMe).not.toHaveBeenCalled();
+
+      await userEvent.click(button);
+
+      expect(entry().queryByRole("alert")).toBeNull();
+      await act(async () => next.resolve(json(200, catalogueSet(true))));
+    },
+  );
+
+  it("ends the session when the switch answers 401", async () => {
+    const { onSessionEnded } = renderSetup("admin", {
+      switchCatalogue: () => json(401, { error: "signed out" }),
+    });
+
+    await userEvent.click(await (await shown()).findByRole("button", { name: "Turn on" }));
+
+    await vi.waitFor(() => expect(onSessionEnded).toHaveBeenCalledOnce());
+  });
+
+  it.each<Role>(["lead", "member"])(
+    "shows a %s the entry and its state, that an Admin turns it on or off, and no button, and sends no PUT",
+    async (role) => {
+      renderSetup(role, { catalogues: cataloguesOf(catalogueSet(true)) });
+
+      expect(await (await shown()).findByText(ON_WORDS)).toBeInTheDocument();
+      expect(entry().getByText("VDA ISA 2027.1, published Sep 30, 2026")).toBeInTheDocument();
+      expect(entry().getByText(`Turned on ${dayAndTimeWords(SET_AT)}`)).toBeInTheDocument();
+      expect(entry().getByText(ADMIN_DOES)).toHaveClass("muted");
+      expect(catalogues().queryByRole("button")).toBeNull();
+      expect(callsTo(PATH)).toEqual([]);
+    },
+  );
+
+  it("shows the credit line and the licence as a link to its page, in a new tab", async () => {
+    renderSetup("member");
+
+    const licence = await (await shown()).findByRole("link", { name: "CC BY-ND 4.0" });
+    expect(licence).toHaveAttribute("href", "https://creativecommons.org/licenses/by-nd/4.0/");
+    expect(licence).toHaveAttribute("target", "_blank");
+    expect(licence).toHaveAttribute("rel", "noreferrer");
+    expect(entry().getByText(CATALOGUE.credit, { exact: false })).toHaveClass("muted");
+  });
+
+  it("never shows who set the Catalogue", async () => {
+    renderSetup("admin", { catalogues: cataloguesOf(catalogueSet(true)) });
+
+    await (await shown()).findByText(ON_WORDS);
+    expect(document.body.textContent).not.toContain(SET_BY);
+    expect(document.body.innerHTML).not.toContain(SET_BY);
+  });
+
+  /** The other three sections show whatever the Catalogues answer. */
+  const othersShow = async () => {
+    expect(await repos().findByText("No repos linked yet.")).toBeInTheDocument();
+    expect(
+      await github().findByRole("link", { name: "Install the GitHub app" }),
+    ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Grant write access" })).getByText(
+        "No write access granted.",
+      ),
+    ).toBeInTheDocument();
+  };
+
+  it("shows its waiting line while the other sections answer", async () => {
+    renderSetup("admin", { catalogues: () => deferred<Response>().promise });
+
+    await othersShow();
+    expect(catalogues().getByText("Loading the Team's Catalogues…")).toHaveClass("muted");
+  });
+
+  it.each([
+    ["Team not opened", () => json(409, { error: "not opened" }), TEAM_NOT_OPENED],
+    [
+      "no Team",
+      () => json(403, { error: "no team" }),
+      "Choose a Team first, from the switcher above.",
+    ],
+    [
+      "too many attempts",
+      () => json(429, { error: "too many" }, { "Retry-After": "120" }),
+      "Too many sign-in attempts. Try again in 120 seconds.",
+    ],
+  ])(
+    "shows the list's refusal, with the other sections there: %s",
+    async (_name, answer, words) => {
+      renderSetup("admin", { catalogues: answer });
+
+      expect(await catalogues().findByText(words)).toBeInTheDocument();
+      await othersShow();
+    },
+  );
+
+  it("shows the list's not-answering line with Retry, the other sections there, and the Catalogue after Retry", async () => {
+    let answer = (): Response => {
+      throw new TypeError("Failed to fetch");
+    };
+    renderSetup("admin", { catalogues: () => answer() });
+
+    expect(await catalogues().findByText("Warden's server isn't answering")).toBeInTheDocument();
+    await othersShow();
+    answer = cataloguesOf(CATALOGUE);
+    await userEvent.click(catalogues().getByRole("button", { name: "Retry" }));
+
+    expect(await (await shown()).findByText("Off.")).toBeInTheDocument();
+  });
+
+  it("says there are no Catalogues on this Warden for an empty list", async () => {
+    renderSetup("admin", { catalogues: cataloguesOf() });
+
+    expect(await catalogues().findByText("No Catalogues on this Warden.")).toHaveClass("muted");
+    await othersShow();
   });
 });
 

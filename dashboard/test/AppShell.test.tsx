@@ -156,6 +156,7 @@ describe("the landing page by Role", () => {
       me: () => me("org_a", "member"),
       repos: () => json(200, { repos: [] }),
       writeGrant: () => json(200, { installations: [] }),
+      catalogues: () => json(200, { catalogues: [] }),
     });
     render(<App />);
 
@@ -376,5 +377,97 @@ describe("a change on Products under way across a Team switch and back", () => {
     );
     expect(screen.getByRole("heading", { level: 2, name: "Docs bot" })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
+// As for Products (#307): an Admin's Catalogue switch sent from a Setup a Team switch replaced (spec #341, slice 5).
+describe("a Catalogue switch on Setup under way across a Team switch", () => {
+  const ON_WORDS = "On: Vouch checks 1 Control: 1.3.3.";
+  const catalogue = (on: boolean) => ({
+    id: "vda-isa-2027.1",
+    name: "VDA ISA 2027.1",
+    date: "2026-09-30",
+    credit: "© 2026 ENX Association.",
+    licence: "CC BY-ND 4.0",
+    licence_url: "https://creativecommons.org/licenses/by-nd/4.0/",
+    on,
+    set_by: on ? "user_admin" : null,
+    set_at: on ? "2026-11-26T09:14:00.000Z" : null,
+    controls: [{ ref: "1.3.3", question: "Is it?", iso_27001: "A.5.1" }],
+  });
+
+  /**
+   * Opens /setup as an Admin of Acme, with Acme's Catalogue read from `storedOn` and Bluebird's always on, clicks
+   * "Turn on" and holds the switch until the test answers it. Counts each Team's reads of the Catalogues.
+   */
+  async function switchOnAndHold(storedOn: () => boolean) {
+    window.history.replaceState(null, "", "/setup");
+    clerk.auth.orgId = "org_a";
+    const held = deferred<Response>();
+    const reads: Record<string, number> = { org_a: 0, org_b: 0 };
+    serve({
+      me: () => me(clerk.auth.orgId, "admin"),
+      githubApp: () => json(200, { slug: "warden-reader", client_id: "Iv23li-client" }),
+      writeApp: () => json(200, { slug: "warden-writer", client_id: "Iv23li-writer" }),
+      writeGrant: () => json(200, { installations: [] }),
+      repos: () => json(200, { repos: [] }),
+      catalogues: () => {
+        const team = clerk.auth.orgId ?? "";
+        reads[team] = (reads[team] ?? 0) + 1;
+        return json(200, { catalogues: [catalogue(team === "org_b" || storedOn())] });
+      },
+      switchCatalogue: () => held.promise,
+    });
+    const { rerender } = render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Turn on" }));
+    await vi.waitFor(() => expect(callsTo("/api/vouch/catalogues/vda-isa-2027.1")).toHaveLength(1));
+    /** Switches to Bluebird, once Bluebird's Catalogue shows. */
+    const away = async () => {
+      clerk.auth.orgId = "org_b";
+      rerender(<App />);
+      await screen.findByText(ON_WORDS);
+    };
+    /** Switches back to Acme, once its Catalogue shows. */
+    const back = async () => {
+      clerk.auth.orgId = "org_a";
+      rerender(<App />);
+      await screen.findByText("Off.");
+    };
+    return { held, reads, away, back };
+  }
+
+  it("never shows on the other Team's Setup, and once it's switched, Acme's Setup reads the Catalogues again", async () => {
+    let storedOn = false;
+    const { held, reads, away, back } = await switchOnAndHold(() => storedOn);
+
+    await away();
+    const bluebirds = screen.getByRole("button", { name: "Turn off" });
+    expect(bluebirds).toBeEnabled();
+    expect(bluebirds).not.toHaveAttribute("aria-busy", "true");
+    await back();
+    expect(screen.getByRole("button", { name: "Turn on" })).toBeEnabled();
+    expect(reads.org_a).toBe(2);
+
+    storedOn = true;
+    held.resolve(json(200, catalogue(true)));
+
+    expect(await screen.findByText(ON_WORDS)).toBeInTheDocument();
+    expect(reads.org_a).toBe(3);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("answered while the other Team's Setup shows, causes no read of the Catalogues there", async () => {
+    let storedOn = false;
+    const { held, reads, away } = await switchOnAndHold(() => storedOn);
+
+    await away();
+    storedOn = true;
+    held.resolve(json(200, catalogue(true)));
+    // Let the dropped answer land and any read it might start go out.
+    await held.promise;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(reads.org_b).toBe(1);
+    expect(screen.getByText(ON_WORDS)).toBeInTheDocument();
   });
 });

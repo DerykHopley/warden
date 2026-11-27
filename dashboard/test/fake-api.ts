@@ -52,6 +52,10 @@ export type Routes = {
   findingAction?: (id: string, action: string, body: unknown) => Answer;
   /** POST /api/proposals/:id/<approve or reject>, with the Proposal id, the action and the parsed body (none: undefined). */
   proposalAction?: (id: string, action: string, body: unknown) => Answer;
+  /** GET /api/vouch/catalogues: every Catalogue Warden has, as the Team sees it. */
+  catalogues?: () => Answer;
+  /** PUT /api/vouch/catalogues/:id, with the Catalogue id and the parsed body. */
+  switchCatalogue?: (id: string, body: unknown) => Answer;
 };
 
 const sentBody = (init: RequestInit | undefined): unknown =>
@@ -126,6 +130,13 @@ export function serve(routes: Routes) {
     if (onProposal && method === "POST" && routes.proposalAction) {
       const [, id = "", action = ""] = onProposal;
       return routes.proposalAction(decodeURIComponent(id), action, sentBody(init));
+    }
+    if (url === "/api/vouch/catalogues" && method === "GET" && routes.catalogues) {
+      return routes.catalogues();
+    }
+    const onCatalogue = /^\/api\/vouch\/catalogues\/([^/]+)$/.exec(url);
+    if (onCatalogue && method === "PUT" && routes.switchCatalogue) {
+      return routes.switchCatalogue(decodeURIComponent(onCatalogue[1] ?? ""), sentBody(init));
     }
     throw new Error(`The test gave no answer for ${method} ${url}`);
   });
