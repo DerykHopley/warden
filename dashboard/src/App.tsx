@@ -229,6 +229,7 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
   const panelContext = pageContext ?? {
     view: page === undefined ? [] : [page.label],
     focus: null,
+    control: null,
     clearFocus: nothingToDo,
     onFindingChanged: nothingToDo,
     onFindingGone: nothingToDo,

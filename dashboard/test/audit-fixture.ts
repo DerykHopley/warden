@@ -1,6 +1,13 @@
 // "Are we ready for the audit?" as GET /api/overview's `audit` answers it (spec #341): no Catalogue on, or ISA2027 on
-// with its four judged Controls, each a valid `AuditControl`, so the page's parse takes them.
-import type { AuditAnswer, AuditCatalogue, AuditControl } from "@warden/contracts";
+// with its four judged Controls, each a valid `AuditControl`, so the page's parse takes them; and one Control as GET
+// /api/vouch/catalogues/:id/controls/:ref answers it, a valid `ControlDetail`.
+import type {
+  AuditAnswer,
+  AuditCatalogue,
+  AuditControl,
+  ControlDetail,
+  OverviewBody,
+} from "@warden/contracts";
 
 /** The answer for a Team with no Catalogue on. */
 export const NO_CATALOGUE: AuditAnswer = {
@@ -47,5 +54,48 @@ export const isaOn = (fields: Partial<AuditAnswer> = {}): AuditAnswer => ({
   waiting: ISA_REFS.length,
   catalogues: [ISA],
   controls: ISA_REFS.map((ref) => auditRow(ref)),
+  ...fields,
+});
+
+/** GET /api/overview's answer for `team` at Quick, with ISA2027 on as `isaOn` gives it unless `fields` says otherwise. */
+export const overviewBody = (team: string, fields: Partial<OverviewBody> = {}): OverviewBody => ({
+  team,
+  level: "quick",
+  audit: isaOn(),
+  last_scan_at: "2026-11-24T09:14:00Z",
+  has_findings: true,
+  period_days: 30,
+  open_at_start: 0,
+  open_now: 1,
+  fix_rate: { fixed: 0, of: 1 },
+  ...fields,
+});
+
+/**
+ * ISA2027's Control `ref` as its card reads it: not reviewed at not evidenced, one guard Rule never covered on 1 Repo,
+ * no Open Finding and no review, unless `fields` says otherwise.
+ */
+export const controlDetail = (ref: string, fields: Partial<ControlDetail> = {}): ControlDetail => ({
+  ref,
+  question: `Question ${ref}?`,
+  iso_27001: "A.5.1",
+  verdict: "not_evidenced",
+  reason: "No Scan covered it in the last 30 days",
+  evidence: {
+    rules: [
+      {
+        rule_id: "guard/unapproved-ai-tool",
+        asset_kind: "repo",
+        last_covered_at: null,
+        assets_covered: 0,
+        assets_held: 1,
+      },
+    ],
+    judge_spot_run_at: null,
+    open_findings: [],
+  },
+  review_state: "not_reviewed",
+  reviewed_verdict: null,
+  reviews: [],
   ...fields,
 });

@@ -182,6 +182,7 @@ button:focus-visible,
 .asset-link:focus-visible,
 .patch-links a:focus-visible,
 .fix-pr-link a:focus-visible,
+.control-findings a:focus-visible,
 .panel-divider:focus-visible,
 .chat-input:focus-visible,
 .field textarea:focus-visible,
@@ -1204,15 +1205,36 @@ button[aria-busy="true"],
   border-top: 1px solid var(--line);
 }
 
-/* Under 640px a row's parts stack: the ref, the question, then the Verdict, the review state and Gap. */
 .audit-control {
+  min-width: 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* The whole row is one button that opens its Control's card (spec #341, slice 7a), set as text, not as a Button:
+   hover tints it as a secondary Button, and the focused Control is marked as a selected Findings row is, the quiet
+   fill and an accent bar at its start, in shape as well as colour. Under 640px its parts stack: the ref, the question, then the Verdict, the review state and Gap. */
+.audit-control-button {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  width: 100%;
   min-width: 0;
-  padding: 12px 0;
-  border-bottom: 1px solid var(--line);
+  padding: 12px 8px 12px 12px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
   overflow-wrap: anywhere;
+}
+
+.audit-control-button:hover {
+  background: var(--chip);
+}
+
+.audit-control-button[aria-current="true"] {
+  background: var(--chip);
+  box-shadow: inset 4px 0 0 var(--accent);
 }
 
 .audit-ref {
@@ -1240,7 +1262,7 @@ button[aria-busy="true"],
 /* From a 640px column, a row's parts sit on one line, the question growing and wrapping between the ref and the
    words. */
 @container app-column (min-width: 640px) {
-  .audit-control {
+  .audit-control-button {
     flex-direction: row;
     align-items: baseline;
     gap: 16px;
@@ -1645,8 +1667,90 @@ button[aria-busy="true"],
   margin-top: 8px;
 }
 
-/* "Couldn't load Proposals" (.proposals-failed), "Couldn't load the CVE assessment." (.patch-failed) and "Couldn't
-   load the Fix PR." (.fix-pr-failed), each with Retry beside it. */
+/* The Control card (spec #341, slice 7a): the Catalogue's credit under the question, then the Verdict, the evidence
+   and the reviews, each under its heading, set like the Patch section above. */
+.control-card > p {
+  margin: 0 8px 4px 0;
+  font-size: 0.875rem;
+}
+
+.control-section {
+  margin-right: 8px;
+  font-size: 0.875rem;
+}
+
+.control-section h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.control-section h5 {
+  margin: 12px 0 4px;
+  font-size: 0.875rem;
+}
+
+.control-section p {
+  margin: 0 0 4px;
+}
+
+.control-rules {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.control-rules code {
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+}
+
+/* Each Open Finding a 44px link to it on Findings, its Severity and Repo on the line under its title. */
+.control-findings {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.control-findings a {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 44px;
+  color: var(--accent);
+  border-radius: var(--radius);
+}
+
+.control-reviews {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.control-review {
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
+}
+
+.control-review-outcome {
+  font-weight: 600;
+}
+
+.control-review-by {
+  color: var(--muted);
+}
+
+/* A changed Verdict says so in words, set apart by weight, not colour, as a stale Proposal does. */
+.control-changed {
+  font-weight: 600;
+}
+
+/* "Couldn't load Proposals" (.proposals-failed), "Couldn't load the CVE assessment." (.patch-failed), "Couldn't
+   load the Fix PR." (.fix-pr-failed) and "Couldn't load the Control." (.control-failed), each with Retry beside it. */
+.control-card > p.control-failed,
 .fix-pr-section > p.fix-pr-failed,
 .patch-failed,
 .proposals-failed {

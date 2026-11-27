@@ -1,17 +1,22 @@
 // The Overview page (story 10, and spec #341's stories 8 and 9): the journey cards with their states in words and their
 // bars, the trend line, the audit section with its answer, Setup pointer, Control rows and credit, and each answer GET
-// /api/overview can get. It renders OverviewPage alone with spy props, Warden's server faked. Which card is in which
-// state, the trend's and the answer's wordings, and which rows a Catalogue shows with which Verdict, are tested below
-// the page, in overview.test.ts.
+// /api/overview can get. It renders OverviewPage alone with spy props, Warden's server faked; focusing a Control in
+// the Ask Warden panel (spec #341, slice 7a) renders the whole App, Clerk faked. Which card is in which state, the
+// trend's and the answer's wordings, and which rows a Catalogue shows with which Verdict, are tested below the page, in
+// overview.test.ts; the Control card's parts, in ControlCard.test.tsx.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { OverviewBody, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { App } from "../src/App.tsx";
 import { OverviewPage } from "../src/Overview.tsx";
 import { journeyCards } from "../src/overview.ts";
-import { auditRow, ISA, isaOn, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
+import { auditRow, controlDetail, ISA, isaOn, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
+import { clerk, resetClerk } from "./fake-clerk.tsx";
 import { TEAM } from "./findings-fixture.ts";
+
+vi.mock("@clerk/react", () => import("./fake-clerk.tsx"));
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -251,16 +256,145 @@ describe("the audit section with ISA2027 on (spec #341, story 8)", () => {
     expect(list.compareDocumentPosition(credit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("makes no row a button, a link or a focus stop: tabbing reaches only the licence link", async () => {
+  it("makes each row one button holding all its parts, and no row a link", async () => {
     open({ audit: isaOn() });
     const audit = await auditSection();
     for (const row of await rowsOf()) {
-      expect(within(row).queryByRole("button")).toBeNull();
-      expect(within(row).queryByRole("link")).toBeNull();
-      expect(row.querySelector("[tabindex]")).toBeNull();
-      expect(row).not.toHaveAttribute("tabindex");
+      const [button, ...others] = within(row).getAllByRole("button");
+      expect(others).toHaveLength(0);
+      expect(button).toHaveClass("audit-control-button");
+      expect(button!.parentElement).toBe(row);
+      expect(
+        button!.querySelectorAll(".audit-ref, .audit-question, .audit-verdict, .audit-review"),
+      ).toHaveLength(4);
+      expect(button).not.toHaveAttribute("aria-current");
     }
     expect(audit.getAllByRole("link").map((link) => link.textContent)).toEqual(["CC BY-ND 4.0"]);
+  });
+
+  it("tells the panel nothing with no Control in focus, and clears its context as it goes", async () => {
+    const { panel } = open({ audit: isaOn() });
+    await auditSection();
+    expect(panel.setContext).toHaveBeenLastCalledWith(null);
+    expect(panel.open).not.toHaveBeenCalled();
+  });
+
+  it("clears the panel's Control as the page goes", async () => {
+    window.history.replaceState(null, "", "/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    serve({ overview: () => answer({ audit: isaOn() }) });
+    const setContext = vi.fn();
+    const { unmount } = render(
+      <OverviewPage
+        getToken={async () => "session-token"}
+        me={{ userId: "user_ada", team: TEAM, role: "admin", level: "quick" }}
+        onSessionEnded={vi.fn()}
+        refreshMe={vi.fn()}
+        panel={{ setContext, open: vi.fn() }}
+      />,
+    );
+    await vi.waitFor(() =>
+      expect(setContext).toHaveBeenLastCalledWith(
+        expect.objectContaining({ control: expect.objectContaining({ catalogue: ISA }) }),
+      ),
+    );
+    unmount();
+    expect(setContext).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe("focusing a Control (spec #341, slice 7a)", () => {
+  beforeEach(() => {
+    resetClerk();
+    clerk.auth.isSignedIn = true;
+    clerk.auth.sessionId = "sess_1";
+    clerk.auth.orgId = TEAM;
+    clerk.orgNames = { [TEAM]: "Acme" };
+  });
+
+  /** Opens `url` in the whole App as a Lead, ISA2027 on, each Control's read answering `control` unless given. */
+  function openApp(url: string, control: Routes["control"] = (_, ref) => readOf(ref)) {
+    window.history.replaceState(null, "", url);
+    serve({
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      overview: () => answer({ audit: isaOn() }),
+      control,
+    });
+    render(<App />);
+  }
+  const readOf = (ref: string) =>
+    json(200, controlDetail(ref, { reason: `Reason ${ref}`, question: `Question ${ref}?` }));
+
+  const rowButton = async (ref: string) => (await rowOf(ref)).getByRole("button");
+  const panel = () => screen.queryByRole("complementary", { name: "Ask Warden" });
+  const cardOf = (ref: string) =>
+    within(panel()!).queryByRole("region", { name: `Question ${ref}?` });
+  const address = () => location.pathname + location.search;
+
+  it("clicking a row puts it in the address in place, marks it current and opens a closed panel with its card", async () => {
+    openApp("/overview");
+    const button = await rowButton("1.3.3");
+    expect(panel()).toBeNull();
+    const entries = history.length;
+
+    await userEvent.click(button);
+    expect(address()).toBe("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    expect(history.length).toBe(entries);
+    expect(button).toHaveAttribute("aria-current", "true");
+    expect(await rowButton("1.3.4")).not.toHaveAttribute("aria-current");
+    expect(cardOf("1.3.3")).toBeVisible();
+    expect(await within(cardOf("1.3.3")!).findByText("Reason 1.3.3")).toBeVisible();
+  });
+
+  it("a direct link to 1.3.4 selects it and opens its card", async () => {
+    openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.4");
+    expect(await screen.findByRole("complementary", { name: "Ask Warden" })).toBeVisible();
+    expect(await rowButton("1.3.4")).toHaveAttribute("aria-current", "true");
+    expect(await within(cardOf("1.3.4")!).findByText("Reason 1.3.4")).toBeVisible();
+    expect(address()).toBe("/overview?catalogue=vda-isa-2027.1&control=1.3.4");
+  });
+
+  it.each([
+    ["a ref the answer doesn't hold", "?catalogue=vda-isa-2027.1&control=9.9.9"],
+    ["a Catalogue the answer doesn't hold", "?catalogue=vda-isa-2099.1&control=1.3.3"],
+    ["a ref with no Catalogue", "?control=1.3.3"],
+  ])("%s selects nothing and is removed from the address", async (_, query) => {
+    openApp(`/overview${query}`);
+    for (const ref of ["1.3.3", "1.3.4", "4.1.3", "5.2.4"]) {
+      expect(await rowButton(ref)).not.toHaveAttribute("aria-current");
+    }
+    await vi.waitFor(() => expect(address()).toBe("/overview"));
+    expect(panel()).toBeNull();
+    expect(callsTo("/api/vouch/catalogues/vda-isa-2027.1/controls/9.9.9")).toHaveLength(0);
+  });
+
+  it("the card's ✕ removes the focus from the address, and the panel stays open", async () => {
+    openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    await screen.findByRole("complementary", { name: "Ask Warden" });
+    await userEvent.click(
+      within(cardOf("1.3.3")!).getByRole("button", { name: "Clear the focus" }),
+    );
+    expect(address()).toBe("/overview");
+    expect(panel()).toBeVisible();
+    expect(cardOf("1.3.3")).toBeNull();
+    expect(await rowButton("1.3.3")).not.toHaveAttribute("aria-current");
+    expect(within(panel()!).getByText(/^Talking about:/)).toHaveTextContent(
+      /^Talking about: view: Overview$/,
+    );
+  });
+
+  it("a read that answers after the focus moved to another Control doesn't show on that Control's card", async () => {
+    const late = deferred<Response>();
+    openApp("/overview", (_, ref) => (ref === "1.3.3" ? late.promise : readOf(ref)));
+    await userEvent.click(await rowButton("1.3.3"));
+    expect(await within(cardOf("1.3.3")!).findByText("Loading the Control…")).toBeVisible();
+
+    await userEvent.click(await rowButton("1.3.4"));
+    expect(await within(cardOf("1.3.4")!).findByText("Reason 1.3.4")).toBeVisible();
+    late.resolve(readOf("1.3.3"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(within(panel()!).queryByText("Reason 1.3.3")).toBeNull();
+    expect(cardOf("1.3.3")).toBeNull();
+    expect(within(cardOf("1.3.4")!).getByText("Reason 1.3.4")).toBeVisible();
   });
 });
 
