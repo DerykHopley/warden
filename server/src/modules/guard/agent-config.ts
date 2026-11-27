@@ -340,7 +340,11 @@ const DOCS_FILE = /\.(?:md|mdx|markdown|txt|rst|adoc|html)$/i;
 /** A shell or YAML comment line, which only mentions the flag. A `#!` line runs it, so isn't one. */
 const COMMENT_LINE = /^[ \t]*#(?!!)/;
 
-type Place = { kind: string; line: number };
+/**
+ * Where a file may skip the permission checks, by kind, on a line. `uncertain` when the text that would show it went
+ * unread (`TOO_DEEP`), so it may skip them; otherwise it does.
+ */
+type Place = { kind: string; line: number; uncertain?: boolean };
 
 function permissionSkip(
   asset: Asset,
@@ -358,16 +362,22 @@ function permissionSkip(
   if (places.length === 0) return undefined;
   places.sort((a, b) => a.line - b.line);
   const first = places[0]!.line;
-  const count = places.length;
-  const kinds = [...new Set(places.map((place) => place.kind))].join(", ");
-  const may = places.some(({ kind }) => kind === TOO_DEEP);
-  const verb = `${count === 1 ? "place" : "places"} ${may ? "may skip" : count === 1 ? "skips" : "skip"}`;
+  const certain = places.filter(({ uncertain }) => uncertain !== true);
+  const unread = places.filter(({ uncertain }) => uncertain === true);
+  const kinds = (of: Place[]) => [...new Set(of.map((place) => place.kind))].join(", ");
+  const placeCount = (n: number) => `${n} ${n === 1 ? "place" : "places"}`;
+  const mayAlso = unread.length === 0 ? "" : ` and ${unread.length} more may (${kinds(unread)})`;
+  // The places that skip the checks are worded apart from those that may, so an unread one doesn't hide a certain one.
+  const skips =
+    certain.length === 0
+      ? `${placeCount(unread.length)} may skip the agent's permission checks (${kinds(unread)})`
+      : `${placeCount(certain.length)} ${certain.length === 1 ? "skips" : "skip"} the agent's permission checks (${kinds(certain)})${mayAlso}`;
   return observation(
     asset,
     PERMISSION_SKIP,
     path,
     first,
-    `${count} ${verb} the agent's permission checks (${kinds}) in ${path}, ${where(count, first)}`,
+    `${skips} in ${path}, ${where(places.length, first)}`,
   );
 }
 
@@ -664,12 +674,17 @@ const ENDS_COMMAND = new Set([...STARTS_COMMAND, ")"]);
  * `&&`, `|&` and a lone `&` or `|` do. Any `(` the run opens (`$(`, `<(`, `$((` or a bare one) and a backquote hold
  * everything up to their close, the close included; one that never closes runs to the end. A `)` the run didn't open
  * still ends it, as does a backquote it didn't open, when the run started in backquotes (`startsInBackquotes`): the
- * one that closes them.
+ * one that closes them. Read no further than `limit`: a run whose end lies past it ends there.
  */
-function runArgumentsEnd(masked: string, start: number, startsInBackquotes: boolean): number {
+function runArgumentsEnd(
+  masked: string,
+  start: number,
+  startsInBackquotes: boolean,
+  limit = masked.length,
+): number {
   let depth = 0;
   let inBackquotes = false;
-  for (let index = start; index < masked.length; index++) {
+  for (let index = start; index < limit; index++) {
     const char = masked[index]!;
     if (char === "\\") index += escapedLength(masked, index);
     else if (char === "`" && startsInBackquotes && depth === 0) return index;
@@ -679,7 +694,7 @@ function runArgumentsEnd(masked: string, start: number, startsInBackquotes: bool
     else if (char === ")" && depth > 0) depth--;
     else if (depth === 0 && ENDS_COMMAND.has(char) && !isRedirect(masked, index)) return index;
   }
-  return masked.length;
+  return limit;
 }
 
 /**
@@ -744,45 +759,69 @@ const withQuotesMasked = (command: string, keep: (quoted: string) => boolean = (
 const isOneWord = (quoted: string) => !/\s/.test(quoted);
 
 /**
- * How many shell runs `agentRuns` reads in one settings command, nested or not, so a hostile config can't make it
- * recurse without end, or reread the command once per shell's name in it.
+ * How many shells' `-c` strings `agentRuns` reads one inside another, so a hostile config can't make it recurse
+ * without end, or reread a command once per shell's name in it.
  */
 const SHELL_LIMIT = 4;
 
-/** A command's place past `SHELL_LIMIT`: its shells aren't read, so it may skip the checks. */
+/** A command's place past `SHELL_LIMIT`: a shell's `-c` string in it isn't read, so it may skip the checks. */
 const TOO_DEEP = `more than ${SHELL_LIMIT} shells in one command, nested too deep to check`;
 
-/** The shell runs a settings command may still read, and whether it had more. */
-type Shells = { left: number; tooDeep: boolean };
+/** How many more shells' `-c` strings may be read, one inside another, where a command stands. */
+type ShellBudget = number;
+
+/** A shell command's runs of the agent, each as its own arguments, and whether a shell's `-c` string went unread. */
+type AgentRuns = { runs: string[]; tooDeep: boolean };
 
 /**
  * Each run of the agent in a shell command, as its own arguments: the flag or mode value may be quoted, so a one-word
- * quoted argument stays as written. A shell run's `-c` string is read the same way, as a command of its own, while
- * `shells` has any left. The next run is looked for after an agent run ends, so no text is in two; a shell run hides
- * nothing, as the runs among its arguments (`bash script.sh $(claude …)`) are outside its `-c` string's quotes and run
- * before it.
+ * quoted argument stays as written. A shell run's `-c` string is read the same way, as a command of its own, with one
+ * less of `budget` for what nests inside it. A shell with no `-c` string (`bash a.sh`, a bare `bash`) has nothing to
+ * read, and spends nothing. The budget is per command and per nesting: a shell's string is read while fewer than
+ * `budget` strings read here hold it among their arguments, so a command after `;`, `&&`, `||`, `|`, `&` or a newline
+ * starts with all of it, while shells among one command's own words (`sudo bash -c x bash -c y`), whose arguments
+ * each run to that command's end, share it. A string past it isn't read, and `tooDeep` says so. The next run is
+ * looked for after an agent run ends, so no text is in two; a shell run hides nothing, as the runs among its arguments
+ * (`bash script.sh $(claude …)`) are outside its `-c` string's quotes and run before it.
  */
-function agentRuns(command: string, shells: Shells): string[] {
+function agentRuns(command: string, budget: ShellBudget): AgentRuns {
   const masked = withQuotesMasked(command);
   // `runStarts` gives the starts in index order, as the reader needs, so one reader answers them all.
   const inBackquotesAt = backquoteReader(masked);
-  const argumentsEnd = (start: number) => runArgumentsEnd(masked, start, inBackquotesAt(start));
+  const starts = runStarts(masked);
   const runs: string[] = [];
+  let tooDeep = false;
+  // Where the arguments of each shell whose string was read here end, innermost last.
+  const holding: number[] = [];
   let end = 0;
-  for (const { start, shell } of runStarts(masked)) {
+  for (let i = 0; i < starts.length; i++) {
+    const { start, shell } = starts[i]!;
     // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run.
     if (start < end) continue;
+    const inBackquotes = inBackquotesAt(start);
+    const argumentsEnd = (limit?: number) => runArgumentsEnd(masked, start, inBackquotes, limit);
     if (!shell) {
-      end = argumentsEnd(start);
+      end = argumentsEnd();
       runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
-    } else if (shells.left === 0) shells.tooDeep = true;
-    else {
-      shells.left--;
-      const script = commandString(shellWords(command.slice(start, argumentsEnd(start))));
-      if (script !== undefined) runs.push(...agentRuns(script, shells));
+      continue;
     }
+    while (holding.length > 0 && holding.at(-1)! <= start) holding.pop();
+    // Whether it has a string, from its words before the next run's only, so no shell's name is read again per shell.
+    const next = starts[i + 1]?.start;
+    if (commandString(shellWords(command.slice(start, argumentsEnd(next)))) === undefined) continue;
+    const left = budget - holding.length;
+    if (left <= 0) {
+      tooDeep = true;
+      continue;
+    }
+    const stop = argumentsEnd();
+    holding.push(stop);
+    // Its words before the next run's held a string, so its words to its end do too.
+    const inner = agentRuns(commandString(shellWords(command.slice(start, stop))) ?? "", left - 1);
+    runs.push(...inner.runs);
+    tooDeep ||= inner.tooDeep;
   }
-  return runs;
+  return { runs, tooDeep };
 }
 
 /** A short option cluster (`-e`, `-lc`, `+o`): it holds `c` when it starts with `-`, and an `o` takes the next word. */
@@ -860,18 +899,19 @@ function* shellWords(text: string): Generator<string, undefined> {
 /**
  * Each run of the agent in each command the settings run (a hook's, the `statusLine`'s, the `apiKeyHelper`), a
  * shell's `-c` string among them, once per flag in that run's own arguments, on the command value's line. A later
- * command, or a quoted argument of more than one word (a prompt), isn't one of them. A command with more shell runs
- * than `SHELL_LIMIT` is one more place, `TOO_DEEP`.
+ * command, or a quoted argument of more than one word (a prompt), isn't one of them. A command with a shell's `-c`
+ * string it didn't read, nested more than `SHELL_LIMIT` strings deep (`agentRuns`), is one more place, `TOO_DEEP`,
+ * which may skip the checks; a shell with no `-c` string never makes it.
  */
 const commandPlaces = ({ hooks, otherCommands }: ClaudeSettings): Place[] =>
   [...hooks, ...otherCommands].flatMap(({ command, line }) => {
-    const shells = { left: SHELL_LIMIT, tooDeep: false };
-    const places = agentRuns(command, shells).flatMap((args) =>
+    const { runs, tooDeep } = agentRuns(command, SHELL_LIMIT);
+    const places: Place[] = runs.flatMap((args) =>
       SKIP_FLAGS.flatMap(({ kind, pattern }) =>
         Array.from(args.matchAll(pattern), () => ({ kind, line })),
       ),
     );
-    return shells.tooDeep ? [...places, { kind: TOO_DEEP, line }] : places;
+    return tooDeep ? [...places, { kind: TOO_DEEP, line, uncertain: true }] : places;
   });
 
 function flagPlaces(text: string): Place[] {

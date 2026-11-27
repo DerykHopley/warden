@@ -257,12 +257,12 @@ describe("guard/permission-skip", () => {
   /** A command's place past its shells' limit: it may skip the checks, but isn't read. */
   const TOO_DEEP = "more than 4 shells in one command, nested too deep to check";
 
-  /** The one Finding of a file with one place that skips the checks, of `kind`, on `line`. */
+  /** The one Finding of a file with one place that certainly skips the checks, of `kind`, on `line`. */
   const onePlace = (path: string, line: number, kind: string) => [
     expect.objectContaining({
       location: { kind: "file", path, line },
       evidence: {
-        summary: `1 place ${kind === TOO_DEEP ? "may skip" : "skips"} the agent's permission checks (${kind}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
+        summary: `1 place skips the agent's permission checks (${kind}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
       },
     }),
   ];
@@ -814,16 +814,29 @@ describe("guard/permission-skip", () => {
   describe("a hook command a shell runs from its -c string", () => {
     const path = ".claude/settings.json";
     const skips = (command: string) => ofRule(path, settings({}, hooks("Stop", command)), SKIP);
-    /** The one Finding of a `Stop` hook running `command`, with one place of `kind`. */
-    const onePlaceIn = (command: string, kind = FLAG) =>
-      onePlace(path, lineWith(settings({}, hooks("Stop", command)), '"command":'), kind);
+    /** The one Finding of a `Stop` hook running `command`, with one place of the flag. */
+    const onePlaceIn = (command: string) =>
+      onePlace(path, lineWith(settings({}, hooks("Stop", command)), '"command":'), FLAG);
     /** A word in double quotes, as a shell reads it back: `"`, `\`, `$` and a backquote escaped. */
     const dq = (text: string) => `"${text.replace(/["\\$`]/g, "\\$&")}"`;
     const sq = (text: string) => `'${text}'`;
+    /** `inner` inside three shells' `-c` strings. */
+    const threeDeepAround = (inner: string) =>
+      `sh -c ${sq(`zsh -c ${dq(`dash -c ${dq(inner)}`)}`)}`;
     /** A run of the agent with the flag, three shells deep. */
-    const threeDeep = `sh -c ${sq(`zsh -c ${dq(`dash -c ${dq(`claude ${FLAG}`)}`)}`)}`;
+    const threeDeep = threeDeepAround(`claude ${FLAG}`);
     /** Four shells deep: `SHELL_LIMIT`'s limit. */
     const fourDeep = `bash -c ${dq(threeDeep)}`;
+    /** Five shells deep: the fifth string is past the limit, so it isn't read. */
+    const fiveDeep = `bash -c ${dq(fourDeep)}`;
+    /** The one Finding of a `Stop` hook running `command`, its summary `text` (up to the fix), then the Rule's fix. */
+    const findingIn = (command: string, text: (line: number) => string) => [
+      expect.objectContaining({
+        evidence: {
+          summary: `${text(lineWith(settings({}, hooks("Stop", command)), '"command":'))}. To fix: ${packRule(SKIP).fix}`,
+        },
+      }),
+    ];
 
     it("reports a double-quoted string with escaped quotes once, its prompt not a place", () => {
       const command = `bash -c "claude ${FLAG} -p \\"hi there\\""`;
@@ -924,25 +937,70 @@ describe("guard/permission-skip", () => {
 
     it("reads no fifth shell's string, and reports the command as too deep to check", () => {
       // A guard on the test, not the code: the string the fifth shell runs is valid, so only the limit stops it.
-      expect(skips(fourDeep)).toEqual(onePlaceIn(fourDeep));
-      const fiveDeep = `bash -c ${dq(fourDeep)}`;
-      expect(skips(fiveDeep)).toEqual(onePlaceIn(fiveDeep, TOO_DEEP));
+      expect(skips(fourDeep)).toEqual(
+        findingIn(
+          fourDeep,
+          (line) =>
+            `1 place skips the agent's permission checks (${FLAG}) in ${path}, on line ${line}`,
+        ),
+      );
+      expect(skips(fiveDeep)).toEqual(
+        findingIn(
+          fiveDeep,
+          (line) =>
+            `1 place may skip the agent's permission checks (${TOO_DEEP}) in ${path}, on line ${line}`,
+        ),
+      );
     });
 
-    // The limit is per command, nested or not; the agent's own runs are still read past it.
+    // A shell with no -c string has nothing to read, so it never counts toward the limit, however many there are.
     it.each([
       `bash a.sh; bash b.sh; bash c.sh; bash d.sh; bash e.sh; claude ${FLAG}`,
       `sudo bash bash bash bash bash claude ${FLAG}`,
-    ])("reports a fifth shell in %s as too deep to check, beside the agent's run", (command) => {
-      const line = lineWith(settings({}, hooks("Stop", command)), '"command":');
+    ])("reports only the agent's run past five shells with no -c string: %s", (command) => {
+      expect(skips(command)).toEqual(onePlaceIn(command));
+    });
 
-      expect(skips(command)).toEqual([
-        expect.objectContaining({
-          evidence: {
-            summary: `2 places may skip the agent's permission checks (${FLAG}, ${TOO_DEEP}) in ${path}, first on line ${line}. To fix: ${packRule(SKIP).fix}`,
-          },
-        }),
-      ]);
+    // The limit is per command and per nesting: a command after `;` starts with the whole of it.
+    it("reads a fifth shell's string in a command of its own", () => {
+      const fiveCommands = (fifth: string) =>
+        `bash -c 'claude -p x'; bash -c 'claude -p y'; bash -c x; bash -c y; ${fifth}`;
+
+      expect(skips(fiveCommands("bash -c z"))).toEqual([]);
+      const reads = fiveCommands(`bash -c 'claude ${FLAG}'`);
+      expect(skips(reads)).toEqual(onePlaceIn(reads));
+    });
+
+    it("reports a run past a script run four strings deep, with nothing unread", () => {
+      const command = `bash -c ${dq(threeDeepAround(`bash a.sh; claude ${FLAG}`))}`;
+
+      expect(skips(command)).toEqual(onePlaceIn(command));
+    });
+
+    // Each shell among one command's words runs to the command's end, so they share its limit.
+    it("reports a fifth shell's string among one command's words as too deep to check", () => {
+      const command = `sudo bash -c x bash -c x bash -c x bash -c x bash -c 'claude ${FLAG}'`;
+
+      expect(skips(command)).toEqual(
+        findingIn(
+          command,
+          (line) =>
+            `1 place may skip the agent's permission checks (${TOO_DEEP}) in ${path}, on line ${line}`,
+        ),
+      );
+    });
+
+    it.each([
+      [`claude ${FLAG}; ${fiveDeep}`, "1 place skips"],
+      [`claude ${FLAG}; claude ${FLAG}; ${fiveDeep}`, "2 places skip"],
+    ])("words the places that skip apart from the one that may, in %s", (command, certain) => {
+      expect(skips(command)).toEqual(
+        findingIn(
+          command,
+          (line) =>
+            `${certain} the agent's permission checks (${FLAG}) and 1 more may (${TOO_DEEP}) in ${path}, first on line ${line}`,
+        ),
+      );
     });
 
     // The 1 MiB rows live with the corpus, in permission-skip-corpus.test.ts.
@@ -950,6 +1008,11 @@ describe("guard/permission-skip", () => {
       ["no word after -c", "bash -c"],
       ["an empty string", "bash -c ''"],
       ["an unclosed string with no flag", "bash -c 'claude -p x"],
+      ["five script runs after ;", "bash a.sh; bash b.sh; bash c.sh; bash d.sh; bash e.sh"],
+      [
+        "five script runs after &&",
+        "bash a.sh && bash b.sh && bash c.sh && bash d.sh && bash e.sh",
+      ],
     ])("gives nothing for %s, and doesn't throw", (_name, command) => {
       expect(see(path, settings({}, hooks("Stop", command)))).toEqual([]);
     });
