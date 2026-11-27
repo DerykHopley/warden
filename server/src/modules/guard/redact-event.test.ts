@@ -118,10 +118,54 @@ describe("redactEvent: the home folder", () => {
     ["/HOME/<name>/… in upper case", "/HOME/alice/x", "~/x"],
     ["doubled separators", "//home//alice/x", "~/x"],
     [
-      "a path after a URL's /home/ path",
+      "a URL's /home/ path, and a path after it",
       "curl https://example.com/home/x -o /home/alice/x",
-      "curl https://example.com/home/x -o ~/x",
+      "curl https://example.com~ -o ~/x",
     ],
+    [
+      "a URL's /Users/ path, after a word",
+      "see:https://example.com/Users/alice/x",
+      "see:https://example.com~/x",
+    ],
+    [
+      "a URL's path with a port",
+      "http://localhost:3000/app/home/alice",
+      "http://localhost:3000/app~",
+    ],
+    [
+      "a JSON-escaped URL's /home/ path",
+      "https:\\/\\/example.com\\/home\\/alice",
+      "https:\\/\\/example.com~",
+    ],
+    ["a file:// URL with a host", "file://localhost/home/alice/x", "file://localhost~/x"],
+    ["an editor's link", "vscode://file/home/alice/app/x.ts:3", "vscode://file~/app/x.ts:3"],
+    [
+      "an ssh:// URL",
+      "git clone ssh://git@host/home/alice/repo.git",
+      "git clone ssh://git@host~/repo.git",
+    ],
+    ["a URL's fragment", "https://x.com/#/home/alice/app", "https://x.com/#~/app"],
+    // JSON-encoded tool output holds a newline as a backslash and an n, with no space after the URL.
+    [
+      "a path after a URL and a JSON-escaped newline",
+      "fetched https://x.com/a\\n/home/alice/app",
+      "fetched https://x.com/a\\n~/app",
+    ],
+    [
+      "a path after a URL and a tab",
+      "see https://x.com\t/home/alice/app",
+      "see https://x.com\t~/app",
+    ],
+    ["a path after a URL and a comma", "https://x.com,/home/alice/app", "https://x.com,~/app"],
+    ["a path after a URL and a colon", "https://x.com:/home/alice/bin", "https://x.com:~/bin"],
+    [
+      "a path after a Markdown link",
+      "[d](https://x.com)/home/alice/app",
+      "[d](https://x.com)~/app",
+    ],
+    ["a git-bash path", "/c/Users/alice/app", "~/app"],
+    ["a WSL path", "/mnt/c/Users/alice/app", "~/app"],
+    ["a Windows long path", "\\\\?\\C:\\Users\\alice\\app", "~\\app"],
     ["doubled separators after var", "/var//home/alice/x", "~/x"],
     [
       "an encoded -users- folder in lower case",
@@ -159,11 +203,8 @@ describe("redactEvent: the home folder", () => {
   });
 
   it.each([
-    ["a URL's /home/ path", "https://example.com/home/alice"],
-    ["a URL's /Users/ path, after a word", "see:https://example.com/Users/alice/x"],
-    ["a URL's path with a port", "http://localhost:3000/app/home/alice"],
-    ["a JSON-escaped URL's /home/ path", "https:\\/\\/example.com\\/home\\/alice"],
     ["a folder named like one inside another", "/srv/myhome/alice"],
+    ["a URL with no home folder in it", "https://example.com/app/x?y#z"],
     ["an encoded project folder outside a home folder", "~/.claude/projects/-srv-app/s.jsonl"],
   ])("leaves %s as it is", (_name, text) => {
     expect(redactEvent({ cwd: text })).toEqual({ cwd: text });
@@ -174,6 +215,8 @@ describe("redactEvent: the home folder", () => {
   it.each([
     ["a run of separators", "/\\".repeat(100_000)],
     ["a long word", "a".repeat(200_000)],
+    ["a run of long-path prefixes", "\\\\?".repeat(70_000)],
+    ["a run of drive-letter folders", "/c".repeat(100_000)],
   ])("redacts %s 200,000 characters long in well under a second", (_name, text) => {
     const started = performance.now();
     redactEvent({ tool_response: text });
