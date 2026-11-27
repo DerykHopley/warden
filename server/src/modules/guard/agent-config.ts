@@ -735,20 +735,23 @@ const SHELL_DEPTH = 3;
 /**
  * Each run of the agent in a shell command, as its own arguments: the flag or mode value may be quoted, so a one-word
  * quoted argument stays as written. A shell run's `-c` string is read the same way, as a command of its own, up to
- * `SHELL_DEPTH` shells deep; `shells` is how many this command is inside. The next run is looked for after this one
- * ends, so no text is in two.
+ * `SHELL_DEPTH` shells deep; `shells` is how many this command is inside. The next run is looked for after an agent
+ * run ends, so no text is in two; a shell run hides nothing, as the runs among its arguments (`bash script.sh
+ * $(claude …)`) are outside its `-c` string's quotes and run before it.
  */
 function agentRuns(command: string, shells = 0): string[] {
   const masked = withQuotesMasked(command);
   const runs: string[] = [];
   let end = 0;
   for (const { start, shell } of runStarts(masked)) {
-    // A run inside an earlier run's arguments (`claude -p $(claude -p y)`) is part of that run.
+    // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run.
     if (start < end) continue;
-    end = runArgumentsEnd(masked, start);
-    if (!shell) runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
-    else if (shells < SHELL_DEPTH) {
-      const script = commandString(shellWords(command.slice(start, end)));
+    const argumentsEnd = runArgumentsEnd(masked, start);
+    if (!shell) {
+      end = argumentsEnd;
+      runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
+    } else if (shells < SHELL_DEPTH) {
+      const script = commandString(shellWords(command.slice(start, argumentsEnd)));
       if (script !== undefined) runs.push(...agentRuns(script, shells + 1));
     }
   }

@@ -833,6 +833,37 @@ describe("guard/permission-skip", () => {
       expect(skips(command)).toEqual(onePlaceIn(command));
     });
 
+    // A shell's own run doesn't hide the runs in its other arguments, which the shell running it executes first.
+    it.each([
+      `bash script.sh $(claude ${FLAG} -p x)`,
+      `bash -c 'echo hi' $(claude ${FLAG} -p x)`,
+      `bash <(claude ${FLAG} -p x)`,
+      `sh -c "echo" \`claude ${FLAG}\``,
+      `zsh script.zsh \`claude ${FLAG} -p x\``,
+      `dash script.sh $(claude ${FLAG} -p x)`,
+      `env FOO=1 bash script.sh $(claude ${FLAG} -p x)`,
+      `env bash <(claude ${FLAG} -p x)`,
+      `sudo sh -c "echo" \`claude ${FLAG}\``,
+      `sudo bash <(claude ${FLAG} -p x)`,
+      `exec bash script.sh $(claude ${FLAG} -p x)`,
+      `time bash script.sh \`claude ${FLAG} -p x\``,
+    ])("reports a run of the agent among a shell's arguments: %s", (command) => {
+      expect(skips(command)).toEqual(onePlaceIn(command));
+    });
+
+    it("counts a run in a shell's -c string and one among its arguments as a place each", () => {
+      const command = `bash -c 'claude ${FLAG}' $(claude ${FLAG})`;
+      const line = lineWith(settings({}, hooks("Stop", command)), '"command":');
+
+      expect(skips(command)).toEqual([
+        expect.objectContaining({
+          evidence: {
+            summary: `2 places skip the agent's permission checks (${FLAG}) in ${path}, first on line ${line}. To fix: ${packRule(SKIP).fix}`,
+          },
+        }),
+      ]);
+    });
+
     it("reads no fourth shell's string, and returns", () => {
       // A guard on the test, not the code: the string the fourth shell runs is valid, so only the depth limit stops it.
       expect(skips(threeDeep)).toEqual(onePlaceIn(threeDeep));
