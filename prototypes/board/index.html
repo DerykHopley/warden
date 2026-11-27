@@ -9,7 +9,7 @@
     B Lanes  - the same rail, the list split into status lanes (columns)
     C Desk   - no rail: a "Waiting on you" strip of every decision across modules, then list + detail
     D Joined - owner's mix: B's lanes with square corners and no gaps between cards, A and B's rail,
-               A's Findings filter bar (status tabs filter the lanes), C's "Waiting on you" on top
+               A's Findings filter bar (status tabs filter the lanes). C's "Waiting on you" was tried and dropped
   Pages: ?page=findings|overview|setup. Data: the demo seed's Findings and VDA ISA 2027.1 Controls, in memory only.
   Run: pnpm prototype:board  (serves this folder on http://127.0.0.1:5181)
 -->
@@ -1812,7 +1812,6 @@
             S.variant === "D" ? (TABS.find((t) => t[0] === S.tab) || TABS[0])[2] : () => true;
           const pool = F.filter((f) => S.mod === "all" || f.mod === S.mod).filter(tabFn);
           return (
-            (S.variant === "D" ? deskStrip() : "") +
             findingsBand() +
             lanes([
               ["Waiting on a Lead", "wait", pool.filter((f) => f.proposal || f.unconfirmed), fcard],
@@ -1852,7 +1851,6 @@
           `<div class="card vouch ${S.sel === c.ref ? "sel" : ""}" data-sel="${c.ref}" tabindex="0"><div class="meta"><span class="mono">${c.ref}</span><span class="st ${vclass(c.verdict)}" style="margin-left:auto">${c.verdict}</span></div><div class="title" style="font-weight:500">${esc(c.q)}</div><div class="meta">${st(cstate(c))}</div></div>`;
         if (S.variant === "B" || S.variant === "D")
           return (
-            (S.variant === "D" ? deskStrip() : "") +
             band +
             lanes([
               ["Waiting for review", "wait", C.filter((c) => c.review !== "Reviewed"), ccard],
@@ -1876,7 +1874,7 @@
         const band = `<div class="band" style="padding-bottom:14px"><div class="row1"><h1>Setup</h1><span class="sub">What Warden may read and change for Elm</span></div><div class="summary">${STEPS.filter((s) => s.state === "done").length} of ${STEPS.length} set up · Level: Quick</div></div>`;
         const icon = { done: "✓", wait: "!", todo: "" };
         return (
-          (S.variant === "C" || S.variant === "D" ? deskStrip() : "") +
+          (S.variant === "C" ? deskStrip() : "") +
           band +
           `<div class="scroll"><ol class="steps">${STEPS.map((s, i) => `<li class="step ${s.state} ${S.sel === s.id ? "sel" : ""}" data-sel="${s.id}" tabindex="0"><span class="num">${icon[s.state] || i + 1}</span><div><h3>${s.title}</h3><div class="muted" style="font-size:14px;overflow-wrap:anywhere">${esc(s.line)}</div></div><div class="right">${s.action ? `<button class="btn small ${s.state === "wait" ? "primary" : ""}" data-act="step" data-id="${s.id}">${s.action}</button>` : st(s.state === "done" ? { k: "fixed", w: "Done", i: ICON.fixed } : { k: "fp", w: "Later", i: ICON.open })}</div></li>`).join("")}</ol></div>`
         );
