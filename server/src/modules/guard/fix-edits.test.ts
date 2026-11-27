@@ -483,6 +483,14 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
       ["--@acme:registry", "npx", ["-y", `--@acme:registry=${PRIVATE}`, "acme-mcp"], undefined],
       ["--registry", "npm", ["--registry", PRIVATE, "exec", "acme-mcp"], undefined],
       ["--registry", "pnpm", ["dlx", "--registry", PRIVATE, "acme-mcp"], undefined],
+      // pnpm's `--config.<key>=<value>` sets any config key, before `dlx` or after it (#404).
+      ["--config.registry", "pnpm", [`--config.registry=${PRIVATE}`, "dlx", "acme-mcp"], undefined],
+      [
+        "--config.@acme:registry",
+        "pnpm",
+        ["dlx", `--config.@acme:registry=${PRIVATE}`, "acme-mcp"],
+        undefined,
+      ],
       ["--index-url", "uvx", ["--index-url", PRIVATE, "acme-mcp"], undefined],
       ["--extra-index-url", "uvx", [`--extra-index-url=${PRIVATE}`, "acme-mcp"], undefined],
       ["--index", "uv", ["tool", "run", "--index", PRIVATE, "acme-mcp"], undefined],

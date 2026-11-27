@@ -546,6 +546,39 @@ describe("serverStart's customRegistry: the runner option or env key that points
     expect(serverStart(entry)?.customRegistry).toBeUndefined();
   });
 
+  describe("pnpm's `--config.<key>` (#404)", () => {
+    it.each([
+      [
+        "--config.registry=, before dlx",
+        server("pnpm", [`--config.registry=${PRIVATE}`, "dlx", "acme-mcp"]),
+        "--config.registry",
+      ],
+      [
+        "--config.registry=, after dlx",
+        server("pnpm", ["dlx", `--config.registry=${PRIVATE}`, "acme-mcp"]),
+        "--config.registry",
+      ],
+      [
+        "a scope's --config.@acme:registry=",
+        server("pnpm", [`--config.@acme:registry=${PRIVATE}`, "dlx", "acme-mcp"]),
+        "--config.@acme:registry",
+      ],
+      ["a key that isn't a registry", server("pnpm --config.foo=bar dlx acme-mcp"), undefined],
+    ])("reads acme-mcp, with customRegistry, for %s", (_case, entry, named) => {
+      expect(serverStart(entry)).toMatchObject({ target: "acme-mcp", positional: true });
+      expect(serverStart(entry)?.customRegistry).toBe(named);
+    });
+
+    // pnpm reads `--config.<key>` without `=` as a switch, as it reads any option it doesn't know, so the next word is
+    // its command and `dlx` is never reached: pnpm 10 fails with "`registry` should be a string" or "Command not found".
+    it.each([
+      server("pnpm", ["--config.registry", PRIVATE, "dlx", "acme-mcp"]),
+      server("pnpm --config.foo bar dlx acme-mcp"),
+    ])("reads no runner for the space form, %j", (entry) => {
+      expect(serverStart(entry)).toBeUndefined();
+    });
+  });
+
   it("leaves the scanner's Observation as it was: the server is still unpinned", () => {
     const text = mcpJson({ acme: server("npx", ["-y", "--registry", PRIVATE, "acme-mcp"]) });
     expect(observe(".mcp.json", text)).toHaveLength(1);
