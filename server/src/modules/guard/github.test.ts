@@ -32,6 +32,7 @@ const ACCESS_TOKENS_URL = `https://api.github.com/app/installations/${INSTALLATI
 const USER_REPOS_URL = `https://api.github.com/user/installations/${INSTALLATION_ID}/repositories`;
 const INSTALLATION_REPOS_URL = "https://api.github.com/installation/repositories";
 const APP_URL = "https://api.github.com/app";
+const REVOKE_URL = `https://api.github.com/applications/${CLIENT_ID}/token`;
 const SLUG = "warden-reader";
 
 const STEPS = {
@@ -42,6 +43,7 @@ const STEPS = {
   installationRepos: `GitHub's count of installation ${INSTALLATION_ID}'s repositories`,
   app: "GitHub's authenticated app",
 };
+const REVOKE_STEP = "GitHub's revoke of the user token";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -91,6 +93,8 @@ function fakeGitHub(
     installationRepos = (call) =>
       json({ total_count: 2, repositories: page(call, [repo(1), repo(2)]) }),
     app = () => json({ id: 1, slug: SLUG, name: "Warden reader", client_id: CLIENT_ID }),
+    // GitHub's "Delete an app token" answers 204 No Content.
+    revoke = () => new Response(null, { status: 204 }),
   }: {
     token?: Answer;
     installations?: Answer;
@@ -98,6 +102,7 @@ function fakeGitHub(
     accessToken?: Answer;
     installationRepos?: Answer;
     app?: Answer;
+    revoke?: Answer;
   } = {},
   timeoutMs?: number,
 ) {
@@ -109,6 +114,7 @@ function fakeGitHub(
     [`POST ${ACCESS_TOKENS_URL}`]: accessToken,
     [`GET ${INSTALLATION_REPOS_URL}`]: installationRepos,
     [`GET ${APP_URL}`]: app,
+    [`DELETE ${REVOKE_URL}`]: revoke,
   };
   const fetch: Fetch = async (url, init) => {
     const call = { url: new URL(url), init };
@@ -166,8 +172,9 @@ describe("createGitHub", () => {
         { ref: "https://github.com/acme/repo-1", githubId: 1001, admin: false },
       ]);
 
+      // The fourth call revokes the token (below).
       const [exchange, list, repos] = calls;
-      expect(calls).toHaveLength(3);
+      expect(calls).toHaveLength(4);
       expect(exchange!.url.href).toBe(TOKEN_URL);
       expect(exchange!.init.method).toBe("POST");
       expect(header(exchange!, "Accept")).toBe("application/json");
@@ -262,7 +269,8 @@ describe("createGitHub", () => {
       expect(await userInstallationRepos(github)).toBeUndefined();
 
       expect(callsTo(calls, USER_REPOS_URL)).toEqual([]);
-      expect(calls).toHaveLength(2);
+      // The exchange, the list, and the token's revoke.
+      expect(calls).toHaveLength(3);
     });
 
     it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
@@ -316,6 +324,125 @@ describe("createGitHub", () => {
       expect(error).toBeInstanceOf(GitHubUnavailable);
       expect((error as GitHubUnavailable).status).toBe(status);
       expect(error.message).toContain(refusal);
+    });
+  });
+
+  describe("userInstallationRepos revokes the user token once the check is done (#147)", () => {
+    /** userInstallationRepos, with every revoke failure it hands on recorded. */
+    const checkRecordingRevokeFailures = (github: ReturnType<typeof createGitHub>) => {
+      const failures: unknown[] = [];
+      const answer = github.userInstallationRepos(CODE, VERIFIER, INSTALLATION_ID, (error) => {
+        failures.push(error);
+      });
+      return { answer, failures };
+    };
+    const revokes = (calls: Call[]) => callsTo(calls, REVOKE_URL);
+    const route = ({ url, init }: Call) => `${init.method ?? "GET"} ${url.origin}${url.pathname}`;
+
+    it("sends one DELETE /applications/{client_id}/token after both lists, with Basic auth of the client id and secret and the token in its body", async () => {
+      const { github, calls } = fakeGitHub();
+
+      const { answer, failures } = checkRecordingRevokeFailures(github);
+
+      expect(await answer).toEqual([
+        { ref: "https://github.com/acme/repo-1", githubId: 1001, admin: false },
+      ]);
+      expect(calls.map(route)).toEqual([
+        `POST ${TOKEN_URL}`,
+        `GET ${INSTALLATIONS_URL}`,
+        `GET ${USER_REPOS_URL}`,
+        `DELETE ${REVOKE_URL}`,
+      ]);
+      const revoke = calls[3]!;
+      const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
+      // Basic only: GitHub's docs say a Bearer header would replace the Basic credentials.
+      expect(header(revoke, "Authorization")).toBe(`Basic ${basic}`);
+      expect(header(revoke, "Accept")).toBe("application/vnd.github+json");
+      expect(header(revoke, "X-GitHub-Api-Version")).toBe("2026-03-10");
+      expect(header(revoke, "User-Agent")).toBe("Warden");
+      expect(JSON.parse(revoke.init.body as string)).toEqual({ access_token: USER_TOKEN });
+      expect(revoke.init.signal).toBeInstanceOf(AbortSignal);
+      expect(failures).toEqual([]);
+    });
+
+    it("revokes the token for an installation the person can't reach, and still answers undefined", async () => {
+      const { github, calls } = fakeGitHub({
+        installations: () => json({ total_count: 1, installations: [{ id: 7 }] }),
+      });
+
+      const { answer, failures } = checkRecordingRevokeFailures(github);
+
+      expect(await answer).toBeUndefined();
+      expect(calls.map(route).at(-1)).toBe(`DELETE ${REVOKE_URL}`);
+      expect(revokes(calls)).toHaveLength(1);
+      expect(failures).toEqual([]);
+    });
+
+    it.each([
+      ["installations", { installations: serverError }],
+      ["userRepos", { userRepos: serverError }],
+    ] as const)(
+      "revokes the token when the %s list answers 500, and still throws that list's GitHubUnavailable",
+      async (step, answers) => {
+        const { github, calls } = fakeGitHub(answers);
+
+        const { answer } = checkRecordingRevokeFailures(github);
+
+        const error = await rejection(answer);
+        expect(error).toBeInstanceOf(GitHubUnavailable);
+        expect(error).toMatchObject({ step: STEPS[step], status: 500 });
+        expect(calls.map(route).at(-1)).toBe(`DELETE ${REVOKE_URL}`);
+        expect(revokes(calls)).toHaveLength(1);
+      },
+    );
+
+    it("throws the list's own error, not the revoke's, when both fail", async () => {
+      const { github } = fakeGitHub({ installations: serverError, revoke: serverError });
+
+      const { answer, failures } = checkRecordingRevokeFailures(github);
+
+      expect(await rejection(answer)).toMatchObject({ step: STEPS.installations, status: 500 });
+      expect(failures).toEqual([expect.objectContaining({ step: REVOKE_STEP, status: 500 })]);
+    });
+
+    it.each([
+      ["GitHub refuses the code", { token: () => json({ error: "bad_verification_code" }) }],
+      ["the exchange answers 500", { token: serverError }],
+      ["the exchange's connection drops", { token: dropped }],
+    ])("makes no revoke call when %s", async (_name, answers) => {
+      const { github, calls } = fakeGitHub(answers);
+
+      const { answer, failures } = checkRecordingRevokeFailures(github);
+
+      await rejection(answer);
+      expect(calls.map(route)).toEqual([`POST ${TOKEN_URL}`]);
+      expect(failures).toEqual([]);
+    });
+
+    it.each([
+      ["answered 422", () => json({ message: "Validation Failed" }, 422), 422],
+      ["answered 500", serverError, 500],
+      ["timing out", never, undefined],
+    ] as [string, Answer, number | undefined][])(
+      "answers as it would, and hands on one GitHubUnavailable naming the revoke's step and status, for a revoke %s",
+      async (_name, revoke, status) => {
+        const { github } = fakeGitHub({ revoke }, 50);
+
+        const { answer, failures } = checkRecordingRevokeFailures(github);
+
+        expect(await answer).toEqual([
+          { ref: "https://github.com/acme/repo-1", githubId: 1001, admin: false },
+        ]);
+        expect(failures).toHaveLength(1);
+        expect(failures[0]).toBeInstanceOf(GitHubUnavailable);
+        expect(failures[0]).toMatchObject({ step: REVOKE_STEP, status });
+      },
+    );
+
+    it("answers as it would when a revoke fails and no one is told", async () => {
+      const { github } = fakeGitHub({ revoke: serverError });
+
+      expect(await userInstallationRepos(github)).toHaveLength(1);
     });
   });
 
@@ -481,6 +608,7 @@ describe("createGitHub", () => {
     expect(apiCalls.map(({ url }) => url.pathname)).toEqual([
       "/user/installations",
       `/user/installations/${INSTALLATION_ID}/repositories`,
+      `/applications/${CLIENT_ID}/token`,
       `/app/installations/${INSTALLATION_ID}/access_tokens`,
       `/app/installations/${INSTALLATION_ID}/access_tokens`,
       "/installation/repositories",
@@ -714,6 +842,27 @@ describe("createGitHub", () => {
         ]) {
           expect(serialised).not.toContain(secret);
         }
+      }
+    });
+
+    it.each([
+      [
+        "a revoke answer repeating the request",
+        ({ init }: Call) => json({ message: init.body }, 422),
+      ],
+      ["a revoke that doesn't answer", never],
+      ["a revoke whose connection drops", dropped],
+    ] as [string, Answer][])("with %s, in the error handed on", async (_name, revoke) => {
+      const { github } = fakeGitHub({ revoke }, 50);
+      const failures: unknown[] = [];
+
+      await github.userInstallationRepos(CODE, VERIFIER, INSTALLATION_ID, (error) => {
+        failures.push(error);
+      });
+
+      expect(failures).toHaveLength(1);
+      for (const secret of [CODE, VERIFIER, CLIENT_SECRET, USER_TOKEN]) {
+        expect(everythingIn(failures[0])).not.toContain(secret);
       }
     });
   });

@@ -52,6 +52,7 @@ afterAll(async () => {
   await pool.end();
 });
 
+const CLIENT_ID = "Iv23li-the-client-id";
 const CLIENT_SECRET = "the-client-secret-value";
 const CODE = "the-code-value";
 const VERIFIER = "the-code-verifier-value-that-is-long-enough-for-pkce";
@@ -76,7 +77,7 @@ const APP_REPOS_URL = "https://api.github.com/installation/repositories";
  * A fake GitHub for one installation: the person reaches `reachable` installations and reads `userRepos` in it; the
  * App's installation token answer gives `permissions` ("omitted": none), or `tokenStatus` when it's an error, and the
  * App's list holds `appRepos`. `failAt` names one endpoint that answers 500; `refuse` makes the token exchange refuse
- * the code. Every call is recorded.
+ * the code; the user token's revoke answers `revokeStatus` (204 by default). Every call is recorded.
  */
 function fakeGitHub({
   installationId,
@@ -87,6 +88,7 @@ function fakeGitHub({
   tokenStatus,
   refuse = false,
   failAt,
+  revokeStatus = 204,
 }: {
   installationId: number;
   reachable?: number[];
@@ -96,6 +98,7 @@ function fakeGitHub({
   tokenStatus?: 403 | 404;
   refuse?: boolean;
   failAt?: "installations";
+  revokeStatus?: 204 | 422;
 }) {
   const calls: string[] = [];
   const fetch: Fetch = async (url, init) => {
@@ -132,12 +135,16 @@ function fakeGitHub({
         );
       case `GET ${APP_REPOS_URL}`:
         return json({ total_count: appRepos.length, repositories: appRepos });
+      case `DELETE ${api}/applications/${CLIENT_ID}/token`:
+        return revokeStatus === 204
+          ? new Response(null, { status: 204 })
+          : json({ message: "Validation Failed" }, revokeStatus);
       default:
         throw new Error(`unexpected call to ${route}`);
     }
   };
   const github = createGitHub({
-    clientId: "Iv23li-the-client-id",
+    clientId: CLIENT_ID,
     clientSecret: CLIENT_SECRET,
     privateKey: gitHubAppKey(),
     fetch,
@@ -332,6 +339,35 @@ describe("POST /api/github/installations: an Admin links an installation (storie
     );
   });
 
+  it("answers 201 and links the installation when GitHub answers the user token's revoke 422, logging one warning with the team, app, step and status and no secret (#147)", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { github, calls } = fakeGitHub({ installationId, revokeStatus: 422 });
+    const { app, logLines } = linkApp(github);
+
+    const res = await link(app, team, linkBody(installationId));
+
+    expect(res.status).toBe(201);
+    expect(LinkedInstallationBody.parse(res.body).installation_id).toBe(installationId);
+    expect(await reposOf(app, team)).toEqual([["https://github.com/acme/web", installationId]]);
+    expect(calls).toContain(`DELETE https://api.github.com/applications/${CLIENT_ID}/token`);
+    const warnings = logEntries(logLines().join("")).filter(
+      (entry) => entry.severity === "WARNING",
+    );
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        team,
+        app: "read",
+        step: "GitHub's revoke of the user token",
+        status: 422,
+      }),
+    ]);
+    const said = [...logLines(), JSON.stringify(res.body)].join("\n");
+    for (const secret of [USER_TOKEN, CODE, VERIFIER, CLIENT_SECRET]) {
+      expect(said).not.toContain(secret);
+    }
+  });
+
   it.each([
     ["can write contents", { contents: "write", metadata: "read" }],
     // Fails closed: permissions GitHub doesn't name aren't taken as read-only.
@@ -479,6 +515,7 @@ describe("POST /api/github/installations: an Admin links an installation (storie
     ["a refused code", { refuse: true }],
     ["GitHub answering 500", { failAt: "installations" as const }],
     ["an installation that can write", { permissions: { contents: "write" } }],
+    ["a revoke GitHub answers 422", { revokeStatus: 422 as const }],
   ])(
     "writes no log line holding a code, verifier, secret or token, for %s",
     async (_name, fake) => {

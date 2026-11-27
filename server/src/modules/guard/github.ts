@@ -4,7 +4,8 @@
 // linked, the repos the person can read. GitHub lists an installation to anyone who can read one of its repos, so only
 // those repos are the person's to link. The App reads the installation's permissions from the answer that grants its
 // installation token. Each token serves one link and is dropped: never stored, logged or returned, and no error this
-// client throws carries one, the code, the verifier or the secret.
+// client throws carries one, the code, the verifier or the secret. The user token is also revoked with GitHub once the
+// check is done (#147), so a copy that leaked from memory stops working.
 import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
 import { CallFailed, callJson, type Answer, type Fetch } from "../../http-call.ts";
@@ -72,12 +73,15 @@ export interface GitHub {
    * The repos in the installation that the person whose `code` this is can read, through their user token, each with
    * whether they're its admin (false where GitHub doesn't say); or undefined when the installation isn't one they can
    * reach. The code is exchanged once, so one call does both. An id that isn't a positive integer is refused with a
-   * RangeError before any call.
+   * RangeError before any call. Once the lists are read, answered or failed, the user token is revoked with GitHub's
+   * "Delete an app token"; a revoke that fails never changes the answer or the error, and is handed to
+   * `onRevokeFailed`, naming the step and status only.
    */
   userInstallationRepos(
     code: string,
     codeVerifier: string,
     installationId: number,
+    onRevokeFailed?: (error: GitHubUnavailable) => void,
   ): Promise<UserRepo[] | undefined>;
   /**
    * How many repos the installation reaches, GitHub's count read through the installation's own token, so it counts
@@ -318,6 +322,37 @@ export function createGitHub({
     return read(UserToken, step, answer, { quiet: true }).access_token;
   }
 
+  /**
+   * Revokes the user `token` with GitHub's "Delete an app token" (204 when done). Basic auth of the App's client id and
+   * secret, and no Bearer header, which GitHub's docs say would replace it. A failure, 422 included, is handed to
+   * `onRevokeFailed`, never thrown; GitHub's answer isn't repeated in it, as it may repeat the token.
+   */
+  async function revokeUserToken(
+    token: string,
+    onRevokeFailed: ((error: GitHubUnavailable) => void) | undefined,
+  ): Promise<void> {
+    const step = "GitHub's revoke of the user token";
+    try {
+      const answer = await call(step, `${API}/applications/${encodeURIComponent(clientId)}/token`, {
+        method: "DELETE",
+        headers: {
+          Accept: "application/vnd.github+json",
+          "Content-Type": "application/json",
+          "X-GitHub-Api-Version": API_VERSION,
+          Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
+          ...USER_AGENT,
+        },
+        body: JSON.stringify({ access_token: token }),
+      });
+      if (!answer.ok) {
+        throw new GitHubUnavailable(step, answer.status, `${step} answered HTTP ${answer.status}`);
+      }
+    } catch (error) {
+      if (!(error instanceof GitHubUnavailable)) throw error;
+      onRevokeFailed?.(error);
+    }
+  }
+
   /** GitHub's answer granting the App a token for the installation; 403 and 404 are GitHubInstallationUnreachable. */
   async function installationToken(installationId: number) {
     checkInstallationId(installationId);
@@ -333,23 +368,28 @@ export function createGitHub({
   }
 
   return {
-    async userInstallationRepos(code, codeVerifier, installationId) {
+    async userInstallationRepos(code, codeVerifier, installationId, onRevokeFailed) {
       checkInstallationId(installationId);
       const token = await userToken(code, codeVerifier);
-      const installations = await everyPage(
-        "GitHub's list of the user's installations",
-        "/user/installations",
-        token,
-        Installations,
-      );
-      if (!installations.some(({ id }) => id === installationId)) return undefined;
-      const repositories = await everyPage(
-        `GitHub's list of the user's repositories in installation ${installationId}`,
-        `/user/installations/${installationId}/repositories`,
-        token,
-        Repositories,
-      );
-      return repositories.map(userRepo);
+      try {
+        const installations = await everyPage(
+          "GitHub's list of the user's installations",
+          "/user/installations",
+          token,
+          Installations,
+        );
+        if (!installations.some(({ id }) => id === installationId)) return undefined;
+        const repositories = await everyPage(
+          `GitHub's list of the user's repositories in installation ${installationId}`,
+          `/user/installations/${installationId}/repositories`,
+          token,
+          Repositories,
+        );
+        return repositories.map(userRepo);
+      } finally {
+        // Whatever the lists answered: the token's last use is done. The revoke never throws a GitHubUnavailable.
+        await revokeUserToken(token, onRevokeFailed);
+      }
     },
 
     async installationPermissions(installationId) {
