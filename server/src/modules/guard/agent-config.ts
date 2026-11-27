@@ -360,7 +360,8 @@ function permissionSkip(
   const first = places[0]!.line;
   const count = places.length;
   const kinds = [...new Set(places.map((place) => place.kind))].join(", ");
-  const verb = count === 1 ? "place skips" : "places skip";
+  const may = places.some(({ kind }) => kind === TOO_DEEP);
+  const verb = `${count === 1 ? "place" : "places"} ${may ? "may skip" : count === 1 ? "skips" : "skip"}`;
   return observation(
     asset,
     PERMISSION_SKIP,
@@ -731,30 +732,42 @@ const withQuotesMasked = (command: string, keep: (quoted: string) => boolean = (
 /** A quoted argument of one word, as the flag or the mode's value is; a prompt holds more. */
 const isOneWord = (quoted: string) => !/\s/.test(quoted);
 
-/** How many shells deep `agentRuns` reads `-c` strings, so a hostile config can't make it recurse without end. */
-const SHELL_DEPTH = 3;
+/**
+ * How many shell runs `agentRuns` reads in one settings command, nested or not, so a hostile config can't make it
+ * recurse without end, or reread the command once per shell's name in it.
+ */
+const SHELL_LIMIT = 4;
+
+/** A command's place past `SHELL_LIMIT`: its shells aren't read, so it may skip the checks. */
+const TOO_DEEP = `more than ${SHELL_LIMIT} shells in one command, nested too deep to check`;
+
+/** The shell runs a settings command may still read, and whether it had more. */
+type Shells = { left: number; tooDeep: boolean };
 
 /**
  * Each run of the agent in a shell command, as its own arguments: the flag or mode value may be quoted, so a one-word
- * quoted argument stays as written. A shell run's `-c` string is read the same way, as a command of its own, up to
- * `SHELL_DEPTH` shells deep; `shells` is how many this command is inside. The next run is looked for after an agent
- * run ends, so no text is in two; a shell run hides nothing, as the runs among its arguments (`bash script.sh
- * $(claude …)`) are outside its `-c` string's quotes and run before it.
+ * quoted argument stays as written. A shell run's `-c` string is read the same way, as a command of its own, while
+ * `shells` has any left. The next run is looked for after an agent run ends, so no text is in two; a shell run hides
+ * nothing, as the runs among its arguments (`bash script.sh $(claude …)`) are outside its `-c` string's quotes and run
+ * before it.
  */
-function agentRuns(command: string, shells = 0): string[] {
+function agentRuns(command: string, shells: Shells): string[] {
   const masked = withQuotesMasked(command);
   const runs: string[] = [];
   let end = 0;
   for (const { start, shell } of runStarts(masked)) {
     // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run.
     if (start < end) continue;
-    const argumentsEnd = runArgumentsEnd(masked, start);
     if (!shell) {
-      end = argumentsEnd;
+      end = runArgumentsEnd(masked, start);
       runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
-    } else if (shells < SHELL_DEPTH) {
-      const script = commandString(shellWords(command.slice(start, argumentsEnd)));
-      if (script !== undefined) runs.push(...agentRuns(script, shells + 1));
+    } else if (shells.left === 0) shells.tooDeep = true;
+    else {
+      shells.left--;
+      const script = commandString(
+        shellWords(command.slice(start, runArgumentsEnd(masked, start))),
+      );
+      if (script !== undefined) runs.push(...agentRuns(script, shells));
     }
   }
   return runs;
@@ -769,17 +782,16 @@ const LONG_OPTION = /^--[A-Za-z]/;
 /**
  * The string a shell runs from its `-c`, from the words after the shell's own: the first word past its options (short
  * clusters, `-o`/`+o` and its value, long options, then maybe `--`), when one of them held `c`. Any later words (`$0`,
- * positional arguments) aren't read.
+ * positional arguments) aren't read, nor split.
  */
-function commandString(words: readonly string[]): string | undefined {
+function commandString(words: Iterator<string, undefined>): string | undefined {
   let runsString = false;
-  for (let i = 0; i < words.length; i++) {
-    const word = words[i]!;
-    if (word === "--") return runsString ? words[i + 1] : undefined;
+  for (let word = words.next().value; word !== undefined; word = words.next().value) {
+    if (word === "--") return runsString ? words.next().value : undefined;
     if (LONG_OPTION.test(word)) continue;
     if (!SHORT_OPTIONS.test(word)) return runsString ? word : undefined;
     runsString ||= word.startsWith("-") && word.includes("c");
-    if (word.includes("o")) i += 1;
+    if (word.includes("o")) words.next();
   }
   return undefined;
 }
@@ -806,15 +818,14 @@ function doubleQuoted(inside: string): string {
  * A command's arguments as the shell splits and joins them, with no expansion: words end at unquoted white space;
  * single quotes are kept as written; double quotes as `doubleQuoted` reads them; unquoted, a backslash escape keeps the
  * character it escapes, and a line continuation joins the words either side. A quote that never closes runs to the
- * end, as `ESCAPE_OR_QUOTED` reads it.
+ * end, as `ESCAPE_OR_QUOTED` reads it. Each word is split only when it is asked for.
  */
-function shellWords(text: string): string[] {
-  const words: string[] = [];
+function* shellWords(text: string): Generator<string, undefined> {
   let word: string | undefined;
   for (let i = 0; i < text.length; i++) {
     const char = text[i]!;
     if (/[ \t\r\n]/.test(char)) {
-      if (word !== undefined) words.push(word);
+      if (word !== undefined) yield word;
       word = undefined;
       continue;
     }
@@ -830,23 +841,26 @@ function shellWords(text: string): string[] {
       i += quoted.length - 1;
     } else word += char;
   }
-  if (word !== undefined) words.push(word);
-  return words;
+  if (word !== undefined) yield word;
+  return undefined;
 }
 
 /**
  * Each run of the agent in each command the settings run (a hook's, the `statusLine`'s, the `apiKeyHelper`), a
  * shell's `-c` string among them, once per flag in that run's own arguments, on the command value's line. A later
- * command, or a quoted argument of more than one word (a prompt), isn't one of them.
+ * command, or a quoted argument of more than one word (a prompt), isn't one of them. A command with more shell runs
+ * than `SHELL_LIMIT` is one more place, `TOO_DEEP`.
  */
 const commandPlaces = ({ hooks, otherCommands }: ClaudeSettings): Place[] =>
-  [...hooks, ...otherCommands].flatMap(({ command, line }) =>
-    agentRuns(command).flatMap((args) =>
+  [...hooks, ...otherCommands].flatMap(({ command, line }) => {
+    const shells = { left: SHELL_LIMIT, tooDeep: false };
+    const places = agentRuns(command, shells).flatMap((args) =>
       SKIP_FLAGS.flatMap(({ kind, pattern }) =>
         Array.from(args.matchAll(pattern), () => ({ kind, line })),
       ),
-    ),
-  );
+    );
+    return shells.tooDeep ? [...places, { kind: TOO_DEEP, line }] : places;
+  });
 
 function flagPlaces(text: string): Place[] {
   const lines = text.split("\n");
