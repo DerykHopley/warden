@@ -483,6 +483,14 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
       ["--@acme:registry", "npx", ["-y", `--@acme:registry=${PRIVATE}`, "acme-mcp"], undefined],
       ["--registry", "npm", ["--registry", PRIVATE, "exec", "acme-mcp"], undefined],
       ["--registry", "pnpm", ["dlx", "--registry", PRIVATE, "acme-mcp"], undefined],
+      // pnpm's `--config.<key>=<value>` sets any config key, before `dlx` or after it (#404).
+      ["--config.registry", "pnpm", [`--config.registry=${PRIVATE}`, "dlx", "acme-mcp"], undefined],
+      [
+        "--config.@acme:registry",
+        "pnpm",
+        ["dlx", `--config.@acme:registry=${PRIVATE}`, "acme-mcp"],
+        undefined,
+      ],
       ["--index-url", "uvx", ["--index-url", PRIVATE, "acme-mcp"], undefined],
       ["--extra-index-url", "uvx", [`--extra-index-url=${PRIVATE}`, "acme-mcp"], undefined],
       ["--index", "uv", ["tool", "run", "--index", PRIVATE, "acme-mcp"], undefined],
@@ -490,6 +498,16 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
       ["--pip-args", "pipx", ["run", `--pip-args="--index-url ${PRIVATE}"`, "acme-mcp"], undefined],
       ["NPM_CONFIG_REGISTRY", "npx", ["-y", "acme-mcp"], { NPM_CONFIG_REGISTRY: PRIVATE }],
       ["UV_INDEX_URL", "uvx", ["acme-mcp"], { UV_INDEX_URL: PRIVATE }],
+      ["BUN_CONFIG_REGISTRY", "bunx", ["acme-mcp"], { BUN_CONFIG_REGISTRY: PRIVATE }],
+      [
+        "YARN_NPM_REGISTRY_SERVER",
+        "yarn",
+        ["dlx", "acme-mcp"],
+        { YARN_NPM_REGISTRY_SERVER: PRIVATE },
+      ],
+      ["npm_config_userconfig", "npx", ["-y", "acme-mcp"], { npm_config_userconfig: PRIVATE }],
+      ["UV_CONFIG_FILE", "uvx", ["acme-mcp"], { UV_CONFIG_FILE: PRIVATE }],
+      ["PIP_CONFIG_FILE", "pipx", ["run", "acme-mcp"], { PIP_CONFIG_FILE: PRIVATE }],
     ])(
       "leaves %s on `%s %j`, asking no registry, naming it and never its value",
       async (what, command, args, env) => {

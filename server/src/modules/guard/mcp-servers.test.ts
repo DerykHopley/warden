@@ -457,6 +457,28 @@ describe("serverStart's customRegistry: the runner option or env key that points
       "--registry",
     ],
     ["uvx -i", server("uvx", ["-i", PRIVATE, "acme-mcp"]), "-i"],
+    ["uvx -i with its value attached (#403)", server("uvx", [`-i${PRIVATE}`, "acme-mcp"]), "-i"],
+    [
+      "uvx -i with an attached value holding = (#403)",
+      server("uvx", [`-i${PRIVATE}/simple?a=b`, "acme-mcp"]),
+      "-i",
+    ],
+    ["uvx -f with its value attached (#403)", server("uvx -f./wheels acme-mcp"), "-f"],
+    [
+      "pipx --pip-args with an attached -i (#403)",
+      server("pipx", ["run", `--pip-args=-i${PRIVATE}`, "acme"]),
+      "--pip-args",
+    ],
+    [
+      "Yarn's env key, in any case (#403)",
+      withEnv(server("yarn", ["dlx", "acme-mcp"]), { yarn_npm_registry_server: PRIVATE }),
+      "yarn_npm_registry_server",
+    ],
+    [
+      "npm's config file env key, in any case (#403)",
+      withEnv(server("npx", ["acme-mcp"]), { NPM_CONFIG_USERCONFIG: "/etc/npmrc" }),
+      "NPM_CONFIG_USERCONFIG",
+    ],
     [
       "uvx, past --from's package",
       server("uvx", ["--from", "acme", `--find-links=${PRIVATE}`, "acme"]),
@@ -502,6 +524,7 @@ describe("serverStart's customRegistry: the runner option or env key that points
       server("npm", ["exec", "--", "acme-mcp", "--registry", PRIVATE]),
     ],
     ["--pip-args with no index", server("pipx", ["run", "--pip-args=--no-cache-dir", "acme"])],
+    ["an attached value on another short option (#403)", server("uvx", ["-p3.12", "acme-mcp"])],
     [
       "the other runner kind's env key",
       withEnv(server("npx", ["acme-mcp"]), { UV_INDEX_URL: PRIVATE }),
@@ -521,6 +544,39 @@ describe("serverStart's customRegistry: the runner option or env key that points
   ])("is undefined for %s", (_case, entry) => {
     expect(serverStart(entry)).toBeDefined();
     expect(serverStart(entry)?.customRegistry).toBeUndefined();
+  });
+
+  describe("pnpm's `--config.<key>` (#404)", () => {
+    it.each([
+      [
+        "--config.registry=, before dlx",
+        server("pnpm", [`--config.registry=${PRIVATE}`, "dlx", "acme-mcp"]),
+        "--config.registry",
+      ],
+      [
+        "--config.registry=, after dlx",
+        server("pnpm", ["dlx", `--config.registry=${PRIVATE}`, "acme-mcp"]),
+        "--config.registry",
+      ],
+      [
+        "a scope's --config.@acme:registry=",
+        server("pnpm", [`--config.@acme:registry=${PRIVATE}`, "dlx", "acme-mcp"]),
+        "--config.@acme:registry",
+      ],
+      ["a key that isn't a registry", server("pnpm --config.foo=bar dlx acme-mcp"), undefined],
+    ])("reads acme-mcp, with customRegistry, for %s", (_case, entry, named) => {
+      expect(serverStart(entry)).toMatchObject({ target: "acme-mcp", positional: true });
+      expect(serverStart(entry)?.customRegistry).toBe(named);
+    });
+
+    // pnpm reads `--config.<key>` without `=` as a switch, as it reads any option it doesn't know, so the next word is
+    // its command and `dlx` is never reached: pnpm 10 fails with "`registry` should be a string" or "Command not found".
+    it.each([
+      server("pnpm", ["--config.registry", PRIVATE, "dlx", "acme-mcp"]),
+      server("pnpm --config.foo bar dlx acme-mcp"),
+    ])("reads no runner for the space form, %j", (entry) => {
+      expect(serverStart(entry)).toBeUndefined();
+    });
   });
 
   it("leaves the scanner's Observation as it was: the server is still unpinned", () => {
