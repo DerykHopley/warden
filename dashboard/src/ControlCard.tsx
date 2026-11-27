@@ -23,11 +23,11 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type KeyboardEvent,
   type ReactNode,
 } from "react";
 import { NOT_ANSWERING, sentence, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
 import { dayAndTimeWords } from "./date-words.ts";
+import { DecisionForm, focusInCard, OpenerButton, type FocusTarget } from "./decision-form.tsx";
 import { SEVERITY_WORDS } from "./finding-words.ts";
 import { assetLabel } from "./findings.ts";
 import { rowAgrees, shownVerdict } from "./overview.ts";
@@ -62,6 +62,9 @@ import { useWardenCall } from "./warden-call.tsx";
 type ReviewForm = "confirm" | "override";
 /** The card's line under Reviews: a review's Done line, or why it was refused. */
 type Line = { kind: "done" | "refused"; text: string };
+/** The card's Done line, which takes focus after a review. */
+const doneLine = (card: HTMLElement) =>
+  card.querySelector<HTMLElement>(".card-line[role='status']");
 
 export function ControlCard(props: {
   focus: ControlFocus;
@@ -86,13 +89,19 @@ export function ControlCard(props: {
     [getToken, team, catalogue.id, control.ref],
   );
   const { result, setResult, refresh } = useWardenCall(call, props.onSessionEnded);
-  // A read newer than the Overview's row asks for the row again, once per read, so the two say the same.
+  // A read newer than the Overview's row asks for the row again, once per read, so the two say the same. A review's
+  // answer asks for the row itself, so the read it brings (its 201's, or the one asked after no answer) asks nothing.
   const { refreshRow } = focus;
   const compared = useRef<ControlResult | null>(null);
+  const rowAskedFor = useRef(false);
   useEffect(() => {
-    if (result === "loading" || result.kind !== "control" || compared.current === result) return;
+    if (result === "loading" || compared.current === result) return;
     compared.current = result;
-    if (!rowAgrees(control, result.detail)) refreshRow();
+    if (rowAskedFor.current) {
+      rowAskedFor.current = false;
+      return;
+    }
+    if (result.kind === "control" && !rowAgrees(control, result.detail)) refreshRow();
   }, [result, control, refreshRow]);
   // A Product Asset's Finding is named by its Product, as on Findings.
   const listProducts = useCallback(
@@ -113,7 +122,7 @@ export function ControlCard(props: {
   };
 
   // The review form: a Lead's or an Admin's, one open at a time, in place of the row of buttons that opens it.
-  const lead = props.role !== null && atLeast(props.role, "lead");
+  const canReview = props.role !== null && atLeast(props.role, "lead");
   const [form, setForm] = useState<ReviewForm | null>(null);
   const [reason, setReason] = useState("");
   const [verdict, setVerdict] = useState<ReviewedVerdict | null>(null);
@@ -121,24 +130,27 @@ export function ControlCard(props: {
   const [line, setLine] = useState<Line | null>(null);
   /** Set at the click, before React renders the busy submit: a second press in the same tick sends nothing. */
   const sendingNow = useRef(false);
+  /**
+   * After no answer, the read the card showed then: until a newer one replaces it, the form waits as while sending,
+   * so a second review's answer can't land before that read and be replaced by it.
+   */
+  const [rereadFrom, setRereadFrom] = useState<ControlResult | "loading" | null>(null);
+  const waiting = sending || rereadFrom === result;
   // A Role lowered (a 403, then /api/me again) closes the form; its refusal line stays, in the card.
-  if (!lead && form !== null) setForm(null);
+  if (!canReview && form !== null) setForm(null);
+  // A read that works out the picked Verdict drops it: its radio has gone, and the override would change nothing.
+  const workedOut =
+    result !== "loading" && result.kind === "control" ? result.detail.verdict : null;
+  if (verdict !== null && verdict === workedOut) setVerdict(null);
 
   const cardRef = useRef<HTMLElement>(null);
   /** What takes focus once the next render lands: the open form's first field, the Done line, or an opener. */
-  const focusNext = useRef<"field" | "line" | ReviewForm | null>(null);
+  const focusNext = useRef<FocusTarget | null>(null);
   useEffect(() => {
     const target = focusNext.current;
     const card = cardRef.current;
     focusNext.current = null;
-    if (target === null || card === null) return;
-    const element =
-      target === "line"
-        ? card.querySelector<HTMLElement>(".card-line[role='status']")
-        : target === "field"
-          ? card.querySelector<HTMLElement>(".decision-form input, .decision-form textarea")
-          : card.querySelector<HTMLElement>(`[data-opener="${target}"]`);
-    element?.focus();
+    if (target !== null && card !== null) focusInCard(card, target, doneLine);
   });
 
   function open(next: ReviewForm) {
@@ -149,7 +161,9 @@ export function ControlCard(props: {
     focusNext.current = "field";
   }
 
+  /** Not while a review is sending, or the read after no answer runs: the form stays for its answer. */
   function cancel() {
+    if (waiting) return;
     if (form !== null) focusNext.current = form;
     setForm(null);
     setLine(null);
@@ -167,24 +181,23 @@ export function ControlCard(props: {
     sendingNow.current = true;
     setSending(true);
     setLine(null);
-    const { refreshRow } = focus;
+    const shown = result;
     const answer = await reviewControlInTeam(getToken, team, catalogue.id, control.ref, body);
     sendingNow.current = false;
     setSending(false);
     switch (answer.kind) {
-      case "reviewed": {
-        const read: ControlResult = { kind: "control", detail: answer.detail };
-        // The row is asked for here, once: the answer's own row check sees it as compared already.
-        compared.current = read;
-        setResult(() => read);
+      case "reviewed":
+        rowAskedFor.current = true;
+        setResult(() => ({ kind: "control", detail: answer.detail }));
         setForm(null);
         setLine({ kind: "done", text: reviewDoneWords(body) });
         focusNext.current = "line";
         refreshRow();
         return;
-      }
       case "maybe-saved":
         refused(MAYBE_REVIEWED);
+        rowAskedFor.current = true;
+        setRereadFrom(shown);
         refresh();
         refreshRow();
         return;
@@ -234,28 +247,22 @@ export function ControlCard(props: {
           {refusal}
         </p>
       )}
-      {props.role === null ? null : !lead ? (
+      {props.role === null ? null : !canReview ? (
         <p className="muted control-member">{MEMBER_REVIEWS}</p>
       ) : form === null ? (
         <div className="card-actions" role="group" aria-label="Review">
-          <button
-            type="button"
-            className="secondary"
-            data-opener="confirm"
-            disabled={sending}
-            onClick={() => open("confirm")}
-          >
-            Confirm
-          </button>
-          <button
-            type="button"
-            className="secondary"
-            data-opener="override"
-            disabled={sending}
-            onClick={() => open("override")}
-          >
-            Override
-          </button>
+          <OpenerButton
+            opener="confirm"
+            label="Confirm"
+            waiting={waiting}
+            onOpen={() => open("confirm")}
+          />
+          <OpenerButton
+            opener="override"
+            label="Override"
+            waiting={waiting}
+            onOpen={() => open("override")}
+          />
         </div>
       ) : (
         <ReviewFormFields
@@ -266,7 +273,7 @@ export function ControlCard(props: {
           verdict={verdict}
           onVerdict={setVerdict}
           ready={form === "confirm" || (verdict !== null && trimmed !== "")}
-          busy={sending}
+          busy={waiting}
           refusal={refusal}
           onSubmit={submit}
           onCancel={cancel}
@@ -414,8 +421,8 @@ function Detail(props: {
 
 /**
  * Confirm's form (an optional Reason) or Override's (the Verdict, from every reviewed Verdict but the worked-out one,
- * and a required Reason), as the Finding card's decision forms are drawn. Its submit is disabled until it's ready, and
- * busy while the review runs; Esc cancels it.
+ * and a required Reason), in the Finding card's decision form frame. Its submit is disabled until it's ready, and busy
+ * while the review runs; Esc cancels it, but not while the review runs.
  */
 function ReviewFormFields(props: {
   form: ReviewForm;
@@ -434,19 +441,16 @@ function ReviewFormFields(props: {
   const radios = useId();
   const confirms = props.form === "confirm";
   const label = confirms ? "Confirm" : "Override";
-  // Marked handled, so a floating panel's Esc, which listens on the document, leaves the panel open.
-  function onKeyDown(event: KeyboardEvent) {
-    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    props.onCancel();
-  }
   return (
-    <form
-      className="decision-form"
-      aria-label={`${label} the Verdict`}
-      noValidate
+    <DecisionForm
+      name={`${label} the Verdict`}
+      submitLabel={label}
+      ready={props.ready}
+      busy={props.busy}
+      holdWhileBusy
+      refusal={props.refusal}
       onSubmit={props.onSubmit}
-      onKeyDown={onKeyDown}
+      onCancel={props.onCancel}
     >
       {!confirms && (
         <fieldset className="field candidates">
@@ -477,25 +481,7 @@ function ReviewFormFields(props: {
           onChange={(event) => props.onReason(event.target.value)}
         />
       </label>
-      {props.refusal !== null && (
-        <p className="card-line refused" role="alert">
-          {props.refusal}
-        </p>
-      )}
-      <div className="form-actions">
-        <button
-          type="submit"
-          className="primary"
-          disabled={!props.ready || props.busy}
-          aria-busy={props.busy ? "true" : undefined}
-        >
-          {label}
-        </button>
-        <button type="button" className="secondary" onClick={props.onCancel}>
-          Cancel
-        </button>
-      </div>
-    </form>
+    </DecisionForm>
   );
 }
 

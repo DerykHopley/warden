@@ -735,6 +735,99 @@ describe("no answer to a review's POST", () => {
       expect(card.getByRole("region", { name: "Verdict" })).toBeVisible();
     },
   );
+
+  /** Opens `name`'s form on 1.3.3 as `answer()` reads it; a review gets no answer, and the read after it `reread`. */
+  async function noAnswerThenReread(
+    name: "Confirm" | "Override",
+    reread: () => Response | Promise<Response>,
+  ) {
+    let reads = 0;
+    return openForm(name, {
+      control: () => (++reads === 1 ? answer() : reread()),
+      review: () => Promise.reject(new TypeError("Failed to fetch")),
+    });
+  }
+  const savedAfterAll = () =>
+    answer({
+      review_state: "reviewed",
+      reviewed_verdict: "not_evidenced",
+      reviews: [ADAS_CONFIRM],
+    });
+  const maybeSaved = /the review may have been saved/;
+
+  it("the submit and Cancel wait, busy, until the Control is read again, so that older read can't replace a newer review", async () => {
+    const reread = deferred<Response>();
+    const { card, form, submit } = await noAnswerThenReread("Confirm", () => reread.promise);
+    await userEvent.type(form.getByRole("textbox"), "Checked");
+    await userEvent.click(submit());
+    expect(await form.findByRole("alert")).toHaveTextContent(maybeSaved);
+    await vi.waitFor(() => expect(callsTo(PATH)).toHaveLength(2));
+
+    expect(submit()).toBeDisabled();
+    expect(submit()).toHaveAttribute("aria-busy", "true");
+    expect(form.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    act(() => submit().click());
+    expect(callsTo(REVIEWS)).toHaveLength(1);
+
+    reread.resolve(savedAfterAll());
+    const reviews = await section("Reviews");
+    expect(await reviews.findByText("Confirmed: Not evidenced")).toBeVisible();
+    expect(submit()).toBeEnabled();
+    expect(form.getByRole("textbox")).toHaveValue("Checked");
+    expect(card.getByRole("alert")).toHaveTextContent(maybeSaved);
+  });
+
+  it("the Overview is asked again once, even when the read that follows differs from the row", async () => {
+    const { form, submit, focus } = await noAnswerThenReread("Confirm", savedAfterAll);
+    await userEvent.click(submit());
+    expect(await form.findByRole("alert")).toHaveTextContent(maybeSaved);
+    expect(await (await section("Reviews")).findByText("Confirmed: Not evidenced")).toBeVisible();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(focus.refreshRow).toHaveBeenCalledOnce();
+  });
+
+  it("Override drops a picked Verdict that the read that follows works out, so it sends nothing that changes nothing", async () => {
+    const { form, submit } = await noAnswerThenReread("Override", () =>
+      answer({ verdict: "evidenced" }),
+    );
+    await fillOverride(form, "Evidenced");
+    await userEvent.click(submit());
+    expect(await form.findByRole("alert")).toHaveTextContent(maybeSaved);
+
+    await vi.waitFor(() => expect(form.queryByRole("radio", { name: "Evidenced" })).toBeNull());
+    expect(form.getAllByRole("radio").map((radio) => radio.closest("label")?.textContent)).toEqual([
+      "Partly evidenced",
+      "Not evidenced",
+      "Not applicable",
+    ]);
+    for (const radio of form.getAllByRole("radio")) expect(radio).not.toBeChecked();
+    expect(submit()).toBeDisabled();
+    await userEvent.click(form.getByRole("radio", { name: "Not evidenced" }));
+    expect(submit()).toBeEnabled();
+  });
+});
+
+describe("while a review is sending", () => {
+  it("Cancel waits (disabled) and Esc leaves the form open with what was typed; a refusal then shows in it", async () => {
+    const late = deferred<Response>();
+    const { card, form, submit } = await openForm("Confirm", { review: () => late.promise });
+    const reason = form.getByRole("textbox");
+    await userEvent.type(reason, "Checked");
+    await userEvent.click(submit());
+    await vi.waitFor(() => expect(callsTo(REVIEWS)).toHaveLength(1));
+
+    expect(form.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    act(() => reason.focus());
+    await userEvent.keyboard("{Escape}");
+    expect(card.getByRole("form")).toBeVisible();
+    expect(reason).toHaveValue("Checked");
+    expect(reason).toHaveFocus();
+
+    late.resolve(json(400, { error: "reason: Too long" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("reason: Too long.");
+    expect(reason).toHaveValue("Checked");
+    expect(form.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
 });
 
 describe("a review's answer after the card has gone", () => {
