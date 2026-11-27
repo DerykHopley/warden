@@ -486,6 +486,15 @@ describe("guard/permission-skip on a 1 MiB hook", () => {
     ["$(s then backquotes", halves("$(", "`")],
     ["a backquote, (s, then escaped backquotes", halves("(", "\\`", "`")],
     ["an unclosed backquote then agent runs", filled("`", "claude x;", "")],
+    [
+      "a shell's string of runs passing on its arguments, then flags after it",
+      filled(
+        `bash -c '${`claude "$@";`.repeat(Math.floor(ARCHIVE_LIMITS.fileBytes / 2 / unitBytes(`claude "$@";`)))}' _`,
+        ` ${FLAG}`,
+        "",
+      ),
+      FLAG,
+    ],
   ])("reads a 1 MiB hook of %s within a second", (_name, text, kind) => {
     const started = performance.now();
     const observations = see(path, text);

@@ -809,6 +809,13 @@ describe("guard/permission-skip", () => {
     ["runs a shell script with the flag as its argument", `bash script.sh '${FLAG}'`],
     // A shell's `-c` string inside an agent run's arguments is read, and keeps the rules above too.
     ["runs a shell inside an agent run's arguments", `claude -p x $(bash -c 'echo hi')`],
+    // The words after a shell's `-c` string and its `$0` count only for an agent run in it that passes them on.
+    ["passes a shell's positional arguments to echo", `bash -c 'echo "$@"' _ ${FLAG}`],
+    ["runs claude without its shell's positional arguments", `bash -c 'claude -p x' _ ${FLAG}`],
+    [
+      "passes a shell's positional arguments to an inner shell's run, not to that shell",
+      `bash -c 'sh -c "claude \\"\\$@\\"" y' _ ${FLAG}`,
+    ],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
   });
@@ -924,6 +931,27 @@ describe("guard/permission-skip", () => {
       ]),
     )("reports an agent word after a wrapped shell: %s", (command) => {
       expect(skips(command)).toEqual(onePlaceIn(command));
+    });
+
+    // A run that passes on its shell's positional arguments takes the words after the string's `$0` as its own.
+    it.each([
+      [`bash -c 'claude "$@"' _ ${FLAG}`, FLAG],
+      [`bash -c 'claude $*' _ ${MODE} ${BYPASS}`, `${MODE} ${BYPASS}`],
+      [`bash -c 'claude -p x $@' _ ${MODE}=${BYPASS}`, `${MODE} ${BYPASS}`],
+      [`sh -c 'claude "$*"' sh '${FLAG}'`, FLAG],
+      [`bash -c 'claude "$@"' _ -p 'say hi' ${FLAG}`, FLAG],
+      [`sudo bash -c "claude \\"\\$@\\"" _ ${FLAG}`, FLAG],
+    ])(
+      "reads the words after a -c string and its name as a run's arguments: %s",
+      (command, kind) => {
+        const line = lineWith(settings({}, hooks("Stop", command)), '"command":');
+
+        expect(skips(command)).toEqual(onePlace(path, line, kind));
+      },
+    );
+
+    it("reads no prompt among a shell's positional arguments as a place", () => {
+      expect(skips(`bash -c 'claude "$@"' _ -p 'never pass ${FLAG}'`)).toEqual([]);
     });
 
     it("counts a run in a shell's -c string and one among its arguments as a place each", () => {
@@ -1042,6 +1070,7 @@ describe("guard/permission-skip", () => {
       ["no word after -c", "bash -c"],
       ["an empty string", "bash -c ''"],
       ["an unclosed string with no flag", "bash -c 'claude -p x"],
+      ["a string passing positional arguments, with no word after it", `bash -c 'claude "$@"'`],
       ["five script runs after ;", "bash a.sh; bash b.sh; bash c.sh; bash d.sh; bash e.sh"],
       [
         "five script runs after &&",
