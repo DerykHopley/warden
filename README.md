@@ -60,7 +60,15 @@ page has something to show: 11 Findings from Guard and Patch on a Repo, a Produc
 of them Open (2 Critical), 2 Fixed (one an Unconfirmed fix), 1 Accepted and 1 False positive. Then it adds the demo
 Product, "Shop web" (the demo Repo, LangChain 0.0.200), and runs its Patch Scan as a save does, so the Products page
 has a Product and the Findings page has its CVE Findings from the loaded CVE snapshot (how many depends on the
-snapshot). Load the snapshot first, once per database:
+snapshot). Then it gives the Team VDA ISA 2027.1 (see "Vouch"), as an Admin and a Lead would: it links the demo Repo
+as one of the Team's Repo Assets under a made-up GitHub installation, turns ISA2027 on, and confirms the Verdicts of
+1.3.4, 4.1.3 and 5.2.4. That gives one Evidenced Control (5.2.4), 2 Gaps (1.3.4 and 4.1.3) and 1.3.3 waiting for a
+Lead's review, so the Overview answers "Not yet: 2 Gaps, 1 Control waiting for review.". As the installation is made
+up, a Guard Scan of the demo Repo from Setup fails at GitHub. The demo's Scans and Spot run age: about 30 days after
+the seed they fall out of the period Vouch reads, its Controls read Not evidenced, the ones reviewed at another Verdict
+read "Changed since review", and a rerun won't change that (it never reviews a Control twice), so a fresh demo needs a
+fresh Team. Load the snapshot first, once per
+database:
 
 ```sh
 PGUSER=warden_migrate pnpm --filter @warden/server load-cves
@@ -68,18 +76,22 @@ PGUSER=warden_migrate pnpm --filter @warden/server load-cves
 
 The data lives in `@warden/contracts/demo`, which the dashboard's tests read too. The Team id is its Clerk
 Organization id (`org_…`, the Organization switcher's Manage screen shows it), and the Team's Admin must have opened
-Warden in it first. It runs as `warden_app` and writes only through the Findings module and the Products store
-(Scans, a Spot run, two decisions made as the Team's oldest Admin or Lead, the Product and its Scan). Run again, it
+Warden in it first. It runs as `warden_app` and writes only through the Findings module, the Products store, Guard's
+Repo Assets store and Vouch's Catalogue and review stores (Scans, a Spot run, two decisions, the Product and its Scan,
+the demo Repo's link, ISA2027's switch and three reviews, each made as the Team's oldest Admin or Lead). Run again, it
 says the Team is already seeded; on a Team seeded without the demo Product (with `--no-product`, or before the seed
-made one), it adds the Product and runs its Scan. A rerun takes the seeded Team's demo Findings as they are: decisions
+made one), it adds the Product and runs its Scan, and on one seeded without the ISA2027 state (before the seed wrote
+it, or a run cut short) it adds what's missing. It never changes ISA2027's switch once the Team has one (an Admin may
+have turned it off), nor reviews a Control that has a review. If another Team holds the demo installation, it exits 1
+("demo seed failed", naming `InstallationLinkedElsewhere`); a rerun after finishes it. A rerun takes the seeded Team's demo Findings as they are: decisions
 made on them since (a Lead's, or the daily Job reopening an expired acceptance) and demo Findings stored under an older
 demo Rule id are no mismatch, and it changes none of them. It exits 1, writing nothing, for a Team with Findings of its
 own, for a Team with Products of its own, and when the CVE snapshot isn't loaded (naming `load-cves`). On a Team it
 has seeded before, it also exits 1, writing nothing, for a seed cut short (not every demo run applied, or the seed's
 two decisions missing), a demo Product changed since or a Product of the Lead's under its name, and any Finding the
 seed didn't write (one from a real Scan, or the CVE Findings a deleted demo Product left). One seed runs per Team at a
-time. `--no-product` after the Team id seeds the demo Findings only, with no Product and no snapshot needed: the
-browser tests seed Acme and Bluebird that way.
+time. `--no-product` after the Team id seeds the demo Findings only, with no Product, no snapshot needed, and none of
+the ISA2027 state (no Repo Asset, Catalogue choice or review): the browser tests seed Acme and Bluebird that way.
 
 It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database (a `PGHOST` other than `127.0.0.1`,
 `localhost` or `::1`, or any `PGPASSWORD`), `WARDEN_SEED_DEMO` must be the database's name, and the live database,
@@ -191,6 +203,37 @@ FIRST while it runs, so the data stays as of that date until a release ships a n
 | EPSS | Attribution requested by FIRST | EPSS by FIRST |
 
 This product uses the NVD API but is not endorsed or certified by the NVD.
+
+## Vouch
+
+Vouch answers "Are we ready for the audit?" on the Overview: **Yes**, when every Control of each Catalogue on is
+reviewed with no Gap; **Not yet**, with how many Gaps there are and how many Controls wait for a review; or, with no
+Catalogue on, that Warden can answer once Vouch checks the Team's Controls.
+
+**What it checks.** An Admin turns VDA ISA 2027.1 on in Setup. Vouch judges four of its Controls, 1.3.3, 1.3.4, 4.1.3
+and 5.2.4, from the Team's Findings under each Control's Rules: the Rule-to-Control map (`RULE_CONTROLS` in the Vouch
+module) names the Guard and Patch Rules behind 1.3.3, 1.3.4 and 4.1.3, and 5.2.4 reads the Judge's Spot runs. For each
+Rule it reads Scan coverage on the Team's held Repo Assets (a Guard Rule) or Products (a Patch Rule) over the last 30
+days, and the Open Findings on them, and gives each Control a Verdict, Evidenced, Partly evidenced or Not evidenced,
+with a one-line reason and the Findings it cites. Severity doesn't change a Verdict, and Accepted and False positive
+Findings don't count against one. The Verdict is worked out on each read, never stored.
+
+**Reviews.** A Lead or an Admin confirms or overrides each Verdict from its Control's card; Not applicable is given
+only by override, and an override needs a reason. Every review is kept in an append-only log. A Control whose
+worked-out Verdict has moved since its review reads "Changed since review" and waits for a review again. A Gap is a
+reviewed Control at Not evidenced or Partly evidenced. The Team is Audit-ready when a Catalogue is on and every one of
+its Controls has been reviewed.
+
+**No model call, no outside call.** Vouch calls no model and no outside service: the Catalogue ships in the server
+image (`server/src/modules/vouch/vda-isa-2027.1/`) and is read from there at start-up.
+
+**What it stores** (`docs/data.md`, the Vouch rows): the Catalogue's text with its source and licence, in the image;
+each Team's Catalogue choices (`team_catalogues`); and the review log (`control_reviews`). A Team's choices and reviews
+are kept for the life of the Team.
+
+**Credit and licence.** VDA ISA 2027.1 is © 2026 ENX Association, licensed under CC BY-ND 4.0
+(<https://creativecommons.org/licenses/by-nd/4.0/>). The full credit, the licence and how its text was taken from the
+ISA Excel are in `NOTICE.md` in the Vouch module's `vda-isa-2027.1` folder.
 
 ## Checks
 
