@@ -75,7 +75,12 @@ export type PanelAction =
   /** A width that shows (clamped) without being chosen: the divider while it's dragged. */
   | { type: "resize"; width: number }
   /** What shows becomes the person's choice: a drag's end, or a keyboard step after its resize. */
-  | { type: "commit" };
+  | { type: "commit" }
+  /**
+   * A page's notice must be read: a panel over the page at `windowWidth` (floating, or full screen) closes, not chosen;
+   * one pinned beside the page, or closed, stays as it is.
+   */
+  | { type: "uncover"; windowWidth: number };
 
 export function panelReducer(store: PanelStore, action: PanelAction): PanelStore {
   switch (action.type) {
@@ -93,6 +98,12 @@ export function panelReducer(store: PanelStore, action: PanelAction): PanelStore
       return { ...store, shown: { ...store.shown, width: clampWidth(action.width) } };
     case "commit":
       return { ...store, chosen: store.shown };
+    case "uncover": {
+      const shownAs = panelShownAs(store.shown.mode, action.windowWidth);
+      return shownAs === "floating" || shownAs === "full-screen"
+        ? panelReducer(store, { type: "show", mode: "closed" })
+        : store;
+    }
   }
 }
 
@@ -118,6 +129,8 @@ export type ControlFocus = {
   clear: () => void;
   /** Asks the page's answer again: the card's read is newer than the row (`rowAgrees`). */
   refreshRow: () => void;
+  /** The card stored a review of this Control, its Done words `done`: the page says so if the Control then goes. */
+  onReviewed: (done: string) => void;
 };
 
 /** What a page is talking about: the panel's context line and detail card read it. */
@@ -149,6 +162,8 @@ export type PagePanel = {
   setContext: (context: PanelContext | null) => void;
   /** Opens the panel floating when it's closed; an open or pinned panel stays as it is. */
   open: () => void;
+  /** Closes a panel that covers the page (floating, or full screen), not stored, so a notice on it can be read. */
+  uncover: () => void;
 };
 
 /** The Findings page's view words: "Findings", then each filter that isn't "all", as status, severity, module. */

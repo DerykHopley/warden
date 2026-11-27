@@ -50,7 +50,7 @@ function renderCallback(search: string | null, routes: Routes = {}, { strict = f
     me: { userId: "user_1", team: "org_a", role: "admin" as const, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
-    panel: { setContext: vi.fn(), open: vi.fn() },
+    panel: { setContext: vi.fn(), open: vi.fn(), uncover: vi.fn() },
   };
   const page = <GitHubCallbackPage {...props} />;
   const { unmount } = render(strict ? <StrictMode>{page}</StrictMode> : page);
@@ -278,7 +278,7 @@ function renderWriteCallback(search: string | null, routes: Routes = {}) {
     me: { userId: "user_1", team: "org_a", role: "admin" as const, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
-    panel: { setContext: vi.fn(), open: vi.fn() },
+    panel: { setContext: vi.fn(), open: vi.fn(), uncover: vi.fn() },
   };
   const { unmount } = render(<WriteAppCallbackPage {...props} />);
   return { ...props, unmount };

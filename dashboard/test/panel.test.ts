@@ -133,6 +133,22 @@ describe("panelReducer: what shows, and what the person chose", () => {
     expect(panelReducer(pinned, { type: "open" })).toBe(pinned);
   });
 
+  it("uncovering the page closes a panel over it without choosing, and leaves one beside it or closed", () => {
+    const floating = panelReducer(start, { type: "choose", mode: "floating" });
+    expect(panelReducer(floating, { type: "uncover", windowWidth: 1024 })).toEqual({
+      shown: { mode: "closed", width: 400 },
+      chosen: floating.chosen,
+    });
+    const pinned = panelReducer(start, { type: "choose", mode: "pinned" });
+    expect(panelReducer(pinned, { type: "uncover", windowWidth: 390 })).toEqual({
+      shown: { mode: "closed", width: 400 },
+      chosen: pinned.chosen,
+    });
+    expect(panelReducer(pinned, { type: "uncover", windowWidth: 1024 }).shown.mode).toBe("closed");
+    expect(panelReducer(pinned, { type: "uncover", windowWidth: 1600 })).toBe(pinned);
+    expect(panelReducer(start, { type: "uncover", windowWidth: 390 })).toBe(start);
+  });
+
   it("a drag resizes what shows, clamped, and its end chooses it", () => {
     const pinned = panelReducer(start, { type: "choose", mode: "pinned" });
     const dragging = panelReducer(pinned, { type: "resize", width: 900 });
