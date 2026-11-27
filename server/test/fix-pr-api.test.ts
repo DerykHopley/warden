@@ -87,7 +87,35 @@ const base64 = (text: string) => Buffer.from(text, "utf8").toString("base64");
 const fromBase64 = (text: string) => Buffer.from(text, "base64").toString("utf8");
 
 type Call = { method: string; url: URL; body: Record<string, unknown> | undefined };
-type Pull = { number: number; head: string; base: string; state: "open" | "closed" };
+/**
+ * A PR the fake holds: `author` is its opener's login, and `commits` each of its commits' author login, null for one
+ * whose email GitHub links to no account.
+ */
+type Pull = {
+  number: number;
+  head: string;
+  base: string;
+  state: "open" | "closed";
+  author: string;
+  commits: (string | null)[];
+};
+
+/** The one request a fake answers 500 to, once. */
+type FailAt = "repo" | "pull" | "commits" | "npm";
+
+/** The write app's slug, as the fake's `GET /app` answers it, and the bot login its PRs and commits carry. */
+const WRITE_SLUG = "warden-writer";
+const BOT = `${WRITE_SLUG}[bot]`;
+/** A person with push access to the repo but no seat in the Team. */
+const PUSHER = "mallory";
+
+/** A PR the write app's bot opened from `head` into `base`, holding its one commit. */
+const botPull = (
+  number: number,
+  head: string,
+  base = DEFAULT_BRANCH,
+  state: Pull["state"] = "open",
+): Pull => ({ number, head, base, state, author: BOT, commits: [BOT] });
 
 /**
  * A fake GitHub holding one repo, `example/web` with GitHub id `repoId` and default branch `main`, and the npm registry.
@@ -95,9 +123,11 @@ type Pull = { number: number; head: string; base: string; state: "open" | "close
  * (the write app's by default); its token is `ghs_fix-<installation id>`. `files` are the files at the default
  * branch's head `HEAD_SHA`; `pushed`, when given, the default branch's files after a push since that head, which a read
  * by the branch's name answers. `branches` are the branches beside it, and a branch whose name a branch's path takes
- * (`warden` beside `warden/fix-…`) is refused with 422, as Git refuses it; `pulls` are its PRs. `failAt` names one
- * request that answers 500 once. `beforePut` holds each contents write until it settles, and `onPullLookup` runs on each
- * read of the open PRs from a branch. Every request is recorded, and every token and JWT it was sent.
+ * (`warden` beside `warden/fix-…`) is refused with 422, as Git refuses it; `pulls` are its PRs, each one the PR create
+ * opens being the write app's bot's with its one commit. `GET /app` answers the write app's slug, `WRITE_SLUG`.
+ * `failAt` names one request that answers 500 once. `beforePut` holds each contents write until it settles, and
+ * `onPullLookup` runs on each read of the open PRs from a branch. Every request is recorded, and every token and JWT
+ * it was sent.
  */
 function fakeGitHub({
   repoId,
@@ -114,7 +144,7 @@ function fakeGitHub({
   files?: Record<string, string>;
   pushed?: Record<string, string>;
   npm?: Record<string, string>;
-  failAt?: "repo" | "pull" | "npm";
+  failAt?: FailAt;
   beforePut?: () => Promise<void>;
   onPullLookup?: () => void;
 }) {
@@ -123,12 +153,13 @@ function fakeGitHub({
   const branches = new Set<string>();
   const pulls: Pull[] = [];
   const failing = new Set(failAt === undefined ? [] : [failAt]);
-  const fail = (at: "repo" | "pull" | "npm") => failing.delete(at);
+  const fail = (at: FailAt) => failing.delete(at);
   const repo = `${API}/repos/${FULL_NAME}`;
   const pullBody = (pull: Pull) => ({
     number: pull.number,
     html_url: `https://github.com/${FULL_NAME}/pull/${pull.number}`,
     state: pull.state,
+    user: { login: pull.author, type: pull.author.endsWith("[bot]") ? "Bot" : "User" },
     head: { ref: pull.head },
     base: { ref: pull.base },
   });
@@ -164,6 +195,9 @@ function fakeGitHub({
       const issued = `ghs_fix-${id}`;
       secrets.add(issued);
       return json({ token: issued, permissions: installation.permissions ?? WRITE_APP }, 201);
+    }
+    if (route === `GET ${API}/app`) {
+      return json({ id: 7, slug: WRITE_SLUG, name: "Warden writer" });
     }
     if (route === `GET ${API}/repositories/${repoId}`) {
       if (fail("repo")) return json({ message: "Server Error" }, 500);
@@ -206,12 +240,7 @@ function fakeGitHub({
     }
     if (route === `POST ${repo}/pulls`) {
       if (fail("pull")) return json({ message: "Server Error" }, 500);
-      const pull: Pull = {
-        number: pulls.length + 1,
-        head: String(body?.head),
-        base: String(body?.base),
-        state: "open",
-      };
+      const pull = botPull(pulls.length + 1, String(body?.head), String(body?.base));
       pulls.push(pull);
       return json(pullBody(pull), 201);
     }
@@ -227,10 +256,23 @@ function fakeGitHub({
           .map(pullBody),
       );
     }
-    const one = new RegExp(`^GET ${repo.replace(/[.]/g, "\\.")}/pulls/(\\d+)$`).exec(route);
+    const one = new RegExp(`^GET ${repo.replace(/[.]/g, "\\.")}/pulls/(\\d+)(/commits)?$`).exec(
+      route,
+    );
     if (one) {
       const pull = pulls.find((p) => p.number === Number(one[1]));
-      return pull ? json(pullBody(pull)) : json({ message: "Not Found" }, 404);
+      if (pull === undefined) return json({ message: "Not Found" }, 404);
+      if (one[2] === undefined) return json(pullBody(pull));
+      if (fail("commits")) return json({ message: "Server Error" }, 500);
+      const perPage = Number(url.searchParams.get("per_page") ?? 30);
+      // GitHub answers an author it links to no account as an empty object.
+      return json(
+        pull.commits.slice(0, perPage).map((login, i) => ({
+          sha: String(i).repeat(40),
+          author: login === null ? {} : { login },
+          commit: { message: "A commit" },
+        })),
+      );
     }
     throw new Error(`unexpected call to ${route}`);
   };
@@ -508,7 +550,7 @@ describe("POST /api/guard/findings/:id/fix-pr: a person opens a Fix PR (story 6)
     const { team, repoId, granted, finding } = await fixableTeam();
     const fake = fakeGitHub({ repoId, installations: installationsOf(granted) });
     fake.branches.add(branchOf(finding));
-    fake.pulls.push({ number: 9, head: branchOf(finding), base: DEFAULT_BRANCH, state: "open" });
+    fake.pulls.push(botPull(9, branchOf(finding)));
     const { app } = fixApp(fake);
 
     const first = await post(app, team, finding.id);
@@ -547,7 +589,7 @@ describe("POST /api/guard/findings/:id/fix-pr: a person opens a Fix PR (story 6)
     const { team, repoId, granted, finding } = await fixableTeam();
     const fake = fakeGitHub({ repoId, installations: installationsOf(granted) });
     fake.branches.add(branchOf(finding));
-    fake.pulls.push({ number: 9, head: branchOf(finding), base: "develop", state: "open" });
+    fake.pulls.push(botPull(9, branchOf(finding), "develop"));
     const { app } = fixApp(fake);
 
     const intoDevelop = await post(app, team, finding.id);
@@ -556,7 +598,7 @@ describe("POST /api/guard/findings/:id/fix-pr: a person opens a Fix PR (story 6)
     expect(JSON.stringify(intoDevelop.body)).toContain(branchOf(finding));
     expect(await fixPrRows(team)).toHaveLength(0);
 
-    fake.pulls.push({ number: 10, head: branchOf(finding), base: DEFAULT_BRANCH, state: "open" });
+    fake.pulls.push(botPull(10, branchOf(finding)));
     const intoMain = await post(app, team, finding.id);
 
     expect(intoMain.status).toBe(200);
@@ -691,6 +733,104 @@ describe("POST /api/guard/findings/:id/fix-pr: a person opens a Fix PR (story 6)
 
     expect(res.status).toBe(201);
     expect(FixPrBody.parse(res.body).opened_by).toBe(as);
+  });
+});
+
+describe("POST /api/guard/findings/:id/fix-pr: a PR found on GitHub is Warden's only when the write app made it alone (#347)", () => {
+  /** The 409 for PR `number` from `branch` that the write app didn't open alone. */
+  const notWardens = (number: number, branch: string) =>
+    `PR #${number} from ${branch} wasn't opened by Warden's write app alone; close the PR and delete the branch to open a new Fix PR`;
+
+  /** The fake's reads of the open PRs from a branch. */
+  const openPullReads = (fake: Fake) =>
+    fake.calls.filter((c) => c.method === "GET" && c.url.pathname === `/repos/${FULL_NAME}/pulls`);
+
+  /** A Team whose Fix PR branch is already on the repo, with `pull` (the bot's by default) open from it. */
+  async function branchThere(pull: (branch: string) => Pull) {
+    const { team, repoId, granted, finding } = await fixableTeam();
+    const fake = fakeGitHub({ repoId, installations: installationsOf(granted) });
+    fake.branches.add(branchOf(finding));
+    fake.pulls.push(pull(branchOf(finding)));
+    return { team, finding, fake, ...fixApp(fake) };
+  }
+
+  it.each([
+    ["a person opened", (head: string) => ({ ...botPull(9, head), author: PUSHER })],
+    [
+      "another app's bot opened",
+      (head: string) => ({
+        ...botPull(9, head),
+        author: "warden-reader[bot]",
+        commits: ["warden-reader[bot]"],
+      }),
+    ],
+    [
+      "the bot opened with a second commit by a person",
+      (head: string) => ({ ...botPull(9, head), commits: [BOT, PUSHER] }),
+    ],
+    [
+      "the bot opened whose one commit is a person's",
+      (head: string) => ({ ...botPull(9, head), commits: [PUSHER] }),
+    ],
+    [
+      "the bot opened whose one commit's author GitHub links to no account",
+      (head: string) => ({ ...botPull(9, head), commits: [null] }),
+    ],
+  ])(
+    "answers 409 naming an open PR from the branch already there that %s, after one look, recording and writing nothing",
+    async (_case, pull) => {
+      const { team, finding, fake, app } = await branchThere(pull);
+
+      const res = await post(app, team, finding.id);
+
+      expect(res).toMatchObject({ status: 409, body: { error: notWardens(9, branchOf(finding)) } });
+      expect(openPullReads(fake)).toHaveLength(1);
+      // The one write sent is the branch create GitHub refused, the branch being there.
+      expect(fake.writes().map((c) => `${c.method} ${c.url.pathname}`)).toEqual([
+        `POST /repos/${FULL_NAME}/git/refs`,
+      ]);
+      expect(await fixPrRows(team)).toHaveLength(0);
+    },
+  );
+
+  it("answers 409 naming the recorded PR, still open, once a person's commit is pushed on top, writing nothing", async () => {
+    const { team, repoId, granted, finding } = await fixableTeam();
+    const fake = fakeGitHub({ repoId, installations: installationsOf(granted) });
+    const { app } = fixApp(fake);
+    expect((await post(app, team, finding.id)).status).toBe(201);
+    const [pull] = fake.pulls;
+    if (pull === undefined) throw new Error("the first POST opened no PR");
+    pull.commits.push(PUSHER);
+    const writes = fake.writes().length;
+
+    const res = await post(app, team, finding.id);
+
+    expect(res).toMatchObject({
+      status: 409,
+      body: { error: notWardens(pull.number, branchOf(finding)) },
+    });
+    expect(fake.writes()).toHaveLength(writes);
+    expect(await fixPrRows(team)).toHaveLength(1);
+  });
+
+  it("answers 502 when GitHub answers 500 to the PR's commits read, logs its step, and records nothing", async () => {
+    const { team, repoId, granted, finding } = await fixableTeam();
+    const fake = fakeGitHub({ repoId, installations: installationsOf(granted), failAt: "commits" });
+    fake.branches.add(branchOf(finding));
+    fake.pulls.push(botPull(9, branchOf(finding)));
+    const { app, logLines } = fixApp(fake);
+
+    const res = await post(app, team, finding.id);
+
+    expect(res).toMatchObject({
+      status: 502,
+      body: { error: "GitHub didn't answer; no Fix PR was opened" },
+    });
+    const logged = logEntries(logLines().join("\n")).find(
+      (entry) => entry.message === "GitHub didn't answer; no Fix PR was opened",
+    );
+    expect(logged).toMatchObject({ team, status: 500, step: "GitHub's Fix PR commits read" });
+    expect(await fixPrRows(team)).toHaveLength(0);
   });
 });
 

@@ -6,9 +6,10 @@
 //
 // It answers the write app's calls on the one repo it knows, `DAHLIA_REPO` (`github-writer.ts`), and the app's own
 // read (`GET /app`, which a Setup page's install link is built from); anything else on those hosts answers 404. It
-// keeps the branches made (`main` from the start) and the PRs opened, all of them open, for as long as the process
-// runs: nothing it answers closes or merges a PR. Each call is appended to the file `E2E_FAKE_GITHUB_LOG` names, as
-// one JSON line of its method, path (with its query) and JSON body, never its headers, so never its Authorization.
+// keeps the branches made (`main` from the start) and the PRs opened, all of them open and each the app's bot's with
+// its one commit, for as long as the process runs: nothing it answers closes or merges a PR. Each call is appended to
+// the file `E2E_FAKE_GITHUB_LOG` names, as one JSON line of its method, path (with its query) and JSON body, never its
+// headers, so never its Authorization.
 // With that variable unset, as in a Scan Job (the server hands it only some of its variables), the fake still answers
 // a read (GET), unlogged, and refuses every other call with a rejected fetch naming it, so a write no test could see
 // fails loudly instead. Only `node:` modules are imported: Node loads this file as it is, types stripped.
@@ -31,6 +32,10 @@ const MAIN_HEAD = "0123456789abcdef0123456789abcdef01234567";
 
 /** The commit each file written on a branch makes its head. */
 const NEW_COMMIT = "fedcba9876543210fedcba9876543210fedcba98";
+
+/** The app's slug, as `GET /app` answers it, and the bot login each PR it opens and its one commit carry. */
+const APP_SLUG = "warden-writer";
+const APP_BOT = `${APP_SLUG}[bot]`;
 
 const GITHUB_HOSTS = new Set(["api.github.com", "github.com"]);
 
@@ -58,6 +63,7 @@ export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
     number: pull.number,
     state: pull.state,
     html_url: `${DAHLIA_REPO.ref}/pull/${pull.number}`,
+    user: { login: APP_BOT, type: "Bot" },
     head: { ref: pull.head },
     base: { ref: pull.base },
   });
@@ -120,6 +126,13 @@ export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
       const pull = pulls.find((p) => String(p.number) === second);
       return pull === undefined ? notFound() : json(200, pullBody(pull));
     }
+    // A PR's commits: the one the app wrote on its branch, authored by the app's bot.
+    if (method === "GET" && first === "pulls" && rest.length === 3 && third === "commits") {
+      const pull = pulls.find((p) => String(p.number) === second);
+      return pull === undefined
+        ? notFound()
+        : json(200, [{ sha: NEW_COMMIT, author: { login: APP_BOT, type: "Bot" } }]);
+    }
     return notFound();
   }
 
@@ -147,7 +160,7 @@ export function createFakeGitHub({ log }: { log?: string | undefined } = {}) {
     const fields =
       typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
     if (method === "GET" && url.pathname === "/app") {
-      return json(200, { id: 1, slug: "warden-writer", name: "Warden writer (e2e)" });
+      return json(200, { id: 1, slug: APP_SLUG, name: "Warden writer (e2e)" });
     }
     if (method === "POST" && /^\/app\/installations\/\d+\/access_tokens$/.test(url.pathname)) {
       return json(201, {

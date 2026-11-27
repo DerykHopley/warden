@@ -76,6 +76,13 @@ const branchFor = (finding: Finding) => `warden/fix-${finding.id}`;
 const branchInTheWay = (branch: string) =>
   `Branch ${branch} already exists on the repo with no open Fix PR from it; if one is being opened, try again in a minute, or else delete the branch to open a new Fix PR`;
 
+/**
+ * The 409 for an open PR from a Fix PR branch that the write app didn't make alone (#347): someone else opened it, or
+ * pushed to it. Warden never takes it as its own.
+ */
+const notWardens = (number: number, branch: string) =>
+  `PR #${number} from ${branch} wasn't opened by Warden's write app alone; close the PR and delete the branch to open a new Fix PR`;
+
 /** The answer `work` gives, or 404 for a Finding the Team doesn't have, naming nothing of anyone's. */
 async function refusing(c: Context<AppEnv>, work: () => Promise<Response>): Promise<Response> {
   try {
@@ -214,7 +221,13 @@ export function fixPrRoutes(
 
           const repo = await token.open();
           const held = await fixPrs.newest(team, finding.id);
-          if (held && (await repo.pullIsOpen(held.number))) return c.json(fixPrBody(held), 200);
+          if (held && (await repo.pullIsOpen(held.number))) {
+            // A closed one reopened with someone else's commits on top is no longer Warden's.
+            if (!(await repo.pullIsWardens(held.number))) {
+              return c.json({ error: notWardens(held.number, held.branch) }, 409);
+            }
+            return c.json(fixPrBody(held), 200);
+          }
 
           // The registry is asked here, before anything is written to GitHub.
           const current = await repo.readFile(location.path);
@@ -230,11 +243,14 @@ export function fixPrRoutes(
           const record = (pull: OpenedPull) =>
             fixPrs.record(team, { findingId: finding.id, ...pull, branch, openedBy: person });
 
-          // The branch already there was made by an earlier click: its open PR is answered, or the branch is named
-          // and left as it is.
+          // The branch already there was made by an earlier click: its open PR is answered when the write app made
+          // it alone, or the branch is named and left as it is. A PR found that isn't Warden's is answered at once.
           if ((await repo.createBranch(branch)) === "exists") {
             const open = await openPullFrom(repo, branch);
             if (open === undefined) return c.json({ error: branchInTheWay(branch) }, 409);
+            if (!(await repo.pullIsWardens(open.number))) {
+              return c.json({ error: notWardens(open.number, branch) }, 409);
+            }
             return c.json(fixPrBody(await record(open)), 200);
           }
           const title = `Fix: ${packRule(finding.rule_id).title}`;
