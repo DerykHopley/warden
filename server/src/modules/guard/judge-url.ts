@@ -22,17 +22,28 @@ export class AddressRefused extends Error {
   override name = "AddressRefused";
 }
 
-/** IPv4 ranges that aren't public, each with the kind a reason names. */
+/**
+ * The URL rule's inputs: the server's localhost setting (WARDEN_JUDGE_LOCALHOST), and how a host is looked up (a
+ * test's stub; DNS otherwise).
+ */
+export type UrlRule = { allowLocalhost: boolean; resolve?: Resolve };
+
+/** IPv4 ranges that aren't public, each with the kind a reason names, its article with it. */
 const IPV4_REFUSED: [base: string, bits: number, kind: string][] = [
-  ["0.0.0.0", 8, "unspecified"],
-  ["10.0.0.0", 8, "private"],
-  ["100.64.0.0", 10, "shared"],
-  ["127.0.0.0", 8, "loopback"],
-  ["169.254.0.0", 16, "link-local"],
-  ["172.16.0.0", 12, "private"],
-  ["192.168.0.0", 16, "private"],
-  ["224.0.0.0", 4, "multicast"],
-  ["240.0.0.0", 4, "reserved"],
+  ["0.0.0.0", 8, "an unspecified"],
+  ["10.0.0.0", 8, "a private"],
+  ["100.64.0.0", 10, "a shared"],
+  ["127.0.0.0", 8, "a loopback"],
+  ["169.254.0.0", 16, "a link-local"],
+  ["172.16.0.0", 12, "a private"],
+  ["192.0.0.0", 24, "a reserved"],
+  ["192.0.2.0", 24, "a documentation"],
+  ["192.168.0.0", 16, "a private"],
+  ["198.18.0.0", 15, "a benchmarking"],
+  ["198.51.100.0", 24, "a documentation"],
+  ["203.0.113.0", 24, "a documentation"],
+  ["224.0.0.0", 4, "a multicast"],
+  ["240.0.0.0", 4, "a reserved"],
 ];
 
 function ipv4Number(address: string): number {
@@ -70,31 +81,31 @@ function ipv6Kind(address: string): string | undefined {
   const embedded = () =>
     `${groups[6]! >> 8}.${groups[6]! & 0xff}.${groups[7]! >> 8}.${groups[7]! & 0xff}`;
   const zeroTo = (end: number) => groups.slice(0, end).every((group) => group === 0);
-  if (zeroTo(8)) return "unspecified";
-  if (zeroTo(7) && groups[7] === 1) return "loopback";
+  const [first, second, third] = groups as [number, number, number];
+  if (zeroTo(8)) return "an unspecified";
+  if (zeroTo(7) && groups[7] === 1) return "a loopback";
   // IPv4-mapped (::ffff:0:0/96), IPv4-compatible (::/96) and NAT64 (64:ff9b::/96) carry an IPv4 address: its kind.
   if (zeroTo(5) && groups[5] === 0xffff) return ipv4Kind(embedded());
   if (zeroTo(6)) return ipv4Kind(embedded());
-  if (
-    groups[0] === 0x64 &&
-    groups[1] === 0xff9b &&
-    groups.slice(2, 6).every((group) => group === 0)
-  ) {
+  if (first === 0x64 && second === 0xff9b && groups.slice(2, 6).every((group) => group === 0)) {
     return ipv4Kind(embedded());
   }
-  const first = groups[0]!;
-  if ((first & 0xfe00) === 0xfc00) return "unique local";
-  if ((first & 0xffc0) === 0xfe80) return "link-local";
-  if ((first & 0xffc0) === 0xfec0) return "site-local";
-  if ((first & 0xff00) === 0xff00) return "multicast";
+  if (first === 0x64 && second === 0xff9b && third === 1) return "a local-use NAT64";
+  if (first === 0x100 && groups.slice(1, 4).every((group) => group === 0)) return "a discard-only";
+  if (first === 0x2001 && second === 0xdb8) return "a documentation";
+  if (first === 0x2002) return "a 6to4";
+  if ((first & 0xfe00) === 0xfc00) return "a unique local";
+  if ((first & 0xffc0) === 0xfe80) return "a link-local";
+  if ((first & 0xffc0) === 0xfec0) return "a site-local";
+  if ((first & 0xff00) === 0xff00) return "a multicast";
   return undefined;
 }
 
-/** The kind of address that isn't public (loopback, private, link-local, …), undefined for a public one. */
+/** The kind of address that isn't public (a loopback, a private, …), undefined for a public one. */
 function addressKind(address: string): string | undefined {
   if (isIPv4(address)) return ipv4Kind(address);
   if (isIPv6(address)) return ipv6Kind(address);
-  return "unreadable";
+  return "an unreadable";
 }
 
 /** Whether `address` is an IP address on the public internet: not loopback, private, link-local and the rest. */
@@ -106,33 +117,64 @@ export function isPublicAddress(address: string): boolean {
  * Why a connection to `address` is refused, or undefined when it may open. A local host (one of `LOCAL_HOSTS`, with
  * the server's localhost setting on) may connect to a loopback address; any other host only to a public one.
  */
-export function addressRefusal(address: string, local: boolean): string | undefined {
+function addressRefusal(address: string, local: boolean): string | undefined {
   const kind = addressKind(address);
-  if (kind === undefined || (local && kind === "loopback")) return undefined;
-  return `its host is a${/^[aeiou]/.test(kind) ? "n" : ""} ${kind} address`;
-}
-
-/** Whether `hostname`, as a URL holds it, is a local host the server's localhost setting `allowLocalhost` lets in. */
-export function isLocalHost(hostname: string, allowLocalhost: boolean): boolean {
-  return allowLocalhost && LOCAL_HOSTS.has(hostname);
+  if (kind === undefined || (local && kind === "a loopback")) return undefined;
+  return `its host is ${kind} address`;
 }
 
 /** A URL's host as an address, without IPv6's brackets, when it is one; undefined for a name. */
-export function literalAddress(hostname: string): string | undefined {
+function literalAddress(hostname: string): string | undefined {
   const bare = hostname.startsWith("[") ? hostname.slice(1, -1) : hostname;
   return isIPv4(bare) || isIPv6(bare) ? bare : undefined;
+}
+
+/** An address a host resolved to, as `Resolve` answers it. */
+export type ResolvedAddress = Awaited<ReturnType<Resolve>>[number];
+
+export type CheckedTarget =
+  { ok: true; addresses: ResolvedAddress[] } | { ok: false; reason: string };
+
+/**
+ * The URL rule's check of a URL's scheme and host, made when a URL is set and again by the pinned connection at each
+ * call: the scheme is https, or http on a local host; and every address the host resolves to through `resolve` (or
+ * the address in the URL itself) may be connected to. The addresses it checked, or why it's refused.
+ */
+export async function checkTarget(
+  url: URL,
+  { allowLocalhost, resolve = resolveHost }: UrlRule,
+): Promise<CheckedTarget> {
+  const refuse = (reason: string): CheckedTarget => ({ ok: false, reason });
+  const local = allowLocalhost && LOCAL_HOSTS.has(url.hostname);
+  if (!(url.protocol === "https:" || (local && url.protocol === "http:"))) {
+    return refuse("its scheme isn't https");
+  }
+  const literal = literalAddress(url.hostname);
+  let addresses: ResolvedAddress[];
+  if (literal !== undefined) {
+    addresses = [{ address: literal, family: isIPv4(literal) ? 4 : 6 }];
+  } else {
+    try {
+      addresses = await resolve(url.hostname);
+    } catch {
+      addresses = [];
+    }
+    if (addresses.length === 0) return refuse("its host doesn't resolve");
+  }
+  for (const { address } of addresses) {
+    const reason = addressRefusal(address, local);
+    if (reason !== undefined) return refuse(reason);
+  }
+  return { ok: true, addresses };
 }
 
 export type CheckedUrl = { ok: true; url: string } | { ok: false; reason: string };
 
 /**
- * Checks a Team's model URL against the URL rule, resolving its host through `resolve`: the URL to store (without a
- * trailing slash, as the Judge adds `/chat/completions`), or why it's refused.
+ * Checks a Team's model URL against the URL rule: the URL to store (without a trailing slash, as the Judge adds
+ * `/chat/completions`), or why it's refused.
  */
-export async function checkJudgeUrl(
-  url: string,
-  { allowLocalhost, resolve = resolveHost }: { allowLocalhost: boolean; resolve?: Resolve },
-): Promise<CheckedUrl> {
+export async function checkJudgeUrl(url: string, rule: UrlRule): Promise<CheckedUrl> {
   const refuse = (reason: string): CheckedUrl => ({ ok: false, reason });
   if (url.length > MAX_JUDGE_URL_LENGTH) {
     return refuse(`it's over ${MAX_JUDGE_URL_LENGTH} characters`);
@@ -148,26 +190,7 @@ export async function checkJudgeUrl(
   }
   if (parsed.search !== "" || url.includes("?")) return refuse("it holds a query");
   if (parsed.hash !== "" || url.includes("#")) return refuse("it holds a fragment");
-  const local = isLocalHost(parsed.hostname, allowLocalhost);
-  if (!(parsed.protocol === "https:" || (local && parsed.protocol === "http:"))) {
-    return refuse("its scheme isn't https");
-  }
-
-  const literal = literalAddress(parsed.hostname);
-  let addresses: string[];
-  if (literal !== undefined) {
-    addresses = [literal];
-  } else {
-    try {
-      addresses = (await resolve(parsed.hostname)).map((answer) => answer.address);
-    } catch {
-      addresses = [];
-    }
-    if (addresses.length === 0) return refuse("its host doesn't resolve");
-  }
-  for (const address of addresses) {
-    const reason = addressRefusal(address, local);
-    if (reason !== undefined) return refuse(reason);
-  }
+  const target = await checkTarget(parsed, rule);
+  if (!target.ok) return target;
   return { ok: true, url: parsed.href.replace(/\/+$/, "") };
 }

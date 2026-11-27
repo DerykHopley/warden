@@ -6,23 +6,15 @@ import { JudgeModelChange, type JudgeModelBody } from "@warden/contracts";
 import type { MountRoutes } from "../../app.ts";
 import { refusedBody } from "../../refused-body.ts";
 import type { JudgeModels } from "./judge-models.ts";
-import { checkJudgeUrl, type Resolve } from "./judge-url.ts";
+import { checkJudgeUrl, type UrlRule } from "./judge-url.ts";
 
 export const JUDGE_MODEL_PATH = "/api/judge/model";
 
-/**
- * `allowLocalhost` is the server's WARDEN_JUDGE_LOCALHOST. `resolve` looks a URL's host up; a test hands it a stub, so
- * no case reaches DNS.
- */
+/** The rest of the arguments are the URL rule's: a test hands it a stub `resolve`, so no case reaches DNS. */
 export function judgeModelRoutes({
   judgeModels,
-  allowLocalhost,
-  resolve,
-}: {
-  judgeModels: JudgeModels;
-  allowLocalhost: boolean;
-  resolve?: Resolve;
-}): MountRoutes {
+  ...rule
+}: { judgeModels: JudgeModels } & UrlRule): MountRoutes {
   async function body(team: string): Promise<JudgeModelBody> {
     const stored = await judgeModels.read(team);
     return {
@@ -46,7 +38,7 @@ export function judgeModelRoutes({
         await judgeModels.clear(team);
         return c.json(await body(team));
       }
-      const checked = await checkJudgeUrl(change.url, { allowLocalhost, resolve });
+      const checked = await checkJudgeUrl(change.url, rule);
       if (!checked.ok) return c.json({ error: `local_model.url: ${checked.reason}` }, 400);
       await judgeModels.set(team, {
         url: checked.url,

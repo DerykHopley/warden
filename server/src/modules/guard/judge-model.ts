@@ -6,8 +6,8 @@
 import { z } from "zod";
 import { ConfigError } from "../../config.ts";
 import { CallFailed, callJson, timedOut, type Fetch } from "../../http-call.ts";
-import { AddressRefused, type Resolve } from "./judge-url.ts";
-import { pinnedFetch } from "./pinned-fetch.ts";
+import { AddressRefused, type UrlRule } from "./judge-url.ts";
+import { AnswerTooLarge, pinnedFetch } from "./pinned-fetch.ts";
 
 /** OpenRouter's OpenAI-compatible API. */
 export const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
@@ -137,13 +137,14 @@ export function judgeModel({
 }
 
 /**
- * Why a local call failed, without the URL, the prompt or the answer: the pinned connection's reason, the timeout, or
- * the connection error's code (ECONNREFUSED and the like).
+ * Why a local call failed, without the URL, the prompt or the answer: the pinned connection's reason, the timeout, an
+ * answer over the cap, or the connection error's code (ECONNREFUSED and the like).
  */
 function localFailure(error: CallFailed): string {
   const cause = error.cause;
   if (cause instanceof AddressRefused)
     return `the Judge's model call was refused: ${cause.message}`;
+  if (cause instanceof AnswerTooLarge) return `the Judge's model call failed: ${cause.message}`;
   if (timedOut(cause)) return error.message;
   const code = (cause as { code?: unknown } | undefined)?.code;
   const named = typeof code === "string" ? code : cause instanceof Error ? cause.name : "an error";
@@ -158,21 +159,18 @@ function localFailure(error: CallFailed): string {
 export function localModel({
   url,
   model,
-  allowLocalhost,
-  resolve,
   timeoutMs,
+  ...rule
 }: {
   url: string;
   model: string;
-  allowLocalhost: boolean;
-  resolve?: Resolve;
   timeoutMs?: number;
-}): JudgeModel {
+} & UrlRule): JudgeModel {
   const inner = chatCompletionsModel({
     baseUrl: url,
     model,
     jsonModeFallback: true,
-    fetch: pinnedFetch({ allowLocalhost, resolve }),
+    fetch: pinnedFetch(rule),
     timeoutMs,
   });
   return {

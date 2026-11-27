@@ -5,8 +5,6 @@
 // its `fetch` boundary) once it's cleared, and refused at the call when the host now resolves to a non-public address.
 // On the suite's shared database, each case with Teams of its own.
 import { randomUUID } from "node:crypto";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { FindingsBody, JudgeModelBody } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
@@ -29,6 +27,7 @@ import { runJudgeJob } from "../src/scan-job.ts";
 import { judge } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
+import { closeFakeModelServers, fakeModelServer, json, resolvesTo } from "./fake-model-server.ts";
 import { fakeOpenRouter, verdict } from "./fake-openrouter.ts";
 import { ADMIN, call, logEntries, newTeam, testApp, testKey } from "./helpers.ts";
 
@@ -54,24 +53,8 @@ beforeAll(async () => {
 
 afterAll(() => pool.end());
 
-const servers: Server[] = [];
-afterEach(async () => {
-  await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          server.closeAllConnections();
-          server.close(() => resolve());
-        }),
-    ),
-  );
-});
+afterEach(closeFakeModelServers);
 
-/** A resolver that answers `address` for every host. */
-const resolvesTo =
-  (address: string): Resolve =>
-  () =>
-    Promise.resolve([{ address, family: address.includes(":") ? 6 : 4 }]);
 const PUBLIC = resolvesTo("93.184.215.14");
 const LOOPBACK = resolvesTo("127.0.0.1");
 
@@ -250,34 +233,6 @@ describe("the judge_models table", () => {
   });
 });
 
-/** One request the fake local model got. */
-type Received = { headers: IncomingMessage["headers"]; body: Record<string, unknown> };
-
-/** A fake OpenAI-compatible server on 127.0.0.1, answering `answer` to each request; it counts its connections. */
-async function localServer(answer: (res: ServerResponse) => void) {
-  const received: Received[] = [];
-  let connections = 0;
-  const server = createServer((req, res) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk: string) => (body += chunk));
-    req.on("end", () => {
-      received.push({ headers: req.headers, body: JSON.parse(body) as Record<string, unknown> });
-      answer(res);
-    });
-  });
-  server.on("connection", () => (connections += 1));
-  servers.push(server);
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
-  const port = (server.address() as AddressInfo).port;
-  return { port, received, connections: () => connections };
-}
-
-const answers = (completion: unknown) => (res: ServerResponse) => {
-  res.writeHead(200, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(completion));
-};
-
 /** Posts an ended session (its start, reading .env, sending the key to a pastebin, its end) through the endpoint. */
 async function postEndedSession(app: App, team: string): Promise<string> {
   const { token } = await hookSettings.issueToken(team, { issuedBy: ADMIN });
@@ -357,8 +312,8 @@ async function runJob(
 describe("a Judge run on the Team's own model", () => {
   it("opens its Finding from the local model's answer, with no key, no provider and nothing sent to OpenRouter (story 10)", async () => {
     const team = await teamOfThree();
-    const local = await localServer(
-      answers({
+    const local = await fakeModelServer(
+      json(200, {
         choices: [
           {
             message: {
@@ -409,7 +364,7 @@ describe("a Judge run on the Team's own model", () => {
 
   it("calls OpenRouter with its routing once the Team's model is cleared", async () => {
     const team = await teamOfThree();
-    const local = await localServer(answers({}));
+    const local = await fakeModelServer(json(200, {}));
     const { app } = judgeApp({ allowLocalhost: true, resolve: LOOPBACK });
     const url = `http://localhost:${local.port}/v1`;
     await change(app, team, { local_model: { url, model: LOCAL_MODEL } });
@@ -440,11 +395,7 @@ describe("a Judge run on the Team's own model", () => {
     const { app } = judgeApp({ resolve: PUBLIC });
     expect((await change(app, team, { local_model: HOSTED })).status).toBe(200);
     const sessionId = await postEndedSession(app, team);
-    const asked: string[] = [];
-    const rebound: Resolve = (host) => {
-      asked.push(host);
-      return resolvesTo("169.254.169.254")(host);
-    };
+    const rebound = resolvesTo("169.254.169.254");
 
     const { code, openRouter, output } = await runJob(team, sessionId, {
       settings: judgeSettings({}),
@@ -452,7 +403,7 @@ describe("a Judge run on the Team's own model", () => {
     });
 
     expect(code).toBe(1);
-    expect(asked).toContain("models.example.com");
+    expect(rebound.asked).toContain("models.example.com");
     expect(openRouter.calls).toHaveLength(0);
     expect(await sessionState(team, sessionId)).toEqual({ judged: false, events: 4 });
     const failed = logEntries(output).find((entry) => entry.severity === "ERROR");
@@ -466,7 +417,7 @@ describe("a Judge run on the Team's own model", () => {
 
   it("opens no connection to a saved http://localhost URL when the Job's WARDEN_JUDGE_LOCALHOST is off, and leaves the session unjudged", async () => {
     const team = await teamOfThree();
-    const local = await localServer(answers({}));
+    const local = await fakeModelServer(json(200, {}));
     const { app } = judgeApp({ allowLocalhost: true, resolve: LOOPBACK });
     const url = `http://localhost:${local.port}/v1`;
     expect((await change(app, team, { local_model: { url, model: LOCAL_MODEL } })).status).toBe(
@@ -484,7 +435,8 @@ describe("a Judge run on the Team's own model", () => {
     expect(local.received).toHaveLength(0);
     expect(openRouter.calls).toHaveLength(0);
     expect(await sessionState(team, sessionId)).toEqual({ judged: false, events: 4 });
-    expect(output).toMatch(/loopback/);
+    // The call-time check refuses it for its scheme: http is for a local host with the setting on.
+    expect(output).toMatch(/scheme isn't https/);
     expect(output).not.toContain(url);
   });
 });

@@ -71,6 +71,12 @@ describe("the Scan Job's process", () => {
       ["WARDEN_SESSION_ID"],
       ["s".repeat(129)],
     ],
+    [
+      "a Judge run's WARDEN_JUDGE_LOCALHOST that isn't 1",
+      { WARDEN_SESSION_ID: "sess-value-1", WARDEN_JUDGE_LOCALHOST: "localhost-please" },
+      ["WARDEN_JUDGE_LOCALHOST"],
+      ["localhost-please"],
+    ],
   ])(
     "exits 1 before connecting with %s, naming the variables and no value",
     async (_name, env, variables, values) => {

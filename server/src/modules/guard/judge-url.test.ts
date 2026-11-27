@@ -1,6 +1,7 @@
 // The URL rule for a Team's own Judge model (spec #225, slice 6a; owner, 2026-11-27, Q5): which addresses count as
 // public, and which URLs an Admin may set, over a stub resolver so no case reaches DNS.
 import { describe, expect, it } from "vitest";
+import { resolvesTo as answering } from "../../../test/fake-model-server.ts";
 import { checkJudgeUrl, isPublicAddress, type Resolve } from "./judge-url.ts";
 
 describe("isPublicAddress", () => {
@@ -33,15 +34,21 @@ describe("isPublicAddress", () => {
   ])("is false for %s (%s)", (_name, address) => {
     expect(isPublicAddress(address)).toBe(false);
   });
-});
 
-/** A resolver answering `addresses` for every host, as `dns.promises.lookup` with `{ all: true }` does. */
-const answering =
-  (...addresses: string[]): Resolve =>
-  () =>
-    Promise.resolve(
-      addresses.map((address) => ({ address, family: address.includes(":") ? 6 : 4 })),
-    );
+  it.each([
+    ["IETF protocol assignments 192.0.0/24", "192.0.0.9"],
+    ["benchmarking 198.18/15", "198.19.255.1"],
+    ["documentation 192.0.2/24", "192.0.2.1"],
+    ["documentation 198.51.100/24", "198.51.100.9"],
+    ["documentation 203.0.113/24", "203.0.113.7"],
+    ["local-use NAT64 64:ff9b:1::/48", "64:ff9b:1::a9fe:a9fe"],
+    ["6to4 2002::/16", "2002:5db8:d70e::1"],
+    ["discard-only 100::/64", "100::1"],
+    ["IPv6 documentation 2001:db8::/32", "2001:db8::1"],
+  ])("is false for the special-purpose range %s (%s)", (_name, address) => {
+    expect(isPublicAddress(address)).toBe(false);
+  });
+});
 
 const PUBLIC = answering("93.184.215.14");
 
@@ -88,6 +95,18 @@ describe("checkJudgeUrl", () => {
   ])("refuses a URL with %s, with a reason", async (_name, url, resolve, reason) => {
     const checked = await checkJudgeUrl(url, { allowLocalhost: false, resolve });
     expect(checked).toEqual({ ok: false, reason: expect.stringMatching(reason) });
+  });
+
+  it.each([
+    ["fc00::1", "its host is a unique local address"],
+    ["0.0.0.0", "its host is an unspecified address"],
+  ])("names the kind of %s with its article", async (address, reason) => {
+    expect(
+      await checkJudgeUrl("https://models.example.com/v1", {
+        allowLocalhost: false,
+        resolve: answering(address),
+      }),
+    ).toEqual({ ok: false, reason });
   });
 
   it("never names the URL in its reason", async () => {

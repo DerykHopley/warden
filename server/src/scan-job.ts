@@ -27,13 +27,7 @@
 //   isn't RSA, exits 1 before connecting, naming the variables. Neither set, a Guard Scan fails.
 // - It needs no Clerk variable, no admin password and no GitHub client secret. Exit 0 when the Scan is done; 1
 //   otherwise.
-import {
-  ConfigError,
-  gitHubReaderSettings,
-  judgeSettings,
-  type GitHubReaderSettings,
-  type JudgeSettings,
-} from "./config.ts";
+import { ConfigError, gitHubReaderSettings, judgeSettings } from "./config.ts";
 import { createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings, type Findings } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
@@ -226,6 +220,22 @@ export async function runJudgeJob({
 /** The environment variable's value, or undefined when it's missing or blank. */
 const named = (value: string | undefined) => (value?.trim() ? value : undefined);
 
+/**
+ * The settings `read` gives, or undefined after logging the ConfigError it threw, naming its variables, so the Job
+ * exits 1 before connecting. Any other error is thrown on.
+ */
+function settingsOrExit<T>(read: () => T, logger: Logger): { settings: T } | undefined {
+  try {
+    return { settings: read() };
+  } catch (error) {
+    if (!(error instanceof ConfigError)) throw error;
+    logger.error(`scan job failed before connecting: ${error.message}`, {
+      variables: error.variables,
+    });
+    return undefined;
+  }
+}
+
 /** The Job's database pool: the PG* variables', with the server's role check on connect. */
 function jobPool(logger: Logger) {
   return createPool(logger, {
@@ -266,16 +276,8 @@ async function judgeMain(
     );
     return 1;
   }
-  let settings: JudgeSettings;
-  try {
-    settings = judgeSettings(env);
-  } catch (error) {
-    if (!(error instanceof ConfigError)) throw error;
-    logger.error(`scan job failed before connecting: ${error.message}`, {
-      variables: error.variables,
-    });
-    return 1;
-  }
+  const judging = settingsOrExit(() => judgeSettings(env), logger);
+  if (judging === undefined) return 1;
   const pool = jobPool(logger);
   try {
     await pool.query("select 1");
@@ -283,7 +285,7 @@ async function judgeMain(
     return await runJudgeJob({
       team,
       sessionId,
-      judge: judge({ withTeam: createWithTeam(pool), settings }),
+      judge: judge({ withTeam: createWithTeam(pool), settings: judging.settings }),
       logger,
     });
   } catch (error) {
@@ -309,16 +311,9 @@ async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
     });
     return 1;
   }
-  let github: GitHubReaderSettings | undefined;
-  try {
-    github = gitHubReaderSettings(env);
-  } catch (error) {
-    if (!(error instanceof ConfigError)) throw error;
-    logger.error(`scan job failed before connecting: ${error.message}`, {
-      variables: error.variables,
-    });
-    return 1;
-  }
+  const reading = settingsOrExit(() => gitHubReaderSettings(env), logger);
+  if (reading === undefined) return 1;
+  const github = reading.settings;
   const pool = jobPool(logger);
   try {
     await pool.query("select 1");

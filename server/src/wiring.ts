@@ -13,7 +13,7 @@ import { createGitHubReader } from "./modules/guard/github-reader.ts";
 import { createJudge, type Judge } from "./modules/guard/judge.ts";
 import { judgeModel, localModel } from "./modules/guard/judge-model.ts";
 import { createJudgeModels } from "./modules/guard/judge-models.ts";
-import type { Resolve } from "./modules/guard/judge-url.ts";
+import type { UrlRule } from "./modules/guard/judge-url.ts";
 import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { createRepoAssets } from "./modules/guard/repo-assets.ts";
 import type { RepoReader } from "./modules/guard/repo-reader.ts";
@@ -76,7 +76,7 @@ export function judge({
   withTeam: WithTeam;
   settings: JudgeSettings;
   fetch?: Fetch;
-  resolve?: Resolve;
+  resolve?: UrlRule["resolve"];
   timeoutMs?: number;
 }): Judge {
   const judgeModels = createJudgeModels({ withTeam });
