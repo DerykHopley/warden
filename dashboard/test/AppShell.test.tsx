@@ -418,6 +418,7 @@ describe("a Catalogue switch on Setup under way across a Team switch", () => {
           privacy_tier: "details",
           managed_settings: { hooks: {} },
         }),
+      judgeModel: () => json(200, { local_model: null }),
       catalogues: () => {
         const team = clerk.auth.orgId ?? "";
         reads[team] = (reads[team] ?? 0) + 1;

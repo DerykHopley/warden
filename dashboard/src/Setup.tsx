@@ -3,7 +3,8 @@
 // installing the app to `/setup/github`, its Setup URL, which asks them to sign in with GitHub so Warden can link that
 // installation to the Team. An Admin grants write access the same way, with Warden's second GitHub app, the write app
 // (#224, story 5): its Setup URL is `/setup/github/write`, and everyone in the Team sees the grant. Last, an Admin turns
-// on the agent hook (story 7, `HookSection.tsx`): the hook token, the Privacy tier and the managed-settings block.
+// on the agent hook (story 7, `HookSection.tsx`): the hook token, the Privacy tier and the managed-settings block; and
+// sets the Judge's model (spec #225, story 10, `JudgeModelSection.tsx`): OpenRouter, or the Team's own model.
 import { useOrganization } from "@clerk/react";
 import {
   assetKey,
@@ -35,6 +36,8 @@ import {
   type WriteGrantsResult,
 } from "./github-setup.ts";
 import { HookSection } from "./HookSection.tsx";
+import { JUDGE_MODEL_ANCHOR } from "./judge-model.ts";
+import { JudgeModelSection } from "./JudgeModelSection.tsx";
 import { useLandOnAnchor } from "./land-on-anchor.ts";
 import { goTo } from "./navigate.ts";
 import {
@@ -55,17 +58,23 @@ import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 /** How long after each answer the repo list is read again while a listed Scan is queued or running. */
 const READ_AGAIN_MS = 5_000;
-/** The Repos or the Catalogues heading, when the address's anchor names it. */
+/** The Repos, the Catalogues or the Judge's model heading, when the address's anchor names it. */
 const findLandingHeading = (anchor: string) =>
-  anchor === REPOS_ANCHOR || anchor === CATALOGUES_ANCHOR ? document.getElementById(anchor) : null;
+  [REPOS_ANCHOR, CATALOGUES_ANCHOR, JUDGE_MODEL_ANCHOR].includes(anchor)
+    ? document.getElementById(anchor)
+    : null;
 
-/** The sections that ask for anyone: only an Admin's GitHub and agent hook sections ask for their settings. */
+/**
+ * The sections that ask for anyone: only an Admin's GitHub, agent hook and Judge's model sections ask for their
+ * settings.
+ */
 const ASKING_FOR_ANYONE: readonly AskingSection[] = ["grants", "repos", "catalogues"];
 const ASKING_FOR_AN_ADMIN: readonly AskingSection[] = [
   "github",
   "write",
   ...ASKING_FOR_ANYONE,
   "hook",
+  "judge-model",
 ];
 /** Setup's anchor for the Agent hook section. */
 const HOOK_ANCHOR = "setup-hook";
@@ -177,6 +186,10 @@ export function SetupPage(props: PageProps) {
       <section className="setup-section" aria-labelledby={HOOK_ANCHOR}>
         <h2 id={HOOK_ANCHOR}>Agent hook</h2>
         <HookSection {...sectionProps} roleChanged={roleChanged} />
+      </section>
+      <section className="setup-section" aria-labelledby={JUDGE_MODEL_ANCHOR}>
+        <h2 id={JUDGE_MODEL_ANCHOR}>Judge's model</h2>
+        <JudgeModelSection {...sectionProps} roleChanged={roleChanged} />
       </section>
     </>
   );

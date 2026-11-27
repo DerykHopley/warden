@@ -425,6 +425,7 @@ test.describe("Catalogues", () => {
       "Repos",
       "Catalogues",
       "Agent hook",
+      "Judge's model",
     ]);
     await expect(isa(page).getByText("VDA ISA 2027.1, published Sep 30, 2026")).toBeVisible();
     await expect(isa(page).getByText("Off.", { exact: true })).toBeVisible();

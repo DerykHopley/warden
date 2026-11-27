@@ -66,6 +66,10 @@ export type Routes = {
   issueHookToken?: () => Answer;
   /** PUT /api/hook/privacy-tier, with the parsed body. */
   setPrivacyTier?: (body: unknown) => Answer;
+  /** GET /api/judge/model: the Team's own Judge model, or null (spec #225, story 10). */
+  judgeModel?: () => Answer;
+  /** PUT /api/judge/model, with the parsed body. */
+  setJudgeModel?: (body: unknown) => Answer;
 };
 
 const sentBody = (init: RequestInit | undefined): unknown =>
@@ -164,6 +168,12 @@ export function serve(routes: Routes) {
     }
     if (url === "/api/hook/privacy-tier" && method === "PUT" && routes.setPrivacyTier) {
       return routes.setPrivacyTier(sentBody(init));
+    }
+    if (url === "/api/judge/model" && method === "GET" && routes.judgeModel) {
+      return routes.judgeModel();
+    }
+    if (url === "/api/judge/model" && method === "PUT" && routes.setJudgeModel) {
+      return routes.setJudgeModel(sentBody(init));
     }
     throw new Error(`The test gave no answer for ${method} ${url}`);
   });
