@@ -2,9 +2,10 @@
 // focused, in the Ask Warden panel. Its ref, question and Catalogue credit show at once, from the Overview's row; its
 // Verdict, evidence and reviews once GET /api/vouch/catalogues/:id/controls/:ref answers, a Product Asset named from
 // GET /api/products, as on Findings. A read newer than the row asks the Overview to read it again. Under Reviews, a Lead
-// or an Admin confirms or overrides the Verdict (POST .../reviews), one review per submit; a Member reads who reviews
-// it. Every string from the server is shown as text. The panel keys it by Catalogue and ref, so a new Control asks
-// again, and the earlier ask's answer, or a review's, shows on no card.
+// or an Admin confirms or overrides the Verdict (POST .../reviews), one review per submit, with no Confirm while the
+// newest review of a reviewed Control is already one; a Member reads who reviews it. Every string from the server is
+// shown as text. The panel keys it by Catalogue and ref, so a new Control asks again, and the earlier ask's answer, or
+// a review's, shows on no card.
 import {
   atLeast,
   FINDINGS_VIEW_DEFAULTS,
@@ -62,6 +63,13 @@ import { useWardenCall } from "./warden-call.tsx";
 type ReviewForm = "confirm" | "override";
 /** The card's line under Reviews: a review's Done line, or why it was refused. */
 type Line = { kind: "done" | "refused"; text: string };
+/**
+ * Whether the Review row offers Confirm: not while the Control is reviewed and its newest review is a confirm, which a
+ * second Confirm would only store again. Changed since review, never reviewed, or reviewed by an override (or with no
+ * reviews listed), it shows, so a Lead is never left unable to confirm.
+ */
+const confirmOffered = (detail: ControlDetail) =>
+  !(detail.review_state === "reviewed" && detail.reviews[0]?.outcome === "confirmed");
 /** The card's Done line, which takes focus after a review. */
 const doneLine = (card: HTMLElement) =>
   card.querySelector<HTMLElement>(".card-line[role='status']");
@@ -138,10 +146,9 @@ export function ControlCard(props: {
   const waiting = sending || rereadFrom === result;
   // A Role lowered (a 403, then /api/me again) closes the form; its refusal line stays, in the card.
   if (!canReview && form !== null) setForm(null);
+  const read = result !== "loading" && result.kind === "control" ? result.detail : null;
   // A read that works out the picked Verdict drops it: its radio has gone, and the override would change nothing.
-  const workedOut =
-    result !== "loading" && result.kind === "control" ? result.detail.verdict : null;
-  if (verdict !== null && verdict === workedOut) setVerdict(null);
+  if (verdict !== null && verdict === read?.verdict) setVerdict(null);
 
   const cardRef = useRef<HTMLElement>(null);
   /** What takes focus once the next render lands: the open form's first field, the Done line, or an opener. */
@@ -161,10 +168,17 @@ export function ControlCard(props: {
     focusNext.current = "field";
   }
 
-  /** Not while a review is sending, or the read after no answer runs: the form stays for its answer. */
+  /**
+   * Not while a review is sending, or the read after no answer runs: the form stays for its answer. Focus goes back to
+   * the form's button, or to Override, the first button left, when a read has taken Confirm away under its open form.
+   */
   function cancel() {
     if (waiting) return;
-    if (form !== null) focusNext.current = form;
+    if (form === "confirm" && read !== null && !confirmOffered(read)) {
+      focusNext.current = "override";
+    } else if (form !== null) {
+      focusNext.current = form;
+    }
     setForm(null);
     setLine(null);
   }
@@ -235,7 +249,7 @@ export function ControlCard(props: {
   }
 
   const refusal = line?.kind === "refused" ? line.text : null;
-  const reviewing = (worked: ControlDetail["verdict"]): ReactNode => (
+  const reviewing = (detail: ControlDetail): ReactNode => (
     <>
       {line?.kind === "done" && (
         <p className="card-line" role="status" tabIndex={-1}>
@@ -251,12 +265,14 @@ export function ControlCard(props: {
         <p className="muted control-member">{MEMBER_REVIEWS}</p>
       ) : form === null ? (
         <div className="card-actions" role="group" aria-label="Review">
-          <OpenerButton
-            opener="confirm"
-            label="Confirm"
-            waiting={waiting}
-            onOpen={() => open("confirm")}
-          />
+          {confirmOffered(detail) && (
+            <OpenerButton
+              opener="confirm"
+              label="Confirm"
+              waiting={waiting}
+              onOpen={() => open("confirm")}
+            />
+          )}
           <OpenerButton
             opener="override"
             label="Override"
@@ -267,7 +283,7 @@ export function ControlCard(props: {
       ) : (
         <ReviewFormFields
           form={form}
-          worked={worked}
+          worked={detail.verdict}
           reason={reason}
           onReason={setReason}
           verdict={verdict}
@@ -313,7 +329,7 @@ export function ControlCard(props: {
           products={products}
           userId={props.userId}
           clerkUsers={props.clerkUsers}
-          reviewing={reviewing(result.detail.verdict)}
+          reviewing={reviewing(result.detail)}
         />
       ) : result.kind === "not-found" ? (
         <p className="muted">{result.error ?? NO_CONTROL}</p>
