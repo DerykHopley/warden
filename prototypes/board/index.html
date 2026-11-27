@@ -1845,6 +1845,14 @@
         .e-composer .ctx .why {
           display: none;
         }
+        .e-composer .e-asks {
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          scrollbar-width: none;
+        }
+        .e-composer .qchip {
+          flex: none;
+        }
       }
       /* E, Warden: pinned Findings overview and Waiting on a Lead, above the feed. */
       .e-pinned {
@@ -1911,6 +1919,73 @@
         100% {
           outline-color: transparent;
         }
+      }
+      .e-wsum .top {
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        font-size: 13px;
+        margin-top: 2px;
+      }
+      .e-wsum .top .st {
+        font-size: 12.5px;
+      }
+      .e-asks {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .qchip {
+        border: 1px solid var(--agent-warden);
+        background: var(--surface);
+        color: var(--fg);
+        font: inherit;
+        font-size: 13.5px;
+        padding: 5px 10px;
+        cursor: pointer;
+      }
+      .qchip:hover {
+        background: var(--bg);
+      }
+      .mock-tag {
+        display: inline-block;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        padding: 0 5px;
+        margin-right: 8px;
+        color: var(--st-wait);
+        border: 1px solid var(--st-wait);
+        vertical-align: 1px;
+      }
+      .e-msg .relay {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 12px;
+        color: var(--muted);
+        margin-right: 8px;
+        vertical-align: -3px;
+      }
+      .e-msg .relay .av2.sm {
+        width: 16px;
+        height: 16px;
+      }
+      .e-msg .relay .av2.sm::before,
+      .e-msg .relay .av2.sm::after {
+        width: 3px;
+        height: 3px;
+      }
+      .e-msg.relayed .bub {
+        border-left: 4px solid var(--ag);
+      }
+      .e-msg .e-item {
+        margin-top: 8px;
+      }
+      .e-tot a {
+        margin-left: 6px;
       }
       .e-wl {
         display: flex;
@@ -3079,26 +3154,85 @@
           tot: `<b>${open.length} open Findings</b>, ${open.filter((f) => f.sev === "critical").length} Critical. Level: Quick.`,
         };
         for (const m of ["guard", "patch", "vouch"]) now[m] = `${eWait(m)}|${eLast(m)}`;
+        // Waiting on a Lead, summarised the same way: a totals line and a card per module with its top item.
+        const wl = eWaitList();
+        const byMod = (m) => wl.filter((w) => w.a === m);
+        const setup = byMod("warden");
+        const inMods = ["guard", "patch", "vouch"]
+          .filter((m) => byMod(m).length)
+          .map((m) => `${byMod(m).length} in ${AGENTS[m].name}`);
+        if (setup.length) inMods.push(`${setup.length} Setup step for an Admin`);
+        now.wtot = wl.length
+          ? `<b>${wl.length} ${wl.length === 1 ? "thing waits" : "things wait"} on a Lead</b>: ${inMods.join(", ")}.`
+          : "<b>Nothing waits on a Lead.</b> Every decision is made.";
+        for (const m of ["guard", "patch", "vouch"])
+          now["w" + m] = byMod(m)
+            .map((w) => w.ref)
+            .join(",");
         const prev = ePrevCounts;
         ePrevCounts = now;
         const chg = (k) => (prev && prev[k] !== now[k] ? " chg" : "");
         const card = (m) =>
           `<button class="ag-${m}${chg(m)}" data-agent="${m}"><b>${eAvatar(m, "sm")}${AGENTS[m].name}${eWait(m) ? `<span class="wbadge">${eWait(m)} waiting</span>` : ""}</b><span class="muted" style="font-size:13px">${eLast(m)}</span></button>`;
-        const wl = eWaitList();
+        const wcard = (m) => {
+          const l = byMod(m);
+          const top = l[0];
+          return `<button class="ag-${m}${chg("w" + m)}" data-agent="${m}" ${top ? `data-eref="${top.ref}"` : ""}><b>${eAvatar(m, "sm")}${AGENTS[m].name}${l.length ? `<span class="wbadge">${l.length} waiting</span>` : ""}</b><span class="top">${top ? `<span class="st wait">${ICON.wait}${esc(top.k)}</span> ${esc(top.t)}` : `<span class="muted">Nothing waits</span>`}</span></button>`;
+        };
         const head = (key, title, sum, cls) =>
           `<button class="ph" data-epin="${key}" aria-expanded="${S.ePin[key]}"><h2>${title}</h2><span class="sum">${sum}</span><span class="chev" aria-hidden="true">${S.ePin[key] ? "▲ Hide" : "▼ Show"}</span></button>`;
         return `<div class="e-pinned">
           <section class="e-pin ov">${head("ov", "Findings", `${open.length} open · ${open.filter((f) => f.sev === "critical").length} Critical`)}
             ${S.ePin.ov ? `<div class="pb"><div class="e-tot${chg("tot")}">${now.tot}</div><div class="e-sum">${card("guard")}${card("patch")}${card("vouch")}</div></div>` : ""}</section>
           <section class="e-pin wait">${head("wait", "Waiting on a Lead", wl.length ? `${wl.length} ${wl.length === 1 ? "thing" : "things"}` : "Nothing waits")}
-            ${S.ePin.wait ? `<div class="pb">${wl.length ? `<div class="e-wl">${wl.map((w) => `<button class="ag-${w.a}" data-agent="${w.a === "warden" ? "setup" : w.a}" data-eref="${w.ref}">${eAvatar(w.a, "sm")}<span class="t"><span class="st wait">${ICON.wait}${esc(w.k)}</span>${esc(w.t)}</span><span class="go">in ${w.a === "warden" ? "Setup" : AGENTS[w.a].name} →</span></button>`).join("")}</div>` : `<div class="muted" style="font-size:13.5px">Every decision is made.</div>`}</div>` : ""}</section>
+            ${S.ePin.wait ? `<div class="pb"><div class="e-tot${chg("wtot")}">${now.wtot}${setup.length ? ` <a href="#" data-agent="setup" data-eref="${setup[0].ref}" style="color:var(--accent)">Open Setup →</a>` : ""}</div><div class="e-sum e-wsum">${wcard("guard")}${wcard("patch")}${wcard("vouch")}</div></div>` : ""}</section>
         </div>`;
       }
       function eWardenFeed() {
         return `<div class="e-day">Today, Nov 27</div>
           ${msg("warden", "9:20 AM", `Morning. The Findings and what waits on a Lead are pinned above; they change as Guard, Patch and Vouch act.`)}
           ${msg("warden", "9:21 AM", `The most urgent fix: <b>${esc(F[0].title)}</b> (Critical, Guard). Guard can open a Fix PR for it, in its feed.`)}
-          ${eLogMsgs("warden")}`;
+          ${eLogMsgs("warden")}
+          ${EASK.map(eAskMsgs).join("")}`;
+      }
+      // Mocked coordinator chat: the Lead asks Warden, Warden hands the question to Patch, and
+      // Patch's answer shows in Warden's chat. Answers are worked out from the data at render time,
+      // so they stay true after a Lead acts. No model is called.
+      const EASK = [];
+      const ASKS = {
+        pwait: "What's Patch waiting on?",
+        purgent: "Which of Patch's Findings should we fix first?",
+      };
+      const SEVO = { critical: 0, high: 1, medium: 2, low: 3 };
+      function ePatchTop() {
+        return F.filter((f) => f.mod === "patch" && f.status === "open").sort(
+          (x, y) => SEVO[x.sev] - SEVO[y.sev],
+        );
+      }
+      function eAskMsgs(k) {
+        const mock = `<span class="mock-tag">MOCK</span>`;
+        const relay = `<span class="relay">${eAvatar("warden", "sm")}via Warden</span>`;
+        // One action row: the link to the item in Patch's feed, then Patch's own buttons for it.
+        const acts = (f) =>
+          `<div class="acts"><button class="btn" data-agent="patch" data-eref="${f.id}">Open in Patch's feed →</button>${eActsF(f).replace(/^<div class="acts">|<\/div>$/g, "")}</div>`;
+        const card = (f) =>
+          `<div class="e-item" style="border-left:4px solid var(--ag)"><div class="meta">${sevp(f.sev)}${st(fstate(f))}<span class="mono muted">${f.id}</span></div><div class="t">${esc(f.title)}</div><div class="meta"><span class="tag">${f.asset}: ${esc(f.ref)}</span><span class="tag mono">${esc(f.loc)}</span></div></div>`;
+        let answer;
+        const open = ePatchTop();
+        if (k === "pwait") {
+          const w = F.filter((f) => f.mod === "patch" && (f.proposal || f.unconfirmed));
+          answer = w.length
+            ? `${w.length} of my Findings wait on a Lead:${w.map((f) => card(f) + eActsF(f)).join("")}`
+            : `Nothing of mine waits on a Lead: no Proposals and no Unconfirmed fixes. I have <b>${open.length} open Findings</b>, ${open.filter((f) => f.sev === "critical").length} Critical. None needs a decision from a Lead yet: an upgrade fixes each one.${open[0] ? acts(open[0]) : ""}`;
+        } else {
+          const f = open[0];
+          answer = f
+            ? `<b>${esc(f.id)}</b> first. ${esc(f.ref)} runs <span class="mono">${esc(f.loc)}</span>, so the version is <b>${f.patch.verdict}</b>: ${esc(f.patch.why)}. Fixed in <span class="mono">${esc(f.patch.fixedIn)}</span>.${card(f)}${acts(f)}`
+            : "I have no open Findings. Nothing to fix.";
+        }
+        return `${pmsg("You (Lead)", "now", `${mock}${esc(ASKS[k])}`, "warden")}
+          ${msg("warden", "now", `${mock}That's Patch's. I've asked it; its answer is below.`)}
+          ${msg("patch", "now", `${relay}${mock}${answer}`, "relayed")}`;
       }
       function eQuick(a) {
         const items = {
@@ -3150,7 +3284,13 @@
             <div class="e-quickrow ag-${a}">${eQuick(a)}</div>
             ${a === "warden" ? eWardenPinned() : ""}
             <div class="e-feed" id="efeed">${feed}</div>
-            <div class="e-composer"><div class="ctx"><span class="mock">MOCK</span><span class="why">Not connected: there is no chat with a model in this prototype.</span></div><div class="box"><input aria-label="Message ${AGENTS[a].name} (mock)" placeholder="Message ${AGENTS[a].name}… (mock)"><button class="btn primary" data-emock>Send</button></div></div></main>
+            <div class="e-composer">${
+              a === "warden"
+                ? `<div class="e-asks" aria-label="Ask Warden (mock)">${Object.entries(ASKS)
+                    .map(([k, q]) => `<button class="qchip" data-eask="${k}">${esc(q)}</button>`)
+                    .join("")}</div>`
+                : ""
+            }<div class="ctx"><span class="mock">MOCK</span><span class="why">Not connected: there is no chat with a model in this prototype.</span></div><div class="box"><input aria-label="Message ${AGENTS[a].name} (mock)" placeholder="Message ${AGENTS[a].name}… (mock)"><button class="btn primary" data-emock>Send</button></div></div></main>
           <aside class="e-quick ag-${a}" aria-label="Quick actions"><h2>Quick actions</h2>${eQuick(a)}<h2>${AGENTS[a].name}</h2><div class="facts">${facts}</div></aside>
           <nav class="e-strip" aria-label="Agents">${AG_ORDER.map((x) => `<button class="ag-${x} ${a === x ? "sel" : ""}" data-agent="${x}" aria-label="${AGENTS[x].name}">${eAvatar(x, "sm")}${eWait(x) ? `<span class="dotw">${eWait(x)}</span>` : ""}</button>`).join("")}</nav>
         </div>
@@ -3159,20 +3299,33 @@
           const el = document.querySelector(`[data-esel="${S.eref}"]`);
           if (el) el.scrollIntoView({ block: "center" });
           S.eref = null;
+        } else if (eScrollEnd) {
+          // A question just asked: bring it to the top of the feed, so its answer reads from the start.
+          const fd = document.getElementById("efeed");
+          const qs = fd.querySelectorAll(".e-msg.person");
+          const q = qs[qs.length - 1];
+          fd.scrollTop = q ? q.offsetTop - fd.offsetTop - 8 : fd.scrollHeight;
         } else if (S.agent !== eLastAgent) {
           // A feed opens at its newest message, as a chat does: what waits on a Lead is at the bottom.
           const fd = document.getElementById("efeed");
           fd.scrollTop = fd.scrollHeight;
         }
         eLastAgent = S.agent;
+        eScrollEnd = false;
       }
+      let eScrollEnd = false;
       let eLastAgent = null;
       document.addEventListener("click", (e) => {
         if (S.variant !== "E") return;
         const t = e.target.closest(
-          "[data-epin],[data-agent],[data-esel],[data-equick],[data-eoverride],[data-emock]",
+          "[data-eask],[data-epin],[data-agent],[data-esel],[data-equick],[data-eoverride],[data-emock]",
         );
         if (!t) return;
+        if (t.dataset.eask) {
+          EASK.push(t.dataset.eask);
+          eScrollEnd = true;
+          return render();
+        }
         if (t.dataset.epin) {
           S.ePin[t.dataset.epin] = !S.ePin[t.dataset.epin];
           return render();
