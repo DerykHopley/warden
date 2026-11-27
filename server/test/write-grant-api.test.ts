@@ -144,6 +144,9 @@ function fakeGitHub({
         });
       case `GET ${api}/app`:
         return json({ id: 1, slug, name: "Warden" });
+      case `DELETE ${api}/applications/${clientId}/token`:
+        // GitHub's "Delete an app token", revoking the person's user token after the check.
+        return new Response(null, { status: 204 });
       default:
         throw new Error(`unexpected call to ${route}`);
     }
@@ -250,6 +253,18 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
     });
     expect(await grantsOf(app, team)).toEqual([grant]);
     expect(await rowCount(team)).toBe(1);
+  });
+
+  it("revokes the Admin's user token once, with the write app's client id (#147)", async () => {
+    const team = await newTeam(withTeam);
+    const installationId = newInstallation();
+    const { github, calls } = fakeGitHub({ installationId });
+    const { app } = writeApp(github);
+
+    expect((await link(app, team, installationId)).status).toBe(201);
+
+    const revoke = `DELETE https://api.github.com/applications/${WRITE_CLIENT_ID}/token`;
+    expect(calls.filter((route) => route === revoke)).toHaveLength(1);
   });
 
   it("adds no Repo Asset to the Team", async () => {

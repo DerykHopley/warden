@@ -97,8 +97,9 @@ export type Linking = {
  * person must also pass its `check` of what they read in the installation (403 with its `refused`). `link` writes the
  * app's store; another Team's installation answers 409 with `linkedElsewhere`, and `answer` answers what `link`
  * wrote. A refused sign-in is 400, an installation the App can't reach 409, and GitHub not answering 502, logged with
- * the app, step and status only. Every refusal writes nothing, and neither token is kept. Each route builds its own,
- * so each app counts its links apart.
+ * the app, step and status only. Every refusal writes nothing, and neither token is kept; the person's user token is
+ * revoked with GitHub after the check, and a revoke that fails is logged as a warning, with the app, step and status
+ * only, without changing the answer. Each route builds its own, so each app counts its links apart.
  */
 export function gitHubLinkRoute<Linked>(options: {
   app: GitHubAppName;
@@ -142,7 +143,19 @@ export function gitHubLinkRoute<Linked>(options: {
     let linking: Linking;
     let linked: Linked;
     try {
-      const repos = await github.userInstallationRepos(code, codeVerifier, installationId);
+      const repos = await github.userInstallationRepos(
+        code,
+        codeVerifier,
+        installationId,
+        (error) =>
+          // The link still answers as it would: a token GitHub didn't revoke expires on its own. Step and status only.
+          logger.warn("GitHub didn't revoke the Admin's user token", {
+            team,
+            app,
+            step: error.step,
+            status: error.status,
+          }),
+      );
       if (repos === undefined) {
         return c.json({ error: "You can't reach this installation on GitHub" }, 403);
       }
