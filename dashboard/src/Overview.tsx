@@ -121,9 +121,11 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);
   // The notice is on the page: a panel over it (floating, or full screen) closes, without storing that as the person's
-  // choice, so the notice can be read; one pinned beside the page stays.
+  // choice, so the notice can be read; one pinned beside the page stays. Focus that was in the closed panel moves to
+  // the notice (#453), so the next Tab goes on into the page.
+  const noticeRef = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
-    if (goneNotice !== null) uncover();
+    if (goneNotice !== null) uncover(noticeRef);
   }, [goneNotice, uncover]);
 
   // A link that names a Control opens a closed panel as selecting it does, once the answer holds it: only on the
@@ -153,7 +155,7 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
     <>
       <h1>Overview</h1>
       {goneNotice !== null && (
-        <p className="notice" role="alert">
+        <p ref={noticeRef} className="notice" role="alert" tabIndex={-1}>
           {goneNotice.words}
         </p>
       )}
