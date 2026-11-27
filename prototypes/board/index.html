@@ -4,10 +4,12 @@
   Question: does a "board" layout like Vercel Board's acme-db inspector (a rail of places, a dense status list,
   a detail pane with its one decision on top and the conversation under it) suit Warden, with a little more colour,
   on a phone, a laptop and a wide desktop window?
-  Three variants on one page, switched with ?variant=A|B|C (or the bar at the bottom, or ← →):
+  Four variants on one page, switched with ?variant=A|B|C|D (or the bar at the bottom, or ← →):
     A Board  - three panes: rail · list with status tabs · detail + Ask Warden
     B Lanes  - the same rail, the list split into status lanes (columns)
     C Desk   - no rail: a "Waiting on you" strip of every decision across modules, then list + detail
+    D Joined - owner's mix: B's lanes with square corners and no gaps between cards, A and B's rail,
+               A's Findings filter bar (status tabs filter the lanes), C's "Waiting on you" on top
   Pages: ?page=findings|overview|setup. Data: the demo seed's Findings and VDA ISA 2027.1 Controls, in memory only.
   Run: pnpm prototype:board  (serves this folder on http://127.0.0.1:5181)
 -->
@@ -1051,6 +1053,127 @@
 
       /* ---------- widths ---------- */
       /* 900-1279: the detail pane floats over the list, as the current panel does at 640-1100 */
+
+      /* ---------- variant D: square, joined lanes ---------- */
+      .v-D {
+        --radius: 0;
+      }
+      .v-D .main {
+        overflow: auto;
+      }
+      .v-D .main > .scroll {
+        overflow: visible;
+        flex: none;
+      }
+      .v-D .lanes {
+        flex: none;
+        overflow-x: auto;
+        align-items: stretch;
+        gap: 0;
+        padding: 0;
+        border-top: 1px solid var(--line);
+        grid-auto-columns: minmax(200px, 1fr);
+      }
+      .v-D .lane {
+        border-radius: 0;
+        padding: 0;
+        max-height: none;
+        background: var(--surface);
+        border-right: 1px solid var(--line);
+      }
+      .v-D .lane h3 {
+        padding: 12px 14px;
+        margin: 0;
+        background: var(--chip);
+        border-bottom: 1px solid var(--line);
+        position: sticky;
+        top: 0;
+        z-index: 1;
+      }
+      .v-D .lane > .muted {
+        padding: 12px 14px !important;
+      }
+      .v-D .card {
+        border-radius: 0;
+        margin: 0;
+        box-shadow: none;
+        border: 0;
+        border-bottom: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        border-top: 0;
+        padding: 12px 14px;
+      }
+      .v-D .card.guard {
+        border-left-color: var(--mod-guard);
+      }
+      .v-D .card.patch {
+        border-left-color: var(--mod-patch);
+      }
+      .v-D .card.vouch {
+        border-left-color: var(--mod-vouch);
+      }
+      .v-D .card:hover {
+        background: var(--focus-bg);
+      }
+      .v-D .card.sel {
+        background: var(--focus-bg);
+        box-shadow: inset 0 0 0 2px var(--accent);
+      }
+      .v-D .desk .cards {
+        gap: 0;
+        border: 1px solid var(--line);
+      }
+      .v-D .ask {
+        border-radius: 0;
+        box-shadow: none;
+        border-right: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+      .v-D .pill,
+      .v-D .sev,
+      .v-D .tag,
+      .v-D .chipbtn,
+      .v-D .tab .n,
+      .v-D .kind,
+      .v-D .av,
+      .v-D .iconbtn,
+      .v-D .rail a,
+      .v-D .team,
+      .v-D .mobbar nav a,
+      .v-D .composer input,
+      .v-D .form textarea,
+      .v-D .form select,
+      .v-D .step .num,
+      .v-D .dot {
+        border-radius: 0;
+      }
+      .v-D .steps {
+        gap: 0;
+        padding: 0;
+        max-width: none;
+        border-top: 1px solid var(--line);
+      }
+      .v-D .step {
+        box-shadow: none;
+        border-width: 0 0 1px 0;
+      }
+      .v-D .step.sel {
+        box-shadow: inset 0 0 0 2px var(--accent);
+      }
+      .v-D .decision {
+        border-radius: 0;
+      }
+      @media (max-width: 899px) {
+        .v-D .lanes {
+          padding: 0 0 80px;
+        }
+        .v-D .lane {
+          border-right: 0;
+        }
+        .v-D .desk .cards {
+          border: 0;
+        }
+      }
       @media (max-width: 1279px) {
         .app,
         .app.no-detail {
@@ -1512,12 +1635,13 @@
         fixBusy: false,
         theme: q.get("theme") || "",
       };
-      const VARIANTS = { A: "Board", B: "Lanes", C: "Desk" };
+      const VARIANTS = { A: "Board", B: "Lanes", C: "Desk", D: "Joined lanes" };
+      if (S.variant === "D" && !q.get("tab")) S.tab = "all";
       if (!S.sel && window.innerWidth >= 1280)
         S.sel = S.page === "findings" ? "19b131ca" : S.page === "overview" ? "1.3.3" : "write";
       function sync() {
         const p = new URLSearchParams({ variant: S.variant, page: S.page });
-        if (S.page === "findings" && S.tab !== "open") p.set("tab", S.tab);
+        if (S.page === "findings") p.set("tab", S.tab);
         if (S.sel) p.set("sel", S.sel);
         if (S.theme) p.set("theme", S.theme);
         history.replaceState(null, "", "?" + p);
@@ -1683,9 +1807,12 @@
       // ---------------- pages (the middle) ----------------
       function findingsMain() {
         const list = visibleF();
-        if (S.variant === "B") {
-          const pool = F.filter((f) => S.mod === "all" || f.mod === S.mod);
+        if (S.variant === "B" || S.variant === "D") {
+          const tabFn =
+            S.variant === "D" ? (TABS.find((t) => t[0] === S.tab) || TABS[0])[2] : () => true;
+          const pool = F.filter((f) => S.mod === "all" || f.mod === S.mod).filter(tabFn);
           return (
+            (S.variant === "D" ? deskStrip() : "") +
             findingsBand() +
             lanes([
               ["Waiting on a Lead", "wait", pool.filter((f) => f.proposal || f.unconfirmed), fcard],
@@ -1723,8 +1850,9 @@
       .join("")}</div></div>`;
         const ccard = (c) =>
           `<div class="card vouch ${S.sel === c.ref ? "sel" : ""}" data-sel="${c.ref}" tabindex="0"><div class="meta"><span class="mono">${c.ref}</span><span class="st ${vclass(c.verdict)}" style="margin-left:auto">${c.verdict}</span></div><div class="title" style="font-weight:500">${esc(c.q)}</div><div class="meta">${st(cstate(c))}</div></div>`;
-        if (S.variant === "B")
+        if (S.variant === "B" || S.variant === "D")
           return (
+            (S.variant === "D" ? deskStrip() : "") +
             band +
             lanes([
               ["Waiting for review", "wait", C.filter((c) => c.review !== "Reviewed"), ccard],
@@ -1748,7 +1876,7 @@
         const band = `<div class="band" style="padding-bottom:14px"><div class="row1"><h1>Setup</h1><span class="sub">What Warden may read and change for Elm</span></div><div class="summary">${STEPS.filter((s) => s.state === "done").length} of ${STEPS.length} set up · Level: Quick</div></div>`;
         const icon = { done: "✓", wait: "!", todo: "" };
         return (
-          (S.variant === "C" ? deskStrip() : "") +
+          (S.variant === "C" || S.variant === "D" ? deskStrip() : "") +
           band +
           `<div class="scroll"><ol class="steps">${STEPS.map((s, i) => `<li class="step ${s.state} ${S.sel === s.id ? "sel" : ""}" data-sel="${s.id}" tabindex="0"><span class="num">${icon[s.state] || i + 1}</span><div><h3>${s.title}</h3><div class="muted" style="font-size:14px;overflow-wrap:anywhere">${esc(s.line)}</div></div><div class="right">${s.action ? `<button class="btn small ${s.state === "wait" ? "primary" : ""}" data-act="step" data-id="${s.id}">${s.action}</button>` : st(s.state === "done" ? { k: "fixed", w: "Done", i: ICON.fixed } : { k: "fp", w: "Later", i: ICON.open })}</div></li>`).join("")}</ol></div>`
         );
@@ -1906,7 +2034,7 @@
         const det = detail();
         const noRail = S.variant === "C";
         document.getElementById("root").innerHTML =
-          `<div class="app ${noRail ? "no-rail" : ""} ${det ? "" : "no-detail"}">
+          `<div class="app v-${S.variant} ${noRail ? "no-rail" : ""} ${det ? "" : "no-detail"}">
     ${noRail ? topbar() : rail() + mobbar()}<main class="main">${main}</main>${det}</div>
     <div class="switcher" role="toolbar" aria-label="Prototype variants"><button data-sw="-1" aria-label="Previous variant">←</button><span class="lbl">${S.variant} (${VARIANTS[S.variant]})</span><button data-sw="1" aria-label="Next variant">→</button><button class="theme" data-theme-t>${S.theme || "auto"} theme</button></div>`;
         const dEl = document.querySelector(".detail");
