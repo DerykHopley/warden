@@ -115,7 +115,7 @@ const InstallationToken = z.object({
   token: z.string().min(1),
   permissions: z.record(z.string(), z.string()).optional(),
 });
-/** GitHub documents `slug` as optional on `GET /app`; an answer without one can't build the install link. */
+/** GitHub documents `slug` as optional on `GET /app`; an answer without one can't name the App's page or bot. */
 const AuthenticatedApp = z.object({ slug: z.string().min(1) });
 const Repositories = z
   .object({
@@ -181,6 +181,43 @@ const apiHeaders = (token: string) => ({
 });
 
 const pageUrl = (path: string, page: number) => `${API}${path}?per_page=${PER_PAGE}&page=${page}`;
+
+/** One call to GitHub as the named step, as each client makes it. */
+type Call = (step: string, url: string, init: RequestInit) => Promise<Answer>;
+
+/**
+ * An App's slug from GitHub's "get the authenticated app" (`GET /app`, with the App's `jwt`), through `call`. Throws
+ * GitHubUnavailable when GitHub answers non-2xx or without a slug.
+ */
+export async function readAppSlug(call: Call, jwt: string): Promise<string> {
+  const step = "GitHub's authenticated app";
+  return read(AuthenticatedApp, step, await call(step, `${API}/app`, { headers: apiHeaders(jwt) }))
+    .slug;
+}
+
+/** How long an App's slug is kept before GitHub is asked again, so a renamed App is followed within the hour. */
+export const SLUG_KEPT_MS = 3_600_000;
+
+/**
+ * The slug `read` answers, kept for SLUG_KEPT_MS from when the read began, by `now`. A read that fails isn't kept, so
+ * the next call asks again, and calls while a read runs share it.
+ */
+export function keptSlug(read: () => Promise<string>, now: () => number): () => Promise<string> {
+  let slug: { read: Promise<string>; at: number } | undefined;
+  return () => {
+    if (slug === undefined || now() - slug.at >= SLUG_KEPT_MS) {
+      const reading = {
+        at: now(),
+        read: read().catch((error: unknown) => {
+          if (slug === reading) slug = undefined;
+          throw error;
+        }),
+      };
+      slug = reading;
+    }
+    return slug.read;
+  };
+}
 
 function checkInstallationId(id: number) {
   if (!(Number.isSafeInteger(id) && id > 0)) {
@@ -330,12 +367,8 @@ export function createGitHub({
       return read(InstallationRepoCount, step, answer).total_count;
     },
 
-    async appSlug() {
-      const step = "GitHub's authenticated app";
-      const answer = await call(step, `${API}/app`, {
-        headers: apiHeaders(signAppJwt(clientId, key)),
-      });
-      return read(AuthenticatedApp, step, answer).slug;
+    appSlug() {
+      return readAppSlug(call, signAppJwt(clientId, key));
     },
 
     clientId,

@@ -7,8 +7,9 @@
 // It answers the write app's calls on the one repo it knows, `DAHLIA_REPO` (`github-writer.ts`), and the app's own
 // read (`GET /app`, which a Setup page's install link is built from); anything else on those hosts answers 404. It
 // keeps the branches made (`main` from the start) and the PRs opened, all of them open and each the app's bot's with
-// its one commit, for as long as the process runs: nothing it answers closes or merges a PR. Each call is appended to the file `E2E_FAKE_GITHUB_LOG` names, as
-// one JSON line of its method, path (with its query) and JSON body, never its headers, so never its Authorization.
+// its one commit, for as long as the process runs: nothing it answers closes or merges a PR. Each call is appended to
+// the file `E2E_FAKE_GITHUB_LOG` names, as one JSON line of its method, path (with its query) and JSON body, never its
+// headers, so never its Authorization.
 // With that variable unset, as in a Scan Job (the server hands it only some of its variables), the fake still answers
 // a read (GET), unlogged, and refuses every other call with a rejected fetch naming it, so a write no test could see
 // fails loudly instead. Only `node:` modules are imported: Node loads this file as it is, types stripped.

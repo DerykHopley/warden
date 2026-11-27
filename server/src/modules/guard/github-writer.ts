@@ -2,16 +2,16 @@
 // `github-reader.ts`. For one repo, the app gets an installation token scoped to that repo alone, by its GitHub id, and
 // through it reads the repo's default branch and one file on it, makes a branch from the default branch's head, commits
 // one file to that branch, and opens a PR from it into the default branch; and it tells whether a PR found there is
-// the write app's own (#347). It never writes to the default branch: no
-// ref is moved or deleted, no contents write names it, and nothing is merged. Each token serves one request's calls
-// and is then dropped; it and the app's JWT are never stored, logged, returned or put in an error. It needs the write
-// app's client id and private key, never its client secret.
+// the write app's own (#347). It never writes to the default branch: no ref is moved or deleted, no contents write
+// names it, and nothing is merged. Each token serves one request's calls and is then dropped; it and the app's JWT are
+// never stored, logged, returned or put in an error. It needs the write app's client id and private key, never its
+// client secret.
 import { createPrivateKey } from "node:crypto";
 import { FixPrBody } from "@warden/contracts";
 import { z } from "zod";
 import { CallFailed, callJson, type Answer, type Fetch } from "../../http-call.ts";
 import { signAppJwt } from "./app-jwt.ts";
-import { GitHubUnavailable, type GitHubRepo } from "./github.ts";
+import { GitHubUnavailable, keptSlug, readAppSlug, type GitHubRepo } from "./github.ts";
 
 const API = "https://api.github.com";
 /** The REST API version this writer was written against (GitHub's "API versions"), as `github.ts`'s. */
@@ -117,8 +117,6 @@ const Pull = z.object({
   base: z.object({ ref: z.string() }),
 });
 const PullState = z.object({ state: z.string() });
-/** `GET /app`: GitHub documents `slug` as optional; an answer without one can't name the bot. */
-const AuthenticatedApp = z.object({ slug: z.string().min(1) });
 /** A PR's opener, which GitHub's PR read documents as required. */
 const PullAuthor = z.object({ user: z.object({ login: z.string().min(1) }) });
 /**
@@ -174,12 +172,15 @@ export function createGitHubWriter({
   privateKey,
   fetch = globalThis.fetch,
   timeoutMs = CALL_TIMEOUT_MS,
+  now = Date.now,
 }: {
   clientId: string;
   /** The write app's private key as GitHub downloads it, a PKCS#1 PEM. */
   privateKey: string;
   fetch?: Fetch;
   timeoutMs?: number;
+  /** The clock the app's slug is kept by. */
+  now?: () => number;
 }): GitHubWriter {
   const key = createPrivateKey(privateKey);
 
@@ -193,20 +194,10 @@ export function createGitHubWriter({
     }
   }
 
-  /** The login the write app's bot makes its PRs and commits as, read once from `GET /app` with the app's JWT. */
-  let readBot: string | undefined;
-  async function botLogin(): Promise<string> {
-    if (readBot === undefined) {
-      const step = "GitHub's write app read";
-      const { slug } = read(
-        AuthenticatedApp,
-        step,
-        await call(step, `${API}/app`, { headers: apiHeaders(signAppJwt(clientId, key)) }),
-      );
-      readBot = `${slug}[bot]`;
-    }
-    return readBot;
-  }
+  /** The write app's slug from `GET /app` with its JWT, kept for an hour as `keptSlug` keeps it. */
+  const writeAppSlug = keptSlug(() => readAppSlug(call, signAppJwt(clientId, key)), now);
+  /** The login the write app's bot makes its PRs and commits as. */
+  const botLogin = async () => `${await writeAppSlug()}[bot]`;
 
   /** The repo's calls through `token`, once its name, default branch and that branch's head are read. */
   async function open(token: string, repo: GitHubRepo): Promise<RepoWriter> {

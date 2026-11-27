@@ -12,6 +12,7 @@ import {
   GitHubInstallationUnreachable,
   GitHubRefusedCode,
   GitHubUnavailable,
+  keptSlug,
   type GitHub,
   type UserRepo,
 } from "./github.ts";
@@ -44,15 +45,11 @@ export function permissionsMatch(
   );
 }
 
-/** How long the App's slug is kept before GitHub is asked again, so a renamed App's links follow within the hour. */
-const SLUG_KEPT_MS = 3_600_000;
-
 /**
  * A handler answering the app's GitHubAppBody, what a Setup page builds GitHub's install and sign-in links from, or
- * 503 with `notSetUp` without the app's client. The slug is read from GitHub and kept for an hour from when the read
- * began, by `now`; a read that fails isn't kept, so the next call asks again, and calls while a read runs share it.
- * GitHub not answering is 502, logged with the app, step and status only. Each app's route builds its own, so each
- * keeps its own slug.
+ * 503 with `notSetUp` without the app's client. The slug is read from GitHub and kept as `keptSlug` keeps it, for an
+ * hour by `now`. GitHub not answering is 502, logged with the app, step and status only. Each app's route builds its
+ * own, so each keeps its own slug.
  */
 export function gitHubAppRoute(
   app: GitHubAppName,
@@ -60,22 +57,16 @@ export function gitHubAppRoute(
   notSetUp: string,
   now: () => number,
 ) {
-  let slug: { read: Promise<string>; at: number } | undefined;
+  const { github } = client;
+  const slug = github && keptSlug(() => github.appSlug(), now);
   return async (c: Context<AppEnv>) => {
-    if (client.github === undefined) return c.json({ error: notSetUp }, 503);
-    const { github, logger } = client;
-    if (slug === undefined || now() - slug.at >= SLUG_KEPT_MS) {
-      const reading = {
-        at: now(),
-        read: github.appSlug().catch((error: unknown) => {
-          if (slug === reading) slug = undefined;
-          throw error;
-        }),
-      };
-      slug = reading;
-    }
+    if (client.github === undefined || slug === undefined) return c.json({ error: notSetUp }, 503);
+    const { logger } = client;
     try {
-      return c.json({ slug: await slug.read, client_id: github.clientId } satisfies GitHubAppBody);
+      return c.json({
+        slug: await slug(),
+        client_id: client.github.clientId,
+      } satisfies GitHubAppBody);
     } catch (error) {
       if (!(error instanceof GitHubUnavailable)) throw error;
       // The step and status only, as the link logs them.

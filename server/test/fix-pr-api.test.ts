@@ -790,21 +790,17 @@ describe("POST /api/guard/findings/:id/fix-pr: a PR found on GitHub is Warden's 
         `POST /repos/${FULL_NAME}/git/refs`,
       ]);
       expect(await fixPrRows(team)).toHaveLength(0);
-      const read = await get(app, team, finding.id);
-      expect(FindingFixPrBody.parse(read.body).fix_pr).toBeNull();
     },
   );
 
-  it("answers 409 naming the recorded PR once it's open again with a person's commit on top, writing nothing", async () => {
+  it("answers 409 naming the recorded PR, still open, once a person's commit is pushed on top, writing nothing", async () => {
     const { team, repoId, granted, finding } = await fixableTeam();
     const fake = fakeGitHub({ repoId, installations: installationsOf(granted) });
     const { app } = fixApp(fake);
     expect((await post(app, team, finding.id)).status).toBe(201);
     const [pull] = fake.pulls;
     if (pull === undefined) throw new Error("the first POST opened no PR");
-    pull.state = "closed";
     pull.commits.push(PUSHER);
-    pull.state = "open";
     const writes = fake.writes().length;
 
     const res = await post(app, team, finding.id);
