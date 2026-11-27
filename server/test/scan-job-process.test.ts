@@ -77,6 +77,28 @@ describe("the Scan Job's process", () => {
       ["WARDEN_JUDGE_LOCALHOST"],
       ["localhost-please"],
     ],
+    [
+      "a Judge run's LANGFUSE_PUBLIC_KEY without LANGFUSE_SECRET_KEY",
+      // Empty counts as unset, whatever the shell running the tests holds.
+      {
+        WARDEN_SESSION_ID: "sess-value-1",
+        LANGFUSE_PUBLIC_KEY: "pk-lf-value-1",
+        LANGFUSE_SECRET_KEY: "",
+      },
+      ["LANGFUSE_SECRET_KEY"],
+      ["pk-lf-value-1"],
+    ],
+    [
+      "a Judge run's LANGFUSE_BASE_URL that isn't https",
+      {
+        WARDEN_SESSION_ID: "sess-value-1",
+        LANGFUSE_PUBLIC_KEY: "pk-lf-value-1",
+        LANGFUSE_SECRET_KEY: "sk-lf-value-1",
+        LANGFUSE_BASE_URL: "http://langfuse.example",
+      },
+      ["LANGFUSE_BASE_URL"],
+      ["pk-lf-value-1", "sk-lf-value-1", "http://langfuse.example"],
+    ],
   ])(
     "exits 1 before connecting with %s, naming the variables and no value",
     async (_name, env, variables, values) => {

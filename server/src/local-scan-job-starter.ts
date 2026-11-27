@@ -46,13 +46,16 @@ function jobVariables(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 }
 
 /**
- * The Judge run's own three, handed on only to it, and only when the server has them (#444): its key and model, and
- * the localhost setting a Team's own model on localhost needs (slice 6a).
+ * The Judge run's own variables, handed on only to it, and only when the server has them (#444): its key and model,
+ * the localhost setting a Team's own model on localhost needs (slice 6a), and Langfuse's keys and URL (slice 7b).
  */
 const JUDGE_VARIABLES = [
   "OPENROUTER_API_KEY",
   "WARDEN_JUDGE_MODEL",
   "WARDEN_JUDGE_LOCALHOST",
+  "LANGFUSE_PUBLIC_KEY",
+  "LANGFUSE_SECRET_KEY",
+  "LANGFUSE_BASE_URL",
 ] as const;
 
 type StarterDeps = { logger: Logger; env?: NodeJS.ProcessEnv; spawn?: Spawn };
