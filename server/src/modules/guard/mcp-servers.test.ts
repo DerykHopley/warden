@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { AWS_KEY, GITHUB_TOKEN } from "../../../test/secret-fixtures.ts";
 import { lineWith } from "../../../test/text-lines.ts";
 import { packRule } from "./default-pack.ts";
-import { mcpServerObservations } from "./mcp-servers.ts";
+import { mcpServerObservations, serverStart } from "./mcp-servers.ts";
 
 const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
 
@@ -429,5 +429,102 @@ describe("guard/mcp-server-unpinned", () => {
 
     expect(observation?.evidence.summary).not.toContain(key);
     expect(observation?.evidence.summary.length).toBeLessThan(400);
+  });
+});
+
+describe("serverStart's customRegistry: the runner option or env key that points it at another registry (#348)", () => {
+  const PRIVATE = "https://r.example";
+  const withEnv = (entry: Record<string, unknown>, env: Record<string, unknown>) => ({
+    ...entry,
+    env,
+  });
+
+  it.each([
+    ["npx --registry", server("npx", ["-y", "--registry", PRIVATE, "acme-mcp"]), "--registry"],
+    [
+      "npx --@scope:registry=",
+      server("npx", [`--@acme:registry=${PRIVATE}`, "acme-mcp"]),
+      "--@acme:registry",
+    ],
+    [
+      "npm's own option, before exec",
+      server("npm", ["--reg", PRIVATE, "exec", "acme-mcp"]),
+      "--reg",
+    ],
+    [
+      "npx, past -p's package",
+      server("npx", ["-p", "acme-mcp", "--registry", PRIVATE, "acme"]),
+      "--registry",
+    ],
+    ["uvx -i", server("uvx", ["-i", PRIVATE, "acme-mcp"]), "-i"],
+    [
+      "uvx, past --from's package",
+      server("uvx", ["--from", "acme", `--find-links=${PRIVATE}`, "acme"]),
+      "--find-links",
+    ],
+    [
+      "pipx --pip-args with an index",
+      server("pipx", ["run", "--pip-args", `-f ${PRIVATE}`, "acme"]),
+      "--pip-args",
+    ],
+    [
+      "a quoted --pip-args in command",
+      server(`pipx run --pip-args="--index-url ${PRIVATE}" acme`),
+      "--pip-args",
+    ],
+    [
+      "an npm env key, in any case",
+      withEnv(server("npx", ["acme-mcp"]), { npm_config_Registry: PRIVATE }),
+      "npm_config_Registry",
+    ],
+    [
+      "an npm scope's env key",
+      withEnv(server("npx", ["acme-mcp"]), { "NPM_CONFIG_@ACME:REGISTRY": PRIVATE }),
+      "NPM_CONFIG_@ACME:REGISTRY",
+    ],
+    [
+      "a Python env key",
+      withEnv(server("uvx", ["acme-mcp"]), { PIP_FIND_LINKS: PRIVATE }),
+      "PIP_FIND_LINKS",
+    ],
+  ])("names it for %s", (_case, entry, named) => {
+    expect(serverStart(entry)?.customRegistry).toBe(named);
+  });
+
+  it.each([
+    ["no registry option", server("npx", ["-y", "acme-mcp"])],
+    [
+      "the server's own option, after its package",
+      server("npx", ["acme-mcp", "--registry", PRIVATE]),
+    ],
+    [
+      "the server's own option, after --",
+      server("npm", ["exec", "--", "acme-mcp", "--registry", PRIVATE]),
+    ],
+    ["--pip-args with no index", server("pipx", ["run", "--pip-args=--no-cache-dir", "acme"])],
+    [
+      "the other runner kind's env key",
+      withEnv(server("npx", ["acme-mcp"]), { UV_INDEX_URL: PRIVATE }),
+    ],
+    [
+      "a Python env key in another case",
+      withEnv(server("uvx", ["acme-mcp"]), { uv_index_url: PRIVATE }),
+    ],
+    [
+      "an env value that isn't a non-empty string",
+      withEnv(server("uvx", ["acme-mcp"]), { UV_INDEX: "", PIP_INDEX_URL: 1 }),
+    ],
+    [
+      "a container image",
+      withEnv(server("docker", ["run", "mcp/github"]), { NPM_CONFIG_REGISTRY: PRIVATE }),
+    ],
+  ])("is undefined for %s", (_case, entry) => {
+    expect(serverStart(entry)).toBeDefined();
+    expect(serverStart(entry)?.customRegistry).toBeUndefined();
+  });
+
+  it("leaves the scanner's Observation as it was: the server is still unpinned", () => {
+    const text = mcpJson({ acme: server("npx", ["-y", "--registry", PRIVATE, "acme-mcp"]) });
+    expect(observe(".mcp.json", text)).toHaveLength(1);
   });
 });
