@@ -1,12 +1,19 @@
 // The Scan Job starter off Cloud Run (ADR 0009): runs scan-job.ts as a child process of the server, with the Scan's
 // id and Team, the server's own PG* variables and HOME, and Node's options, so it connects as the server does, and the
 // GitHub App's client id and key, which it reads repos with. Nothing else of the server's environment is handed on: no
-// Clerk key, no admin password, no GitHub client secret. It isn't waited on; its exit is logged.
+// Clerk key, no admin password, no GitHub client secret. It isn't waited on; its exit is logged. The Judge run's
+// starter runs the same child with the session's id in place of the Scan's, and the Judge's key and model (#444).
 import { spawn as nodeSpawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import type { Logger } from "./log.ts";
-import { SCAN_ID_VARIABLE, TEAM_VARIABLE, type ScanJobStarter } from "./scans.ts";
+import {
+  SCAN_ID_VARIABLE,
+  SESSION_ID_VARIABLE,
+  TEAM_VARIABLE,
+  type JudgeJobStarter,
+  type ScanJobStarter,
+} from "./scans.ts";
 
 /** The part of `child_process.spawn` the starter calls, so a test can hand it a fake. */
 export type Spawn = (
@@ -37,28 +44,80 @@ function jobVariables(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   );
 }
 
+/** The Judge run's own two, handed on only to it, and only when the server has them (#444). */
+const JUDGE_VARIABLES = ["OPENROUTER_API_KEY", "WARDEN_JUDGE_MODEL"] as const;
+
+type StarterDeps = { logger: Logger; env?: NodeJS.ProcessEnv; spawn?: Spawn };
+
+/**
+ * Spawns scan-job.ts with `childEnv`, resolving once it has started; its exit is logged with `fields` and the exit
+ * code, as `exited` on 0 and `failed` otherwise.
+ */
+function spawnJob(
+  spawn: Spawn,
+  logger: Logger,
+  childEnv: NodeJS.ProcessEnv,
+  { fields, exited, failed }: { fields: Record<string, string>; exited: string; failed: string },
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [SCAN_JOB], {
+      env: childEnv,
+      // Its log lines go where the server's go.
+      stdio: "inherit",
+    });
+    child.once("spawn", () => resolve());
+    child.once("error", reject);
+    child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
+      if (code === 0) logger.info(exited, { ...fields, code, signal });
+      else logger.error(failed, { ...fields, code, signal });
+    });
+  });
+}
+
 export function localScanJobStarter({
   logger,
   env = process.env,
   spawn = nodeSpawn,
-}: {
-  logger: Logger;
-  env?: NodeJS.ProcessEnv;
-  spawn?: Spawn;
-}): ScanJobStarter {
+}: StarterDeps): ScanJobStarter {
   return ({ scanId, team }) =>
-    new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [SCAN_JOB], {
-        env: { ...jobVariables(env), [SCAN_ID_VARIABLE]: scanId, [TEAM_VARIABLE]: team },
-        // Its log lines go where the server's go.
-        stdio: "inherit",
-      });
-      child.once("spawn", () => resolve());
-      child.once("error", reject);
-      child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
-        const fields = { scanId, team, code, signal };
-        if (code === 0) logger.info("scan job exited", fields);
-        else logger.error("scan job exited without finishing its Scan", fields);
-      });
-    });
+    spawnJob(
+      spawn,
+      logger,
+      { ...jobVariables(env), [SCAN_ID_VARIABLE]: scanId, [TEAM_VARIABLE]: team },
+      {
+        fields: { scanId, team },
+        exited: "scan job exited",
+        failed: "scan job exited without finishing its Scan",
+      },
+    );
+}
+
+/**
+ * The Judge run's starter (#444): the same child, with the session's id and Team in place of the Scan's, and the
+ * Judge's key and model when the server has them. Its exit line holds the Team and the exit code, never the session id
+ * (threat H7).
+ */
+export function localJudgeJobStarter({
+  logger,
+  env = process.env,
+  spawn = nodeSpawn,
+}: StarterDeps): JudgeJobStarter {
+  return ({ sessionId, team }) =>
+    spawnJob(
+      spawn,
+      logger,
+      {
+        ...jobVariables(env),
+        ...Object.fromEntries(
+          JUDGE_VARIABLES.flatMap((name) => (env[name] === undefined ? [] : [[name, env[name]]])),
+        ),
+        [SESSION_ID_VARIABLE]: sessionId,
+        [TEAM_VARIABLE]: team,
+      },
+      {
+        fields: { team },
+        exited: "judge run exited",
+        failed: "judge run exited without finishing its session",
+      },
+    );
 }

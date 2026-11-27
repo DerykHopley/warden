@@ -1,6 +1,7 @@
 // The hook endpoint (spec #225, slice 1, #183): `POST /api/hook/events` takes Claude Code's hook events with the Team's
 // hook token and stores the fields the Team's Privacy tier keeps, redacted, under the token's Team and the developer's
-// pseudonym (story 8, story 15 in part; threats H1, H2, H3, H6, H7, H8). Through the real app with the hook event routes, on the suite's shared
+// pseudonym (story 8, story 15 in part; threats H1, H2, H3, H6, H7, H8). A stored SessionEnd starts the Judge for its
+// session, with a fake starter (story 9, #444). Through the real app with the hook event routes, on the suite's shared
 // database, each case with Teams of its own and an endpoint (so its limits) of its own.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { PrivacyTier } from "@warden/contracts";
@@ -20,6 +21,8 @@ import {
 import { createHookSettings, type HookSettings } from "../src/modules/guard/hook-settings.ts";
 import { HOOK_EVENTS_PATH } from "../src/modules/guard/managed-settings.ts";
 import { pseudonym } from "../src/modules/guard/pseudonym.ts";
+import { createLogger } from "../src/log.ts";
+import type { JudgeJobStarter } from "../src/scans.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { ADMIN, newTeam, testApp, testKey } from "./helpers.ts";
@@ -56,10 +59,20 @@ function fakeClock(start = Date.now()) {
   return { now: () => now, advance: (ms: number) => (now += ms) };
 }
 
-/** The app with the hook event routes (the pseudonym key unless `pseudonymKey` is null), as on Cloud Run. */
+/**
+ * The app with the hook event routes (the pseudonym key unless `pseudonymKey` is null), as on Cloud Run, with no Judge
+ * starter unless `startJudgeJob` is given. `lines` are the app's own; `ownLines` the endpoint's, from its logger.
+ */
 function eventsApp(
-  options: { hookSettings?: HookSettings; now?: () => number; pseudonymKey?: Buffer | null } = {},
+  options: {
+    hookSettings?: HookSettings;
+    now?: () => number;
+    pseudonymKey?: Buffer | null;
+    startJudgeJob?: JudgeJobStarter;
+  } = {},
 ) {
+  const ownLines: string[] = [];
+  const logger = createLogger((line) => ownLines.push(line));
   const routes = hookEventRoutes({
     hookSettings: options.hookSettings ?? hookSettings,
     agentSessions: createAgentSessions({ withTeam }),
@@ -67,9 +80,21 @@ function eventsApp(
       options.pseudonymKey === null ? undefined : (options.pseudonymKey ?? PSEUDONYM_KEY),
     behindCloudRun: true,
     now: options.now,
+    startJudgeJob: options.startJudgeJob,
+    logger,
   });
   const { app, lines } = testApp({ publicPem, withTeam, moduleRoutes: [routes] });
-  return { app, lines, flush: () => allLines.push(...lines) };
+  return { app, lines, ownLines, flush: () => allLines.push(...lines, ...ownLines) };
+}
+
+/** A Judge starter that records each start, and throws `failure` when given. */
+function fakeJudge(failure?: Error) {
+  const calls: { sessionId: string; team: string }[] = [];
+  const start: JudgeJobStarter = async (input) => {
+    calls.push(input);
+    if (failure !== undefined) throw failure;
+  };
+  return { calls, start };
 }
 
 type App = ReturnType<typeof eventsApp>["app"];
@@ -329,20 +354,20 @@ describe("POST /api/hook/events: the Team comes from the token alone (story 15, 
   });
 });
 
-describe("POST /api/hook/events: the per-Team limit (threat H6)", () => {
-  /** Sends the Team's whole minute of events, each taken. */
-  async function fillMinute(app: App, token: string) {
-    // Events the endpoint takes but doesn't store still count: the limit is on what the Team sends.
-    for (let sent = 0; sent < HOOK_EVENTS_PER_MINUTE; sent += 20) {
-      const batch = await Promise.all(
-        Array.from({ length: 20 }, () =>
-          post(app, { token, body: event(newSession(), "PreToolUse") }),
-        ),
-      );
-      expect(batch.map((res) => res.status)).toEqual(Array<number>(20).fill(204));
-    }
+/** Sends the Team's whole minute of events, each taken. */
+async function fillMinute(app: App, token: string) {
+  // Events the endpoint takes but doesn't store still count: the limit is on what the Team sends.
+  for (let sent = 0; sent < HOOK_EVENTS_PER_MINUTE; sent += 20) {
+    const batch = await Promise.all(
+      Array.from({ length: 20 }, () =>
+        post(app, { token, body: event(newSession(), "PreToolUse") }),
+      ),
+    );
+    expect(batch.map((res) => res.status)).toEqual(Array<number>(20).fill(204));
   }
+}
 
+describe("POST /api/hook/events: the per-Team limit (threat H6)", () => {
   it(`answers the Team's ${HOOK_EVENTS_PER_MINUTE + 1}st event in a minute 429, and counts it on its session`, async () => {
     const { team, token } = await teamWithToken();
     const other = await teamWithToken();
@@ -713,13 +738,105 @@ describe("POST /api/hook/events: the Agent session record", () => {
   });
 });
 
-describe("POST /api/hook/events: the logs (threat H7)", () => {
-  it("writes no line of its own, and no line holds a body, the token, the developer or a pseudonym", async () => {
+describe("POST /api/hook/events: a SessionEnd starts the Judge (story 9, #444)", () => {
+  it("starts it once, with the session's id and the token's Team, though the body names another Team", async () => {
+    const a = await teamWithToken();
+    const b = await teamWithToken();
+    const judge = fakeJudge();
+    const { app, flush } = eventsApp({ startJudgeJob: judge.start });
+    const session = newSession();
+
+    const res = await post(app, {
+      token: b.token,
+      body: event(session, "SessionEnd", { team: a.team, team_id: a.team }),
+      headers: { "X-Warden-Team": a.team },
+    });
+    flush();
+
+    expect(res.status).toBe(204);
+    expect(judge.calls).toEqual([{ sessionId: session, team: b.team }]);
+  });
+
+  it("starts nothing for a stored PostToolUse, a PreToolUse, or a SessionEnd over the Team's limit", async () => {
     const { team, token } = await teamWithToken();
-    const { app, lines, flush } = eventsApp();
+    const judge = fakeJudge();
+    const clock = fakeClock();
+    const { app, flush } = eventsApp({ startJudgeJob: judge.start, now: clock.now });
+    const session = newSession();
+
+    const stored = await post(app, { token, body: event(session, "PostToolUse") });
+    const skipped = await post(app, { token, body: event(session, "PreToolUse") });
+    clock.advance(MINUTE_MS);
+    await fillMinute(app, token);
+    const limited = await post(app, { token, body: event(session, "SessionEnd") });
+    flush();
+
+    expect([stored.status, skipped.status, limited.status]).toEqual([204, 204, 429]);
+    expect(judge.calls).toEqual([]);
+    expect((await tables(team)).sessions.map((row) => row.ended_at)).toEqual([null]);
+  });
+
+  it("still answers 204 when the start throws, the session ended, with one line of its own: the Team and the error", async () => {
+    const { team, token } = await teamWithToken();
+    const judge = fakeJudge(new Error("The Scan Job's jobs.run answered HTTP 503"));
+    const { app, lines, ownLines, flush } = eventsApp({ startJudgeJob: judge.start });
+    const session = newSession();
+
+    const res = await post(app, {
+      token,
+      body: event(session, "SessionEnd", { reason: PLANTED }),
+      headers: { "X-Warden-Developer": "alice" },
+    });
+    flush();
+
+    expect(res).toEqual({ status: 204, retryAfter: null, text: "" });
+    expect(judge.calls).toHaveLength(1);
+    expect((await tables(team)).sessions).toEqual([
+      expect.objectContaining({ session_id: session, ended_at: expect.any(Date) }),
+    ]);
+    expect(ownLines.map((line) => JSON.parse(line) as Record<string, unknown>)).toEqual([
+      expect.objectContaining({
+        severity: "WARNING",
+        team,
+        error: expect.objectContaining({ message: "The Scan Job's jobs.run answered HTTP 503" }),
+      }),
+    ]);
+    for (const line of [...lines, ...ownLines]) {
+      for (const kept of [
+        session,
+        PLANTED,
+        token,
+        "alice",
+        pseudonym(PSEUDONYM_KEY, team, "alice"),
+      ]) {
+        expect(line).not.toContain(kept);
+      }
+    }
+  });
+
+  it("stores a SessionEnd and answers 204 with no Judge starter wired", async () => {
+    const { team, token } = await teamWithToken();
+    const { app, flush } = eventsApp();
+    const session = newSession();
+
+    const res = await post(app, { token, body: event(session, "SessionEnd") });
+    flush();
+
+    expect(res.status).toBe(204);
+    expect((await tables(team)).sessions).toEqual([
+      expect.objectContaining({ session_id: session, ended_at: expect.any(Date) }),
+    ]);
+  });
+});
+
+describe("POST /api/hook/events: the logs (threat H7)", () => {
+  it("writes no line of its own when the Judge starts, and no line holds a body, the token, the developer or a pseudonym", async () => {
+    const { team, token } = await teamWithToken();
+    const { app, lines, ownLines, flush } = eventsApp({ startJudgeJob: fakeJudge().start });
     const body = event(newSession(), "PostToolUse", { note: PLANTED, cwd: "/home/alice" });
     const headers = { "X-Warden-Developer": "alice" };
     await post(app, { token, body, headers });
+    await post(app, { token, body: { ...body, hook_event_name: "SessionEnd" }, headers });
     await post(app, { token, body: `{${PLANTED}`, headers });
     await post(app, { token: `${token}x`, body, headers });
     await post(app, { token: null, body, path: `${HOOK_EVENTS_PATH}?token=${token}` });
@@ -728,8 +845,9 @@ describe("POST /api/hook/events: the logs (threat H7)", () => {
     flush();
     unset.flush();
 
+    expect(ownLines).toEqual([]);
     expect([...lines, ...unset.lines].map((line) => JSON.parse(line).message)).toEqual(
-      Array(5).fill("request"),
+      Array(6).fill("request"),
     );
     // Every line any case in this file wrote.
     expect(allLines.length).toBeGreaterThan(lines.length);

@@ -32,7 +32,7 @@ import { createPatchScan } from "./modules/patch/scan.ts";
 import { createAuditReads } from "./modules/vouch/audit.ts";
 import { createVouchDeps } from "./modules/vouch/deps.ts";
 import { vouchRoutes } from "./modules/vouch/routes.ts";
-import { scanJobStarterFor } from "./scan-job-starters.ts";
+import { judgeJobStarterFor, scanJobStarterFor } from "./scan-job-starters.ts";
 import { createScans } from "./scans.ts";
 import { createShutdown } from "./shutdown.ts";
 import { MOVE_RULES, scanners } from "./wiring.ts";
@@ -164,12 +164,15 @@ const appDeps: AppDeps = {
         : { findings, repoAssets, writeGrants, fixPrs },
     ),
     hookRoutes({ hookSettings }),
-    // Without WARDEN_PSEUDONYM_KEY, the hook endpoint answers 503 and stores nothing.
+    // Without WARDEN_PSEUDONYM_KEY, the hook endpoint answers 503 and stores nothing. A stored SessionEnd starts the
+    // Judge run, chosen as the Scan Job's starter is; on Cloud Run without a Job, none starts.
     hookEventRoutes({
       hookSettings,
       agentSessions: createAgentSessions({ withTeam }),
       pseudonymKey: config.pseudonymKey,
       behindCloudRun: config.behindCloudRun,
+      startJudgeJob: judgeJobStarterFor(config, { logger }),
+      logger,
     }),
     patchRoutes({
       products,

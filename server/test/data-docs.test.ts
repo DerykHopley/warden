@@ -95,6 +95,13 @@ describe("docs/data.md", () => {
     expect(sessions).not.toMatch(/\| Designed: Guard spec \|$/);
   });
 
+  it("marks the OpenRouter row built: the Judge's call (#443), started on each SessionEnd (#444)", () => {
+    const openRouter = row("OpenRouter and the model providers behind it");
+    expect(openRouter).toMatch(/Built: [^|]*`zdr`[^|]*`data_collection: "deny"`[^|]*#443/);
+    expect(openRouter).toMatch(/Built: [^|]*`SessionEnd`[^|]*#444/);
+    expect(openRouter).not.toMatch(/\| Designed: Guard spec \|$/);
+  });
+
   it("names one Warden pseudonym key, each Team's key derived from it, in The pseudonym", () => {
     const section = /^## The pseudonym\n([\s\S]*?)(?=^## )/m.exec(data)?.[1] ?? "";
     expect(section).toContain("`WARDEN_PSEUDONYM_KEY`");
