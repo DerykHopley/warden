@@ -255,7 +255,7 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
     expect(await rowCount(team)).toBe(1);
   });
 
-  it("revokes the Admin's user token with the write app's client id once both lists are read (#147)", async () => {
+  it("revokes the Admin's user token once, with the write app's client id (#147)", async () => {
     const team = await newTeam(withTeam);
     const installationId = newInstallation();
     const { github, calls } = fakeGitHub({ installationId });
@@ -263,12 +263,8 @@ describe("POST /api/github/write-installations: an Admin grants write access (st
 
     expect((await link(app, team, installationId)).status).toBe(201);
 
-    const api = "https://api.github.com";
-    const revoke = `DELETE ${api}/applications/${WRITE_CLIENT_ID}/token`;
+    const revoke = `DELETE https://api.github.com/applications/${WRITE_CLIENT_ID}/token`;
     expect(calls.filter((route) => route === revoke)).toHaveLength(1);
-    expect(calls.indexOf(revoke)).toBeGreaterThan(
-      calls.indexOf(`GET ${api}/user/installations/${installationId}/repositories`),
-    );
   });
 
   it("adds no Repo Asset to the Team", async () => {

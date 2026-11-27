@@ -130,7 +130,7 @@ function fakeGitHub(
     fetch,
     ...(timeoutMs === undefined ? {} : { timeoutMs }),
   });
-  return { github, calls };
+  return { github, calls, fetch };
 }
 
 const header = (call: Call, name: string) => new Headers(call.init.headers).get(name);
@@ -443,6 +443,46 @@ describe("createGitHub", () => {
       const { github } = fakeGitHub({ revoke: serverError });
 
       expect(await userInstallationRepos(github)).toHaveLength(1);
+    });
+
+    describe("when noting a failed revoke throws", () => {
+      const throwingNote = () => {
+        throw new Error("the log line couldn't be written");
+      };
+
+      it("answers as it would", async () => {
+        const { github } = fakeGitHub({ revoke: serverError });
+
+        const answer = github.userInstallationRepos(CODE, VERIFIER, INSTALLATION_ID, throwingNote);
+
+        expect(await answer).toHaveLength(1);
+      });
+
+      it("throws the list's own error", async () => {
+        const { github } = fakeGitHub({ installations: serverError, revoke: serverError });
+
+        const answer = github.userInstallationRepos(CODE, VERIFIER, INSTALLATION_ID, throwingNote);
+
+        expect(await rejection(answer)).toMatchObject({ step: STEPS.installations, status: 500 });
+      });
+    });
+
+    it("hands on a revoke that throws something else before its call as a GitHubUnavailable naming the step, and answers as it would", async () => {
+      // A client id that can't go in the revoke's URL: encodeURIComponent throws a URIError, not a GitHubUnavailable.
+      const { fetch } = fakeGitHub();
+      const github = createGitHub({
+        clientId: "\uD800",
+        clientSecret: CLIENT_SECRET,
+        privateKey: PRIVATE_KEY,
+        fetch,
+      });
+
+      const { answer, failures } = checkRecordingRevokeFailures(github);
+
+      expect(await answer).toHaveLength(1);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toBeInstanceOf(GitHubUnavailable);
+      expect(failures[0]).toMatchObject({ step: REVOKE_STEP, status: undefined });
     });
   });
 

@@ -177,12 +177,14 @@ function read<T>(
   return parsed.data;
 }
 
-const apiHeaders = (token: string) => ({
+/** The headers every REST API call sends, whatever its credentials. */
+const API_HEADERS = {
   Accept: "application/vnd.github+json",
   "X-GitHub-Api-Version": API_VERSION,
-  Authorization: `Bearer ${token}`,
   ...USER_AGENT,
-});
+};
+
+const apiHeaders = (token: string) => ({ ...API_HEADERS, Authorization: `Bearer ${token}` });
 
 const pageUrl = (path: string, page: number) => `${API}${path}?per_page=${PER_PAGE}&page=${page}`;
 
@@ -325,31 +327,42 @@ export function createGitHub({
   /**
    * Revokes the user `token` with GitHub's "Delete an app token" (204 when done). Basic auth of the App's client id and
    * secret, and no Bearer header, which GitHub's docs say would replace it. A failure, 422 included, is handed to
-   * `onRevokeFailed`, never thrown; GitHub's answer isn't repeated in it, as it may repeat the token.
+   * `onRevokeFailed`, never thrown; GitHub's answer isn't repeated in it, as it may repeat the token. Nothing it does
+   * throws, `onRevokeFailed` included, so it never replaces the answer or the error of the check it ends.
    */
   async function revokeUserToken(
     token: string,
     onRevokeFailed: ((error: GitHubUnavailable) => void) | undefined,
   ): Promise<void> {
     const step = "GitHub's revoke of the user token";
+    let failure: GitHubUnavailable;
     try {
       const answer = await call(step, `${API}/applications/${encodeURIComponent(clientId)}/token`, {
         method: "DELETE",
         headers: {
-          Accept: "application/vnd.github+json",
+          ...API_HEADERS,
           "Content-Type": "application/json",
-          "X-GitHub-Api-Version": API_VERSION,
           Authorization: `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString("base64")}`,
-          ...USER_AGENT,
         },
         body: JSON.stringify({ access_token: token }),
       });
-      if (!answer.ok) {
-        throw new GitHubUnavailable(step, answer.status, `${step} answered HTTP ${answer.status}`);
-      }
+      if (answer.ok) return;
+      failure = new GitHubUnavailable(
+        step,
+        answer.status,
+        `${step} answered HTTP ${answer.status}`,
+      );
     } catch (error) {
-      if (!(error instanceof GitHubUnavailable)) throw error;
-      onRevokeFailed?.(error);
+      // Anything but a GitHubUnavailable is named by its step alone: its message could hold what the call carried.
+      failure =
+        error instanceof GitHubUnavailable
+          ? error
+          : new GitHubUnavailable(step, undefined, `${step} failed`);
+    }
+    try {
+      onRevokeFailed?.(failure);
+    } catch {
+      // Noting the failure failed too: the check's answer or error still stands, and the token expires on its own.
     }
   }
 
@@ -387,7 +400,7 @@ export function createGitHub({
         );
         return repositories.map(userRepo);
       } finally {
-        // Whatever the lists answered: the token's last use is done. The revoke never throws a GitHubUnavailable.
+        // Whatever the lists answered: the token's last use is done. The revoke never throws.
         await revokeUserToken(token, onRevokeFailed);
       }
     },
