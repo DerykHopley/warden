@@ -101,6 +101,31 @@ describe("readVerdict", () => {
     Observation.parse(outcome.observations[0]);
   });
 
+  it("ends every summary with `ending`, cutting the model's summary to leave it room within 2,000 (slice 7a)", () => {
+    const ending =
+      "The Judge read the last 5 of 9 events; the earlier ones were over its input cap.";
+    const outcome = readVerdict(
+      {
+        refusal: false,
+        content: JSON.stringify({
+          broken_rules: [
+            broken(AGENT_SENDS_SECRETS, "s".repeat(2500), [0]),
+            broken(AGENT_READS_SECRETS, "Read .env.", [1]),
+          ],
+        }),
+      },
+      { sessionId: "sess-1", events: events(5), eventsHash: HASH, ending },
+    );
+
+    expect(outcome.kind).toBe("observations");
+    if (outcome.kind !== "observations") return;
+    const [long, short] = outcome.observations.map((observation) => observation.evidence.summary);
+    expect(long).toHaveLength(2000);
+    expect(long!.endsWith(` ${ending}`)).toBe(true);
+    expect(short).toBe(`Read .env. ${ending}`);
+    for (const observation of outcome.observations) Observation.parse(observation);
+  });
+
   it("keeps a summary with no character Postgres can't store as the model wrote it", () => {
     const summary = "Lu le fichier .env\tpuis l'a envoyé 🔑 à example.com";
     const outcome = read({ broken_rules: [broken(AGENT_SENDS_SECRETS, summary, [0])] });

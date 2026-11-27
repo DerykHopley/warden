@@ -40,6 +40,12 @@ export type WriteGrantEvent = "granted" | "revoked";
 /** How a Role history row came about: the Team's first visit, an invited person's first visit, or a Role change. */
 export type RoleChange = "created_team" | "joined" | "changed";
 
+/** What made a paid model call, as 0021_spending_ledger's check lists it: the Judge, until Scans and chat add theirs. */
+export type SpendingPath = "judge";
+
+/** Where a ledger row's cost came from: the provider's answer, or the assumed cost of a call it didn't price. */
+export type CostBasis = "stated" | "assumed";
+
 export interface Database {
   /** One row per Team, keyed by its Clerk Organization id; every later Team-owned table points at it. */
   teams: {
@@ -217,6 +223,23 @@ export interface Database {
     branch: string;
     opened_by: string;
     at: Generated<Date>;
+  };
+
+  /**
+   * One paid model call made for the Team (0021_spending_ledger): its spending path, model, tokens (null when the
+   * answer stated none) and cost in US dollars, stated by the provider or assumed. Append-only. Written only by the
+   * shared spending store (spending.ts). The cost is `numeric`, read back as a string.
+   */
+  spending_ledger: {
+    team_id: string;
+    id: Generated<string>;
+    at: Generated<Date>;
+    path: SpendingPath;
+    model: string;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    cost_usd: ColumnType<string, number, never>;
+    cost_basis: CostBasis;
   };
 
   /**

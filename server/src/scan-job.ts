@@ -8,10 +8,11 @@
 // the server shares, so the API's Rules and the Job's scanner can't drift apart.
 //
 // Started with WARDEN_SESSION_ID in place of WARDEN_SCAN_ID (#443), it runs Guard's Judge for that ended Agent session
-// instead (`runJudgeJob`), with the Judge `wiring.ts` builds: one model call, to the Team's own model when it set one
-// (slice 6a) or else on OpenRouter, a Guard Spot run reported, then the session marked judged and the events it read
-// dropped. A run that throws leaves the session unjudged with its events, and a retry over the same events reports the
-// same Spot run, which changes nothing.
+// instead (`runJudgeJob`), with the Judge `wiring.ts` builds: one model call (and one retry when it fails), to the
+// Team's own model when it set one (slice 6a) or else on OpenRouter, a Guard Spot run reported, then the session marked
+// judged and the events it read dropped. A run that throws leaves the session unjudged with its events, and a retry over the same events reports the
+// same Spot run, which changes nothing. A run another run already holds, or one for a Team at its daily spending
+// limit (slice 7a), changes nothing and exits 0: the session stays unjudged with its events.
 //
 // As its own process (the local starter spawns it; the Cloud Run Job runs it from slice 1b):
 // - WARDEN_SCAN_ID and WARDEN_TEAM name the Scan; either missing or blank exits 1 before connecting.
@@ -207,11 +208,26 @@ export async function runJudgeJob({
     );
     return 0;
   }
+  if (run.kind === "busy") {
+    logger.info("judge run: another run is judging this session; nothing changed", {
+      team,
+      sessionId,
+    });
+    return 0;
+  }
+  if (run.kind === "limited") {
+    logger.info(
+      "judge run: the Team's daily spending limit is reached; the session stays unjudged",
+      { team, sessionId, spent: run.spent },
+    );
+    return 0;
+  }
   logger.info("judge run done", {
     team,
     sessionId,
     outcome: run.outcome,
     eventsRead: run.eventsRead,
+    eventsCut: run.eventsCut,
     opened: run.opened,
   });
   return 0;

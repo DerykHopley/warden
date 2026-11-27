@@ -17,6 +17,15 @@ export const completion = (content: string | null, refusal: string | null = null
 export const verdict = (broken: { rule_id: string; summary: string; event_seqs: number[] }[]) =>
   completion(JSON.stringify({ broken_rules: broken }));
 
+/** `answer` with OpenRouter's `usage` block: its tokens, and its cost in dollars when `cost` is given. */
+export const withUsage = (
+  answer: object,
+  usage: { prompt_tokens: number; completion_tokens: number; cost?: number },
+) => ({
+  ...answer,
+  usage: { ...usage, total_tokens: usage.prompt_tokens + usage.completion_tokens },
+});
+
 /**
  * The fake: `answer` gives each call's reply, a JSON body (answered 200) or a whole Response; it may also wait on the
  * request's signal, as a call that never answers does.

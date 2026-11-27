@@ -3,6 +3,8 @@
 // (slice 6). OpenRouter's call adds its `provider` routing as one of those fields; a Team's own model (`localModel`)
 // sends no key and no routing, through the pinned connection. A call that times out, loses its connection, answers
 // non-2xx or doesn't answer a chat completion throws, naming only its status: never the key, the prompt or the answer.
+// Slice 7a: each model says whether it is paid (OpenRouter's is), and an answer carries its usage block's tokens and
+// cost, for the spending ledger.
 import { z } from "zod";
 import { ConfigError } from "../../config.ts";
 import { CallFailed, callJson, timedOut, type Fetch } from "../../http-call.ts";
@@ -27,11 +29,26 @@ export const JUDGE_CALL_TIMEOUT_MS = 60_000;
 
 export type ChatMessage = { role: "system" | "user"; content: string };
 
-/** The model's answer: its content, or a refusal (its `refusal` set, or no content). */
-export type ModelAnswer = { refusal: true } | { refusal: false; content: string };
+/**
+ * What an answer's usage block stated (slice 7a): its input and output tokens and its cost in US dollars, each left out
+ * when the block doesn't state it as a count or a cost at or above 0.
+ */
+export type ModelUsage = { inputTokens?: number; outputTokens?: number; costUsd?: number };
+
+/**
+ * The model's answer: its content, or a refusal (its `refusal` set, or no content); with `usage` when it had a usage
+ * block, as OpenRouter's always does.
+ */
+export type ModelAnswer = ({ refusal: true } | { refusal: false; content: string }) & {
+  usage?: ModelUsage;
+};
 
 /** What the Judge calls: one completion of `messages`, answering to the JSON schema `schema` names. */
 export interface JudgeModel {
+  /** The model's name, as each call sends it. */
+  readonly model: string;
+  /** Whether a call costs Warden money (OpenRouter's), so the Team's spending limit and ledger apply to it. */
+  readonly paid: boolean;
   complete(
     messages: ChatMessage[],
     schema: { name: string; schema: Record<string, unknown> },
@@ -55,7 +72,30 @@ const Completion = z.object({
       }),
     )
     .min(1),
+  usage: z.unknown().optional(),
 });
+
+/** A whole count at or above 0, else nothing. */
+const count = z.number().int().nonnegative().optional().catch(undefined);
+/** A finite amount at or above 0, else nothing. */
+const amount = z.number().nonnegative().finite().optional().catch(undefined);
+
+/** A usage block, each field kept only when it is what OpenRouter states: a bad field never fails the answer. */
+const Usage = z
+  .object({ prompt_tokens: count, completion_tokens: count, cost: amount })
+  .optional()
+  .catch(undefined);
+
+/** What `usage` states, or nothing when the answer had no usage block. */
+function readUsage(usage: unknown): ModelUsage | undefined {
+  const parsed = Usage.parse(usage);
+  if (parsed === undefined) return undefined;
+  return {
+    ...(parsed.prompt_tokens === undefined ? {} : { inputTokens: parsed.prompt_tokens }),
+    ...(parsed.completion_tokens === undefined ? {} : { outputTokens: parsed.completion_tokens }),
+    ...(parsed.cost === undefined ? {} : { costUsd: parsed.cost }),
+  };
+}
 
 /**
  * A model behind an OpenAI-compatible `POST <baseUrl>/chat/completions`, with `apiKey` as the Bearer token (no
@@ -94,6 +134,8 @@ export function chatCompletionsModel({
       timeoutMs,
     });
   return {
+    model,
+    paid: false,
     async complete(messages, { name, schema }) {
       let answer = await call(messages, {
         type: "json_schema",
@@ -110,8 +152,10 @@ export function chatCompletionsModel({
         throw new ModelCallFailed("the Judge's model call answered no chat completion");
       }
       const { content, refusal } = completion.data.choices[0]!.message;
-      if (refusal || !content?.trim()) return { refusal: true };
-      return { refusal: false, content };
+      const usage = readUsage(completion.data.usage);
+      const stated = usage === undefined ? {} : { usage };
+      if (refusal || !content?.trim()) return { refusal: true, ...stated };
+      return { refusal: false, content, ...stated };
     },
   };
 }
@@ -131,7 +175,11 @@ export function judgeModel({
   timeoutMs?: number;
 }): JudgeModel {
   if (apiKey === undefined) {
-    return { complete: () => Promise.reject(new ConfigError(["OPENROUTER_API_KEY"])) };
+    return {
+      model: options.model,
+      paid: true,
+      complete: () => Promise.reject(new ConfigError(["OPENROUTER_API_KEY"])),
+    };
   }
   return openRouterModel({ apiKey, ...options });
 }
@@ -174,6 +222,7 @@ export function localModel({
     timeoutMs,
   });
   return {
+    ...inner,
     async complete(messages, schema) {
       try {
         return await inner.complete(messages, schema);
@@ -185,16 +234,32 @@ export function localModel({
   };
 }
 
-/** The Judge's model on OpenRouter, with its routing (`OPENROUTER_PROVIDER`). */
+/**
+ * The Judge's model on OpenRouter, with its routing (`OPENROUTER_PROVIDER`): paid, its usage block read from every
+ * answer (OpenRouter always sends one; no request field asks for it). A call that times out or loses its connection
+ * throws ModelCallFailed, as a non-2xx answer does, so the Judge retries it.
+ */
 export function openRouterModel(options: {
   apiKey: string;
   model: string;
   fetch?: Fetch;
   timeoutMs?: number;
 }): JudgeModel {
-  return chatCompletionsModel({
+  const inner = chatCompletionsModel({
     ...options,
     baseUrl: OPENROUTER_BASE_URL,
     extraBody: { provider: OPENROUTER_PROVIDER },
   });
+  return {
+    ...inner,
+    paid: true,
+    async complete(messages, schema) {
+      try {
+        return await inner.complete(messages, schema);
+      } catch (error) {
+        if (error instanceof CallFailed) throw new ModelCallFailed(error.message, { cause: error });
+        throw error;
+      }
+    },
+  };
 }
