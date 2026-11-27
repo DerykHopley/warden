@@ -1,7 +1,13 @@
-// Vouch's Catalogues (spec #341, slice 5): the calls Setup's Catalogues section makes, reading every Catalogue as the
-// Team sees it and an Admin's switch turning one on or off, and the watch that rereads them after a switch a Team
-// switch dropped.
-import { CataloguesBody, TeamCatalogue, type CatalogueId } from "@warden/contracts";
+// Vouch's Catalogues (spec #341, slices 5 and 6): the calls Setup's Catalogues section makes, reading every Catalogue
+// as the Team sees it and an Admin's switch turning one on or off, the watch that rereads them after a switch a Team
+// switch dropped, and a Control's Verdict and review state in words.
+import {
+  CataloguesBody,
+  TeamCatalogue,
+  type CatalogueId,
+  type ReviewedVerdict,
+  type ReviewState,
+} from "@warden/contracts";
 import {
   callWarden,
   parsed,
@@ -11,6 +17,24 @@ import {
   type TeamRefusal,
 } from "./api.ts";
 import { confirmTeam, type TeamCheckRefused } from "./products.ts";
+
+/** Setup's Catalogues heading's id, the anchor the Overview's Setup pointer lands on (`/setup#setup-catalogues`). */
+export const CATALOGUES_ANCHOR = "setup-catalogues";
+
+/** A Control's Verdict, worked out or reviewed, in words. */
+export const VOUCH_VERDICT_WORDS: Record<ReviewedVerdict, string> = {
+  evidenced: "Evidenced",
+  partly_evidenced: "Partly evidenced",
+  not_evidenced: "Not evidenced",
+  not_applicable: "Not applicable",
+};
+
+/** A Control's review state in words. */
+export const REVIEW_STATE_WORDS: Record<ReviewState, string> = {
+  not_reviewed: "Not reviewed",
+  reviewed: "Reviewed",
+  changed_since_review: "Changed since review",
+};
 
 export type CataloguesResult =
   { kind: "catalogues"; catalogues: TeamCatalogue[] } | TeamRefusal | Refused;

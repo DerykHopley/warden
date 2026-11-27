@@ -1,7 +1,7 @@
 // "Are we ready for the audit?" and the Audit-ready Level (spec #341, slice 4, stories 8 and 9), worked out on read
 // from what Vouch stores: the Catalogues the Team has on, each judged Control's Verdict worked out now, and its newest
 // review. Nothing is stored. The app reads them through `AuditReads` (ADR 0005: it imports no module).
-import type { AuditAnswer, AuditControl, CatalogueId, ControlVerdict } from "@warden/contracts";
+import type { AuditAnswer, AuditCatalogue, AuditControl, ControlVerdict } from "@warden/contracts";
 import type { AuditReads } from "../../app.ts";
 import { auditReadyOf } from "../../level.ts";
 import type { Catalogue } from "./catalogue.ts";
@@ -15,6 +15,19 @@ export type ControlStanding = Pick<
   "ref" | "question" | "verdict" | "review_state" | "reviewed_verdict"
 >;
 
+/** What the answer reads of a Catalogue on: what it is, and its credit and licence. */
+export type AnsweredCatalogue = Pick<Catalogue, "id" | "name" | "date" | "credit" | "licence">;
+
+/** `catalogue` as the API names it: what it is, and its credit and licence (`TeamCatalogue` and `AuditCatalogue`). */
+export const catalogueAsAnswered = (catalogue: AnsweredCatalogue): AuditCatalogue => ({
+  id: catalogue.id,
+  name: catalogue.name,
+  date: catalogue.date,
+  credit: catalogue.credit,
+  licence: catalogue.licence.name,
+  licence_url: catalogue.licence.url,
+});
+
 /**
  * A Gap (GLOSSARY): reviewed, at not evidenced or partly evidenced. A Control not reviewed, or changed since review,
  * has no reviewed Verdict, so it waits instead.
@@ -26,14 +39,16 @@ const isGap = ({ review_state, reviewed_verdict }: ControlStanding) =>
 /**
  * The answer from the Catalogues the Team has on, each with its judged Controls in the order it shows them: no
  * Catalogue on, no Catalogue; every Control reviewed with no Gap, yes; otherwise not yet. A Catalogue on that judges no
- * Control is never yes: there is nothing reviewed to be ready with.
+ * Control is never yes: there is nothing reviewed to be ready with. Each Catalogue on comes with the answer, in the
+ * order given, with its credit and licence for wherever its Controls' text is shown.
  */
 export function auditAnswerOf(
-  on: readonly { catalogue: CatalogueId; controls: readonly ControlStanding[] }[],
+  on: readonly { catalogue: AnsweredCatalogue; controls: readonly ControlStanding[] }[],
 ): AuditAnswer {
+  const catalogues = on.map(({ catalogue }) => catalogueAsAnswered(catalogue));
   const controls: AuditControl[] = on.flatMap(({ catalogue, controls: standing }) =>
     standing.map((control) => ({
-      catalogue,
+      catalogue: catalogue.id,
       ref: control.ref,
       question: control.question,
       verdict: control.verdict,
@@ -44,12 +59,13 @@ export function auditAnswerOf(
   );
   const gaps = controls.filter(({ gap }) => gap).length;
   const waiting = controls.filter(({ review_state }) => review_state !== "reviewed").length;
-  if (on.length === 0) return { answer: "no_catalogue", gaps, waiting, controls };
+  if (on.length === 0) return { answer: "no_catalogue", gaps, waiting, catalogues, controls };
   const judgesEach = on.every(({ controls: standing }) => standing.length > 0);
   return {
     answer: judgesEach && gaps === 0 && waiting === 0 ? "yes" : "not_yet",
     gaps,
     waiting,
+    catalogues,
     controls,
   };
 }
@@ -94,7 +110,7 @@ export function createAuditReads({
       const on = [];
       for (const catalogue of await onFor(team)) {
         on.push({
-          catalogue: catalogue.id,
+          catalogue,
           controls: await judgeCatalogue(
             { findings, teamAssets, controlReviews },
             team,

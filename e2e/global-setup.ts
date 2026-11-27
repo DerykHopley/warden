@@ -4,8 +4,8 @@
 // moment first (`scan-job-start-delay.ts`). The server has the write app's settings, with a key pair made for the run,
 // and it and its Scan Jobs reach GitHub only through the fake (`fake-github.ts`, installed by `fake-github-preload.ts`),
 // which logs each of the server's calls to a file in a temporary folder (`E2E_FAKE_GITHUB_LOG`, handed to the server
-// and the test workers; a Scan Job doesn't get it, so the fake refuses its writes). Acme, Bluebird, Cedar and
-// Dahlia are opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets
+// and the test workers; a Scan Job doesn't get it, so the fake refuses its writes). Acme, Bluebird, Cedar, Dahlia and
+// Elm are opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets
 // and a stale Guard Scan of them (`seedCedarRepos`); Dahlia gets one Repo Asset, a write grant and an Open Finding for
 // story 6's Fix PR (`seedDahliaFixPr`); Acme and Bluebird are then filled by the demo seed (`server/src/seed.ts`)
 // without its demo Product (`--no-product`), so the Findings their tests count stay the demo ones. Returns the
@@ -40,6 +40,8 @@ import {
   DAHLIA,
   DAHLIA_REPO,
   DOROTHY,
+  ELM,
+  EVELYN,
   FRONTEND_API_HOST,
   GRACE,
   HEDY,
@@ -313,6 +315,9 @@ export default async function globalSetup() {
     await open(DAHLIA.admin, DAHLIA, "admin");
     await open(ANNIE, DAHLIA, "member");
     await seedDahliaFixPr(connection, database.name);
+    // Elm is spec #341's stories 8 and 9's alone (e2e/overview.spec.ts): no seed, no Scan.
+    await open(ELM.admin, ELM, "admin");
+    await open(EVELYN, ELM, "member");
     for (const team of [ACME, BLUEBIRD]) {
       await run(process.execPath, ["server/src/seed.ts", team.id, "--no-product"], {
         ...db,

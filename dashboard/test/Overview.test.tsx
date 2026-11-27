@@ -1,11 +1,15 @@
-// The Overview page (story 10): the journey cards with their states in words and their bars, the trend line, the audit
-// section, and each answer GET /api/overview can get. It renders OverviewPage alone with spy props, Warden's server
-// faked. Which card is in which state, and the trend's wordings, are tested below the page, in overview.test.ts.
+// The Overview page (story 10, and spec #341's stories 8 and 9): the journey cards with their states in words and their
+// bars, the trend line, the audit section with its answer, Setup pointer, Control rows and credit, and each answer GET
+// /api/overview can get. It renders OverviewPage alone with spy props, Warden's server faked. Which card is in which
+// state, the trend's and the answer's wordings, and which rows a Catalogue shows with which Verdict, are tested below
+// the page, in overview.test.ts.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OverviewBody } from "@warden/contracts";
+import type { OverviewBody, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OverviewPage } from "../src/Overview.tsx";
+import { journeyCards } from "../src/overview.ts";
+import { auditRow, ISA, isaOn, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { TEAM } from "./findings-fixture.ts";
 
@@ -22,7 +26,7 @@ const scannedOn = new Date(SCANNED).toLocaleDateString(undefined, { dateStyle: "
 const overview = (fields: Partial<OverviewBody> = {}): OverviewBody => ({
   team: TEAM,
   level: "quick",
-  audit: { answer: "no_catalogue", gaps: 0, waiting: 0, controls: [] },
+  audit: NO_CATALOGUE,
   last_scan_at: SCANNED,
   has_findings: true,
   period_days: 30,
@@ -34,13 +38,20 @@ const overview = (fields: Partial<OverviewBody> = {}): OverviewBody => ({
 
 const answer = (fields: Partial<OverviewBody> = {}) => json(200, overview(fields));
 
-/** Renders OverviewPage with GET /api/overview answering `fields` unless `routes` says otherwise. */
-function open(fields: Partial<OverviewBody> = {}, routes: Routes = {}) {
+/**
+ * Renders OverviewPage for an Admin (or `role`) with GET /api/overview answering `fields` unless `routes` says
+ * otherwise.
+ */
+function open(
+  fields: Partial<OverviewBody> = {},
+  routes: Routes = {},
+  role: Role | null = "admin",
+) {
   window.history.replaceState(null, "", "/overview");
   serve({ overview: () => answer(fields), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
-    me: { userId: "user_ada", team: TEAM, role: "admin" as const, level: "quick" as const },
+    me: { userId: "user_ada", team: TEAM, role, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
     panel: { setContext: vi.fn(), open: vi.fn() },
@@ -112,6 +123,154 @@ describe("the page", () => {
     );
     expect(within(audit).queryAllByRole("row")).toEqual([]);
     expect(within(audit).queryAllByRole("listitem")).toEqual([]);
+  });
+});
+
+const auditSection = async () =>
+  within(await screen.findByRole("region", { name: "Are we ready for the audit?" }));
+const NO_CATALOGUE_LINE = "Warden can answer this at Audit-ready, once Vouch checks your Controls.";
+const rowsOf = async () =>
+  (await auditSection())
+    .getByRole("list", { name: "VDA ISA 2027.1 Controls" })
+    .querySelectorAll<HTMLElement>(":scope > li");
+/** The row of Control `ref`. */
+const rowOf = async (ref: string) => {
+  const row = [...(await rowsOf())].find(
+    (li) => li.querySelector(".audit-ref")?.textContent === ref,
+  );
+  if (row === undefined) throw new Error(`no row for ${ref}`);
+  return within(row);
+};
+
+describe("the audit section with no Catalogue on (spec #341)", () => {
+  it("points an Admin to Setup's Catalogues, under the muted line, with no Control list", async () => {
+    open();
+    const audit = await auditSection();
+    expect(audit.getByText(NO_CATALOGUE_LINE)).toHaveClass("muted");
+    const setup = audit.getByRole("link", { name: "Setup" });
+    expect(setup).toHaveAttribute("href", "/setup#setup-catalogues");
+    expect(setup.parentElement).toHaveTextContent(/^Turn on a Catalogue on Setup\.$/);
+    expect(setup.parentElement).toHaveClass("setup-line");
+    expect(audit.queryByRole("list")).toBeNull();
+  });
+
+  it.each(["lead", "member"] as const)(
+    "tells a %s an Admin turns one on, with no link",
+    async (role) => {
+      open({}, {}, role);
+      const audit = await auditSection();
+      expect(audit.getByText("An Admin turns on a Catalogue on Setup.")).toBeInTheDocument();
+      expect(audit.queryByRole("link")).toBeNull();
+      expect(audit.queryByRole("list")).toBeNull();
+    },
+  );
+
+  it("shows no pointer while the role isn't known", async () => {
+    open({}, {}, null);
+    const audit = await auditSection();
+    expect(audit.getByText(NO_CATALOGUE_LINE)).toBeInTheDocument();
+    expect(audit.queryByRole("link")).toBeNull();
+    expect(audit.queryByText("An Admin turns on a Catalogue on Setup.")).toBeNull();
+  });
+});
+
+describe("the audit section with ISA2027 on (spec #341, story 8)", () => {
+  it("answers in one line in the heading font, with no Setup pointer", async () => {
+    open({ audit: isaOn({ gaps: 2, waiting: 1 }) });
+    const audit = await auditSection();
+    expect(audit.getByText("Not yet: 2 Gaps, 1 Control waiting for review.")).toHaveClass(
+      "audit-answer",
+    );
+    expect(audit.queryByText(NO_CATALOGUE_LINE)).toBeNull();
+    expect(audit.queryByRole("link", { name: "Setup" })).toBeNull();
+  });
+
+  it("lists its Controls under an h3 of its name, in the server's order, each with its ref, question and words", async () => {
+    open({ audit: isaOn() });
+    const audit = await auditSection();
+    expect(audit.getByRole("heading", { level: 3, name: "VDA ISA 2027.1" })).toBeInTheDocument();
+    const rows = [...(await rowsOf())];
+    expect(rows.map((row) => row.querySelector(".audit-ref")?.textContent)).toEqual([
+      "1.3.3",
+      "1.3.4",
+      "4.1.3",
+      "5.2.4",
+    ]);
+    const first = within(rows[0]!);
+    expect(first.getByText("Question 1.3.3?")).toBeInTheDocument();
+    expect(first.getByText("Not evidenced")).toHaveClass("audit-verdict");
+    expect(first.getByText("Not reviewed")).toBeInTheDocument();
+  });
+
+  it("shows the row's Verdict by shownVerdict: an overridden one, not the worked-out one", async () => {
+    open({
+      audit: isaOn({
+        controls: [
+          auditRow("1.3.3", {
+            verdict: "evidenced",
+            review_state: "reviewed",
+            reviewed_verdict: "not_applicable",
+          }),
+        ],
+      }),
+    });
+    const overridden = await rowOf("1.3.3");
+    expect(overridden.getByText("Not applicable")).toHaveClass("audit-verdict");
+    expect(overridden.getByText("Reviewed")).toHaveClass("audit-review");
+  });
+
+  it("shows Gap in a pill on a Gap's row only", async () => {
+    open({
+      audit: isaOn({
+        gaps: 1,
+        controls: [
+          auditRow("1.3.3", {
+            review_state: "reviewed",
+            reviewed_verdict: "not_evidenced",
+            gap: true,
+          }),
+          reviewedRow("1.3.4"),
+        ],
+      }),
+    });
+    expect((await rowOf("1.3.3")).getByText("Gap")).toHaveClass("audit-gap");
+    expect((await rowOf("1.3.4")).queryByText("Gap")).toBeNull();
+  });
+
+  it("gives the credit and the licence, a link opening in a new tab, under the rows", async () => {
+    open({ audit: isaOn() });
+    const audit = await auditSection();
+    const credit = audit.getByText("© 2026 ENX Association.");
+    expect(credit).toHaveClass("muted");
+    const licence = audit.getByRole("link", { name: "CC BY-ND 4.0" });
+    expect(licence.parentElement).toHaveTextContent(/^Licence: CC BY-ND 4\.0$/);
+    expect(licence).toHaveAttribute("href", ISA.licence_url);
+    expect(licence).toHaveAttribute("target", "_blank");
+    expect(licence).toHaveAttribute("rel", "noreferrer");
+    const list = audit.getByRole("list", { name: "VDA ISA 2027.1 Controls" });
+    expect(list.compareDocumentPosition(credit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("makes no row a button, a link or a focus stop: tabbing reaches only the licence link", async () => {
+    open({ audit: isaOn() });
+    const audit = await auditSection();
+    for (const row of await rowsOf()) {
+      expect(within(row).queryByRole("button")).toBeNull();
+      expect(within(row).queryByRole("link")).toBeNull();
+      expect(row.querySelector("[tabindex]")).toBeNull();
+      expect(row).not.toHaveAttribute("tabindex");
+    }
+    expect(audit.getAllByRole("link").map((link) => link.textContent)).toEqual(["CC BY-ND 4.0"]);
+  });
+});
+
+describe("the journey with a Catalogue on (spec #341, story 9)", () => {
+  it("gives the Audit-ready card the note journeyCards works out from the answer", async () => {
+    const audit = isaOn({ waiting: 3, controls: [reviewedRow("1.3.3"), auditRow("1.3.4")] });
+    open({ audit });
+    await screen.findByRole("list", { name: "The journey" });
+    const [note] = journeyCards("quick", SCANNED, audit)[2]!.notes;
+    expect(cardOf("Audit-ready").getByText(note!)).toHaveClass("journey-note");
   });
 });
 

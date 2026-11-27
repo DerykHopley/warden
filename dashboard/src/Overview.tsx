@@ -1,14 +1,21 @@
-// The Overview page (story 10, docs/design.md direction E): where the Team is on the journey (Quick, Standard,
-// Audit-ready), the trend over 30 days, and "Are we ready for the audit?", which Vouch answers later. A Lead and an
-// Admin land here. Nothing on it moves.
+// The Overview page (story 10, and spec #341's stories 8 and 9; docs/design.md direction E): where the Team is on the
+// journey (Quick, Standard, Audit-ready), the trend over 30 days, and "Are we ready for the audit?", answered from the
+// Catalogues the Team has on, one row per judged Control, with each Catalogue's credit. A Lead and an Admin land here.
+// Nothing on it moves, and its rows take no focus or click.
+import type { AuditAnswer, AuditCatalogue, AuditControl, Role } from "@warden/contracts";
 import type { PageProps } from "./App.tsx";
 import {
+  auditAnswerLine,
+  controlsByCatalogue,
   JOURNEY_STATE_WORDS,
   journeyCards,
+  NO_CATALOGUE_LINE,
+  shownVerdict,
   trendLine,
   useOverview,
   type JourneyCardView,
 } from "./overview.ts";
+import { CATALOGUES_ANCHOR, REVIEW_STATE_WORDS, VOUCH_VERDICT_WORDS } from "./vouch.ts";
 import { CallRefused, TeamRefused } from "./warden-call.tsx";
 
 export function OverviewPage({ getToken, me, onSessionEnded }: PageProps) {
@@ -25,17 +32,12 @@ export function OverviewPage({ getToken, me, onSessionEnded }: PageProps) {
       {body !== null && (
         <>
           <ol className="journey" aria-label="The journey">
-            {journeyCards(body.level, body.last_scan_at).map((card) => (
+            {journeyCards(body.level, body.last_scan_at, body.audit).map((card) => (
               <JourneyCard key={card.level} card={card} />
             ))}
           </ol>
           <p className="trend-line">{trendLine(body)}</p>
-          <section className="audit" aria-labelledby="audit">
-            <h2 id="audit">Are we ready for the audit?</h2>
-            <p className="muted">
-              Warden can answer this at Audit-ready, once Vouch checks your Controls.
-            </p>
-          </section>
+          <AuditSection audit={body.audit} role={me.role} />
         </>
       )}
     </>
@@ -68,6 +70,83 @@ function JourneyCard({ card }: { card: JourneyCardView }) {
           {note}
         </span>
       ))}
+    </li>
+  );
+}
+
+/**
+ * "Are we ready for the audit?": the answer in one line, then each Catalogue on with its Controls and credit. With no
+ * Catalogue on, the muted line and a pointer to Setup, a link only for an Admin, who can turn one on.
+ */
+function AuditSection({ audit, role }: { audit: AuditAnswer; role: Role | null }) {
+  return (
+    <section className="audit" aria-labelledby="audit">
+      <h2 id="audit">Are we ready for the audit?</h2>
+      {audit.answer === "no_catalogue" ? (
+        <>
+          <p className="muted">{NO_CATALOGUE_LINE}</p>
+          <SetupPointer role={role} />
+        </>
+      ) : (
+        <p className="audit-answer">{auditAnswerLine(audit)}</p>
+      )}
+      {controlsByCatalogue(audit).map(({ catalogue, controls }) => (
+        <AuditCatalogueBlock key={catalogue.id} catalogue={catalogue} controls={controls} />
+      ))}
+    </section>
+  );
+}
+
+/** Where a Catalogue is turned on: Setup's Catalogues, linked for an Admin; nothing while the role isn't known. */
+function SetupPointer({ role }: { role: Role | null }) {
+  if (role === null) return null;
+  if (role !== "admin") return <p className="muted">An Admin turns on a Catalogue on Setup.</p>;
+  return (
+    <p className="setup-line">
+      Turn on a Catalogue on <a href={`/setup#${CATALOGUES_ANCHOR}`}>Setup</a>.
+    </p>
+  );
+}
+
+/** One Catalogue on: its name, its judged Controls in the server's order, and its credit and licence, last. */
+function AuditCatalogueBlock({
+  catalogue,
+  controls,
+}: {
+  catalogue: AuditCatalogue;
+  controls: AuditControl[];
+}) {
+  return (
+    <>
+      <h3>{catalogue.name}</h3>
+      <ul className="audit-controls" aria-label={`${catalogue.name} Controls`}>
+        {controls.map((control) => (
+          <AuditControlRow key={control.ref} control={control} />
+        ))}
+      </ul>
+      <p className="muted">{catalogue.credit}</p>
+      <p className="muted catalogue-licence">
+        Licence:{" "}
+        <a href={catalogue.licence_url} target="_blank" rel="noreferrer">
+          {catalogue.licence}
+        </a>
+      </p>
+    </>
+  );
+}
+
+/**
+ * One judged Control, every state a word: its ref and question, the Verdict it shows (`shownVerdict`), its review
+ * state, and Gap when it is one.
+ */
+function AuditControlRow({ control }: { control: AuditControl }) {
+  return (
+    <li className="audit-control">
+      <span className="audit-ref">{control.ref}</span>
+      <span className="audit-question">{control.question}</span>
+      <span className="audit-verdict">{VOUCH_VERDICT_WORDS[shownVerdict(control)]}</span>
+      <span className="audit-review">{REVIEW_STATE_WORDS[control.review_state]}</span>
+      {control.gap && <span className="audit-gap">Gap</span>}
     </li>
   );
 }

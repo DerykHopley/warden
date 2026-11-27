@@ -438,6 +438,7 @@ export const NO_CATALOGUE: AuditAnswer = {
   answer: "no_catalogue",
   gaps: 0,
   waiting: 0,
+  catalogues: [],
   controls: [],
 };
 

@@ -4,6 +4,7 @@
 // Vouch's own routes, in Teams of this file's own in the suite's shared database.
 import { randomUUID } from "node:crypto";
 import {
+  CataloguesBody,
   ControlsBody,
   MeBody,
   OverviewBody,
@@ -322,9 +323,36 @@ describe("GET /api/overview: Are we ready for the audit?", () => {
 
     for (const team of [neverSet, turnedOff]) {
       const { body } = await overviewOf(team);
-      expect(body.audit).toEqual({ answer: "no_catalogue", gaps: 0, waiting: 0, controls: [] });
+      expect(body.audit).toEqual({
+        answer: "no_catalogue",
+        gaps: 0,
+        waiting: 0,
+        catalogues: [],
+        controls: [],
+      });
       expect(body.level).toBe("quick");
     }
+  });
+
+  it("gives ISA2027 with its credit and licence, as the Catalogues read has them, once it is on", async () => {
+    const team = await vouchTeam();
+    await setIsa(team, true);
+
+    const { body } = await overviewOf(team);
+    const res = await call(app, key, "GET", "/api/vouch/catalogues", { as: MEMBER, teamId: team });
+    const isa = CataloguesBody.parse(res.body).catalogues.find(({ id }) => id === ISA);
+
+    expect(body.audit.catalogues).toEqual([
+      {
+        id: ISA,
+        name: "VDA ISA 2027.1",
+        date: "2026-09-30",
+        credit: isa?.credit,
+        licence: "CC BY-ND 4.0",
+        licence_url: isa?.licence_url,
+      },
+    ]);
+    expect(body.audit.catalogues[0]?.credit).toContain("ENX Association");
   });
 
   it("answers not yet with every Control waiting when ISA2027 is on and nothing is reviewed, each row as the Controls read has it", async () => {

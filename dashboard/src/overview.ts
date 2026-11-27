@@ -1,6 +1,16 @@
-// The Team's Level and trend as the server answers them (GET /api/overview), and the Overview's rules: each journey
-// card's state and next step, and the trend line's words (docs/design.md, Components: Journey card, Trend line).
-import { Level, OverviewBody } from "@warden/contracts";
+// The Team's Level, trend and audit answer as the server answers them (GET /api/overview), and the Overview's rules:
+// each journey card's state and next step, the trend line's words, and the audit answer's line, its rows by Catalogue
+// and the Verdict each row shows (docs/design.md, Components: Journey card, Trend line, Audit answer, Audit Control
+// row).
+import {
+  hasReview,
+  Level,
+  OverviewBody,
+  type AuditAnswer,
+  type AuditCatalogue,
+  type AuditControl,
+  type ReviewedVerdict,
+} from "@warden/contracts";
 import { useCallback } from "react";
 import { askAboutTeam, callWarden, parsed, type GetToken, type Refused } from "./api.ts";
 import { dayWords } from "./date-words.ts";
@@ -68,16 +78,58 @@ const ADDS: Record<Level, string> = {
   audit_ready: "Evidence for an audit",
 };
 
+/** `count` of what `one` names, in the singular or plural: "1 Gap", "2 Gaps". */
+const counted = (count: number, one: string, many = `${one}s`) =>
+  `${count} ${count === 1 ? one : many}`;
+
+/**
+ * The Audit-ready card's note: how many judged Controls have a review, counted as the Level counts them, with those
+ * changed since review named, as the answer line counts them waiting; none to review when the Catalogues on judge no
+ * Control, as the answer line says; or, with no Catalogue on, the step that starts it.
+ */
+function controlsReviewedNote(audit: AuditAnswer): string {
+  if (audit.answer === "no_catalogue") return "Next: an Admin turns on a Catalogue";
+  const all = audit.controls.length;
+  if (all === 0) return "No Controls to review";
+  const withReview = audit.controls.filter(({ review_state }) => hasReview(review_state)).length;
+  const changed = audit.controls.filter(
+    ({ review_state }) => review_state === "changed_since_review",
+  ).length;
+  const note = `${withReview} of ${counted(all, "Control")} ${all === 1 ? "has" : "have"} a review`;
+  return changed > 0 ? `${note}, ${changed} changed since` : note;
+}
+
 /**
  * The three journey cards, Quick, Standard, Audit-ready, for a Team at `level`: a Level before it is done (a full
  * bar), after it not started (an empty bar). Quick's one part in the foundation is a Scan, so while current its bar
- * and next step follow `lastScanAt`. Standard and Audit-ready have no parts yet: current, their bar stays empty.
+ * and next step follow `lastScanAt`. Standard has no parts yet, and Warden has no Standard rule: at Audit-ready it is
+ * not started, never done, and says so. Audit-ready's note counts the Controls with a review in `audit`; current, its bar
+ * is full, as the Level needs every Control reviewed.
  */
-export function journeyCards(level: Level, lastScanAt: string | null): JourneyCardView[] {
+export function journeyCards(
+  level: Level,
+  lastScanAt: string | null,
+  audit: AuditAnswer,
+): JourneyCardView[] {
   const at = Level.options.indexOf(level);
   return Level.options.map((cardLevel, i) => {
     const state: JourneyState = i < at ? "done" : i === at ? "current" : "not-started";
     const card = { level: cardLevel, word: LEVEL_WORDS[cardLevel], adds: ADDS[cardLevel], state };
+    if (cardLevel === "standard" && level === "audit_ready") {
+      return {
+        ...card,
+        state: "not-started",
+        progress: 0,
+        notes: ["Warden doesn't check this yet."],
+      };
+    }
+    if (cardLevel === "audit_ready") {
+      return {
+        ...card,
+        progress: state === "current" ? 100 : 0,
+        notes: [controlsReviewedNote(audit)],
+      };
+    }
     if (state === "done") return { ...card, progress: 100, notes: [] };
     if (state === "not-started" || cardLevel !== "quick")
       return { ...card, progress: 0, notes: [] };
@@ -91,6 +143,58 @@ export function journeyCards(level: Level, lastScanAt: string | null): JourneyCa
       ],
     };
   });
+}
+
+/** The audit section's line with no Catalogue on, shown muted, as before Vouch answered. */
+export const NO_CATALOGUE_LINE =
+  "Warden can answer this at Audit-ready, once Vouch checks your Controls.";
+
+/**
+ * The answer to "Are we ready for the audit?" in one line: yes, with every Control reviewed; not yet, with its Gaps
+ * and the Controls waiting for a review, a part at 0 left out; or, with no Catalogue on, when Warden can answer.
+ */
+export function auditAnswerLine(audit: AuditAnswer): string {
+  switch (audit.answer) {
+    case "no_catalogue":
+      return NO_CATALOGUE_LINE;
+    case "yes": {
+      const all = audit.controls.length;
+      return all === 1
+        ? "Yes: the 1 Control is reviewed, with no Gaps."
+        : `Yes: all ${all} Controls are reviewed, with no Gaps.`;
+    }
+    case "not_yet": {
+      const parts = [
+        ...(audit.gaps > 0 ? [counted(audit.gaps, "Gap")] : []),
+        ...(audit.waiting > 0 ? [`${counted(audit.waiting, "Control")} waiting for review`] : []),
+      ];
+      return `Not yet: ${parts.length > 0 ? parts.join(", ") : "no Controls to review"}.`;
+    }
+  }
+}
+
+/** One Catalogue on and its judged Controls, as the audit section shows them under its name. */
+export type CatalogueControls = { catalogue: AuditCatalogue; controls: AuditControl[] };
+
+/**
+ * Each Catalogue the answer lists, in its order, with its own rows in the answer's order: one that judges no Control
+ * has none, and a row of a Catalogue the answer doesn't list is dropped.
+ */
+export function controlsByCatalogue(audit: AuditAnswer): CatalogueControls[] {
+  return audit.catalogues.map((catalogue) => ({
+    catalogue,
+    controls: audit.controls.filter((control) => control.catalogue === catalogue.id),
+  }));
+}
+
+/**
+ * The Verdict a Control's row shows: the reviewed one while the Control is reviewed, and the one worked out now
+ * otherwise (not reviewed, changed since review, or a reviewed row with no reviewed Verdict).
+ */
+export function shownVerdict(control: AuditControl): ReviewedVerdict {
+  return control.review_state === "reviewed" && control.reviewed_verdict !== null
+    ? control.reviewed_verdict
+    : control.verdict;
 }
 
 /**
