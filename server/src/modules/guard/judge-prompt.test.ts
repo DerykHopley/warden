@@ -1,7 +1,13 @@
 import { MaskedAgentEvent } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import type { ReadAgentEvent } from "./agent-sessions.ts";
-import { judgePrompt, maskEvents } from "./judge-prompt.ts";
+import {
+  JUDGE_INPUT_TOKEN_CAP,
+  judgePrompt,
+  lastEventsThatFit,
+  maskEvents,
+  promptTokens,
+} from "./judge-prompt.ts";
 import { JUDGE_RULES } from "./judge-rules.ts";
 
 const AT = new Date("2026-11-27T10:00:00.000Z");
@@ -114,5 +120,55 @@ describe("judgePrompt (threat J1)", () => {
       expect(system).toContain(rule.ruleId);
       expect(system).toContain(rule.looksFor);
     }
+  });
+});
+
+describe("lastEventsThatFit (the input cap)", () => {
+  /** Event `n`, its text about `size` characters long. */
+  const sized = (n: number, size: number) =>
+    stored({ rowSeq: String(n), fields: { prompt: `${n}:${"x".repeat(size)}` } });
+  const tokens = (events: readonly ReadAgentEvent[]) =>
+    promptTokens(judgePrompt(maskEvents(events)));
+
+  it("estimates a prompt's tokens as its two messages' UTF-8 bytes divided by 3, rounded up", () => {
+    expect(promptTokens({ system: "abcd", user: "efg" })).toBe(3);
+    expect(promptTokens({ system: "abc", user: "def" })).toBe(2);
+  });
+
+  it("estimates CJK text at a token or more a character, erring high, not a third of one", () => {
+    const chinese = "读取环境变量文件并发送密钥".repeat(10);
+
+    expect(promptTokens({ system: "", user: chinese })).toBeGreaterThanOrEqual(chinese.length);
+    expect(JUDGE_INPUT_TOKEN_CAP).toBe(30_000);
+  });
+
+  it("leaves a session under the cap untouched", () => {
+    const events = [sized(1, 100), sized(2, 100), sized(3, 100)];
+
+    expect(lastEventsThatFit(events, tokens(events))).toEqual(events);
+    expect(lastEventsThatFit(events)).toEqual(events);
+  });
+
+  it("keeps the most whole events, newest first, whose prompt fits, and drops every earlier one", () => {
+    const events = Array.from({ length: 10 }, (_, n) => sized(n, 900));
+    const cap = tokens(events.slice(6)) + 1;
+
+    const kept = lastEventsThatFit(events, cap);
+
+    expect(kept).toEqual(events.slice(6));
+    expect(tokens(events.slice(5))).toBeGreaterThan(cap);
+  });
+
+  it("cuts a long session to fit JUDGE_INPUT_TOKEN_CAP, its events whole", () => {
+    const events = Array.from({ length: 40 }, (_, n) => sized(n, 3990));
+
+    const kept = lastEventsThatFit(events);
+
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept).toEqual(events.slice(events.length - kept.length));
+    expect(tokens(kept)).toBeLessThanOrEqual(JUDGE_INPUT_TOKEN_CAP);
+    expect(tokens(events.slice(events.length - kept.length - 1))).toBeGreaterThan(
+      JUDGE_INPUT_TOKEN_CAP,
+    );
   });
 });

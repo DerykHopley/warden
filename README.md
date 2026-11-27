@@ -254,6 +254,15 @@ Each call connects only to the address it checked, and never follows a redirect.
 `http://localhost:11434/v1` (or `127.0.0.1`, `[::1]`). It's for local development only: on Cloud Run it stops the
 server and the Scan Job at start.
 
+**What the Judge may spend.** On OpenRouter, a Team may spend $1 a day (UTC) on Judge calls. Once it has, the Judge
+makes no more calls that day: the Team's ended sessions stay unjudged, their events kept, and the run logs "the
+Team's daily spending limit is reached". Each run makes at most two calls (one retry when the first times out, loses
+its connection, or answers 429 or 5xx) and sends at most about 30,000 tokens; a longer session is judged on its last
+events, and its Findings say how many were read. Each call reserves its cost before it's made, so two runs at once
+can't both spend the Team's last cents; the limit can still be passed by the one call that crosses it. A Team's own
+model costs Warden nothing, so its calls don't count toward the $1. Warden's operator also sets a cap on the
+OpenRouter key itself, at OpenRouter.
+
 ## CVE data
 
 Patch matches a Team's Products against a frozen snapshot of public CVE data, **as of 2026-10-13**. It ships in the

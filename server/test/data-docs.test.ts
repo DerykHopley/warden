@@ -102,6 +102,15 @@ describe("docs/data.md", () => {
     expect(openRouter).not.toMatch(/\| Designed: Guard spec \|$/);
   });
 
+  it("has a spending ledger row, built (#481), holding no content and naming no person, and says what the limits are", () => {
+    const ledger = row("Cloud SQL: spending ledger");
+    expect(ledger).toMatch(/Built: [^|]*`spending_ledger`[^|]*#481/);
+    for (const field of ["path", "model", "tokens", "cost"]) expect(ledger).toContain(field);
+    expect(ledger).toMatch(/no content/);
+    expect(leaves).toMatch(/\$1 a day[^\n]*per Team/);
+    expect(leaves).toMatch(/2 calls/);
+  });
+
   it("names one Warden pseudonym key, each Team's key derived from it, in The pseudonym", () => {
     const section = /^## The pseudonym\n([\s\S]*?)(?=^## )/m.exec(data)?.[1] ?? "";
     expect(section).toContain("`WARDEN_PSEUDONYM_KEY`");

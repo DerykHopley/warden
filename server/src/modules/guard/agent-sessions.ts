@@ -1,7 +1,8 @@
 // A Team's Agent sessions and their Agent events (spec #225, slice 1, #183): what the hook endpoint stores from each
 // event Claude Code posts (0019_agent_sessions), and what the Judge reads of an ended session then drops (slice 5a,
-// #443). Every call runs inside `withTeam`, so row-level security keeps each Team's rows to itself (ADR 0006); the Team
-// is always the hook token's or the Job's, never the event's.
+// #443), claiming it first so one run judges it at a time (slice 7a). Every call runs inside `withTeam`, so row-level
+// security keeps each Team's rows to itself (ADR 0006); the Team is always the hook token's or the Job's, never the
+// event's.
 import { sql, type Generated } from "kysely";
 import type { WithTeam } from "../../with-team.ts";
 
@@ -26,6 +27,8 @@ export type AgentSessionTables = {
     judged_at: Date | null;
     outcome: string | null;
     refused_events: Generated<number>;
+    /** Until when a Judge run holds the session (0022_agent_session_claims); null when none does. */
+    judging_until: Generated<Date | null>;
   };
   /** One row per stored event, holding only what the Team's Privacy tier kept. */
   agent_events: {
@@ -78,6 +81,21 @@ export type SessionOutcome = "flagged" | "clean" | "needs_human_review";
  */
 export const OUTCOME_ORDER: readonly SessionOutcome[] = ["clean", "needs_human_review", "flagged"];
 
+/**
+ * How long a Judge run's claim on a session lasts (slice 7a): longer than a run's two model calls at their 60-second
+ * timeout, so a live run never loses it, and short enough that a run that died frees the session for the next.
+ */
+export const JUDGE_CLAIM_MINUTES = 10;
+
+/**
+ * What a claim got: the session, until the instant `until` (its `judging_until`, as Postgres's text, which round-trips
+ * exactly), or nothing, as another run holds it or there's no ended session to judge.
+ */
+export type Claim = HeldClaim | { kind: "busy" } | { kind: "absent" };
+
+/** A run's claim on a session. Only the run holding it clears it: `release` and `markJudged` compare `until`. */
+export type HeldClaim = { kind: "claimed"; until: string };
+
 export interface AgentSessions {
   /**
    * Stores one event in one transaction: makes the session on its first event (or updates it: its last event's time,
@@ -90,13 +108,26 @@ export interface AgentSessions {
    */
   readEnded(team: string, sessionId: string): Promise<ReadAgentEvent[] | undefined>;
   /**
-   * In one transaction, marks the session judged now, and drops exactly the events `rowSeqs` names: the ones the Judge
-   * read. An event stored after the read stays, for its own run. The session's outcome becomes the higher in
-   * OUTCOME_ORDER of the one it held and `outcome`, and is what this answers.
+   * Claims an ended session for one Judge run, for JUDGE_CLAIM_MINUTES, in one update: "busy" when another run's claim
+   * still holds it, "absent" when the Team holds no such ended session. Of two claims at once, the second waits on the
+   * row's lock, then sees the first's claim.
+   */
+  claim(team: string, sessionId: string): Promise<Claim>;
+  /**
+   * Clears the session's claim, for a run that ends without marking it judged: only while it is still `claim`, so a
+   * run that outlived its claim leaves the next run's.
+   */
+  release(team: string, sessionId: string, claim: HeldClaim): Promise<void>;
+  /**
+   * In one transaction, marks the session judged now, clears its claim while it is still `claim` (as `release` does),
+   * and drops exactly the events `rowSeqs` names: the ones the Judge read. An event stored after the read stays, for
+   * its own run. The session's outcome becomes the higher in OUTCOME_ORDER of the one it held and `outcome`, and is
+   * what this answers.
    */
   markJudged(
     team: string,
     sessionId: string,
+    claim: HeldClaim,
     judged: { outcome: SessionOutcome; rowSeqs: readonly string[] },
   ): Promise<SessionOutcome>;
 }
@@ -168,7 +199,46 @@ export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): Agent
       });
     },
 
-    markJudged(team, sessionId, { outcome, rowSeqs }) {
+    claim(team, sessionId) {
+      return withTeam(team, async (tx) => {
+        const db = tx.$extendTables<AgentSessionTables>();
+        const claimed = await db
+          .updateTable("agent_sessions")
+          .set({ judging_until: sql<Date>`now() + make_interval(mins => ${JUDGE_CLAIM_MINUTES})` })
+          .where("session_id", "=", sessionId)
+          .where("ended_at", "is not", null)
+          .where((where) =>
+            where.or([
+              where("judging_until", "is", null),
+              where("judging_until", "<=", sql<Date>`now()`),
+            ]),
+          )
+          .returning(sql<string>`judging_until::text`.as("until"))
+          .executeTakeFirst();
+        if (claimed !== undefined) return { kind: "claimed", until: claimed.until };
+        const held = await db
+          .selectFrom("agent_sessions")
+          .select("session_id")
+          .where("session_id", "=", sessionId)
+          .where("ended_at", "is not", null)
+          .executeTakeFirst();
+        return { kind: held === undefined ? "absent" : "busy" };
+      });
+    },
+
+    async release(team, sessionId, { until }) {
+      await withTeam(team, (tx) =>
+        tx
+          .$extendTables<AgentSessionTables>()
+          .updateTable("agent_sessions")
+          .set({ judging_until: null })
+          .where("session_id", "=", sessionId)
+          .where("judging_until", "=", sql<Date>`${until}::timestamptz`)
+          .execute(),
+      );
+    },
+
+    markJudged(team, sessionId, { until }, { outcome, rowSeqs }) {
       return withTeam(team, async (tx) => {
         const db = tx.$extendTables<AgentSessionTables>();
         // Compared in the update itself: of two marks at once, the second waits on the row's lock, then compares with
@@ -177,6 +247,8 @@ export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): Agent
         const marked = await db
           .updateTable("agent_sessions")
           .set({
+            judging_until: sql<Date | null>`case when agent_sessions.judging_until = ${until}::timestamptz
+              then null else agent_sessions.judging_until end`,
             judged_at: sql<Date>`now()`,
             outcome: sql<string>`case
               when coalesce(array_position(${order}, agent_sessions.outcome), 0)

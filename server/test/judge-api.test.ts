@@ -1,7 +1,7 @@
 // Story 9 at the API (spec #225, slice 5a): a session's events posted through `POST /api/hook/events` at the content
 // tier, then one Judge run for that session, as the Scan Job runs it with the Judge `wiring.ts` builds, in-process with
 // OpenRouter faked at its HTTP boundary. A Member then reads the Finding it opened. On the suite's shared database,
-// with a Team of this file's own.
+// with a Team of this file's own per case. Story 10 (slice 7a): a Team at its daily spending limit gets no call.
 import { randomUUID } from "node:crypto";
 import { agentEventsHash, FindingsBody, type MaskedAgentEvent } from "@warden/contracts";
 import type { CryptoKey } from "jose";
@@ -19,11 +19,12 @@ import { HOOK_EVENTS_PATH } from "../src/modules/guard/managed-settings.ts";
 import { AGENT_SENDS_SECRETS } from "../src/modules/guard/judge-rules.ts";
 import { VERDICT_JSON_SCHEMA } from "../src/modules/guard/judge-verdict.ts";
 import { runJudgeJob } from "../src/scan-job.ts";
+import { createSpending, TEAM_DAILY_SPENDING_LIMIT_USD } from "../src/spending.ts";
 import { judge } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { fakeOpenRouter, verdict } from "./fake-openrouter.ts";
-import { ADMIN, call, newTeam, testApp, testKey } from "./helpers.ts";
+import { ADMIN, call, logEntries, newTeam, testApp, testKey } from "./helpers.ts";
 
 const MEMBER = "user_member";
 
@@ -69,7 +70,11 @@ const masked = (
     };
   });
 
-it("opens one Open High Finding on the Agent session for a key sent to a pastebin, from the session's masked events", async () => {
+/**
+ * A Team of an Admin and a Member at the content tier, and one ended session of four events (the key read, then sent
+ * to a pastebin) posted through the hook endpoint; the app, its log lines and what was posted.
+ */
+async function teamPostingSession() {
   const team = await newTeam(withTeam, [
     [ADMIN, "admin"],
     [MEMBER, "member"],
@@ -124,7 +129,12 @@ it("opens one Open High Finding on the Agent session for a key sent to a pastebi
     );
     expect(res.status).toBe(204);
   }
-  const rows = await withTeam(team, (tx) =>
+  return { team, sessionId, app, lines, posted };
+}
+
+/** The session's stored events, read as the Team. */
+const storedEvents = (team: string, sessionId: string) =>
+  withTeam(team, (tx) =>
     tx
       .$extendTables<AgentSessionTables>()
       .selectFrom("agent_events")
@@ -133,6 +143,10 @@ it("opens one Open High Finding on the Agent session for a key sent to a pastebi
       .orderBy("seq")
       .execute(),
   );
+
+it("opens one Open High Finding on the Agent session for a key sent to a pastebin, from the session's masked events", async () => {
+  const { team, sessionId, app, lines, posted } = await teamPostingSession();
+  const rows = await storedEvents(team, sessionId);
   expect(rows).toHaveLength(posted.length);
   const events = masked(rows);
   const fake = fakeOpenRouter(() =>
@@ -194,4 +208,54 @@ it("opens one Open High Finding on the Agent session for a key sent to a pastebi
   const logged = [...lines, ...jobLines].join("");
   expect(logged).not.toBe("");
   for (const kept of [PLANTED, KEY, SUMMARY]) expect(logged).not.toContain(kept);
+});
+
+it("makes no call for a Team at its daily spending limit: the session stays unjudged with its events, and the Job exits 0 (story 10)", async () => {
+  const { team, sessionId, app, lines, posted } = await teamPostingSession();
+  await createSpending({ withTeam }).record(team, {
+    path: "judge",
+    model: MODEL,
+    inputTokens: 25_000,
+    outputTokens: 400,
+    costUsd: TEAM_DAILY_SPENDING_LIMIT_USD,
+    costBasis: "stated",
+  });
+  const fake = fakeOpenRouter(() => verdict([]));
+  const jobLines: string[] = [];
+
+  const code = await runJudgeJob({
+    team,
+    sessionId,
+    judge: judge({
+      withTeam,
+      settings: judgeSettings({ OPENROUTER_API_KEY: KEY, WARDEN_JUDGE_MODEL: MODEL }),
+      fetch: fake.fetch,
+    }),
+    logger: createLogger((line) => jobLines.push(line)),
+  });
+
+  expect(code).toBe(0);
+  expect(fake.calls).toEqual([]);
+  expect(await storedEvents(team, sessionId)).toHaveLength(posted.length);
+  const session = await withTeam(team, (tx) =>
+    tx
+      .$extendTables<AgentSessionTables>()
+      .selectFrom("agent_sessions")
+      .select(["judged_at", "outcome"])
+      .where("session_id", "=", sessionId)
+      .executeTakeFirstOrThrow(),
+  );
+  expect(session).toEqual({ judged_at: null, outcome: null });
+  const read = await call(app, key, "GET", "/api/findings", { as: MEMBER, teamId: team });
+  expect(FindingsBody.parse(read.body).findings).toEqual([]);
+  const logged = jobLines.join("");
+  expect(logEntries(logged)).toContainEqual(
+    expect.objectContaining({
+      message: "judge run: the Team's daily spending limit is reached; the session stays unjudged",
+      team,
+      sessionId,
+      spent: TEAM_DAILY_SPENDING_LIMIT_USD,
+    }),
+  );
+  for (const kept of [PLANTED, KEY]) expect([...lines, logged].join("")).not.toContain(kept);
 });

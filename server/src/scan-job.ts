@@ -8,10 +8,11 @@
 // the server shares, so the API's Rules and the Job's scanner can't drift apart.
 //
 // Started with WARDEN_SESSION_ID in place of WARDEN_SCAN_ID (#443), it runs Guard's Judge for that ended Agent session
-// instead (`runJudgeJob`), with the Judge `wiring.ts` builds: one model call, to the Team's own model when it set one
-// (slice 6a) or else on OpenRouter, a Guard Spot run reported, then the session marked judged and the events it read
-// dropped. A run that throws leaves the session unjudged with its events, and a retry over the same events reports the
-// same Spot run, which changes nothing.
+// instead (`runJudgeJob`), with the Judge `wiring.ts` builds: one model call (and one retry when it fails), to the
+// Team's own model when it set one (slice 6a) or else on OpenRouter, a Guard Spot run reported, then the session marked
+// judged and the events it read dropped. A run that throws leaves the session unjudged with its events, and a retry
+// over the same events reports the same Spot run, which changes nothing. A run another run already holds, or one for a
+// Team at its daily spending limit (slice 7a), changes nothing and exits 0: the session stays unjudged with its events.
 //
 // As its own process (the local starter spawns it; the Cloud Run Job runs it from slice 1b):
 // - WARDEN_SCAN_ID and WARDEN_TEAM name the Scan; either missing or blank exits 1 before connecting.
@@ -166,9 +167,11 @@ export async function runScanJob({
 
 /**
  * One Judge run for the Team's Agent session `sessionId` (#443): 0 when it judged the session, or found nothing to
- * judge (no such session in this Team, an open one, or one whose events are already dropped); 1 when it threw, which
- * leaves the session unjudged with its events. Its log lines hold the Team, the session id, the outcome and the counts:
- * never an event's text, the prompt, the model's answer, the key or the developer.
+ * judge (no such session in this Team, an open one, or one whose events are already dropped); 0 when another run holds
+ * the session (busy), or the Team's spending today reached its daily limit (limited, slice 7a), each leaving the
+ * session unjudged with its events; 1 when it threw, which leaves the session unjudged with its events. Its log lines
+ * hold the Team, the session id, the outcome and the counts (and a limited run's spending): never an event's text, the
+ * prompt, the model's answer, the key or the developer.
  */
 export async function runJudgeJob({
   team,
@@ -207,11 +210,26 @@ export async function runJudgeJob({
     );
     return 0;
   }
+  if (run.kind === "busy") {
+    logger.info("judge run: another run is judging this session; nothing changed", {
+      team,
+      sessionId,
+    });
+    return 0;
+  }
+  if (run.kind === "limited") {
+    logger.info(
+      "judge run: the Team's daily spending limit is reached; the session stays unjudged",
+      { team, sessionId, spent: run.spent },
+    );
+    return 0;
+  }
   logger.info("judge run done", {
     team,
     sessionId,
     outcome: run.outcome,
     eventsRead: run.eventsRead,
+    eventsCut: run.eventsCut,
     opened: run.opened,
   });
   return 0;

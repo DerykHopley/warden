@@ -79,8 +79,9 @@ function parseJson(text: string): unknown {
  * The model's answer as Observations on the session `sessionId`: one per broken Rule, a Rule listed twice merged into
  * one (its summaries joined, its events together), with the Rule's severity and title, the summary without the NULs
  * and lone surrogate halves Postgres can't store (#450) and cut to 2,000, and
- * at most the first 50 cited events in session order beside `events_read` and `events_hash`. The reason a person must
- * review it otherwise; the reason never holds the answer's text.
+ * at most the first 50 cited events in session order beside `events_read` and `events_hash`. With `ending` (slice
+ * 7a: what the Judge left unread), each summary ends with it, the model's text cut to leave it room. The reason a
+ * person must review it otherwise; the reason never holds the answer's text.
  */
 export function readVerdict(
   answer: ModelAnswer,
@@ -88,8 +89,18 @@ export function readVerdict(
     sessionId,
     events,
     eventsHash,
-  }: { sessionId: string; events: readonly MaskedAgentEvent[]; eventsHash: string },
+    ending,
+  }: {
+    sessionId: string;
+    events: readonly MaskedAgentEvent[];
+    eventsHash: string;
+    ending?: string;
+  },
 ): VerdictOutcome {
+  const summarise = (text: string) =>
+    ending === undefined
+      ? cut(text, MAX_SUMMARY_LENGTH)
+      : `${cut(text, MAX_SUMMARY_LENGTH - ending.length - 1)} ${ending}`;
   if (answer.refusal) return review("the model refused");
   const parsed = Verdict.safeParse(parseJson(answer.content));
   if (!parsed.success) return review("the answer isn't a verdict");
@@ -118,7 +129,7 @@ export function readVerdict(
       severity: rule.severity,
       title: rule.title,
       evidence: {
-        summary: cut(summaries.join(" "), MAX_SUMMARY_LENGTH),
+        summary: summarise(summaries.join(" ")),
         session: {
           events: cited.map((seq) => events[seq]!),
           events_read: events.length,

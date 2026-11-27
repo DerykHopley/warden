@@ -1,6 +1,7 @@
 // A Team's own Judge model (spec #225, slice 6a): `localModel` calls the Team's OpenAI-compatible URL through the
 // pinned connection, with no key and no OpenRouter routing, falls back once to JSON mode when the JSON-schema request
-// answers 400, and never follows a redirect. Against fake model servers on 127.0.0.1, with a stub resolver.
+// answers 400, and never follows a redirect. Against fake model servers on 127.0.0.1, with a stub resolver. Slice 7a:
+// `openRouterModel` reads each answer's usage block for the spending ledger, and is the one paid model.
 import { afterEach, describe, expect, it } from "vitest";
 import {
   closeFakeModelServers,
@@ -9,7 +10,14 @@ import {
   json,
   resolvesTo,
 } from "../../../test/fake-model-server.ts";
-import { localModel, ModelCallFailed, type ChatMessage } from "./judge-model.ts";
+import { fakeOpenRouter, neverAnswers, verdict, withUsage } from "../../../test/fake-openrouter.ts";
+import {
+  judgeModel,
+  localModel,
+  ModelCallFailed,
+  openRouterModel,
+  type ChatMessage,
+} from "./judge-model.ts";
 
 afterEach(closeFakeModelServers);
 
@@ -88,7 +96,7 @@ describe("localModel", () => {
     });
 
     await expect(model(server.port).complete(MESSAGES, SCHEMA)).rejects.toThrow(
-      new ModelCallFailed("the Judge's model call answered 302"),
+      new ModelCallFailed("the Judge's model call answered 302", { retry: false, billed: false }),
     );
     expect(target.received).toEqual([]);
   });
@@ -124,5 +132,99 @@ describe("localModel", () => {
     expect(error).toBeInstanceOf(ModelCallFailed);
     expect(error.message).not.toContain("localhost");
     expect(error.message).toMatch(/ECONNREFUSED/);
+  });
+
+  it("is free: its calls are never counted against the Team's spending", () => {
+    expect(model(1)).toMatchObject({ model: "qwen3.8:27b", paid: false });
+  });
+});
+
+describe("openRouterModel (story 10)", () => {
+  const openRouter = (answer: Parameters<typeof fakeOpenRouter>[0]) =>
+    openRouterModel({
+      apiKey: "sk-or-v1-test",
+      model: "test/judge-model",
+      fetch: fakeOpenRouter(answer).fetch,
+      timeoutMs: 50,
+    });
+
+  it("is paid, under the model name it sends", () => {
+    expect(openRouter(() => verdict([]))).toMatchObject({ model: "test/judge-model", paid: true });
+  });
+
+  it("reads the answer's usage block: its tokens and its cost in dollars", async () => {
+    const answer = await openRouter(() =>
+      withUsage(verdict([]), { prompt_tokens: 1200, completion_tokens: 30, cost: 0.0042 }),
+    ).complete(MESSAGES, SCHEMA);
+
+    expect(answer).toEqual({
+      refusal: false,
+      content: '{"broken_rules":[]}',
+      usage: { inputTokens: 1200, outputTokens: 30, costUsd: 0.0042 },
+    });
+  });
+
+  it("leaves out each usage field that isn't a whole count or a cost at or above 0, and still reads the answer", async () => {
+    const answer = await openRouter(() => ({
+      ...verdict([]),
+      usage: { prompt_tokens: -3, completion_tokens: "many", cost: null },
+    })).complete(MESSAGES, SCHEMA);
+
+    expect(answer).toEqual({ refusal: false, content: '{"broken_rules":[]}', usage: {} });
+  });
+
+  it("gives no usage for an answer without a usage block", async () => {
+    const answer = await openRouter(() => verdict([])).complete(MESSAGES, SCHEMA);
+
+    expect(answer).toEqual({ refusal: false, content: '{"broken_rules":[]}' });
+  });
+
+  it("throws ModelCallFailed for a call that times out, to retry and to book as billed", async () => {
+    await expect(openRouter(neverAnswers).complete(MESSAGES, SCHEMA)).rejects.toThrow(
+      new ModelCallFailed("the Judge's model call timed out after 50 ms", {
+        retry: true,
+        billed: true,
+      }),
+    );
+  });
+
+  it("throws ModelCallFailed to retry and book as billed for an answer that isn't a chat completion", async () => {
+    await expect(
+      openRouter(() => ({ error: "mid-generation" })).complete(MESSAGES, SCHEMA),
+    ).rejects.toThrow(
+      new ModelCallFailed("the Judge's model call answered no chat completion", {
+        retry: true,
+        billed: true,
+      }),
+    );
+  });
+
+  it.each([
+    [400, { retry: false, billed: false }],
+    [401, { retry: false, billed: false }],
+    [402, { retry: false, billed: false }],
+    [403, { retry: false, billed: false }],
+    [404, { retry: false, billed: false }],
+    [408, { retry: false, billed: true }],
+    [429, { retry: true, billed: false }],
+    [500, { retry: true, billed: true }],
+    [502, { retry: true, billed: true }],
+    [503, { retry: true, billed: true }],
+  ])(
+    "throws ModelCallFailed for an answer of %i, saying whether to retry it and book it",
+    async (status, failed) => {
+      await expect(
+        openRouter(() => new Response("refused", { status })).complete(MESSAGES, SCHEMA),
+      ).rejects.toThrow(new ModelCallFailed(`the Judge's model call answered ${status}`, failed));
+    },
+  );
+});
+
+describe("judgeModel without a key", () => {
+  it("is paid, so a run is checked against the Team's limit before its ConfigError", () => {
+    expect(judgeModel({ apiKey: undefined, model: "test/judge-model" })).toMatchObject({
+      model: "test/judge-model",
+      paid: true,
+    });
   });
 });

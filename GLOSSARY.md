@@ -193,7 +193,20 @@ _Avoid_: trace, span, log
 
 **Judge**:
 The model that reads an Agent session's events and flags behaviour against the Baseline. A Judge run is a Spot run.
+One run judges a session at a time: a run claims the session first, for a few minutes, and a second run that finds
+it claimed changes nothing.
 _Avoid_: trace judge, LLM judge
+
+**Spending ledger**:
+What each paid model call Warden makes for a Team cost: its path, its model, its tokens and its cost, stated or
+assumed. Rows are only ever added: a call's assumed cost is reserved before it's made, then corrected to what the
+answer stated by a second row. A Team's own model costs Warden nothing and adds no row.
+_Avoid_: usage log, billing
+
+**Daily spending limit**:
+The most a Team's paid model calls may cost Warden in one day (UTC), $1 today, summed from the spending ledger.
+A Team at its limit gets no paid call until the next day: its sessions stay unjudged, their events kept.
+_Avoid_: quota, budget (a run's call budget is its own limit)
 
 **Team's own model**:
 An OpenAI-compatible model a Team's Admin names, by its URL and model name, for the Judge to call in place of
