@@ -188,7 +188,8 @@ export function ControlCard(props: {
   /**
    * One review per submit: sent once /api/me confirms the Team the card was opened in. Its answer may land after the
    * card has gone (✕, or another Control focused): the card's own state is then dropped with it, and only the row of
-   * the focus it was sent from is asked for again.
+   * the focus it was sent from is asked for again. A stored review tells that focus its Done words, which the page says
+   * if the Control then leaves its answer.
    */
   async function send(body: ReviewBody) {
     if (sendingNow.current) return;
@@ -200,14 +201,17 @@ export function ControlCard(props: {
     sendingNow.current = false;
     setSending(false);
     switch (answer.kind) {
-      case "reviewed":
+      case "reviewed": {
+        const done = reviewDoneWords(body);
         rowAskedFor.current = true;
         setResult(() => ({ kind: "control", detail: answer.detail }));
         setForm(null);
-        setLine({ kind: "done", text: reviewDoneWords(body) });
+        setLine({ kind: "done", text: done });
         focusNext.current = "line";
+        focus.onReviewed(done);
         refreshRow();
         return;
+      }
       case "maybe-saved":
         refused(MAYBE_REVIEWED);
         rowAskedFor.current = true;

@@ -242,6 +242,36 @@ export function focusedControl(
   return catalogue === undefined || row === undefined ? null : { catalogue, control: row };
 }
 
+/** A focused Control as the answer held it: its Catalogue and its row. */
+export type FocusedControl = NonNullable<ReturnType<typeof focusedControl>>;
+
+/**
+ * The Overview's notice when an answer asked for again no longer holds the focused Control `gone` (#395), naming it by
+ * its ref: with `reviewed`, the Done words of a review the card stored, that it's stored; then why the Overview no
+ * longer shows it, naming its Catalogue when `audit` no longer lists that.
+ */
+export function controlGoneNotice(
+  gone: FocusedControl,
+  audit: AuditAnswer,
+  reviewed: string | null,
+): string {
+  const { ref } = gone.control;
+  const off = audit.catalogues.every(({ id }) => id !== gone.catalogue.id);
+  const name = gone.catalogue.name;
+  if (reviewed !== null) {
+    return off
+      ? `${reviewed} Your review of ${ref} is stored, but ${name} is off now, so the Overview doesn't show it.`
+      : `${reviewed} Your review of ${ref} is stored, but the Overview no longer shows it.`;
+  }
+  return off
+    ? `${ref} is no longer on the Overview: ${name} is off now.`
+    : `${ref} is no longer on the Overview.`;
+}
+
+/** Whether `control` names the Control `focus` is. */
+export const namesControl = (control: ControlInAddress, focus: FocusedControl) =>
+  control?.catalogue === focus.catalogue.id && control.ref === focus.control.ref;
+
 /** Whether a row says what the Control's read says: the same Verdicts and review state. */
 export const rowAgrees = (
   row: AuditControl,

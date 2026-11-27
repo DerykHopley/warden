@@ -50,6 +50,7 @@ function show(
       control: auditRow("1.3.3", { question: "Is AI tool use approved?" }),
       clear: vi.fn(),
       refreshRow: vi.fn(),
+      onReviewed: vi.fn(),
     },
     team: TEAM,
     getToken: vi.fn(async () => "session-token" as string | null),
@@ -363,7 +364,13 @@ describe("the read", () => {
     });
     render(
       <ControlCard
-        focus={{ catalogue: ISA, control: auditRow("1.3.3"), clear: vi.fn(), refreshRow: vi.fn() }}
+        focus={{
+          catalogue: ISA,
+          control: auditRow("1.3.3"),
+          clear: vi.fn(),
+          refreshRow: vi.fn(),
+          onReviewed: vi.fn(),
+        }}
         team={TEAM}
         getToken={getTokens}
         userId="user_ada"
@@ -581,7 +588,7 @@ describe("the review form (story 4)", () => {
     ]);
   });
 
-  it("a 201 shows the answer's new review first, closes the form, focuses the Done line Confirmed. and calls refreshRow once", async () => {
+  it("a 201 shows the answer's new review first, closes the form, focuses the Done line Confirmed. and calls refreshRow and onReviewed once", async () => {
     const { card, form, submit, focus } = await openForm("Confirm", { review: confirmed });
     await userEvent.type(form.getByRole("textbox"), "Checked");
     await userEvent.click(submit());
@@ -599,6 +606,7 @@ describe("the review form (story 4)", () => {
     // The answer is the card's: it isn't read again, and the row is asked for once, not again by the answer's own check.
     await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
     expect(focus.refreshRow).toHaveBeenCalledOnce();
+    expect(focus.onReviewed).toHaveBeenCalledExactlyOnceWith("Confirmed.");
     expect(callsTo(PATH)).toHaveLength(1);
   });
 
@@ -619,6 +627,7 @@ describe("the review form (story 4)", () => {
     expect(await card.findByRole("status")).toHaveTextContent(/^Overridden to Not applicable\.$/);
     expect((await section("Verdict")).getByText("Not applicable").tagName).toBe("STRONG");
     expect(focus.refreshRow).toHaveBeenCalledOnce();
+    expect(focus.onReviewed).toHaveBeenCalledExactlyOnceWith("Overridden to Not applicable.");
   });
 
   it.each(["Confirm", "Override"] as const)(
@@ -695,7 +704,7 @@ describe("a review's refusals keep the form open with what was typed", () => {
   ])("%s shows its line in the form", async (_, failing, line) => {
     // /api/me answers the read as usual; `failing` answers from the review on.
     let meAnswer: () => Response | Promise<Response> = me;
-    const { form, submit } = await openForm("Confirm", {
+    const { form, submit, focus } = await openForm("Confirm", {
       me: () => meAnswer(),
       review: failing.review ?? confirmed,
     });
@@ -709,6 +718,7 @@ describe("a review's refusals keep the form open with what was typed", () => {
     expect(form.getByRole("textbox")).toHaveValue("Checked the tool list");
     expect(submit()).toBeEnabled();
     expect(submit()).not.toHaveAttribute("aria-busy", "true");
+    expect(focus.onReviewed).not.toHaveBeenCalled();
   });
 
   it("a 403 says only a Lead or an Admin can review, and asks for the Role again; once it's lowered, the line stays with the Member's", async () => {
@@ -773,6 +783,7 @@ describe("no answer to a review's POST", () => {
       expect(form.getByRole("textbox")).toHaveValue("Checked");
       await vi.waitFor(() => expect(callsTo(PATH)).toHaveLength(2));
       expect(focus.refreshRow).toHaveBeenCalledOnce();
+      expect(focus.onReviewed).not.toHaveBeenCalled();
       expect(card.getByRole("region", { name: "Verdict" })).toBeVisible();
     },
   );

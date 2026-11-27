@@ -118,6 +118,8 @@ export type ControlFocus = {
   clear: () => void;
   /** Asks the page's answer again: the card's read is newer than the row (`rowAgrees`). */
   refreshRow: () => void;
+  /** The card stored a review of this Control, its Done words `done`: the page says so if the Control then goes. */
+  onReviewed: (done: string) => void;
 };
 
 /** What a page is talking about: the panel's context line and detail card read it. */

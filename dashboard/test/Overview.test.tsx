@@ -6,7 +6,7 @@
 // overview.test.ts; the Control card's parts, in ControlCard.test.tsx.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OverviewBody, Role } from "@warden/contracts";
+import type { AuditAnswer, OverviewBody, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App.tsx";
 import { OverviewPage } from "../src/Overview.tsx";
@@ -525,6 +525,165 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
     expect(card134.queryByText("Confirmed: Not evidenced")).toBeNull();
     expect(card134.getByText("No reviews yet.")).toBeVisible();
     expect(cardOf("1.3.3")).toBeNull();
+  });
+
+  // #395: an answer asked for again that no longer holds the focused Control says so, above the journey.
+  describe("when an answer asked for again no longer holds the focused Control (#395)", () => {
+    /** ISA2027 still on, with every row but 1.3.3. */
+    const without133 = () =>
+      isaOn({ controls: ["1.3.4", "4.1.3", "5.2.4"].map((ref) => auditRow(ref)) });
+    const card133 = () => screen.queryByRole("region", { name: "Question 1.3.3?" });
+
+    /** Opens 1.3.3's card from a link as a Lead; the Overview answers ISA2027 on, then `next`. */
+    function openThen(next: AuditAnswer, routes: Routes = {}) {
+      const answers = [isaOn(), next];
+      window.history.replaceState(null, "", "/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+      serve({
+        me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+        overview: () => answer({ audit: answers.length > 1 ? answers.shift()! : answers[0]! }),
+        control: (_, ref) => readOf(ref),
+        review: confirmed133,
+        ...routes,
+      });
+      render(<App />);
+      return vi.waitFor(() => cardOf("1.3.3")!);
+    }
+
+    /** The notice reads `words` exactly, as the page's alert above the journey, and 1.3.3's card is gone. */
+    async function expectNotice(words: string) {
+      const notice = await screen.findByText(words);
+      expect(notice.textContent).toBe(words);
+      expect(notice).toHaveAttribute("role", "alert");
+      expect(notice).toHaveClass("notice");
+      expect(
+        notice.compareDocumentPosition(journey()) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      await vi.waitFor(() => expect(card133()).toBeNull());
+      expect(address()).toBe("/overview");
+    }
+
+    it("a confirm stored, then no Catalogue in the answer: the notice says it's stored and the Catalogue is off", async () => {
+      await confirmIn(await openThen(NO_CATALOGUE));
+      await expectNotice(
+        "Confirmed. Your review of 1.3.3 is stored, but VDA ISA 2027.1 is off now, so the Overview doesn't show it.",
+      );
+    });
+
+    it("an override to Not applicable stored, then no Catalogue: the notice starts with its Done words", async () => {
+      const overridden = () =>
+        json(
+          201,
+          controlDetail("1.3.3", {
+            review_state: "reviewed",
+            reviewed_verdict: "not_applicable",
+            reviews: [
+              {
+                id: "r-1",
+                worked_out_verdict: "not_evidenced",
+                outcome: "overridden",
+                verdict: "not_applicable",
+                reason: "We use no AI tools",
+                reviewed_by: "user_ada",
+                reviewed_at: "2026-11-25T10:30:00Z",
+              },
+            ],
+          }),
+        );
+      const card = within(await openThen(NO_CATALOGUE, { review: overridden }));
+      await userEvent.click(await card.findByRole("button", { name: "Override" }));
+      const form = within(card.getByRole("form"));
+      await userEvent.click(form.getByRole("radio", { name: "Not applicable" }));
+      await userEvent.type(form.getByRole("textbox", { name: "Reason" }), "We use no AI tools");
+      await userEvent.click(form.getByRole("button", { name: "Override" }));
+      await expectNotice(
+        "Overridden to Not applicable. Your review of 1.3.3 is stored, but VDA ISA 2027.1 is off now, so the Overview doesn't show it.",
+      );
+    });
+
+    it("a review with no answer, then no Catalogue: the notice says only that the Catalogue is off, not that it's stored", async () => {
+      await confirmIn(
+        await openThen(NO_CATALOGUE, {
+          review: () => Promise.reject(new TypeError("Failed to fetch")),
+        }),
+      );
+      await expectNotice("1.3.3 is no longer on the Overview: VDA ISA 2027.1 is off now.");
+      expect(screen.queryByText(/is stored/)).toBeNull();
+    });
+
+    it("a read newer than the row, with no review, then no Catalogue: the notice says the Catalogue is off", async () => {
+      await openThen(NO_CATALOGUE, {
+        control: (_, ref) => json(200, controlDetail(ref, { review_state: "reviewed" })),
+      });
+      await expectNotice("1.3.3 is no longer on the Overview: VDA ISA 2027.1 is off now.");
+    });
+
+    it.each<[string, (card: HTMLElement) => Promise<void>, string, Routes]>([
+      [
+        "a stored review",
+        confirmIn,
+        "Confirmed. Your review of 1.3.3 is stored, but the Overview no longer shows it.",
+        {},
+      ],
+      [
+        "no review (a read newer than the row)",
+        async () => {},
+        "1.3.3 is no longer on the Overview.",
+        { control: (_, ref) => json(200, controlDetail(ref, { review_state: "reviewed" })) },
+      ],
+    ])(
+      "with the Catalogue still listed but not the row, after %s, the notice doesn't say it's off",
+      async (_, step, words, routes) => {
+        await step(await openThen(without133(), routes));
+        await expectNotice(words);
+      },
+    );
+
+    it("a review's 201 that lands after the focus moved to 1.3.4, then an answer without 1.3.3: no notice, and 1.3.4's card stays", async () => {
+      const late = deferred<Response>();
+      await confirmIn(await openThen(without133(), { review: () => late.promise }));
+      await vi.waitFor(() => expect(callsTo(REVIEWS_133)).toHaveLength(1));
+
+      await userEvent.click(await rowButton("1.3.4"));
+      expect(await within(cardOf("1.3.4")!).findByText("Reason 1.3.4")).toBeVisible();
+      late.resolve(confirmed133());
+      await vi.waitFor(() => expect(callsTo("/api/overview")).toHaveLength(2));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(within(cardOf("1.3.4")!).getByText("Reason 1.3.4")).toBeVisible();
+    });
+
+    it("clearing the focus with ✕, or selecting another row, shows no notice", async () => {
+      const card = await openThen(without133());
+      await userEvent.click(await rowButton("1.3.4"));
+      expect(await within(cardOf("1.3.4")!).findByText("Reason 1.3.4")).toBeVisible();
+      expect(card).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).toBeNull();
+
+      await userEvent.click(
+        within(cardOf("1.3.4")!).getByRole("button", { name: "Clear the focus" }),
+      );
+      expect(cardOf("1.3.4")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("a link to a Control the first answer doesn't hold shows no notice", async () => {
+      openApp("/overview?catalogue=vda-isa-2027.1&control=9.9.9");
+      await vi.waitFor(() => expect(address()).toBe("/overview"));
+      await rowButton("1.3.3");
+      expect(screen.queryByRole("alert")).toBeNull();
+    });
+
+    it("after the notice shows, selecting a Control row removes it", async () => {
+      await openThen(without133(), {
+        control: (_, ref) =>
+          json(200, controlDetail(ref, ref === "1.3.3" ? { review_state: "reviewed" } : {})),
+      });
+      await expectNotice("1.3.3 is no longer on the Overview.");
+      await userEvent.click(await rowButton("1.3.4"));
+      expect(screen.queryByText("1.3.3 is no longer on the Overview.")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(cardOf("1.3.4")).toBeVisible();
+    });
   });
 });
 

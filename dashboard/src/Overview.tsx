@@ -9,10 +9,12 @@ import type { PageProps } from "./App.tsx";
 import {
   auditAnswerLine,
   controlInAddress,
+  controlGoneNotice,
   controlsByCatalogue,
   focusedControl,
   JOURNEY_STATE_WORDS,
   journeyCards,
+  namesControl,
   NO_CATALOGUE_LINE,
   searchWithControl,
   shownVerdict,
@@ -53,6 +55,23 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
     [audit, selected, focused],
   );
 
+  // A review the card stored, of the Control it was sent from; and the notice when an answer asked for again no longer
+  // holds the focused Control (#395). The card goes with its row, and the notice says what became of it, until a row
+  // is selected. The focus that last answer showed is gone only while still selected: ✕ and another row change the
+  // selection, so they say nothing, and a link the first answer doesn't hold was never shown.
+  const [reviewed, setReviewed] = useState<{ catalogue: string; ref: string; done: string } | null>(
+    null,
+  );
+  const [gone, setGone] = useState<string | null>(null);
+  const [answered, setAnswered] = useState(focused);
+  if (audit !== null && focused !== answered) {
+    setAnswered(focused);
+    if (answered !== null && focused === null && namesControl(selected, answered)) {
+      const done = reviewed !== null && namesControl(reviewed, answered) ? reviewed.done : null;
+      setGone(controlGoneNotice(answered, audit, done));
+    }
+  }
+
   // The address always names the focus shown: one the answer doesn't hold is removed in place. As the page goes (a
   // Team switch, sign-out), its focus leaves the address, so the next Team's page doesn't open it as a link.
   useEffect(() => showInAddress(shown), [shown]);
@@ -66,7 +85,10 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
   // The Ask Warden panel talks about the focused Control, its card's ✕ clearing it; with none, about the page. A card
   // whose read is newer than its row asks the answer again, keeping the page on screen while it does.
   const { setContext, open: openPanel } = panel;
-  const clearFocus = useCallback(() => setSelected(null), []);
+  const clearFocus = useCallback(() => {
+    setSelected(null);
+    setReviewed(null);
+  }, []);
   const refreshRow = call.refresh;
   useEffect(() => {
     setContext(
@@ -75,7 +97,13 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
         : {
             view: ["Overview"],
             focus: null,
-            control: { ...focused, clear: clearFocus, refreshRow },
+            control: {
+              ...focused,
+              clear: clearFocus,
+              refreshRow,
+              onReviewed: (done) =>
+                setReviewed({ catalogue: focused.catalogue.id, ref: focused.control.ref, done }),
+            },
             clearFocus,
             onFindingChanged: nothingToDo,
             onFindingGone: nothingToDo,
@@ -96,10 +124,17 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
     linked.current = null;
   }, [audit, focused, openPanel]);
 
-  /** Selecting a Control replaces the address's entry (the effect above writes it), and opens a closed panel. */
+  /**
+   * Selecting a Control replaces the address's entry (the effect above writes it), and opens a closed panel. It removes
+   * the notice, and a stored review of another Control, whose card has gone.
+   */
   const select = useCallback(
     (control: AuditControl) => {
       setSelected({ catalogue: control.catalogue, ref: control.ref });
+      setGone(null);
+      setReviewed((was) =>
+        was?.catalogue === control.catalogue && was.ref === control.ref ? was : null,
+      );
       openPanel();
     },
     [openPanel],
@@ -108,6 +143,11 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
   return (
     <>
       <h1>Overview</h1>
+      {gone !== null && (
+        <p className="notice" role="alert">
+          {gone}
+        </p>
+      )}
       {call.result === "loading" && <p className="muted">Loading Overview…</p>}
       {call.result !== "loading" && <CallRefused result={call.result} onRetry={call.retry} />}
       {call.result !== "loading" && <TeamRefused result={call.result} />}
