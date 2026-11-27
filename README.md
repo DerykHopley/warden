@@ -84,8 +84,9 @@ it, or a run cut short) it adds what's missing. That rerun works out the Verdict
 first seed: on a Team seeded more than about 30 days before, whose demo Scans and Spot run are out of the period Vouch
 reads, it confirms 1.3.4, 4.1.3 and 5.2.4 at Not evidenced, so the Team has 3 Gaps rather than an Evidenced Control
 and 2 Gaps, and no later rerun changes that. For the demo, seed a fresh Team. It never changes ISA2027's switch once
-the Team has one (an Admin may have turned it off), nor reviews a Control that has a review. If another Team holds the
-demo installation, it exits 1 ("demo seed failed", naming `InstallationLinkedElsewhere`); a rerun after the cause is
+the Team has one (an Admin may have turned it off), nor reviews a Control that has a review, and a Repo the Team linked
+itself counts in the Verdicts too: the answer above holds only on a fresh Team. If another Team holds the demo
+installation, it exits 1 ("demo seed failed", naming `InstallationLinkedElsewhere`); a rerun after the cause is
 fixed (the other Team's link of that installation removed) finishes the Vouch step. A rerun takes the seeded Team's demo
 Findings as they are: decisions made on them since (a Lead's, or the daily Job reopening an expired acceptance) and demo
 Findings stored under an older demo Rule id are no mismatch, and it changes none of them. It exits 1, writing nothing,
