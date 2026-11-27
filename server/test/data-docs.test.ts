@@ -1,5 +1,6 @@
 // Story 10: docs/data.md's inventory names the CVE reference data, table by table, and Products, and its "What leaves
-// the machine" section says Warden makes no outside call for CVE data.
+// the machine" section says Warden makes no outside call for CVE data. Vouch's story 12 (spec #341), in part: the
+// Team's Catalogues and the Catalogue's text are in the inventory, and Vouch makes no model call.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -70,6 +71,24 @@ describe("docs/data.md", () => {
     expect(gitHubLeaves).not.toMatch(/Designed \(#224\)/);
     const registries = /^- \*\*npm and PyPI:\*\*[\s\S]*?(?=^- )/m.exec(leaves)?.[0] ?? "";
     expect(registries).toMatch(/called by the Fix PR route \(built, #313\)/);
+  });
+
+  it("has a Vouch Catalogues row naming its table, on or off, and the Admin's Clerk user id (#345)", () => {
+    const catalogues = row("Cloud SQL: Vouch Catalogues");
+    for (const said of ["`team_catalogues`", "on or off", "Clerk user id", "#345"]) {
+      expect(catalogues).toContain(said);
+    }
+  });
+
+  it("has a server image row naming the VDA ISA 2027.1 text and its licence", () => {
+    const isa = row("Warden's server image: the VDA ISA Catalogue");
+    for (const said of ["VDA ISA 2027.1", "CC BY-ND 4.0", "NOTICE.md"]) expect(isa).toContain(said);
+  });
+
+  it("says Vouch makes no model call and no outside call", () => {
+    expect(leaves).toMatch(
+      /^- \*\*Vouch:\*\* none\. Vouch makes no model call and no outside call/m,
+    );
   });
 
   it("says Warden makes no outside call for CVE data", () => {

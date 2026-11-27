@@ -14,10 +14,14 @@ import {
   type ListedRepoBody,
   type StartScanBody,
 } from "@warden/contracts";
-import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
-
-/** 403 and 409 on a Team's call, read as every page reads them. */
-type TeamRefusal = { kind: "no-team" } | { kind: "team-not-opened" };
+import {
+  callWarden,
+  parsed,
+  serverError,
+  type GetToken,
+  type Refused,
+  type TeamRefusal,
+} from "./api.ts";
 
 /** Where the read app's sign-in attempt is kept: `sessionStorage`, this tab's only, gone when it closes. */
 export const ATTEMPT_KEY = "warden.githubSignIn";

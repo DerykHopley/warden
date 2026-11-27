@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { Proposal } from "./decisions.ts";
 import { DateTime, Finding, Id, Module, Severity, Status } from "./finding.ts";
+import { AuditAnswer } from "./vouch.ts";
 
 /**
  * `GET /api/findings`: every Finding of the session's Team, and that Team's id, so the page can tell an answer about a
@@ -13,7 +14,7 @@ export type FindingsBody = z.infer<typeof FindingsBody>;
 
 /**
  * A Team's Level on the journey (GLOSSARY.md), read from what it has set up: Quick, then Standard (the agent hook and
- * the Judge), then Audit-ready (Vouch's Policy and evidence). In order, lowest first.
+ * the Judge), then Audit-ready (a Catalogue on, with every one of its Controls reviewed). In order, lowest first.
  */
 export const Level = z.enum(["quick", "standard", "audit_ready"]);
 export type Level = z.infer<typeof Level>;
@@ -22,11 +23,13 @@ const Count = z.number().int().nonnegative();
 
 /**
  * `GET /api/overview`: the session's Team (as in `FindingsBody`), its Level, its latest Scan, and the trend over the
- * last `period_days`: Open Findings then and now, and the Fix rate (`fixed` of `of`, so never over 100%).
+ * last `period_days`: Open Findings then and now, and the Fix rate (`fixed` of `of`, so never over 100%). `audit` is
+ * Vouch's answer to "Are we ready for the audit?".
  */
 export const OverviewBody = z.object({
   team: Id,
   level: Level,
+  audit: AuditAnswer,
   /** The latest Scan's `started_at` (Spot runs don't count); null before the first Scan. */
   last_scan_at: DateTime.nullable(),
   /** Whether the Team has any Finding at all, whatever its Status. */

@@ -15,8 +15,25 @@ import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { runDailyExpiry } from "../src/daily-expiry.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
+import {
+  createRepoAssets,
+  InstallationLinkedElsewhere,
+  type RepoAssets,
+} from "../src/modules/guard/repo-assets.ts";
 import { createProducts, type Products } from "../src/modules/patch/products.ts";
-import { demoFindingsIn, onProduct, seedDemo, seedRefusal } from "../src/seed.ts";
+import { createPatchScan } from "../src/modules/patch/scan.ts";
+import { createAuditReads } from "../src/modules/vouch/audit.ts";
+import { VDA_ISA_2027_1 } from "../src/modules/vouch/catalogue.ts";
+import { judgeCatalogue } from "../src/modules/vouch/controls.ts";
+import { createVouchDeps, type VouchDeps } from "../src/modules/vouch/deps.ts";
+import {
+  DEMO_REPO,
+  demoFindingsIn,
+  demoInstallationId,
+  onProduct,
+  seedDemo,
+  seedRefusal,
+} from "../src/seed.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
@@ -27,6 +44,8 @@ let pool: pg.Pool;
 let withTeam: WithTeam;
 let findings: Findings;
 let products: Products;
+let repoAssets: RepoAssets;
+let vouch: VouchDeps;
 
 beforeAll(() => {
   // A seed holds one connection for its lock and uses another for its work: two at once need four.
@@ -41,6 +60,9 @@ beforeAll(() => {
   withTeam = createWithTeam(pool);
   findings = createFindings({ withTeam, moveRules: {} });
   products = createProducts({ withTeam });
+  repoAssets = createRepoAssets({ withTeam });
+  // As the start-up file wires Vouch.
+  vouch = createVouchDeps({ withTeam, findings, repoAssets, products });
 });
 
 afterAll(() => pool.end());
@@ -55,13 +77,71 @@ const SHOP_COUNT = Object.values(DEMO_OBSERVATIONS).filter(
   (o) => o.asset.kind === SHOP.kind && o.asset.ref === SHOP.ref,
 ).length;
 
-/** Everything the seed writes in `team`: its Products, Findings and Scans, to compare before and after. */
+const ISA = VDA_ISA_2027_1.id;
+/** The Controls the seed confirms: every judged one but 1.3.3, which waits for a Lead in the demo. */
+const CONFIRMED = ["1.3.4", "4.1.3", "5.2.4"] as const;
+
+/** Every review the Team made of each of ISA2027's judged Controls, newest first, by Control. */
+async function reviewsOf(team: string) {
+  const reviews: Record<string, Awaited<ReturnType<VouchDeps["controlReviews"]["history"]>>> = {};
+  for (const { id } of VDA_ISA_2027_1.judgedControls) {
+    reviews[id] = await vouch.controlReviews.history(team, ISA, id);
+  }
+  return reviews;
+}
+
+/**
+ * Everything the seed writes in `team`: its Products, Findings and Scans, and its Repo Assets, Catalogue choices and
+ * reviews, to compare before and after.
+ */
 async function stateOf(team: string) {
   return {
     products: await products.list(team),
     findings: await findings.list(team),
     scans: await withTeam(team, (tx) => tx.selectFrom("scans").selectAll().orderBy("id").execute()),
+    repoAssets: await repoAssets.list(team),
+    catalogues: await vouch.teamCatalogues.list(team),
+    reviews: await reviewsOf(team),
   };
+}
+
+/** No Repo Asset, no Catalogue choice and no review: the Vouch state left out. */
+async function expectNoVouchState(team: string) {
+  expect(await repoAssets.list(team)).toEqual([]);
+  expect(await vouch.teamCatalogues.list(team)).toEqual([]);
+  expect(Object.values(await reviewsOf(team)).flat()).toEqual([]);
+}
+
+/**
+ * The Vouch state the seed leaves: the demo Repo held, ISA2027 on, and 1.3.4, 4.1.3 and 5.2.4 each with one review, a
+ * confirm by `by` with a `Demo seed:` reason; 1.3.3 with none.
+ */
+async function expectVouchState(team: string, by: string) {
+  expect((await repoAssets.list(team)).map(({ ref }) => ref)).toEqual([DEMO_REPO]);
+  expect(await vouch.teamCatalogues.list(team)).toEqual([
+    { catalogue: ISA, on: true, setBy: by, setAt: expect.any(Date) },
+  ]);
+  const reviews = await reviewsOf(team);
+  expect(reviews["1.3.3"]).toEqual([]);
+  for (const ref of CONFIRMED) {
+    const [review, ...older] = reviews[ref]!;
+    expect(older).toEqual([]);
+    expect(review).toMatchObject({
+      controlRef: ref,
+      outcome: "confirmed",
+      reviewedBy: by,
+      reason: expect.stringMatching(/^Demo seed: /),
+    });
+    expect(review?.verdict).toBe(review?.workedOutVerdict);
+  }
+}
+
+/** Seeds `team` as the seed did before its Vouch step: the demo Findings, then the demo Product and its Patch Scan. */
+async function seedAsBeforeVouch(team: string) {
+  expect((await seedDemo({ pool, team, now: NOW, withProduct: false })).kind).toBe("seeded");
+  const { id } = await products.create(team, DEMO_PRODUCT);
+  await createPatchScan({ findings, logger: createLogger(() => {}) }).scanProduct(team, { id });
+  await expectNoVouchState(team);
 }
 
 /** The Team's demo Finding `name`, found by today's demo data, as the seed finds it. */
@@ -247,7 +327,7 @@ describe("seedDemo", () => {
     expect(Date.parse(accepted?.accepted_until ?? "")).toBe(Date.parse("2027-02-22T12:00:00Z"));
   });
 
-  it("run again, says the Team is already seeded and changes no Product, Finding or Scan", async () => {
+  it("run again, says the Team is already seeded and changes no Product, Finding, Scan, Repo Asset, Catalogue choice or review", async () => {
     const team = await teamWith([["user_admin", "admin"]]);
     await seedDemo({ pool, team, now: NOW });
     const before = await stateOf(team);
@@ -283,12 +363,15 @@ describe("seedDemo", () => {
       products: 1,
     });
     expect(await stateOf(team)).toEqual(before);
+    await expectNoVouchState(team);
   });
 
-  it("on a rerun, finishes a Team seeded without the demo Product: creates it and runs its Scan", async () => {
+  it("on a rerun, finishes a Team seeded without the demo Product: creates it, runs its Scan and adds ISA2027", async () => {
     // As after --no-product, a seed from before the demo Product, or a Product step cut short after the Findings.
     const team = await teamWith([["user_admin", "admin"]]);
-    await seedDemo({ pool, team, now: NOW, withProduct: false });
+    expect((await seedDemo({ pool, team, now: NOW, withProduct: false })).kind).toBe("seeded");
+    // --no-product has no Vouch step: the browser tests' Acme and Bluebird stay without a Catalogue or a Repo Asset.
+    await expectNoVouchState(team);
 
     const result = await seedDemo({ pool, team, now: NOW });
 
@@ -297,6 +380,7 @@ describe("seedDemo", () => {
     expect(await demoFindingsOf(team)).toHaveLength(DEMO_COUNT);
     const cves = (await findings.list(team)).filter((f) => onProduct(f, id));
     expect(cves.filter((f) => f.status === "open").length).toBeGreaterThan(0);
+    await expectVouchState(team, "user_admin");
     expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("already_seeded");
   });
 
@@ -556,13 +640,14 @@ describe("seedDemo", () => {
     const team = await teamWith([["user_admin", "admin"]]);
     const { scans } = demoRuns(team, NOW);
     await findings.reconcile({ ...scans[0]!, id: "a-real-scan" });
-    const before = await findings.list(team);
+    const before = await stateOf(team);
 
     expect(await seedDemo({ pool, team, now: NOW })).toEqual({
       kind: "other_findings",
-      findings: before.length,
+      findings: before.findings.length,
     });
-    expect(await findings.list(team)).toEqual(before);
+    expect(await stateOf(team)).toEqual(before);
+    await expectNoVouchState(team);
   });
 
   it("on a rerun, a Finding of the Team's own doesn't match, writing nothing", async () => {
@@ -610,6 +695,162 @@ describe("seedDemo", () => {
   });
 });
 
+describe("the demo seed's ISA2027 state", () => {
+  it("answers Not yet as of the seed's now: 2 Gaps and 1.3.3 waiting, one Control Evidenced (story 11)", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("seeded");
+
+    // As of the seed's now, not the clock: the demo's Scans age out of the 30 days.
+    const answer = await createAuditReads(vouch).answer(team, NOW);
+
+    expect(answer).toMatchObject({ answer: "not_yet", gaps: 2, waiting: 1 });
+    expect(
+      answer.controls.map(({ ref, verdict, review_state, gap }) => ({
+        ref,
+        verdict,
+        review_state,
+        gap,
+      })),
+    ).toEqual([
+      { ref: "1.3.3", verdict: "not_evidenced", review_state: "not_reviewed", gap: false },
+      { ref: "1.3.4", verdict: "partly_evidenced", review_state: "reviewed", gap: true },
+      { ref: "4.1.3", verdict: "not_evidenced", review_state: "reviewed", gap: true },
+      { ref: "5.2.4", verdict: "evidenced", review_state: "reviewed", gap: false },
+    ]);
+    expect(await createAuditReads(vouch).auditReady(team)).toBe(false);
+  });
+
+  it("cites the demo secret under 4.1.3, and the Open .env Finding and a demo Product CVE under 1.3.4", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedDemo({ pool, team, now: NOW });
+    const { id: product } = await expectOneDemoProduct(team);
+
+    const controls = await judgeCatalogue(vouch, team, VDA_ISA_2027_1, NOW);
+
+    const cited = (ref: string) =>
+      controls.find((control) => control.ref === ref)?.evidence.open_findings ?? [];
+    expect(cited("4.1.3").map(({ id }) => id)).toContain((await demoFinding(team, "secret")).id);
+    const under134 = cited("1.3.4");
+    expect(under134.map(({ id }) => id)).toContain((await demoFinding(team, "envLocal")).id);
+    expect(
+      under134.some(
+        (f) =>
+          f.rule_id === "patch/known-vulnerability" &&
+          f.asset.kind === "product" &&
+          f.asset.ref === product,
+      ),
+    ).toBe(true);
+  });
+
+  it("links the demo Repo, turns ISA2027 on and confirms 1.3.4, 4.1.3 and 5.2.4 as the oldest Admin or Lead", async () => {
+    const team = await teamWith([
+      ["user_member", "member"],
+      ["user_lead", "lead"],
+    ]);
+
+    await seedDemo({ pool, team, now: NOW });
+
+    await expectVouchState(team, "user_lead");
+    const [asset] = await repoAssets.list(team);
+    expect(asset?.installationId).toBe(demoInstallationId(team));
+    expect(asset?.githubId).toBeGreaterThan(0);
+  });
+
+  it("run again after an Admin turns ISA2027 off and a Lead overrides 4.1.3, leaves both as they are", async () => {
+    const team = await teamWith([
+      ["user_admin", "admin"],
+      ["user_lead", "lead"],
+    ]);
+    await seedDemo({ pool, team, now: NOW });
+    await vouch.teamCatalogues.set(team, { catalogue: ISA, on: false, setBy: "user_admin" });
+    await vouch.controlReviews.add(team, {
+      catalogue: ISA,
+      controlRef: "4.1.3",
+      workedOutVerdict: "not_evidenced",
+      outcome: "overridden",
+      verdict: "not_applicable",
+      reason: "No secrets in this Repo's history",
+      reviewedBy: "user_lead",
+    });
+    const before = await stateOf(team);
+
+    expect(await seedDemo({ pool, team, now: NOW })).toEqual({
+      kind: "already_seeded",
+      findings: before.findings.length,
+    });
+    expect(await stateOf(team)).toEqual(before);
+  });
+
+  it("on a rerun, gives a Team seeded before the Vouch step all of it, answering seeded", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedAsBeforeVouch(team);
+
+    const result = await seedDemo({ pool, team, now: NOW });
+
+    expect(result).toEqual({ kind: "seeded", findings: (await findings.list(team)).length });
+    await expectOneDemoProduct(team);
+    await expectVouchState(team, "user_admin");
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("already_seeded");
+  });
+
+  it("on a rerun, finishes a Vouch step cut short after 5.2.4's review, which keeps its one review", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    await seedAsBeforeVouch(team);
+    await vouch.controlReviews.add(team, {
+      catalogue: ISA,
+      controlRef: "5.2.4",
+      workedOutVerdict: "evidenced",
+      outcome: "confirmed",
+      verdict: "evidenced",
+      reason: "Demo seed: cut short",
+      reviewedBy: "user_admin",
+    });
+    const [first] = await vouch.controlReviews.history(team, ISA, "5.2.4");
+
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("seeded");
+
+    await expectVouchState(team, "user_admin");
+    expect(await vouch.controlReviews.history(team, ISA, "5.2.4")).toEqual([first]);
+  });
+
+  it("two Teams on one database each hold the demo Repo, under installations of their own", async () => {
+    const teams = [
+      await teamWith([["user_admin", "admin"]]),
+      await teamWith([["user_admin", "admin"]]),
+    ];
+
+    for (const team of teams)
+      expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("seeded");
+
+    const held = await Promise.all(teams.map((team) => repoAssets.list(team)));
+    expect(held.map((list) => list.map(({ ref }) => ref))).toEqual([[DEMO_REPO], [DEMO_REPO]]);
+    const [first, second] = held.map(([asset]) => asset?.installationId);
+    expect(first).not.toBe(second);
+  });
+
+  it("rejects with InstallationLinkedElsewhere when another Team holds the demo installation, and a rerun after finishes it", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    const other = await teamWith([["user_other", "admin"]]);
+    const installationId = demoInstallationId(team);
+    await repoAssets.link(other, { installationId, linkedBy: "user_other", repos: [] });
+
+    await expect(seedDemo({ pool, team, now: NOW })).rejects.toBeInstanceOf(
+      InstallationLinkedElsewhere,
+    );
+    await expectNoVouchState(team);
+
+    // The cause fixed: the other Team's link of it is gone.
+    await withTeam(other, (tx) =>
+      tx
+        .deleteFrom("github_installations")
+        .where("installation_id", "=", String(installationId))
+        .execute(),
+    );
+    expect((await seedDemo({ pool, team, now: NOW })).kind).toBe("seeded");
+    await expectVouchState(team, "user_admin");
+  });
+});
+
 describe("pnpm seed", () => {
   const env = () => ({
     PGUSER: "warden_app",
@@ -622,7 +863,7 @@ describe("pnpm seed", () => {
 
     const { code, output } = await runInServer(["node", "src/seed.ts", team], env());
 
-    expect(output).toContain(`"message":"demo Findings and demo Product seeded"`);
+    expect(output).toContain(`"message":"demo Findings, demo Product and ISA2027 seeded"`);
     expect(code).toBe(0);
     expect(await demoFindingsOf(team)).toHaveLength(DEMO_COUNT);
   });
@@ -640,9 +881,25 @@ describe("pnpm seed", () => {
 
     const { code, output } = await runInServer(["node", "src/seed.ts", team], env());
 
-    expect(output).toContain(`"message":"demo Findings and demo Product seeded"`);
+    expect(output).toContain(`"message":"demo Findings, demo Product and ISA2027 seeded"`);
     expect(code).toBe(0);
     await expectOneDemoProduct(team);
+  });
+
+  it("exits 1 through 'demo seed failed' when another Team holds the demo installation, naming the error", async () => {
+    const team = await teamWith([["user_admin", "admin"]]);
+    const other = await teamWith([["user_other", "admin"]]);
+    await repoAssets.link(other, {
+      installationId: demoInstallationId(team),
+      linkedBy: "user_other",
+      repos: [],
+    });
+
+    const { code, output } = await runInServer(["node", "src/seed.ts", team], env());
+
+    expect(code).toBe(1);
+    expect(output).toContain(`"message":"demo seed failed"`);
+    expect(output).toContain("InstallationLinkedElsewhere");
   });
 
   it("exits 1 for a Team with Products of its own, saying so", async () => {

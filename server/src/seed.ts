@@ -2,14 +2,19 @@
 // show a filled Findings page. It writes only through the Findings module, as a module and a Lead would: Scans through
 // `reconcile`, a Spot run through `report`, and two named decisions made as the Team's oldest Admin or Lead. Then it
 // creates the demo Product (`DEMO_PRODUCT`) through the Products store and runs its Patch Scan, as a save does, so the
-// Product's CVE Findings come from the loaded CVE snapshot. The browser tests seed their Teams with it too, without
-// the Product (`--no-product`), so the Findings their tests count stay the demo ones.
+// Product's CVE Findings come from the loaded CVE snapshot. With the Product, it then gives the Team VDA ISA 2027.1 as
+// an Admin and a Lead would: the demo Repo linked as a Repo Asset under a made-up installation (Guard's Repo Assets
+// store), ISA2027 turned on (Vouch's Catalogue store) and 1.3.4, 4.1.3 and 5.2.4 confirmed (Vouch's review store),
+// leaving 1.3.3 for a Lead to review in the demo. The browser tests seed their Teams with it too, without the Product
+// (`--no-product`), so the Findings their tests count stay the demo ones and their Teams have no Catalogue or Repo
+// Asset.
 //
 // As its own process: `WARDEN_SEED_DEMO=1 pnpm --filter @warden/server seed <team-id> [--no-product]`, the Team being
 // the Clerk Organization id (`org_…`) that the Team's Admin has already opened Warden in. See `seedRefusal` for when
 // it refuses to start. It connects as the PG* variables say (`pnpm seed` sets warden_app), with the server's role
 // check on connect: a role that can get around row-level security exits 1. Exit 0 when seeded or already seeded; 1
 // otherwise, naming why.
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import {
   fingerprint,
@@ -34,8 +39,12 @@ import type pg from "pg";
 import { createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings, type HistoryEntry } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
+import { createRepoAssets } from "./modules/guard/repo-assets.ts";
 import { createProducts } from "./modules/patch/products.ts";
 import { createPatchScan, PATCH_RULE } from "./modules/patch/scan.ts";
+import { VDA_ISA_2027_1 } from "./modules/vouch/catalogue.ts";
+import { judgeCatalogue } from "./modules/vouch/controls.ts";
+import { createVouchDeps } from "./modules/vouch/deps.ts";
 import { MOVE_RULES } from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
@@ -44,7 +53,8 @@ export type SeedResult =
   | { kind: "seeded"; findings: number }
   /**
    * Every demo run and the seed's decisions were already applied, and (with the Product) the demo Product is as the
-   * seed leaves it: nothing was written. The demo Findings count as they are, whatever has been decided on them since.
+   * seed leaves it and the Vouch state is in place: nothing was written. The demo Findings count as they are, whatever
+   * has been decided on them since.
    */
   | { kind: "already_seeded"; findings: number }
   /** Warden has no such Team: its Admin hasn't opened Warden in it yet. */
@@ -62,6 +72,25 @@ export type SeedResult =
    * missing, a Finding the seed didn't write, or a demo Product not as `DEMO_PRODUCT`. Nothing was written.
    */
   | { kind: "mismatch"; problems: string[] };
+
+/** The demo Repo: the Repo Asset the demo's Guard Findings are on, which the seed links for Vouch to judge. */
+export const DEMO_REPO = DEMO_OBSERVATIONS.secret.asset.ref;
+
+/**
+ * The made-up GitHub installation the seed links the demo Repo under in `team`: worked out from the Team id, so two
+ * Teams seeded on one database never share one (an installation belongs to one Team, threat G6) and a rerun relinks
+ * the same one. 2^48 plus 48 bits of the id's SHA-256: above any id GitHub gives today, and a safe integer.
+ */
+export function demoInstallationId(team: string): number {
+  return 2 ** 48 + createHash("sha256").update(team).digest().readUIntBE(0, 6);
+}
+
+/** The demo Repo's made-up GitHub repo id: positive, as the column wants. Only its installation must differ by Team. */
+const DEMO_REPO_GITHUB_ID = 1;
+
+/** The Catalogue the seed turns on, and the judged Controls it confirms: every one but 1.3.3, left for a Lead. */
+const DEMO_CATALOGUE = VDA_ISA_2027_1;
+const DEMO_CONFIRMED: readonly string[] = ["1.3.4", "4.1.3", "5.2.4"];
 
 /** The hosts that are this machine: the compose database, or a local socket when PGHOST is unset. */
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
@@ -179,16 +208,19 @@ function productProblems(product: Product, list: readonly Finding[]): string[] {
 }
 
 /**
- * Seeds `team` with the demo Findings, then (`withProduct`, the default) the demo Product and its Patch Scan, as of
- * `now`, through connections from `pool` (warden_app). One seed runs per Team at a time: a second waits for the first,
- * then finds the Team seeded. A Team is seeded when every demo run id is applied, the seed's two decisions are in the
- * history of the demo Findings they name, every other Finding is on the demo Product's Asset, and (`withProduct`) its
- * demo Product is as `DEMO_PRODUCT` with a CVE Finding. The demo Findings (the ones a demo run first saw) are taken as
- * they are: their Statuses, decisions and Rule ids since the seed aren't compared with today's demo data, and a rerun
- * never changes them. A Team seeded without the demo Product (`withProduct` false, or a Product step cut short) gets
- * it on a rerun with it. One with Findings of its own, or (`withProduct`, not yet seeded) Products of its own, is left
- * as it is; so is every Team when the CVE snapshot the Product's Scan needs isn't loaded. `logger` takes the Scan's
- * log lines.
+ * Seeds `team` with the demo Findings, then (`withProduct`, the default) the demo Product and its Patch Scan, then the
+ * Vouch state (`writeVouch`), as of `now`, through connections from `pool` (warden_app). One seed runs per Team at a
+ * time: a second waits for the first, then finds the Team seeded. A Team is seeded when every demo run id is applied,
+ * the seed's two decisions are in the history of the demo Findings they name, every other Finding is on the demo
+ * Product's Asset, and (`withProduct`) its demo Product is as `DEMO_PRODUCT` with a CVE Finding and the Vouch state is
+ * in place: the demo Repo one of its Repo Assets, a choice for ISA2027 (on or off), and a review of each of 1.3.4,
+ * 4.1.3 and 5.2.4. The demo Findings (the ones a demo run first saw) are taken as they are: their Statuses, decisions
+ * and Rule ids since the seed aren't compared with today's demo data, and a rerun never changes them; nor does it
+ * change a Catalogue choice or add a review to a Control that has one. A Team seeded without the demo Product
+ * (`withProduct` false, or a Product step cut short) or without the Vouch state (seeded before the seed wrote it, or a
+ * Vouch step cut short) gets what's missing on a rerun with it. One with Findings of its own, or (`withProduct`, not
+ * yet seeded) Products of its own, is left as it is; so is every Team when the CVE snapshot the Product's Scan needs
+ * isn't loaded. Each refusal comes before any Vouch write. `logger` takes the Scan's log lines.
  */
 export async function seedDemo({
   pool,
@@ -207,6 +239,63 @@ export async function seedDemo({
   // Every module's move rule, as the server wires them: the demo's Unconfirmed fix comes from Guard's.
   const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
   const products = createProducts({ withTeam });
+  const repoAssets = createRepoAssets({ withTeam });
+  // As the start-up file wires Vouch: its Findings reads, and Guard's and Patch's stores handed in.
+  const vouch = createVouchDeps({ withTeam, findings, repoAssets, products });
+
+  /**
+   * What the Vouch step still has to write: the demo Repo not one of the Team's Repo Assets, no choice for ISA2027 (on
+   * or off: an Admin may have turned it off since), and the Controls the seed confirms that have no review yet.
+   */
+  async function vouchToDo() {
+    const link = !(await repoAssets.list(team)).some(({ ref }) => ref === DEMO_REPO);
+    const choose = !(await vouch.teamCatalogues.list(team)).some(
+      ({ catalogue }) => catalogue === DEMO_CATALOGUE.id,
+    );
+    const reviewed = new Set(
+      (await vouch.controlReviews.newest(team, DEMO_CATALOGUE.id)).map(
+        ({ controlRef }) => controlRef,
+      ),
+    );
+    const confirm = DEMO_CONFIRMED.filter((ref) => !reviewed.has(ref));
+    return { link, choose, confirm, done: !link && !choose && confirm.length === 0 };
+  }
+
+  /**
+   * The Vouch step, as an Admin and a Lead would, made as Admin or Lead `lead`, writing only what `vouchToDo` finds
+   * missing: the demo Repo linked under the Team's made-up installation, ISA2027 turned on, then each of the Controls
+   * the seed confirms with no review yet confirmed on its Verdict as of `now`. A link of an installation another Team
+   * holds throws InstallationLinkedElsewhere before anything else of the step is written.
+   */
+  async function writeVouch(lead: string) {
+    const todo = await vouchToDo();
+    if (todo.link) {
+      await repoAssets.link(team, {
+        installationId: demoInstallationId(team),
+        linkedBy: lead,
+        repos: [{ ref: DEMO_REPO, githubId: DEMO_REPO_GITHUB_ID }],
+      });
+    }
+    if (todo.choose) {
+      await vouch.teamCatalogues.set(team, { catalogue: DEMO_CATALOGUE.id, on: true, setBy: lead });
+    }
+    if (todo.confirm.length === 0) return;
+    // Judged once the demo Repo is held, so its Guard Rules and the Open Findings on it count.
+    const judged = await judgeCatalogue(vouch, team, DEMO_CATALOGUE, now);
+    for (const ref of todo.confirm) {
+      const control = judged.find((candidate) => candidate.ref === ref);
+      if (control === undefined) throw new Error(`the demo seed's Catalogue doesn't judge ${ref}`);
+      await vouch.controlReviews.add(team, {
+        catalogue: DEMO_CATALOGUE.id,
+        controlRef: ref,
+        workedOutVerdict: control.verdict,
+        outcome: "confirmed",
+        verdict: control.verdict,
+        reason: "Demo seed: the Verdict as Vouch worked it out",
+        reviewedBy: lead,
+      });
+    }
+  }
 
   /**
    * The Team's Findings, its demo Product if it has one, and how the Team differs from what the seed leaves, given
@@ -294,15 +383,20 @@ export async function seedDemo({
     if (found.team === undefined) return { kind: "no_team" };
     if (found.lead === undefined) return { kind: "no_lead" };
 
+    // Whether the Team has its demo Product already: a rerun then has only the Vouch step left, if that.
+    let hasProduct = false;
     if (found.runs.length > 0) {
       const { list, demo, problems } = await check(found.runs.length);
       if (problems.length > 0) return { kind: "mismatch", problems };
-      if (!withProduct || demo !== undefined) {
+      if (!withProduct) return { kind: "already_seeded", findings: list.length };
+      hasProduct = demo !== undefined;
+      if (hasProduct && (await vouchToDo()).done) {
         return { kind: "already_seeded", findings: list.length };
       }
       // Seeded without the demo Product (with --no-product, before the seed made one, or a Product step cut short
-      // after the Findings): the rest of this run finishes it.
-      if (found.snapshot === undefined) return { kind: "no_cve_snapshot" };
+      // after the Findings), or without the Vouch state (before the seed wrote it, or a Vouch step cut short): the
+      // rest of this run finishes it.
+      if (!hasProduct && found.snapshot === undefined) return { kind: "no_cve_snapshot" };
     } else {
       const others = Number(found.others.count);
       if (others > 0) return { kind: "other_findings", findings: others };
@@ -315,9 +409,13 @@ export async function seedDemo({
     }
 
     if (withProduct) {
-      // As a save does: the Product, then its Scan against the loaded snapshot.
-      const { id } = await products.create(team, DEMO_PRODUCT);
-      await createPatchScan({ findings, logger }).scanProduct(team, { id });
+      if (!hasProduct) {
+        // As a save does: the Product, then its Scan against the loaded snapshot.
+        const { id } = await products.create(team, DEMO_PRODUCT);
+        await createPatchScan({ findings, logger }).scanProduct(team, { id });
+      }
+      // After the Product's Scan, so 1.3.4's Verdict counts its CVE Findings.
+      await writeVouch(found.lead.user_id);
     }
 
     // Every demo run is applied by now: this run applied them, or found them all applied.
@@ -380,7 +478,7 @@ async function main(
     switch (result.kind) {
       case "seeded":
         logger.info(
-          withProduct ? "demo Findings and demo Product seeded" : "demo Findings seeded",
+          withProduct ? "demo Findings, demo Product and ISA2027 seeded" : "demo Findings seeded",
           {
             team,
             findings: result.findings,

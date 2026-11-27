@@ -10,11 +10,12 @@ import {
   startsScans,
   type ListedRepoBody,
   type ScanBody,
+  type TeamCatalogue,
 } from "@warden/contracts";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { NOT_ANSWERING, TEAM_NOT_OPENED } from "./api.ts";
+import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn } from "./api.ts";
 import type { PageProps } from "./App.tsx";
-import { dayAndTimeWords } from "./date-words.ts";
+import { calendarDayWords, dayAndTimeWords } from "./date-words.ts";
 import {
   fetchGitHubApp,
   fetchRepos,
@@ -34,13 +35,37 @@ import {
 } from "./github-setup.ts";
 import { useLandOnAnchor } from "./land-on-anchor.ts";
 import { goTo } from "./navigate.ts";
+import {
+  CATALOGUES_ANCHOR,
+  cataloguesChanged,
+  fetchCatalogues,
+  switchCatalogueInTeam,
+  watchCatalogues,
+  type CataloguesResult,
+} from "./vouch.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 /** How long after each answer the repo list is read again while a listed Scan is queued or running. */
 const READ_AGAIN_MS = 5_000;
-/** The Repos heading, when the address's anchor names it. */
-const findReposHeading = (anchor: string) =>
-  anchor === REPOS_ANCHOR ? document.getElementById(REPOS_ANCHOR) : null;
+/** The Repos or the Catalogues heading, when the address's anchor names it. */
+const findLandingHeading = (anchor: string) =>
+  anchor === REPOS_ANCHOR || anchor === CATALOGUES_ANCHOR ? document.getElementById(anchor) : null;
+
+/** A Setup section that asks Warden's server something before it shows, its waiting line in its place until then. */
+type AskingSection = "github" | "write" | "grants" | "repos" | "catalogues";
+/** The sections that ask for anyone: only an Admin's GitHub sections ask for their app's settings. */
+const ASKING_FOR_ANYONE: readonly AskingSection[] = ["grants", "repos", "catalogues"];
+const ASKING_FOR_AN_ADMIN: readonly AskingSection[] = ["github", "write", ...ASKING_FOR_ANYONE];
+/** Tells Setup a section's call has answered, so its waiting line is gone. */
+type OnAnswered = (section: AskingSection) => void;
+type SectionProps = PageProps & { onAnswered: OnAnswered };
+
+/** Once `answered` first turns true, tells Setup that `section` has. */
+function useReportAnswered(answered: boolean, section: AskingSection, onAnswered: OnAnswered) {
+  useEffect(() => {
+    if (answered) onAnswered(section);
+  }, [answered, section, onAnswered]);
+}
 const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
 /** The write app's Setup URL's path, `WriteAppSetupPage`'s route. */
 const WRITE_SETUP_PATH = "/setup/github/write";
@@ -52,6 +77,8 @@ const CANT_START =
 /** One GitHub app's Setup words: its section on Setup and its Connect page (its Setup URL on GitHub). */
 type AppWords = {
   app: WardenApp;
+  /** Its section on Setup. */
+  section: "github" | "write";
   asking: string;
   /** The app's 503: this Warden has no settings for it. */
   notSetUp: string;
@@ -67,6 +94,7 @@ type AppWords = {
 
 const READ_WORDS: AppWords = {
   app: READ_APP,
+  section: "github",
   asking: "Asking Warden's server about GitHub…",
   notSetUp: "GitHub isn't set up on this Warden.",
   adminDoes: "An Admin connects GitHub.",
@@ -79,6 +107,7 @@ const READ_WORDS: AppWords = {
 /** The write app (#224, story 5): the second GitHub app, which Fix PRs go through. */
 const WRITE_WORDS: AppWords = {
   app: WRITE_APP,
+  section: "write",
   asking: "Asking Warden's server about the write app…",
   notSetUp: "Fix PRs aren't set up on this Warden.",
   adminDoes: "An Admin grants write access.",
@@ -102,21 +131,44 @@ export function SetupPage(props: PageProps) {
   // Each app's 403 says the same thing, that the Role changed since /api/me answered, so the app sections share one
   // ask for the Role (#325). Scan now's 403 is a later click, so the repo list keeps the shell's own refreshMe.
   const roleChanged = useOnce(props.refreshMe);
+  // Opened at `#setup-repos` (Findings' "Scan now" link, #342) or `#setup-catalogues` (the Overview's Setup pointer),
+  // the heading comes into view once every section that asks has answered: one still waiting above it would push it
+  // away when its answer shows.
+  const [answered, setAnswered] = useState<ReadonlySet<AskingSection>>(() => new Set());
+  const onAnswered = useCallback<OnAnswered>(
+    (section) => setAnswered((old) => (old.has(section) ? old : new Set(old).add(section))),
+    [],
+  );
+  const asking = props.me.role === "admin" ? ASKING_FOR_AN_ADMIN : ASKING_FOR_ANYONE;
+  useLandOnAnchor(
+    asking.every((section) => answered.has(section)),
+    findLandingHeading,
+  );
+  const sectionProps = { ...props, onAnswered };
   return (
     <>
       <h1>Setup</h1>
       <section className="setup-section" aria-labelledby="setup-github">
         <h2 id="setup-github">GitHub</h2>
-        <AppSection {...props} refreshMe={roleChanged} words={READ_WORDS} />
+        <AppSection {...sectionProps} refreshMe={roleChanged} words={READ_WORDS} />
       </section>
       <section className="setup-section" aria-labelledby="setup-write">
         <h2 id="setup-write">Grant write access</h2>
-        <AppSection {...props} refreshMe={roleChanged} words={WRITE_WORDS} HowTo={WriteAppHowTo} />
-        <WriteGrantList {...props} />
+        <AppSection
+          {...sectionProps}
+          refreshMe={roleChanged}
+          words={WRITE_WORDS}
+          HowTo={WriteAppHowTo}
+        />
+        <WriteGrantList {...sectionProps} />
       </section>
       <section className="setup-section" aria-labelledby={REPOS_ANCHOR}>
         <h2 id={REPOS_ANCHOR}>Repos</h2>
-        <RepoList {...props} />
+        <RepoList {...sectionProps} />
+      </section>
+      <section className="setup-section" aria-labelledby={CATALOGUES_ANCHOR}>
+        <h2 id={CATALOGUES_ANCHOR}>Catalogues</h2>
+        <CatalogueSection {...sectionProps} />
       </section>
     </>
   );
@@ -128,7 +180,7 @@ type AppProps = PageProps & { words: AppWords };
 type HowTo = (props: { notSetUp: boolean }) => ReactNode;
 
 /** An app's section on Setup: its words, and its how-to when it has one. */
-type AppSectionProps = AppProps & { HowTo?: HowTo };
+type AppSectionProps = AppProps & { HowTo?: HowTo; onAnswered: OnAnswered };
 
 /** An Admin's install link, and the app's how-to when it has one; a Lead or a Member reads who does this instead. */
 function AppSection(props: AppSectionProps) {
@@ -165,9 +217,10 @@ function AppNotReady({ app, words }: { app: ReturnType<typeof useGitHubApp>; wor
   );
 }
 
-function InstallLink({ HowTo, ...props }: AppSectionProps) {
+function InstallLink({ HowTo, onAnswered, ...props }: AppSectionProps) {
   const app = useGitHubApp(props);
   const answered = app.result === "loading" ? null : app.result;
+  useReportAnswered(answered !== null, props.words.section, onAnswered);
   return (
     <>
       {answered?.kind === "app" ? (
@@ -273,9 +326,10 @@ function WriteAppHowTo({ notSetUp }: { notSetUp: boolean }) {
 }
 
 /** The Team's write grants, shown to every Role; who granted each (a Clerk user id) isn't shown. */
-function WriteGrantList({ getToken, onSessionEnded }: PageProps) {
+function WriteGrantList({ getToken, onSessionEnded, onAnswered }: SectionProps) {
   const ask = useCallback(() => fetchWriteGrants(getToken), [getToken]);
   const grants = useWardenCall<WriteGrantsResult>(ask, onSessionEnded);
+  useReportAnswered(grants.result !== "loading", "grants", onAnswered);
   if (grants.result === "loading") {
     return <p className="muted">Loading the Team's write access…</p>;
   }
@@ -335,7 +389,7 @@ function withScan(list: ReposResult | "loading", scan: ScanBody): ReposResult | 
   };
 }
 
-function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
+function RepoList({ getToken, me, onSessionEnded, refreshMe, onAnswered }: SectionProps) {
   const ask = useCallback(() => fetchRepos(getToken), [getToken]);
   const list = useWardenCall<ReposResult>(ask, onSessionEnded);
   const { refresh, setResult } = list;
@@ -358,9 +412,7 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
     return () => clearTimeout(next);
   }, [underWay, list.result, refresh]);
 
-  // Opened at `#setup-repos` (Findings' "Scan now" link, #342), the Repos heading comes into view once the list first
-  // answers.
-  useLandOnAnchor(list.result !== "loading", findReposHeading);
+  useReportAnswered(list.result !== "loading", "repos", onAnswered);
 
   async function scanNow(repos: ListedRepoBody[]) {
     if (startRuns.current) return;
@@ -436,6 +488,196 @@ function RepoList({ getToken, me, onSessionEnded, refreshMe }: PageProps) {
         ))}
       </ul>
     </>
+  );
+}
+
+const ONLY_ADMIN_SWITCHES = "Only an Admin turns a Catalogue on or off.";
+
+/** A Catalogue's state in words, never colour alone: on, with the Controls Vouch checks in its order, or off. */
+function catalogueStateWords({ on, controls }: TeamCatalogue): string {
+  if (!on) return "Off.";
+  if (controls.length === 0) return "On: Vouch checks no Controls.";
+  const refs = controls.map((control) => control.ref).join(", ");
+  return `On: Vouch checks ${controls.length} ${controls.length === 1 ? "Control" : "Controls"}: ${refs}.`;
+}
+
+/** The list with `catalogue` in place of the one with its id: what a switch answered, shown at once. */
+function withCatalogue(
+  list: CataloguesResult | "loading",
+  catalogue: TeamCatalogue,
+): CataloguesResult | "loading" {
+  if (list === "loading" || list.kind !== "catalogues") return list;
+  return {
+    ...list,
+    catalogues: list.catalogues.map((old) => (old.id === catalogue.id ? catalogue : old)),
+  };
+}
+
+/**
+ * Setup's Catalogues (spec #341, slice 5): every Catalogue Warden has, whether it's on for the Team, its credit and
+ * licence. Everyone in the Team sees it; only an Admin turns one on or off.
+ */
+function CatalogueSection({ onAnswered, ...props }: SectionProps) {
+  const { getToken, me, onSessionEnded } = props;
+  const ask = useCallback(() => fetchCatalogues(getToken), [getToken]);
+  const list = useWardenCall<CataloguesResult>(ask, onSessionEnded);
+  const { refresh, setResult } = list;
+  // A switch a Team switch dropped (its page gone before the answer) that changed the Team shown now reads the
+  // Catalogues again, whether this page sent it or one the switch replaced.
+  const { team } = me;
+  useEffect(
+    () =>
+      watchCatalogues((changedIn) => {
+        if (changedIn === team) refresh();
+      }),
+    [team, refresh],
+  );
+  const showSwitched = useCallback(
+    (catalogue: TeamCatalogue) => setResult((old) => withCatalogue(old, catalogue)),
+    [setResult],
+  );
+  useReportAnswered(list.result !== "loading", "catalogues", onAnswered);
+
+  if (list.result === "loading") {
+    return <p className="muted">Loading the Team's Catalogues…</p>;
+  }
+  if (list.result.kind !== "catalogues") {
+    return (
+      <>
+        <CallRefused result={list.result} onRetry={list.retry} />
+        <TeamRefused result={list.result} />
+      </>
+    );
+  }
+  if (list.result.catalogues.length === 0) {
+    return <p className="muted">No Catalogues on this Warden.</p>;
+  }
+  return (
+    <ul className="catalogue-list">
+      {list.result.catalogues.map((catalogue) => (
+        <CatalogueEntry
+          key={catalogue.id}
+          {...props}
+          catalogue={catalogue}
+          onSwitched={showSwitched}
+          readAgain={refresh}
+        />
+      ))}
+    </ul>
+  );
+}
+
+type CatalogueEntryProps = PageProps & {
+  catalogue: TeamCatalogue;
+  onSwitched: (catalogue: TeamCatalogue) => void;
+  /** Reads the list again, keeping it on screen until the answer. */
+  readAgain: () => void;
+};
+
+/** One Catalogue: its name and date, its state, when it was last set, an Admin's switch, and its credit and licence. */
+function CatalogueEntry({
+  catalogue,
+  onSwitched,
+  readAgain,
+  getToken,
+  me,
+  onSessionEnded,
+  refreshMe,
+}: CatalogueEntryProps) {
+  const [switching, setSwitching] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  /**
+   * The switch under way, by an object of its own, set at the click so a second click sends nothing. The page leaving
+   * forgets it (a Team switch unmounts Setup), so its answer never shows on another Team's Setup.
+   */
+  const switchCall = useRef<object | null>(null);
+  useEffect(
+    () => () => {
+      switchCall.current = null;
+    },
+    [],
+  );
+
+  async function turn(on: boolean) {
+    if (switchCall.current !== null) return;
+    const call = {};
+    switchCall.current = call;
+    const sentIn = me.team;
+    setSwitching(true);
+    setRefusal(null);
+    const result = await switchCatalogueInTeam(getToken, sentIn, catalogue.id, on);
+    // The page that sent it is gone: the Setup shown now for the Team it was sent in reads its Catalogues again, and
+    // the shell's /api/me (safe after the page has gone) is read again as below.
+    if (switchCall.current !== call) {
+      if (result.kind === "switched") cataloguesChanged(sentIn);
+      if (result.kind === "switched" || result.kind === "forbidden") refreshMe();
+      return;
+    }
+    switchCall.current = null;
+    setSwitching(false);
+    switch (result.kind) {
+      // Turning a Catalogue on or off can change the Team's Level (#374), which the shell reads from /api/me. The list
+      // is read again too, so a newer ask drops an older read a dropped switch started (as Scan now's `started` does).
+      case "switched":
+        onSwitched(result.catalogue);
+        readAgain();
+        return refreshMe();
+      case "forbidden":
+        setRefusal(ONLY_ADMIN_SWITCHES);
+        return refreshMe();
+      case "refused":
+        return setRefusal(result.words);
+      case "team-not-opened":
+        return setRefusal(TEAM_NOT_OPENED);
+      case "too-many-attempts":
+      case "too-many-sign-ins":
+        return setRefusal(tryAgainIn(result.retryAfter));
+      case "not-answering":
+        return setRefusal(NOT_ANSWERING);
+      case "session-ended":
+        return onSessionEnded();
+    }
+  }
+
+  return (
+    <li className="catalogue">
+      <p className="catalogue-name">
+        {catalogue.name}, published {calendarDayWords(catalogue.date)}
+      </p>
+      <p>{catalogueStateWords(catalogue)}</p>
+      {catalogue.set_at !== null && (
+        <p className="muted">
+          {catalogue.on ? "Turned on" : "Turned off"} {dayAndTimeWords(catalogue.set_at)}
+        </p>
+      )}
+      {me.role === "admin" ? (
+        <div className="catalogue-switch">
+          <button
+            type="button"
+            className={catalogue.on ? "secondary" : "primary"}
+            disabled={switching}
+            aria-busy={switching}
+            onClick={() => void turn(!catalogue.on)}
+          >
+            {catalogue.on ? "Turn off" : "Turn on"}
+          </button>
+        </div>
+      ) : (
+        <p className="muted">An Admin turns a Catalogue on or off.</p>
+      )}
+      {refusal !== null && (
+        <p className="notice" role="alert">
+          {refusal}
+        </p>
+      )}
+      <p className="muted">{catalogue.credit}</p>
+      <p className="muted catalogue-licence">
+        Licence:{" "}
+        <a href={catalogue.licence_url} target="_blank" rel="noreferrer">
+          {catalogue.licence}
+        </a>
+      </p>
+    </li>
   );
 }
 

@@ -1,0 +1,97 @@
+// The review log (Vouch, spec #341, slice 3, stories 4 to 7): each review a Lead (or an Admin) made of a judged
+// Control's Verdict, one row per review in `control_reviews` (0018), never changed. This store is the table's only
+// writer, and every call runs inside `withTeam`, so row-level security keeps each Team to its own rows (ADR 0006).
+// Newest is the latest `reviewed_at`, then the highest id; each row is stamped when it is written, so the two agree.
+import type { CatalogueId, ReviewedVerdict, ReviewOutcome, Verdict } from "@warden/contracts";
+import type { Selectable } from "kysely";
+import type { Database } from "../../schema.ts";
+import type { WithTeam } from "../../with-team.ts";
+
+/**
+ * One review as the store answers it: its Control, the Verdict worked out when it was written, what the Lead did and
+ * the Verdict they gave, their reason (null on a confirm without one), who reviewed (a Clerk user id) and when.
+ */
+export type StoredControlReview = {
+  id: string;
+  controlRef: string;
+  workedOutVerdict: Verdict;
+  outcome: ReviewOutcome;
+  verdict: ReviewedVerdict;
+  reason: string | null;
+  reviewedBy: string;
+  reviewedAt: Date;
+};
+
+export interface ControlReviews {
+  /** Writes one review of a Control of `catalogue`, at the time now. */
+  add(
+    team: string,
+    review: Omit<StoredControlReview, "id" | "reviewedAt"> & { catalogue: CatalogueId },
+  ): Promise<void>;
+  /** The newest review of each of `catalogue`'s Controls the Team reviewed: one per Control, ordered by ref. */
+  newest(team: string, catalogue: CatalogueId): Promise<StoredControlReview[]>;
+  /** Every review the Team made of `catalogue`'s Control `controlRef`, newest first. */
+  history(team: string, catalogue: CatalogueId, controlRef: string): Promise<StoredControlReview[]>;
+}
+
+const stored = (row: Selectable<Database["control_reviews"]>): StoredControlReview => ({
+  id: row.id,
+  controlRef: row.control_ref,
+  workedOutVerdict: row.worked_out_verdict,
+  outcome: row.outcome,
+  verdict: row.verdict,
+  reason: row.reason,
+  reviewedBy: row.reviewed_by,
+  reviewedAt: row.reviewed_at,
+});
+
+export function createControlReviews({ withTeam }: { withTeam: WithTeam }): ControlReviews {
+  return {
+    async add(team, review) {
+      await withTeam(team, (tx) =>
+        tx
+          .insertInto("control_reviews")
+          .values({
+            team_id: team,
+            catalogue: review.catalogue,
+            control_ref: review.controlRef,
+            worked_out_verdict: review.workedOutVerdict,
+            outcome: review.outcome,
+            verdict: review.verdict,
+            reason: review.reason,
+            reviewed_by: review.reviewedBy,
+          })
+          .execute(),
+      );
+    },
+
+    async newest(team, catalogue) {
+      const rows = await withTeam(team, (tx) =>
+        tx
+          .selectFrom("control_reviews")
+          .distinctOn("control_ref")
+          .selectAll()
+          .where("catalogue", "=", catalogue)
+          .orderBy("control_ref")
+          .orderBy("reviewed_at", "desc")
+          .orderBy("id", "desc")
+          .execute(),
+      );
+      return rows.map(stored);
+    },
+
+    async history(team, catalogue, controlRef) {
+      const rows = await withTeam(team, (tx) =>
+        tx
+          .selectFrom("control_reviews")
+          .selectAll()
+          .where("catalogue", "=", catalogue)
+          .where("control_ref", "=", controlRef)
+          .orderBy("reviewed_at", "desc")
+          .orderBy("id", "desc")
+          .execute(),
+      );
+      return rows.map(stored);
+    },
+  };
+}

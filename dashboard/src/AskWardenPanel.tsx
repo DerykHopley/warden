@@ -14,6 +14,7 @@ import {
 } from "react";
 import type { Role } from "@warden/contracts";
 import { askAboutTeam, type GetToken } from "./api.ts";
+import { ControlCard } from "./ControlCard.tsx";
 import { DetailCard } from "./DetailCard.tsx";
 import { shortId } from "./findings.ts";
 import {
@@ -266,6 +267,23 @@ export function AskWardenPanel(props: {
             onSessionEnded={onSessionEnded}
           />
         )}
+        {context.control !== null && (
+          <ControlCard
+            key={`${context.control.catalogue.id} ${context.control.control.ref}`}
+            focus={context.control}
+            team={team}
+            getToken={getToken}
+            userId={props.userId}
+            role={props.role}
+            refreshMe={props.refreshMe}
+            clerkUsers={clerkUsers}
+            onClear={() => {
+              focusNext.current = "input";
+              context.control?.clear();
+            }}
+            onSessionEnded={onSessionEnded}
+          />
+        )}
         <ol className="chat-messages" aria-label="Messages">
           {messages.map((message, i) => (
             <li key={i} className={`chat-message from-${message.from}`} data-from={message.from}>
@@ -295,8 +313,9 @@ export function AskWardenPanel(props: {
 }
 
 /**
- * What "this" means to the chat: "Talking about: 3f9a1c2e · view: Findings, Open, High", the focused item's short id
- * in mono; without a focus "Talking about: view: Findings, Open".
+ * What "this" means to the chat: "Talking about: 3f9a1c2e · view: Findings, Open, High", the focused Finding's short
+ * id in mono, or a focused Control's ref ("Talking about: 1.3.3 · view: Overview"); without a focus "Talking about:
+ * view: Findings, Open".
  */
 export function ContextLine({ context }: { context: PanelContext }) {
   return (
@@ -305,6 +324,11 @@ export function ContextLine({ context }: { context: PanelContext }) {
       {context.focus !== null && (
         <>
           <code>{shortId(context.focus.id)}</code> ·{" "}
+        </>
+      )}
+      {context.control !== null && (
+        <>
+          <code>{context.control.control.ref}</code> ·{" "}
         </>
       )}
       view: {context.view.join(", ")}

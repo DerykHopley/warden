@@ -7,6 +7,7 @@ import type {
   Actor,
   Asset,
   AssetKind,
+  CatalogueId,
   Control,
   Evidence,
   HistoryCauseKind,
@@ -14,11 +15,14 @@ import type {
   Module,
   ProposalDecision,
   ProposalState,
+  ReviewedVerdict,
+  ReviewOutcome,
   Role,
   ScanState,
   Severity,
   Status,
   Usage,
+  Verdict,
 } from "@warden/contracts";
 
 /** A jsonb column written as a JSON string and read back parsed. */
@@ -213,6 +217,38 @@ export interface Database {
     branch: string;
     opened_by: string;
     at: Generated<Date>;
+  };
+
+  /**
+   * A Catalogue a Team has set on or off (0017_team_catalogues), who set it (an Admin's Clerk user id) and when: one
+   * row per Team and Catalogue, replaced on each change. No row: off. Written only by the Vouch module's Team
+   * Catalogues store.
+   */
+  team_catalogues: {
+    team_id: string;
+    catalogue: CatalogueId;
+    turned_on: boolean;
+    set_by: string;
+    set_at: Generated<Date>;
+  };
+
+  /**
+   * A review of a judged Control's Verdict (0018_control_reviews): the Verdict the server worked out when it was
+   * written, a confirm or an override, the reviewed Verdict, the reason (required on an override), who reviewed (a
+   * Clerk user id) and when. Append-only: rows are only ever inserted. Written only by the Vouch module's Control
+   * Reviews store; a Control's newest row is its review. Ids are bigint, read back as strings.
+   */
+  control_reviews: {
+    team_id: string;
+    id: Generated<string>;
+    catalogue: CatalogueId;
+    control_ref: string;
+    worked_out_verdict: Verdict;
+    outcome: ReviewOutcome;
+    verdict: ReviewedVerdict;
+    reason: string | null;
+    reviewed_by: string;
+    reviewed_at: Generated<Date>;
   };
 
   /**

@@ -7,6 +7,9 @@ export type Refused =
   | { kind: "too-many-attempts"; retryAfter: number | null }
   | { kind: "not-answering" };
 
+/** 403 and 409 on a Team's call, read as every page reads them. */
+export type TeamRefusal = { kind: "no-team" } | { kind: "team-not-opened" };
+
 export type GetToken = () => Promise<string | null>;
 
 export async function callWarden(

@@ -1,13 +1,22 @@
-// The Overview page (story 10): the journey cards with their states in words and their bars, the trend line, the audit
-// section, and each answer GET /api/overview can get. It renders OverviewPage alone with spy props, Warden's server
-// faked. Which card is in which state, and the trend's wordings, are tested below the page, in overview.test.ts.
+// The Overview page (story 10, and spec #341's stories 8 and 9): the journey cards with their states in words and their
+// bars, the trend line, the audit section with its answer, Setup pointer, Control rows and credit, and each answer GET
+// /api/overview can get. It renders OverviewPage alone with spy props, Warden's server faked; focusing a Control in
+// the Ask Warden panel (spec #341, slice 7a) renders the whole App, Clerk faked. Which card is in which state, the
+// trend's and the answer's wordings, and which rows a Catalogue shows with which Verdict, are tested below the page, in
+// overview.test.ts; the Control card's parts, in ControlCard.test.tsx.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { OverviewBody } from "@warden/contracts";
+import type { OverviewBody, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { App } from "../src/App.tsx";
 import { OverviewPage } from "../src/Overview.tsx";
+import { journeyCards } from "../src/overview.ts";
+import { auditRow, controlDetail, ISA, isaOn, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
+import { clerk, resetClerk } from "./fake-clerk.tsx";
 import { TEAM } from "./findings-fixture.ts";
+
+vi.mock("@clerk/react", () => import("./fake-clerk.tsx"));
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -22,6 +31,7 @@ const scannedOn = new Date(SCANNED).toLocaleDateString(undefined, { dateStyle: "
 const overview = (fields: Partial<OverviewBody> = {}): OverviewBody => ({
   team: TEAM,
   level: "quick",
+  audit: NO_CATALOGUE,
   last_scan_at: SCANNED,
   has_findings: true,
   period_days: 30,
@@ -33,13 +43,20 @@ const overview = (fields: Partial<OverviewBody> = {}): OverviewBody => ({
 
 const answer = (fields: Partial<OverviewBody> = {}) => json(200, overview(fields));
 
-/** Renders OverviewPage with GET /api/overview answering `fields` unless `routes` says otherwise. */
-function open(fields: Partial<OverviewBody> = {}, routes: Routes = {}) {
+/**
+ * Renders OverviewPage for an Admin (or `role`) with GET /api/overview answering `fields` unless `routes` says
+ * otherwise.
+ */
+function open(
+  fields: Partial<OverviewBody> = {},
+  routes: Routes = {},
+  role: Role | null = "admin",
+) {
   window.history.replaceState(null, "", "/overview");
   serve({ overview: () => answer(fields), ...routes });
   const props = {
     getToken: vi.fn(async () => "session-token" as string | null),
-    me: { userId: "user_ada", team: TEAM, role: "admin" as const, level: "quick" as const },
+    me: { userId: "user_ada", team: TEAM, role, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
     panel: { setContext: vi.fn(), open: vi.fn() },
@@ -111,6 +128,413 @@ describe("the page", () => {
     );
     expect(within(audit).queryAllByRole("row")).toEqual([]);
     expect(within(audit).queryAllByRole("listitem")).toEqual([]);
+  });
+});
+
+const auditSection = async () =>
+  within(await screen.findByRole("region", { name: "Are we ready for the audit?" }));
+const NO_CATALOGUE_LINE = "Warden can answer this at Audit-ready, once Vouch checks your Controls.";
+const rowsOf = async () =>
+  (await auditSection())
+    .getByRole("list", { name: "VDA ISA 2027.1 Controls" })
+    .querySelectorAll<HTMLElement>(":scope > li");
+/** The row of Control `ref`. */
+const rowOf = async (ref: string) => {
+  const row = [...(await rowsOf())].find(
+    (li) => li.querySelector(".audit-ref")?.textContent === ref,
+  );
+  if (row === undefined) throw new Error(`no row for ${ref}`);
+  return within(row);
+};
+
+describe("the audit section with no Catalogue on (spec #341)", () => {
+  it("points an Admin to Setup's Catalogues, under the muted line, with no Control list", async () => {
+    open();
+    const audit = await auditSection();
+    expect(audit.getByText(NO_CATALOGUE_LINE)).toHaveClass("muted");
+    const setup = audit.getByRole("link", { name: "Setup" });
+    expect(setup).toHaveAttribute("href", "/setup#setup-catalogues");
+    expect(setup.parentElement).toHaveTextContent(/^Turn on a Catalogue on Setup\.$/);
+    expect(setup.parentElement).toHaveClass("setup-line");
+    expect(audit.queryByRole("list")).toBeNull();
+  });
+
+  it.each(["lead", "member"] as const)(
+    "tells a %s an Admin turns one on, with no link",
+    async (role) => {
+      open({}, {}, role);
+      const audit = await auditSection();
+      expect(audit.getByText("An Admin turns on a Catalogue on Setup.")).toBeInTheDocument();
+      expect(audit.queryByRole("link")).toBeNull();
+      expect(audit.queryByRole("list")).toBeNull();
+    },
+  );
+
+  it("shows no pointer while the role isn't known", async () => {
+    open({}, {}, null);
+    const audit = await auditSection();
+    expect(audit.getByText(NO_CATALOGUE_LINE)).toBeInTheDocument();
+    expect(audit.queryByRole("link")).toBeNull();
+    expect(audit.queryByText("An Admin turns on a Catalogue on Setup.")).toBeNull();
+  });
+});
+
+describe("the audit section with ISA2027 on (spec #341, story 8)", () => {
+  it("answers in one line in the heading font, with no Setup pointer", async () => {
+    open({ audit: isaOn({ gaps: 2, waiting: 1 }) });
+    const audit = await auditSection();
+    expect(audit.getByText("Not yet: 2 Gaps, 1 Control waiting for review.")).toHaveClass(
+      "audit-answer",
+    );
+    expect(audit.queryByText(NO_CATALOGUE_LINE)).toBeNull();
+    expect(audit.queryByRole("link", { name: "Setup" })).toBeNull();
+  });
+
+  it("lists its Controls under an h3 of its name, in the server's order, each with its ref, question and words", async () => {
+    open({ audit: isaOn() });
+    const audit = await auditSection();
+    expect(audit.getByRole("heading", { level: 3, name: "VDA ISA 2027.1" })).toBeInTheDocument();
+    const rows = [...(await rowsOf())];
+    expect(rows.map((row) => row.querySelector(".audit-ref")?.textContent)).toEqual([
+      "1.3.3",
+      "1.3.4",
+      "4.1.3",
+      "5.2.4",
+    ]);
+    const first = within(rows[0]!);
+    expect(first.getByText("Question 1.3.3?")).toBeInTheDocument();
+    expect(first.getByText("Not evidenced")).toHaveClass("audit-verdict");
+    expect(first.getByText("Not reviewed")).toBeInTheDocument();
+  });
+
+  it("shows the row's Verdict by shownVerdict: an overridden one, not the worked-out one", async () => {
+    open({
+      audit: isaOn({
+        controls: [
+          auditRow("1.3.3", {
+            verdict: "evidenced",
+            review_state: "reviewed",
+            reviewed_verdict: "not_applicable",
+          }),
+        ],
+      }),
+    });
+    const overridden = await rowOf("1.3.3");
+    expect(overridden.getByText("Not applicable")).toHaveClass("audit-verdict");
+    expect(overridden.getByText("Reviewed")).toHaveClass("audit-review");
+  });
+
+  it("shows Gap in a pill on a Gap's row only", async () => {
+    open({
+      audit: isaOn({
+        gaps: 1,
+        controls: [
+          auditRow("1.3.3", {
+            review_state: "reviewed",
+            reviewed_verdict: "not_evidenced",
+            gap: true,
+          }),
+          reviewedRow("1.3.4"),
+        ],
+      }),
+    });
+    expect((await rowOf("1.3.3")).getByText("Gap")).toHaveClass("audit-gap");
+    expect((await rowOf("1.3.4")).queryByText("Gap")).toBeNull();
+  });
+
+  it("gives the credit and the licence, a link opening in a new tab, under the rows", async () => {
+    open({ audit: isaOn() });
+    const audit = await auditSection();
+    const credit = audit.getByText("© 2026 ENX Association.");
+    expect(credit).toHaveClass("muted");
+    const licence = audit.getByRole("link", { name: "CC BY-ND 4.0" });
+    expect(licence.parentElement).toHaveTextContent(/^Licence: CC BY-ND 4\.0$/);
+    expect(licence).toHaveAttribute("href", ISA.licence_url);
+    expect(licence).toHaveAttribute("target", "_blank");
+    expect(licence).toHaveAttribute("rel", "noreferrer");
+    const list = audit.getByRole("list", { name: "VDA ISA 2027.1 Controls" });
+    expect(list.compareDocumentPosition(credit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("makes each row one button holding all its parts, and no row a link", async () => {
+    open({ audit: isaOn() });
+    const audit = await auditSection();
+    for (const row of await rowsOf()) {
+      const [button, ...others] = within(row).getAllByRole("button");
+      expect(others).toHaveLength(0);
+      expect(button).toHaveClass("audit-control-button");
+      expect(button!.parentElement).toBe(row);
+      expect(
+        button!.querySelectorAll(".audit-ref, .audit-question, .audit-verdict, .audit-review"),
+      ).toHaveLength(4);
+      expect(button).not.toHaveAttribute("aria-current");
+    }
+    expect(audit.getAllByRole("link").map((link) => link.textContent)).toEqual(["CC BY-ND 4.0"]);
+  });
+
+  it("tells the panel nothing with no Control in focus", async () => {
+    const { panel } = open({ audit: isaOn() });
+    await auditSection();
+    expect(panel.setContext).toHaveBeenLastCalledWith(null);
+    expect(panel.open).not.toHaveBeenCalled();
+  });
+
+  it("clears the panel's Control as the page goes", async () => {
+    window.history.replaceState(null, "", "/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    serve({ overview: () => answer({ audit: isaOn() }) });
+    const setContext = vi.fn();
+    const { unmount } = render(
+      <OverviewPage
+        getToken={async () => "session-token"}
+        me={{ userId: "user_ada", team: TEAM, role: "admin", level: "quick" }}
+        onSessionEnded={vi.fn()}
+        refreshMe={vi.fn()}
+        panel={{ setContext, open: vi.fn() }}
+      />,
+    );
+    await vi.waitFor(() =>
+      expect(setContext).toHaveBeenLastCalledWith(
+        expect.objectContaining({ control: expect.objectContaining({ catalogue: ISA }) }),
+      ),
+    );
+    unmount();
+    expect(setContext).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe("focusing a Control (spec #341, slice 7a)", () => {
+  beforeEach(() => {
+    resetClerk();
+    clerk.auth.isSignedIn = true;
+    clerk.auth.sessionId = "sess_1";
+    clerk.auth.orgId = TEAM;
+    clerk.orgNames = { [TEAM]: "Acme" };
+  });
+
+  /** Opens `url` in the whole App as a Lead, ISA2027 on, each Control's read answering `control` unless given. */
+  function openApp(url: string, control: Routes["control"] = (_, ref) => readOf(ref)) {
+    window.history.replaceState(null, "", url);
+    serve({
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      overview: () => answer({ audit: isaOn() }),
+      control,
+    });
+    return render(<App />);
+  }
+  const readOf = (ref: string) =>
+    json(200, controlDetail(ref, { reason: `Reason ${ref}`, question: `Question ${ref}?` }));
+
+  const rowButton = async (ref: string) => (await rowOf(ref)).getByRole("button");
+  const panel = () => screen.queryByRole("complementary", { name: "Ask Warden" });
+  const cardOf = (ref: string) =>
+    within(panel()!).queryByRole("region", { name: `Question ${ref}?` });
+  const address = () => location.pathname + location.search;
+
+  it("clicking a row puts it in the address in place, marks it current and opens a closed panel with its card", async () => {
+    openApp("/overview");
+    const button = await rowButton("1.3.3");
+    expect(panel()).toBeNull();
+    const entries = history.length;
+
+    await userEvent.click(button);
+    expect(address()).toBe("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    expect(history.length).toBe(entries);
+    expect(button).toHaveAttribute("aria-current", "true");
+    expect(await rowButton("1.3.4")).not.toHaveAttribute("aria-current");
+    expect(cardOf("1.3.3")).toBeVisible();
+    expect(await within(cardOf("1.3.3")!).findByText("Reason 1.3.3")).toBeVisible();
+  });
+
+  it("a direct link to 1.3.4 selects it and opens its card", async () => {
+    openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.4");
+    expect(await screen.findByRole("complementary", { name: "Ask Warden" })).toBeVisible();
+    expect(await rowButton("1.3.4")).toHaveAttribute("aria-current", "true");
+    expect(await within(cardOf("1.3.4")!).findByText("Reason 1.3.4")).toBeVisible();
+    expect(address()).toBe("/overview?catalogue=vda-isa-2027.1&control=1.3.4");
+  });
+
+  // Which addresses name a Control the answer holds is focusedControl's, in overview.test.ts.
+  it("a link to a Control the answer doesn't hold selects nothing, opens nothing, and only its params leave the address", async () => {
+    openApp("/overview?tab=x&catalogue=vda-isa-2027.1&control=9.9.9#notes");
+    for (const ref of ["1.3.3", "1.3.4", "4.1.3", "5.2.4"]) {
+      expect(await rowButton(ref)).not.toHaveAttribute("aria-current");
+    }
+    await vi.waitFor(() => expect(address()).toBe("/overview?tab=x"));
+    expect(location.hash).toBe("#notes");
+    expect(panel()).toBeNull();
+    expect(callsTo("/api/vouch/catalogues/vda-isa-2027.1/controls/9.9.9")).toHaveLength(0);
+  });
+
+  it("selecting a row changes only the Control in the address, keeping its other params, its hash and the entry's state", async () => {
+    openApp("/overview?tab=x#notes");
+    const button = await rowButton("1.3.3");
+    history.replaceState({ kept: true }, "", location.href);
+
+    await userEvent.click(button);
+    expect(address()).toBe("/overview?tab=x&catalogue=vda-isa-2027.1&control=1.3.3");
+    expect(location.hash).toBe("#notes");
+    expect(history.state).toEqual({ kept: true });
+  });
+
+  it("a Team switch drops the focus, so a panel closed on the old Team stays closed on the new one", async () => {
+    const { rerender } = openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    await screen.findByRole("complementary", { name: "Ask Warden" });
+    await userEvent.click(screen.getByRole("button", { name: "Close Ask Warden" }));
+    expect(panel()).toBeNull();
+
+    clerk.auth.orgId = "org_b";
+    clerk.orgNames = { ...clerk.orgNames, org_b: "Bluebird" };
+    serve({
+      me: () => json(200, { userId: "user_ada", team: "org_b", role: "lead", level: "quick" }),
+      overview: () => json(200, { ...overview({ audit: isaOn() }), team: "org_b" }),
+      control: (_, ref) => readOf(ref),
+    });
+    rerender(<App />);
+    await vi.waitFor(() => expect(callsTo("/api/overview").length).toBeGreaterThanOrEqual(2));
+    expect(await rowButton("1.3.3")).not.toHaveAttribute("aria-current");
+    expect(address()).toBe("/overview");
+    expect(panel()).toBeNull();
+  });
+
+  it("the card's ✕ removes the focus from the address, and the panel stays open", async () => {
+    openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    await screen.findByRole("complementary", { name: "Ask Warden" });
+    await userEvent.click(
+      within(cardOf("1.3.3")!).getByRole("button", { name: "Clear the focus" }),
+    );
+    expect(address()).toBe("/overview");
+    expect(panel()).toBeVisible();
+    expect(cardOf("1.3.3")).toBeNull();
+    expect(await rowButton("1.3.3")).not.toHaveAttribute("aria-current");
+    expect(within(panel()!).getByText(/^Talking about:/)).toHaveTextContent(
+      /^Talking about: view: Overview$/,
+    );
+  });
+
+  it("when the card's read is newer than the row, the Overview asks again once, and the row shows what the card does", async () => {
+    const reviewed = { verdict: "not_evidenced", review_state: "reviewed" } as const;
+    const answers = [isaOn(), isaOn({ controls: [auditRow("1.3.3", reviewed)] })];
+    window.history.replaceState(null, "", "/overview");
+    serve({
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      overview: () => answer({ audit: answers.shift() ?? isaOn() }),
+      control: (_, ref) => json(200, controlDetail(ref, reviewed)),
+    });
+    render(<App />);
+    const row = await rowOf("1.3.3");
+    expect(row.getByText("Not reviewed")).toBeVisible();
+
+    await userEvent.click(row.getByRole("button"));
+    expect(await row.findByText("Reviewed")).toBeVisible();
+    expect(within(cardOf("1.3.3")!).getByText("Reviewed")).toBeVisible();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(callsTo("/api/overview")).toHaveLength(2);
+  });
+
+  it("a read that agrees with the row asks the Overview nothing more", async () => {
+    openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    await screen.findByRole("complementary", { name: "Ask Warden" });
+    expect(await within(cardOf("1.3.3")!).findByText("Reason 1.3.3")).toBeVisible();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(callsTo("/api/overview")).toHaveLength(1);
+  });
+
+  it("a read that answers after the focus moved to another Control doesn't show on that Control's card", async () => {
+    const late = deferred<Response>();
+    openApp("/overview", (_, ref) => (ref === "1.3.3" ? late.promise : readOf(ref)));
+    await userEvent.click(await rowButton("1.3.3"));
+    expect(await within(cardOf("1.3.3")!).findByText("Loading the Control…")).toBeVisible();
+
+    await userEvent.click(await rowButton("1.3.4"));
+    expect(await within(cardOf("1.3.4")!).findByText("Reason 1.3.4")).toBeVisible();
+    late.resolve(readOf("1.3.3"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(within(panel()!).queryByText("Reason 1.3.3")).toBeNull();
+    expect(cardOf("1.3.3")).toBeNull();
+    expect(within(cardOf("1.3.4")!).getByText("Reason 1.3.4")).toBeVisible();
+  });
+
+  // Slice 7b: a Lead's review in the card, and the row after it (story 7).
+  const REVIEWS_133 = "/api/vouch/catalogues/vda-isa-2027.1/controls/1.3.3/reviews";
+  const confirmed133 = () =>
+    json(
+      201,
+      controlDetail("1.3.3", {
+        reason: "Reason 1.3.3",
+        review_state: "reviewed",
+        reviewed_verdict: "not_evidenced",
+        reviews: [
+          {
+            id: "r-1",
+            worked_out_verdict: "not_evidenced",
+            outcome: "confirmed",
+            verdict: "not_evidenced",
+            reason: null,
+            reviewed_by: "user_ada",
+            reviewed_at: "2026-11-25T10:30:00Z",
+          },
+        ],
+      }),
+    );
+  const confirmIn = async (card: HTMLElement) => {
+    await userEvent.click(await within(card).findByRole("button", { name: "Confirm" }));
+    await userEvent.click(
+      within(within(card).getByRole("form")).getByRole("button", { name: "Confirm" }),
+    );
+  };
+
+  it("after a review in the card, the Overview asks again once, and the row shows the new review state", async () => {
+    const answers = [isaOn(), isaOn({ controls: [reviewedRow("1.3.3", "not_evidenced")] })];
+    window.history.replaceState(null, "", "/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    serve({
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      overview: () => answer({ audit: answers.shift() ?? isaOn() }),
+      control: (_, ref) => readOf(ref),
+      review: confirmed133,
+    });
+    render(<App />);
+    const row = await rowOf("1.3.3");
+    expect(row.getByText("Not reviewed")).toBeVisible();
+    await confirmIn(await vi.waitFor(() => cardOf("1.3.3")!));
+
+    expect(await within(cardOf("1.3.3")!).findByRole("status")).toHaveTextContent("Confirmed.");
+    expect(await row.findByText("Reviewed")).toBeVisible();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(callsTo(REVIEWS_133)).toHaveLength(1);
+    expect(callsTo("/api/overview")).toHaveLength(2);
+  });
+
+  it("a review's answer that arrives after the focus moved to another Control doesn't show on that Control's card, and the Overview still asks again", async () => {
+    const late = deferred<Response>();
+    openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    serve({
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      overview: () => answer({ audit: isaOn() }),
+      control: (_, ref) => readOf(ref),
+      review: () => late.promise,
+    });
+    await confirmIn(await vi.waitFor(() => cardOf("1.3.3")!));
+    await vi.waitFor(() => expect(callsTo(REVIEWS_133)).toHaveLength(1));
+
+    await userEvent.click(await rowButton("1.3.4"));
+    const card134 = within(cardOf("1.3.4")!);
+    expect(await card134.findByText("Reason 1.3.4")).toBeVisible();
+    late.resolve(confirmed133());
+    await vi.waitFor(() => expect(callsTo("/api/overview")).toHaveLength(2));
+    expect(card134.queryByRole("status")).toBeNull();
+    expect(card134.queryByText("Confirmed: Not evidenced")).toBeNull();
+    expect(card134.getByText("No reviews yet.")).toBeVisible();
+    expect(cardOf("1.3.3")).toBeNull();
+  });
+});
+
+describe("the journey with a Catalogue on (spec #341, story 9)", () => {
+  it("gives the Audit-ready card the note journeyCards works out from the answer", async () => {
+    const audit = isaOn({ waiting: 3, controls: [reviewedRow("1.3.3"), auditRow("1.3.4")] });
+    open({ audit });
+    await screen.findByRole("list", { name: "The journey" });
+    const [note] = journeyCards("quick", SCANNED, audit)[2]!.notes;
+    expect(cardOf("Audit-ready").getByText(note!)).toHaveClass("journey-note");
   });
 });
 

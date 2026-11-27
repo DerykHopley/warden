@@ -97,6 +97,60 @@ export const DAHLIA = {
   people: [DOROTHY, ANNIE],
 };
 
+export const MARY: Person = {
+  userId: "user_e2e_mary",
+  firstName: "Mary",
+  lastName: "Jackson",
+  email: "mary@elm.test",
+};
+
+export const EVELYN: Person = {
+  userId: "user_e2e_evelyn",
+  firstName: "Evelyn",
+  lastName: "Granville",
+  email: "evelyn@elm.test",
+};
+
+/**
+ * A fifth Team for spec #341's stories 8 and 9 (e2e/overview.spec.ts), with no demo seed and no Scan: it turns VDA ISA
+ * 2027.1 on and reviews its Controls, which can't be undone, so no other spec's Overview or Setup reads it.
+ */
+export const ELM = {
+  id: "org_e2e_elm",
+  name: "Elm",
+  admin: MARY,
+  people: [MARY, EVELYN],
+};
+
+export const FRANCES: Person = {
+  userId: "user_e2e_frances",
+  firstName: "Frances",
+  lastName: "Allen",
+  email: "frances@fir.test",
+};
+
+export const JOAN: Person = {
+  userId: "user_e2e_joan",
+  firstName: "Joan",
+  lastName: "Clarke",
+  email: "joan@fir.test",
+};
+
+/**
+ * A sixth Team for spec #341's Control card (e2e/control-card.spec.ts): one Repo Asset, `FIR_REPO`, and a Guard Scan
+ * of it under both of 1.3.3's Rules with one Open `guard/unapproved-ai-tool` Finding, so 1.3.3 is Partly evidenced.
+ * Its review and its Finding's False positive can't be undone, so no other spec reads Fir.
+ */
+export const FIR = {
+  id: "org_e2e_fir",
+  name: "Fir",
+  admin: FRANCES,
+  people: [FRANCES, JOAN],
+};
+
+/** Fir's one Repo Asset, linked by the global setup. */
+export const FIR_REPO = { ref: "https://github.com/fir/assistant", githubId: 5251 };
+
 export type Team = typeof ACME;
 
 /**
@@ -227,6 +281,31 @@ export async function asAdmin(team: Team) {
   const token = await sessionToken(await signingKey(), origin, team.admin, team, "admin");
   return { origin, headers: { Authorization: `Bearer ${token}` } };
 }
+
+/** Calls the API at `path` as `team`'s Admin with `body` as JSON; throws unless it answers 2xx. */
+export async function sendAsAdmin(
+  team: Team,
+  method: "PUT" | "POST",
+  path: string,
+  body: object,
+): Promise<void> {
+  const { origin, headers } = await asAdmin(team);
+  const res = await fetch(`${origin}${path}`, {
+    method,
+    headers: { ...headers, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`${method} ${path} in ${team.name}: ${res.status} ${await res.text()}`);
+  }
+}
+
+/** Where VDA ISA 2027.1 is turned on or off, and its Controls reviewed under `/controls/<ref>/reviews`. */
+export const ISA_PATH = "/api/vouch/catalogues/vda-isa-2027.1";
+
+/** Turns VDA ISA 2027.1 on or off for `team`, as its Admin, before a test reads Setup or the Overview. */
+export const switchCatalogue = (team: Team, on: boolean) =>
+  sendAsAdmin(team, "PUT", ISA_PATH, { on });
 
 /** `team`'s Products, asked with the Admin call the caller already made, so its token is minted once. */
 async function listProducts(team: Team, { origin, headers }: Awaited<ReturnType<typeof asAdmin>>) {

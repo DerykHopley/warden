@@ -72,3 +72,4 @@ export * from "./repos.ts";
 export * from "./hook.ts";
 export * from "./products.ts";
 export * from "./patch.ts";
+export * from "./vouch.ts";

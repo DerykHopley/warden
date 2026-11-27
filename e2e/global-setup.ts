@@ -4,10 +4,11 @@
 // moment first (`scan-job-start-delay.ts`). The server has the write app's settings, with a key pair made for the run,
 // and it and its Scan Jobs reach GitHub only through the fake (`fake-github.ts`, installed by `fake-github-preload.ts`),
 // which logs each of the server's calls to a file in a temporary folder (`E2E_FAKE_GITHUB_LOG`, handed to the server
-// and the test workers; a Scan Job doesn't get it, so the fake refuses its writes). Acme, Bluebird, Cedar and
-// Dahlia are opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets
+// and the test workers; a Scan Job doesn't get it, so the fake refuses its writes). Acme, Bluebird, Cedar, Dahlia, Elm
+// and Fir are opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets
 // and a stale Guard Scan of them (`seedCedarRepos`); Dahlia gets one Repo Asset, a write grant and an Open Finding for
-// story 6's Fix PR (`seedDahliaFixPr`); Acme and Bluebird are then filled by the demo seed (`server/src/seed.ts`)
+// story 6's Fix PR (`seedDahliaFixPr`); Fir gets one Repo Asset and a Guard Scan of it with an Open Finding under
+// 1.3.3 for the Control card (`seedFirControl`); Acme and Bluebird are then filled by the demo seed (`server/src/seed.ts`)
 // without its demo Product (`--no-product`), so the Findings their tests count stay the demo ones. Returns the
 // teardown: the server stopped, the database dropped, the build and the fake's log removed.
 import { spawn } from "node:child_process";
@@ -40,9 +41,15 @@ import {
   DAHLIA,
   DAHLIA_REPO,
   DOROTHY,
+  ELM,
+  EVELYN,
+  FIR,
+  FIR_REPO,
+  FRANCES,
   FRONTEND_API_HOST,
   GRACE,
   HEDY,
+  JOAN,
   KATHERINE,
   MARGARET,
   sessionToken,
@@ -204,6 +211,44 @@ async function seedDahliaFixPr(connection: { host: string; port: number }, datab
   });
 }
 
+/** The installation Fir's Repo Asset is linked through: not one another Team's or the Setup tests' links use. */
+const FIR_INSTALLATION = 5250;
+
+/**
+ * Fir's Control card for spec #341 (slice 7a), as warden_app inside withTeam: its one Repo Asset, as Frances's link
+ * would write it, and a Guard Scan of it an hour ago under both of 1.3.3's Rules, reconciled as the demo seed's are,
+ * with one Open `guard/unapproved-ai-tool` Finding: one Rule is Partly evidenced and the other Evidenced, so 1.3.3 is
+ * Partly evidenced, "1 Open Finding on 1 Repo".
+ */
+async function seedFirControl(connection: { host: string; port: number }, database: string) {
+  await withAppPool(connection, database, async (withTeam) => {
+    await createRepoAssets({ withTeam }).link(FIR.id, {
+      installationId: FIR_INSTALLATION,
+      linkedBy: FRANCES.userId,
+      repos: [FIR_REPO],
+    });
+    const asset = { kind: "repo", ref: FIR_REPO.ref } as const;
+    await createFindings({ withTeam, moveRules: MOVE_RULES }).reconcile({
+      id: "e2e-fir-guard-1",
+      team: FIR.id,
+      module: "guard",
+      started_at: new Date(Date.now() - 3_600_000).toISOString(),
+      assets: [asset],
+      rules: ["guard/unapproved-ai-tool", "guard/mcp-server-unpinned"],
+      observations: [
+        {
+          asset,
+          rule_id: "guard/unapproved-ai-tool",
+          location: { kind: "file", path: ".cursor" },
+          severity: "medium",
+          title: "Another AI tool's config is in the repo",
+          evidence: { summary: "Cursor config in 1 path (.cursor/rules)." },
+        },
+      ],
+    });
+  });
+}
+
 export default async function globalSetup() {
   const cleanup: (() => Promise<unknown> | void)[] = [];
   const teardown = async () => {
@@ -313,6 +358,13 @@ export default async function globalSetup() {
     await open(DAHLIA.admin, DAHLIA, "admin");
     await open(ANNIE, DAHLIA, "member");
     await seedDahliaFixPr(connection, database.name);
+    // Elm is spec #341's stories 8 and 9's alone (e2e/overview.spec.ts): no seed, no Scan.
+    await open(ELM.admin, ELM, "admin");
+    await open(EVELYN, ELM, "member");
+    // Fir is the Control card's alone (e2e/control-card.spec.ts): Joan, its Member, reads the review.
+    await open(FIR.admin, FIR, "admin");
+    await open(JOAN, FIR, "member");
+    await seedFirControl(connection, database.name);
     for (const team of [ACME, BLUEBIRD]) {
       await run(process.execPath, ["server/src/seed.ts", team.id, "--no-product"], {
         ...db,

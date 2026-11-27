@@ -1,7 +1,7 @@
 // The Ask Warden panel's rules (docs/design.md: Side panel, Chat context, Layout): its starting state by window width
 // and a person's stored choice, what a change shows and what it chooses, how each state shows at a width, and the
 // context line's view words.
-import type { Finding, FindingsView } from "@warden/contracts";
+import type { AuditCatalogue, AuditControl, Finding, FindingsView } from "@warden/contracts";
 import { MODULE_WORDS, SEVERITY_WORDS, STATUS_WORDS } from "./finding-words.ts";
 
 /** A person's choice: closed (a button), floating over the page, or pinned beside it. */
@@ -107,12 +107,27 @@ export function panelShownAs(
   return mode;
 }
 
+/**
+ * A Control the Overview has focused (spec #341, slice 7a): its Catalogue, whose credit the card shows with its text,
+ * and the Control as the Overview's row shows it.
+ */
+export type ControlFocus = {
+  catalogue: AuditCatalogue;
+  control: AuditControl;
+  /** Clears the page's focus: the Control card's ✕. */
+  clear: () => void;
+  /** Asks the page's answer again: the card's read is newer than the row (`rowAgrees`). */
+  refreshRow: () => void;
+};
+
 /** What a page is talking about: the panel's context line and detail card read it. */
 export type PanelContext = {
   /** The view's words: the page, then each filter that isn't "all". */
   view: string[];
-  /** The Finding the page has focused, or null. */
+  /** The Finding the page has focused, or null. A page sets at most one of `focus` and `control`. */
   focus: Finding | null;
+  /** The Control the page has focused, or null. */
+  control: ControlFocus | null;
   /** Clears the page's focus: the detail card's ✕. */
   clearFocus: () => void;
   /** A decision or an approval in the detail card changed the focused Finding: the page asks for it again. */
@@ -124,6 +139,9 @@ export type PanelContext = {
   /** The focused Finding's Product name (`productName`); null with no focus, or for an Asset that isn't a Product. */
   productName: string | null;
 };
+
+/** A context callback with nothing to do: no focus to clear, or no Finding to ask for again. */
+export const nothingToDo = () => {};
 
 /** What the shell gives a page to talk to the panel. Both functions keep their identity across renders. */
 export type PagePanel = {
