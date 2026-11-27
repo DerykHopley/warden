@@ -457,6 +457,28 @@ describe("serverStart's customRegistry: the runner option or env key that points
       "--registry",
     ],
     ["uvx -i", server("uvx", ["-i", PRIVATE, "acme-mcp"]), "-i"],
+    ["uvx -i with its value attached (#403)", server("uvx", [`-i${PRIVATE}`, "acme-mcp"]), "-i"],
+    [
+      "uvx -i with an attached value holding = (#403)",
+      server("uvx", [`-i${PRIVATE}/simple?a=b`, "acme-mcp"]),
+      "-i",
+    ],
+    ["uvx -f with its value attached (#403)", server("uvx -f./wheels acme-mcp"), "-f"],
+    [
+      "pipx --pip-args with an attached -i (#403)",
+      server("pipx", ["run", `--pip-args=-i${PRIVATE}`, "acme"]),
+      "--pip-args",
+    ],
+    [
+      "Yarn's env key, in any case (#403)",
+      withEnv(server("yarn", ["dlx", "acme-mcp"]), { yarn_npm_registry_server: PRIVATE }),
+      "yarn_npm_registry_server",
+    ],
+    [
+      "npm's config file env key, in any case (#403)",
+      withEnv(server("npx", ["acme-mcp"]), { NPM_CONFIG_USERCONFIG: "/etc/npmrc" }),
+      "NPM_CONFIG_USERCONFIG",
+    ],
     [
       "uvx, past --from's package",
       server("uvx", ["--from", "acme", `--find-links=${PRIVATE}`, "acme"]),
@@ -502,6 +524,7 @@ describe("serverStart's customRegistry: the runner option or env key that points
       server("npm", ["exec", "--", "acme-mcp", "--registry", PRIVATE]),
     ],
     ["--pip-args with no index", server("pipx", ["run", "--pip-args=--no-cache-dir", "acme"])],
+    ["an attached value on another short option (#403)", server("uvx", ["-p3.12", "acme-mcp"])],
     [
       "the other runner kind's env key",
       withEnv(server("npx", ["acme-mcp"]), { UV_INDEX_URL: PRIVATE }),

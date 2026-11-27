@@ -490,6 +490,16 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
       ["--pip-args", "pipx", ["run", `--pip-args="--index-url ${PRIVATE}"`, "acme-mcp"], undefined],
       ["NPM_CONFIG_REGISTRY", "npx", ["-y", "acme-mcp"], { NPM_CONFIG_REGISTRY: PRIVATE }],
       ["UV_INDEX_URL", "uvx", ["acme-mcp"], { UV_INDEX_URL: PRIVATE }],
+      ["BUN_CONFIG_REGISTRY", "bunx", ["acme-mcp"], { BUN_CONFIG_REGISTRY: PRIVATE }],
+      [
+        "YARN_NPM_REGISTRY_SERVER",
+        "yarn",
+        ["dlx", "acme-mcp"],
+        { YARN_NPM_REGISTRY_SERVER: PRIVATE },
+      ],
+      ["npm_config_userconfig", "npx", ["-y", "acme-mcp"], { npm_config_userconfig: PRIVATE }],
+      ["UV_CONFIG_FILE", "uvx", ["acme-mcp"], { UV_CONFIG_FILE: PRIVATE }],
+      ["PIP_CONFIG_FILE", "pipx", ["run", "acme-mcp"], { PIP_CONFIG_FILE: PRIVATE }],
     ])(
       "leaves %s on `%s %j`, asking no registry, naming it and never its value",
       async (what, command, args, env) => {
