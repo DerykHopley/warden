@@ -423,9 +423,10 @@ And these, made by hand:
   ```
 
   and the same for the two Langfuse keys. The script grants all three to the Scan Jobs' accounts only
-  (`warden-scan` and `warden-preview-scan`), and each release and preview pins them on the Scan Jobs as
-  `OPENROUTER_API_KEY`, `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`. Previews share the key and the Langfuse
-  project;
+  (`warden-scan` and `warden-preview-scan`), and prints the `WARDEN_JUDGE_KEYS` variable's line. With that
+  repository variable set, each release, rollback and preview pins them on the Scan Jobs as `OPENROUTER_API_KEY`,
+  `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`; unset, as until the three exist, a deploy pins none of them, and a
+  Judge run stops with a config error naming `OPENROUTER_API_KEY`. Previews share the key and the Langfuse project;
 - optionally, the write app's secrets `warden-github-write-app-client-secret` and
   `warden-github-write-app-private-key` ("Granting write access" says how). The script checks them with the rest,
   before it changes anything. With both, it grants them to `warden-run` and `warden-preview-run` and prints the
@@ -522,12 +523,14 @@ GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-
    service as `GITHUB_APP_CLIENT_ID`). The publishable key and the client id are public by design; their lines read
    them from your keyring when you paste them. With both write-app secrets in Secret Manager, it also prints
    `WARDEN_GITHUB_WRITE_APP_CLIENT_ID`'s line, the write app's client id, which switches Fix PRs on at the next
-   release or preview; without them it prints a note in its place, and Fix PRs stay off:
+   release or preview; without them it prints a note in its place, and Fix PRs stay off. Last comes
+   `WARDEN_JUDGE_KEYS`, which switches the Judge's three secrets on for the Scan Jobs at the next deploy (#482):
 
    ```sh
    gh variable set VITE_CLERK_PUBLISHABLE_KEY --body "$(secret-tool lookup service warden-clerk-publishable)" --repo <owner>/<repo>
    gh variable set WARDEN_GITHUB_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-app-client-id)" --repo <owner>/<repo>
    gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-write-app-client-id)" --repo <owner>/<repo>
+   gh variable set WARDEN_JUDGE_KEYS --body on --repo <owner>/<repo>
    ```
 
 **Why the database keeps a public IP.** A private IP needs a VPC network, private services access and Direct VPC
@@ -587,7 +590,8 @@ replace the preview.
    migration or load stops the deploy before any revision exists.
 5. **The Scan Job:** `warden-scan-preview` gets the image and its settings afresh, as a release does for
    `warden-scan`, but as `warden-preview-scan` on `warden_preview` as `warden_preview_app`, with the preview app
-   password and the GitHub app's private key, both pinned (never its client secret). It comes before the revision, so
+   password and the GitHub app's private key, both pinned (never its client secret), and with `WARDEN_JUDGE_KEYS`
+   set, the Judge's three keys, pinned. It comes before the revision, so
    the revision's first Scan runs this image. If this fails, the run fails naming the Job and no revision is deployed:
    push again.
 6. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as

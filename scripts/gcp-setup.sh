@@ -51,6 +51,12 @@ readonly LOG_DAYS=6
 GENERATED_SECRETS=(warden-db-app-password warden-db-migrate-password warden-db-preview-app-password
   warden-db-preview-migrate-password warden-db-admin-password warden-pseudonym-key warden-preview-pseudonym-key)
 readonly GENERATED_SECRETS
+# What the owner makes by hand, checked before any change: the instance's postgres password and Clerk's three, which
+# use automatic replication (checked live, #65), and the read-only GitHub app's two (#132's steps), which the live
+# service reads.
+HAND_MADE_SECRETS=(warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key
+  warden-github-app-client-secret warden-github-app-private-key)
+readonly HAND_MADE_SECRETS
 # The write GitHub app's two (#334), made by hand and optional: it opens Fix PRs, and only the two services read it.
 # The write app is both or neither: preflight stops on one alone.
 WRITE_APP_SECRETS=(warden-github-write-app-client-secret warden-github-write-app-private-key)
@@ -364,10 +370,8 @@ preflight() {
   # What the owner makes by hand, checked before any change.
   exists gcloud sql instances describe "$instance" --project="$project" ||
     missing+=("Cloud SQL instance $instance")
-  # The GitHub app's two (#132's steps) are made by hand too: the live service reads them. So are the Judge's three
-  # (#482), which the Scan Jobs read.
-  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-    warden-github-app-client-secret warden-github-app-private-key ${JUDGE_SECRETS[@]+"${JUDGE_SECRETS[@]}"}; do
+  # So are the Judge's three (#482), which the Scan Jobs read.
+  for secret in ${HAND_MADE_SECRETS[@]+"${HAND_MADE_SECRETS[@]}"} ${JUDGE_SECRETS[@]+"${JUDGE_SECRETS[@]}"}; do
     exists gcloud secrets describe "$secret" --project="$project" || missing+=("secret $secret")
   done
   # The write app's two: both, and it's granted; neither, and Fix PRs stay off (step 10 says so); one alone stops here.
@@ -616,8 +620,7 @@ main() {
   note "Each secret's replication: warden-db-password, warden-clerk-secret, warden-clerk-publishable and" \
     "warden-clerk-jwt-key use automatic replication (made by hand); every other one should be user-managed," \
     "in $REGION only"
-  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-    warden-github-app-client-secret warden-github-app-private-key ${JUDGE_SECRETS[@]+"${JUDGE_SECRETS[@]}"} \
+  for secret in ${HAND_MADE_SECRETS[@]+"${HAND_MADE_SECRETS[@]}"} ${JUDGE_SECRETS[@]+"${JUDGE_SECRETS[@]}"} \
     ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
     run gcloud secrets describe "$secret" --format='yaml(name,replication)' --project="$project"
   done
@@ -813,6 +816,8 @@ main() {
     note "Fix PRs stay off: the write app's secrets ${WRITE_APP_SECRETS[0]} and ${WRITE_APP_SECRETS[1]} don't exist." \
       "Make both (README.md, \"Granting write access\"), then run this script again"
   fi
+  # The Judge's three exist (preflight checked them), so the Scan Jobs may pin them: a deploy does once it's set (#482).
+  print_command gh variable set WARDEN_JUDGE_KEYS --body on --repo "$GITHUB_REPO"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

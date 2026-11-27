@@ -102,4 +102,7 @@ jobs:
           WARDEN_GITHUB_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_APP_CLIENT_ID }}
           # The write app's client id (#334): optional; unset, the release runs with Fix PRs off.
           WARDEN_GITHUB_WRITE_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_WRITE_APP_CLIENT_ID }}
+          # The Judge's keys (#482): optional; set once its three secrets exist, the Scan Job gets them. Unset, a Judge
+          # run stops on a config error naming OPENROUTER_API_KEY.
+          WARDEN_JUDGE_KEYS: ${{ vars.WARDEN_JUDGE_KEYS }}
         run: scripts/cloud-run-deploy.sh "$IMAGE" release

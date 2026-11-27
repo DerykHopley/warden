@@ -149,7 +149,9 @@ export function readVerdict(
   }
   if (steering.length > 0) {
     const why =
-      "reason" in answered ? ` The model's answer needs a person's review: ${answered.reason}.` : "";
+      "reason" in answered
+        ? ` The model's answer needs a person's review: ${answered.reason}.`
+        : "";
     add(JUDGE_STEERING_TEXT, `${steeringSummary(steering.length)}${why}`, steering);
   }
 

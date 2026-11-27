@@ -27,8 +27,11 @@
 #        all required; GITHUB_SHA and GITHUB_RUN_NUMBER (required) and GITHUB_RUN_ATTEMPT (default 1), which GitHub
 #        Actions sets, name the revision. WARDEN_GITHUB_WRITE_APP_CLIENT_ID (the write GitHub app's client id, public;
 #        optional): set, the revision also gets it and the write app's two secrets, and opens Fix PRs; unset or empty,
-#        Fix PRs stay off. A preview shares the live write app; no Scan Job gets it. HEALTH_ATTEMPTS and
-#        HEALTH_INTERVAL (seconds) bound the health gate.
+#        Fix PRs stay off. A preview shares the live write app; no Scan Job gets it. WARDEN_JUDGE_KEYS (optional, any
+#        non-empty value): set, the Scan Job also gets the Judge's OpenRouter and Langfuse keys (#482); unset or
+#        empty, as until those three secrets exist, it gets none, and a Judge run stops naming OPENROUTER_API_KEY. A
+#        preview shares the live keys; no revision gets them. HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound the
+#        health gate.
 # Needs: gcloud signed in as an account that may deploy the mode's job and service and act as its accounts; curl; jq;
 #        git, for a release.
 # The secret versions it pins, and what it shares with the rollback, are in scripts/lib/cloud-run.sh.

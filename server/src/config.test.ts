@@ -527,7 +527,9 @@ describe("judgeSettings (the Scan Job's, for a Judge run)", () => {
   );
 
   it("traces nothing, and doesn't stop the run, for a LANGFUSE_BASE_URL that isn't https with neither key set", () => {
-    expect(judgeSettings({ LANGFUSE_BASE_URL: "http://langfuse.example" }).langfuse).toBeUndefined();
+    expect(
+      judgeSettings({ LANGFUSE_BASE_URL: "http://langfuse.example" }).langfuse,
+    ).toBeUndefined();
   });
 
   it("turns localhost on with WARDEN_JUDGE_LOCALHOST=1", () => {

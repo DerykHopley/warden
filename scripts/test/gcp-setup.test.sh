@@ -366,7 +366,7 @@ trigger_line=$(line_of "$daily_trigger")
 pass "the Scheduler job is printed after the daily Job and its binding"
 
 variables=$(grep -E '^gh variable set' <<<"$output" | awk '{ print $4 }' | sort)
-assert_equal "a gh variable line for each of the eight variables" \
+assert_equal "a gh variable line for each of the nine variables" \
   "CLOUD_SQL_CONNECTION
 GCP_DEPLOY_SA
 GCP_PREVIEW_DEPLOY_SA
@@ -374,8 +374,12 @@ GCP_PROJECT_ID
 GCP_WIF_PROVIDER
 VITE_CLERK_PUBLISHABLE_KEY
 WARDEN_GITHUB_APP_CLIENT_ID
-WARDEN_GITHUB_WRITE_APP_CLIENT_ID" \
+WARDEN_GITHUB_WRITE_APP_CLIENT_ID
+WARDEN_JUDGE_KEYS" \
   "$variables"
+# The Judge's three secrets exist once preflight passes, so the line that lets a deploy pin them is printed (#482).
+assert_line "the Judge's keys variable switches them on for the Scan Jobs" \
+  "gh variable set WARDEN_JUDGE_KEYS --body on --repo $repo"
 write_variable="gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID --body \"\$(secret-tool lookup service warden-github-write-app-client-id)\" --repo $repo"
 assert_equal "the write app's client id is read from the keyring when the line is pasted" \
   "$write_variable" "$(grep -F 'gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID ' <<<"$output")"
