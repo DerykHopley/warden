@@ -411,6 +411,13 @@ describe("a Catalogue switch on Setup under way across a Team switch", () => {
       writeApp: () => json(200, { slug: "warden-writer", client_id: "Iv23li-writer" }),
       writeGrant: () => json(200, { installations: [] }),
       repos: () => json(200, { repos: [] }),
+      hook: () =>
+        json(200, {
+          token: null,
+          previous_valid_until: null,
+          privacy_tier: "details",
+          managed_settings: { hooks: {} },
+        }),
       catalogues: () => {
         const team = clerk.auth.orgId ?? "";
         reads[team] = (reads[team] ?? 0) + 1;

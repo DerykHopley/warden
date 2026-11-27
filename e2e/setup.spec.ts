@@ -419,7 +419,13 @@ test.describe("Catalogues", () => {
     await page.goto("/setup");
 
     const headings = page.getByRole("heading", { level: 2 });
-    await expect(headings).toHaveText(["GitHub", "Grant write access", "Repos", "Catalogues"]);
+    await expect(headings).toHaveText([
+      "GitHub",
+      "Grant write access",
+      "Repos",
+      "Catalogues",
+      "Agent hook",
+    ]);
     await expect(isa(page).getByText("VDA ISA 2027.1, published Sep 30, 2026")).toBeVisible();
     await expect(isa(page).getByText("Off.", { exact: true })).toBeVisible();
 

@@ -2,7 +2,8 @@
 // Assets with each one's last Scan, and a Lead or an Admin starts a Scan of them. GitHub sends the Admin back from
 // installing the app to `/setup/github`, its Setup URL, which asks them to sign in with GitHub so Warden can link that
 // installation to the Team. An Admin grants write access the same way, with Warden's second GitHub app, the write app
-// (#224, story 5): its Setup URL is `/setup/github/write`, and everyone in the Team sees the grant.
+// (#224, story 5): its Setup URL is `/setup/github/write`, and everyone in the Team sees the grant. Last, an Admin turns
+// on the agent hook (story 7, `HookSection.tsx`): the hook token, the Privacy tier and the managed-settings block.
 import { useOrganization } from "@clerk/react";
 import {
   assetKey,
@@ -33,6 +34,7 @@ import {
   type WardenApp,
   type WriteGrantsResult,
 } from "./github-setup.ts";
+import { HookSection } from "./HookSection.tsx";
 import { useLandOnAnchor } from "./land-on-anchor.ts";
 import { goTo } from "./navigate.ts";
 import {
@@ -52,10 +54,17 @@ const findLandingHeading = (anchor: string) =>
   anchor === REPOS_ANCHOR || anchor === CATALOGUES_ANCHOR ? document.getElementById(anchor) : null;
 
 /** A Setup section that asks Warden's server something before it shows, its waiting line in its place until then. */
-type AskingSection = "github" | "write" | "grants" | "repos" | "catalogues";
-/** The sections that ask for anyone: only an Admin's GitHub sections ask for their app's settings. */
+type AskingSection = "github" | "write" | "grants" | "repos" | "catalogues" | "hook";
+/** The sections that ask for anyone: only an Admin's GitHub and agent hook sections ask for their settings. */
 const ASKING_FOR_ANYONE: readonly AskingSection[] = ["grants", "repos", "catalogues"];
-const ASKING_FOR_AN_ADMIN: readonly AskingSection[] = ["github", "write", ...ASKING_FOR_ANYONE];
+const ASKING_FOR_AN_ADMIN: readonly AskingSection[] = [
+  "github",
+  "write",
+  ...ASKING_FOR_ANYONE,
+  "hook",
+];
+/** Setup's anchor for the Agent hook section. */
+const HOOK_ANCHOR = "setup-hook";
 /** Tells Setup a section's call has answered, so its waiting line is gone. */
 type OnAnswered = (section: AskingSection) => void;
 type SectionProps = PageProps & { onAnswered: OnAnswered };
@@ -145,6 +154,7 @@ export function SetupPage(props: PageProps) {
     findLandingHeading,
   );
   const sectionProps = { ...props, onAnswered };
+  const hookAnswered = useCallback(() => onAnswered("hook"), [onAnswered]);
   return (
     <>
       <h1>Setup</h1>
@@ -169,6 +179,10 @@ export function SetupPage(props: PageProps) {
       <section className="setup-section" aria-labelledby={CATALOGUES_ANCHOR}>
         <h2 id={CATALOGUES_ANCHOR}>Catalogues</h2>
         <CatalogueSection {...sectionProps} />
+      </section>
+      <section className="setup-section" aria-labelledby={HOOK_ANCHOR}>
+        <h2 id={HOOK_ANCHOR}>Agent hook</h2>
+        <HookSection {...props} refreshMe={roleChanged} onAnswered={hookAnswered} />
       </section>
     </>
   );

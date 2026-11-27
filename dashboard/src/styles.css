@@ -1101,6 +1101,82 @@ button[aria-busy="true"],
   border-radius: var(--radius);
 }
 
+/* Setup's Agent hook (story 7): the token lines, the token shown once in a box on --surface, Issue or Rotate (with
+   its confirm, dressed as Products' delete confirm), the Privacy tier picker (the Role picker) and the block. The
+   token and the block are mono and wrap rather than pushing the page sideways; each Copy has its line beside it. */
+.hook-settings p {
+  margin: 0 0 8px;
+}
+
+.hook-token {
+  margin: 0 0 12px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.hook-token p:last-child {
+  margin-bottom: 0;
+}
+
+.hook-token-value {
+  overflow-wrap: anywhere;
+}
+
+.hook-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+}
+
+.hook-copy .notice {
+  margin: 0;
+}
+
+.hook-actions {
+  margin: 8px 0 12px;
+}
+
+.hook-tier {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.hook-tier label {
+  font-weight: 600;
+}
+
+.hook-tier .role-picker {
+  max-width: 100%;
+}
+
+.hook-tier p {
+  margin: 0;
+}
+
+.hook-settings h3 {
+  margin: 16px 0 8px;
+  font-size: 1rem;
+}
+
+.hook-block {
+  margin: 0 0 8px;
+  padding: 12px 16px;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
 /* The Overview (story 10): the journey as three cards, the trend line, and "Are we ready for the audit?". Nothing here
    moves. Under 640px the cards stack; from 640px three sit in a row. */
 .journey {

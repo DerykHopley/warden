@@ -16,6 +16,13 @@ export const PrivacyTierBody = z.strictObject({ privacy_tier: PrivacyTier });
 export type PrivacyTierBody = z.infer<typeof PrivacyTierBody>;
 
 /**
+ * What stands in the token's place in the managed-settings block when there is no token to give: every read after the
+ * answer that issued it. The dashboard swaps it for a token it holds, so the block it shows after a tier change still
+ * works.
+ */
+export const HOOK_TOKEN_PLACEHOLDER = "<rotate the hook token in Warden to get a new one>";
+
+/**
  * The managed-settings block an Admin pastes into Claude Code to turn the hook on. Its shape is Claude Code's (its
  * hooks reference), which the server's unit test checks, so here it is any JSON object.
  */

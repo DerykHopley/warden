@@ -1,12 +1,8 @@
 // The managed-settings block an Admin pastes into Claude Code (story 7): its events follow the Privacy tier, and every
 // hook is the same `http` handler, the token in a header and never in a URL. Shapes from Claude Code's hooks reference.
+import { HOOK_TOKEN_PLACEHOLDER } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import {
-  HOOK_EVENTS_PATH,
-  HOOK_TOKEN_PLACEHOLDER,
-  managedSettings,
-  type ManagedSettings,
-} from "./managed-settings.ts";
+import { HOOK_EVENTS_PATH, managedSettings, type ManagedSettings } from "./managed-settings.ts";
 
 const URL_BASE = "https://warden.example";
 const TOKEN = "org_a.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

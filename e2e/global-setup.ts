@@ -8,11 +8,13 @@
 // and Fir are opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets
 // and a stale Guard Scan of them (`seedCedarRepos`); Dahlia gets one Repo Asset, a write grant and an Open Finding for
 // story 6's Fix PR (`seedDahliaFixPr`); Fir gets one Repo Asset and a Guard Scan of it with an Open Finding under
-// 1.3.3 for the Control card (`seedFirControl`); Acme and Bluebird are then filled by the demo seed (`server/src/seed.ts`)
+// 1.3.3 for the Control card (`seedFirControl`); Ginkgo gets two hook tokens, issued 50 and 25 hours before the run
+// (`seedGinkgoHookTokens`, handed to the test workers as `E2E_HOOK_TOKENS`), and the server a pseudonym key made for
+// the run, so the hook endpoint stores events (story 7); Acme and Bluebird are then filled by the demo seed (`server/src/seed.ts`)
 // without its demo Product (`--no-product`), so the Findings their tests count stay the demo ones. Returns the
 // teardown: the server stopped, the database dropped, the build and the fake's log removed.
 import { spawn } from "node:child_process";
-import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -22,6 +24,7 @@ import { exportJWK, exportSPKI, generateKeyPair } from "jose";
 import { createPool } from "../server/src/database.ts";
 import { createFindings } from "../server/src/findings/index.ts";
 import { createLogger } from "../server/src/log.ts";
+import { createHookSettings } from "../server/src/modules/guard/hook-settings.ts";
 import { createRepoAssets } from "../server/src/modules/guard/repo-assets.ts";
 import { createWriteGrants } from "../server/src/modules/guard/write-grants.ts";
 import { MOVE_RULES } from "../server/src/wiring.ts";
@@ -35,6 +38,7 @@ import { OWNER_PGPORT, refuseOwnerDatabase } from "../server/test/owner-database
 import {
   ACME,
   ANNIE,
+  BARBARA,
   BLUEBIRD,
   CEDAR,
   CEDAR_REPOS,
@@ -47,6 +51,7 @@ import {
   FIR_REPO,
   FRANCES,
   FRONTEND_API_HOST,
+  GINKGO,
   GRACE,
   HEDY,
   JOAN,
@@ -249,6 +254,28 @@ async function seedFirControl(connection: { host: string; port: number }, databa
   });
 }
 
+/**
+ * Ginkgo's hook tokens for story 7, as warden_app inside withTeam: one issued 50 hours ago and the next 25 hours ago, as
+ * Barbara's rotations then would have written them. The older stopped working an hour ago, 24 hours after the newer.
+ */
+async function seedGinkgoHookTokens(
+  connection: { host: string; port: number },
+  database: string,
+): Promise<{ issued50hAgo: string; issued25hAgo: string }> {
+  const tokens: string[] = [];
+  await withAppPool(connection, database, async (withTeam) => {
+    for (const hoursAgo of [50, 25]) {
+      const settings = createHookSettings({
+        withTeam,
+        now: () => Date.now() - hoursAgo * 3_600_000,
+      });
+      tokens.push((await settings.issueToken(GINKGO.id, { issuedBy: BARBARA.userId })).token);
+    }
+  });
+  const [issued50hAgo, issued25hAgo] = tokens as [string, string];
+  return { issued50hAgo, issued25hAgo };
+}
+
 export default async function globalSetup() {
   const cleanup: (() => Promise<unknown> | void)[] = [];
   const teardown = async () => {
@@ -321,6 +348,8 @@ export default async function globalSetup() {
           GITHUB_WRITE_APP_CLIENT_SECRET: "e2e-write-app-secret-unused",
           GITHUB_WRITE_APP_PRIVATE_KEY: writeAppKey,
           E2E_FAKE_GITHUB_LOG: githubLog,
+          // A key made for this run, so the hook endpoint stores events (story 7): no other copy of it exists.
+          WARDEN_PSEUDONYM_KEY: randomBytes(32).toString("hex"),
           // Handed on to each Scan Job: the fake in both, and the delay, which holds a Scan Job before it runs and
           // lets the server run at once.
           NODE_OPTIONS: [
@@ -365,6 +394,9 @@ export default async function globalSetup() {
     await open(FIR.admin, FIR, "admin");
     await open(JOAN, FIR, "member");
     await seedFirControl(connection, database.name);
+    // Ginkgo is story 7's alone (e2e/hook.spec.ts): two hook tokens, issued 50 and 25 hours ago.
+    await open(BARBARA, GINKGO, "admin");
+    const hookTokens = await seedGinkgoHookTokens(connection, database.name);
     for (const team of [ACME, BLUEBIRD]) {
       await run(process.execPath, ["server/src/seed.ts", team.id, "--no-product"], {
         ...db,
@@ -375,6 +407,7 @@ export default async function globalSetup() {
     process.env.E2E_BASE_URL = origin;
     process.env.E2E_FAKE_GITHUB_LOG = githubLog;
     process.env.E2E_SIGNING_JWK = JSON.stringify(await exportJWK(privateKey));
+    process.env.E2E_HOOK_TOKENS = JSON.stringify(hookTokens);
   } catch (error) {
     await teardown();
     throw error;

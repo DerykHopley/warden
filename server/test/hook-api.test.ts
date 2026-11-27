@@ -3,13 +3,13 @@
 // (`GET /api/hook`), never the token itself. Through the real app with the hook routes, on the suite's shared
 // database, each case with Teams of its own.
 import { createHash } from "node:crypto";
-import { HookSettingsBody, HookTokenBody } from "@warden/contracts";
+import { HOOK_TOKEN_PLACEHOLDER, HookSettingsBody, HookTokenBody } from "@warden/contracts";
 import type { CryptoKey } from "jose";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { hookRoutes } from "../src/modules/guard/hook-routes.ts";
 import { createHookSettings } from "../src/modules/guard/hook-settings.ts";
-import { HOOK_EVENTS_PATH, HOOK_TOKEN_PLACEHOLDER } from "../src/modules/guard/managed-settings.ts";
+import { HOOK_EVENTS_PATH } from "../src/modules/guard/managed-settings.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import {
