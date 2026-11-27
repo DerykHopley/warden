@@ -58,6 +58,8 @@ export type Routes = {
   switchCatalogue?: (id: string, body: unknown) => Answer;
   /** GET /api/vouch/catalogues/:id/controls/:ref, with the Catalogue id and the Control's ref. */
   control?: (catalogue: string, ref: string) => Answer;
+  /** POST /api/vouch/catalogues/:id/controls/:ref/reviews, with the Catalogue id, the Control's ref and the parsed body. */
+  review?: (catalogue: string, ref: string, body: unknown) => Answer;
 };
 
 const sentBody = (init: RequestInit | undefined): unknown =>
@@ -144,6 +146,11 @@ export function serve(routes: Routes) {
     if (onControl && method === "GET" && routes.control) {
       const [, catalogue = "", ref = ""] = onControl;
       return routes.control(decodeURIComponent(catalogue), decodeURIComponent(ref));
+    }
+    const reviewed = /^\/api\/vouch\/catalogues\/([^/]+)\/controls\/([^/]+)\/reviews$/.exec(url);
+    if (reviewed && method === "POST" && routes.review) {
+      const [, catalogue = "", ref = ""] = reviewed;
+      return routes.review(decodeURIComponent(catalogue), decodeURIComponent(ref), sentBody(init));
     }
     throw new Error(`The test gave no answer for ${method} ${url}`);
   });

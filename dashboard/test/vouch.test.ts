@@ -1,16 +1,19 @@
 // Setup's Catalogue switch (spec #341, slice 5), sent only with a token /api/me says is in the Team Setup was opened
 // in, as a Product save is. What the section shows for each answer is Setup.test.tsx's. Then the Control card's lines
-// (slice 7a): the reason under the Verdict, each Rule's evidence, the Judge run's, and a review's outcome.
+// (slice 7a): the reason under the Verdict, each Rule's evidence, the Judge run's, and a review's outcome; and a
+// review's POST (slice 7b), sent the same Team-checked way, each answer mapped to its result.
 import type { ControlReview, ControlRuleEvidence } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dayAndTimeWords } from "../src/date-words.ts";
 import {
   judgeRunLine,
+  reviewControlInTeam,
   reviewOutcomeLine,
   ruleEvidenceWords,
   switchCatalogueInTeam,
   verdictReasonLine,
 } from "../src/vouch.ts";
+import { controlDetail } from "./audit-fixture.ts";
 import { callsTo, fetchMock, json, serve } from "./fake-api.ts";
 
 beforeEach(() => {
@@ -79,6 +82,98 @@ describe("switchCatalogueInTeam", () => {
       kind: "team-not-opened",
     });
     expect(callsTo(PATH)).toHaveLength(0);
+  });
+});
+
+describe("reviewControlInTeam (slice 7b)", () => {
+  const REVIEWS = `${PATH}/controls/1.3.3/reviews`;
+  const review = (getToken: () => Promise<string | null>, team = "org_a") =>
+    reviewControlInTeam(getToken, team, ID, "1.3.3", { outcome: "confirm" });
+  const reviewed = (status = 201) => json(status, controlDetail("1.3.3"));
+
+  it("sends the POST, its body as given, with the token /api/me confirmed the Team with", async () => {
+    let tokens = 0;
+    const freshTokens = async () => `token-${++tokens}` as string | null;
+    const bodies: unknown[] = [];
+    serve({
+      me: inTeam(),
+      review: (_, __, body) => {
+        bodies.push(body);
+        return reviewed();
+      },
+    });
+
+    expect(
+      await reviewControlInTeam(freshTokens, "org_a", ID, "1.3.3", {
+        outcome: "override",
+        verdict: "not_applicable",
+        reason: "We use no AI tools",
+      }),
+    ).toEqual({ kind: "reviewed", detail: controlDetail("1.3.3") });
+    expect(bodies).toEqual([
+      { outcome: "override", verdict: "not_applicable", reason: "We use no AI tools" },
+    ]);
+    const [[, init] = []] = callsTo(REVIEWS);
+    expect(init?.method).toBe("POST");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer token-1");
+  });
+
+  it("while /api/me names another Team, sends no POST and counts as not answering", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      serve({ me: inTeam("org_left"), review: () => reviewed() });
+      const answer = review(getToken);
+      await vi.runAllTimersAsync();
+
+      expect(await answer).toEqual({ kind: "not-answering" });
+      expect(callsTo(REVIEWS)).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("hands back the Team check's own refusals: too many sign-ins, a Team not opened", async () => {
+    serve({ me: () => json(429, {}, { "Retry-After": "30" }) });
+    expect(await review(getToken)).toEqual({ kind: "too-many-sign-ins", retryAfter: 30 });
+    serve({ me: () => json(409, { error: "not opened" }) });
+    expect(await review(getToken)).toEqual({ kind: "team-not-opened" });
+    expect(callsTo(REVIEWS)).toHaveLength(0);
+  });
+
+  it.each<[string, () => Response | Promise<Response>, unknown]>([
+    [
+      "a 400",
+      () => json(400, { error: "reason: Too long" }),
+      { kind: "refused", error: "reason: Too long" },
+    ],
+    [
+      "a 404",
+      () => json(404, { error: "No such Control" }),
+      { kind: "refused", error: "No such Control" },
+    ],
+    [
+      "a 404 with no words",
+      () => new Response(null, { status: 404 }),
+      { kind: "refused", error: null },
+    ],
+    ["a 403", () => json(403, { error: "Lead only" }), { kind: "forbidden" }],
+    ["a 409", () => json(409, { error: "not opened" }), { kind: "team-not-opened" }],
+    [
+      "a 429",
+      () => json(429, {}, { "Retry-After": "30" }),
+      { kind: "too-many-attempts", retryAfter: 30 },
+    ],
+    ["a 401", () => json(401, {}), { kind: "session-ended" }],
+    ["no answer", () => Promise.reject(new TypeError("Failed to fetch")), { kind: "maybe-saved" }],
+    ["a 500", () => json(500, { error: "boom" }), { kind: "maybe-saved" }],
+    [
+      "a 201 whose body doesn't parse",
+      () => json(201, { ...controlDetail("1.3.3"), verdict: "maybe" }),
+      { kind: "maybe-saved" },
+    ],
+  ])("maps %s to its result", async (_, answer, result) => {
+    serve({ me: inTeam(), review: answer });
+    expect(await review(getToken)).toEqual(result);
   });
 });
 

@@ -1,18 +1,32 @@
-// The Control card (spec #341, slice 7a; docs/design.md: Control detail card): the Control the Overview has focused,
-// in the Ask Warden panel, read-only. Its ref, question and Catalogue credit show at once, from the Overview's row; its
+// The Control card (spec #341, slices 7a and 7b; docs/design.md: Control detail card): the Control the Overview has
+// focused, in the Ask Warden panel. Its ref, question and Catalogue credit show at once, from the Overview's row; its
 // Verdict, evidence and reviews once GET /api/vouch/catalogues/:id/controls/:ref answers, a Product Asset named from
-// GET /api/products, as on Findings. A read newer than the row asks the Overview to read it again. Everyone in the Team sees
-// the same card: the review form is slice 7b's. Every string from the server is shown as text. The panel keys it by
-// Catalogue and ref, so a new Control asks again, and the earlier ask's answer is dropped.
+// GET /api/products, as on Findings. A read newer than the row asks the Overview to read it again. Under Reviews, a Lead
+// or an Admin confirms or overrides the Verdict (POST .../reviews), one review per submit; a Member reads who reviews
+// it. Every string from the server is shown as text. The panel keys it by Catalogue and ref, so a new Control asks
+// again, and the earlier ask's answer, or a review's, shows on no card.
 import {
+  atLeast,
   FINDINGS_VIEW_DEFAULTS,
   findingsViewPath,
+  ReviewedVerdict,
   type ControlDetail,
   type ControlReview,
   type Product,
+  type ReviewBody,
+  type Role,
 } from "@warden/contracts";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { tryAgainIn, type GetToken } from "./api.ts";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { NOT_ANSWERING, sentence, TEAM_NOT_OPENED, tryAgainIn, type GetToken } from "./api.ts";
 import { dayAndTimeWords } from "./date-words.ts";
 import { SEVERITY_WORDS } from "./finding-words.ts";
 import { assetLabel } from "./findings.ts";
@@ -25,10 +39,16 @@ import {
   CONTROL_LOADING,
   fetchControlInTeam,
   judgeRunLine,
+  MAYBE_REVIEWED,
+  MEMBER_REVIEWS,
   NO_CONTROL,
   NO_OPEN_FINDINGS,
   NO_REVIEWS,
+  REVIEW_FORBIDDEN,
+  REVIEW_REFUSED,
   REVIEW_STATE_WORDS,
+  reviewControlInTeam,
+  reviewDoneWords,
   reviewOutcomeLine,
   ruleEvidenceWords,
   verdictReasonLine,
@@ -38,13 +58,22 @@ import {
 } from "./vouch.ts";
 import { useWardenCall } from "./warden-call.tsx";
 
+/** The review form that is open: Confirm's or Override's. */
+type ReviewForm = "confirm" | "override";
+/** The card's line under Reviews: a review's Done line, or why it was refused. */
+type Line = { kind: "done" | "refused"; text: string };
+
 export function ControlCard(props: {
   focus: ControlFocus;
-  /** The active Team: the read waits until the session is confirmed in it. */
+  /** The active Team: the read waits until the session is confirmed in it, and so does a review. */
   team: string | null;
   getToken: GetToken;
   /** The signed-in person's user id: their own reviews read "By you". */
   userId: string | null;
+  /** The person's Role: a Lead or an Admin reviews; null until /api/me answers, and nothing shows. */
+  role: Role | null;
+  /** Asks /api/me again: after a 403, so a lowered Role loses the form. */
+  refreshMe: () => void;
   clerkUsers: Map<string, ClerkUser>;
   onClear: () => void;
   onSessionEnded: () => void;
@@ -56,7 +85,7 @@ export function ControlCard(props: {
     () => fetchControlInTeam(getToken, team, catalogue.id, control.ref),
     [getToken, team, catalogue.id, control.ref],
   );
-  const { result, refresh } = useWardenCall(call, props.onSessionEnded);
+  const { result, setResult, refresh } = useWardenCall(call, props.onSessionEnded);
   // A read newer than the Overview's row asks for the row again, once per read, so the two say the same.
   const { refreshRow } = focus;
   const compared = useRef<ControlResult | null>(null);
@@ -83,8 +112,171 @@ export function ControlCard(props: {
     refresh();
   };
 
+  // The review form: a Lead's or an Admin's, one open at a time, in place of the row of buttons that opens it.
+  const lead = props.role !== null && atLeast(props.role, "lead");
+  const [form, setForm] = useState<ReviewForm | null>(null);
+  const [reason, setReason] = useState("");
+  const [verdict, setVerdict] = useState<ReviewedVerdict | null>(null);
+  const [sending, setSending] = useState(false);
+  const [line, setLine] = useState<Line | null>(null);
+  /** Set at the click, before React renders the busy submit: a second press in the same tick sends nothing. */
+  const sendingNow = useRef(false);
+  // A Role lowered (a 403, then /api/me again) closes the form; its refusal line stays, in the card.
+  if (!lead && form !== null) setForm(null);
+
+  const cardRef = useRef<HTMLElement>(null);
+  /** What takes focus once the next render lands: the open form's first field, the Done line, or an opener. */
+  const focusNext = useRef<"field" | "line" | ReviewForm | null>(null);
+  useEffect(() => {
+    const target = focusNext.current;
+    const card = cardRef.current;
+    focusNext.current = null;
+    if (target === null || card === null) return;
+    const element =
+      target === "line"
+        ? card.querySelector<HTMLElement>(".card-line[role='status']")
+        : target === "field"
+          ? card.querySelector<HTMLElement>(".decision-form input, .decision-form textarea")
+          : card.querySelector<HTMLElement>(`[data-opener="${target}"]`);
+    element?.focus();
+  });
+
+  function open(next: ReviewForm) {
+    setForm(next);
+    setReason("");
+    setVerdict(null);
+    setLine(null);
+    focusNext.current = "field";
+  }
+
+  function cancel() {
+    if (form !== null) focusNext.current = form;
+    setForm(null);
+    setLine(null);
+  }
+
+  const refused = (text: string) => setLine({ kind: "refused", text });
+
+  /**
+   * One review per submit: sent once /api/me confirms the Team the card was opened in. Its answer may land after the
+   * card has gone (✕, or another Control focused): the card's own state is then dropped with it, and only the row of
+   * the focus it was sent from is asked for again.
+   */
+  async function send(body: ReviewBody) {
+    if (sendingNow.current) return;
+    sendingNow.current = true;
+    setSending(true);
+    setLine(null);
+    const { refreshRow } = focus;
+    const answer = await reviewControlInTeam(getToken, team, catalogue.id, control.ref, body);
+    sendingNow.current = false;
+    setSending(false);
+    switch (answer.kind) {
+      case "reviewed": {
+        const read: ControlResult = { kind: "control", detail: answer.detail };
+        // The row is asked for here, once: the answer's own row check sees it as compared already.
+        compared.current = read;
+        setResult(() => read);
+        setForm(null);
+        setLine({ kind: "done", text: reviewDoneWords(body) });
+        focusNext.current = "line";
+        refreshRow();
+        return;
+      }
+      case "maybe-saved":
+        refused(MAYBE_REVIEWED);
+        refresh();
+        refreshRow();
+        return;
+      case "session-ended":
+        props.onSessionEnded();
+        return;
+      case "forbidden":
+        refused(REVIEW_FORBIDDEN);
+        props.refreshMe();
+        return;
+      case "refused":
+        refused(answer.error === null ? REVIEW_REFUSED : sentence(answer.error));
+        return;
+      case "team-not-opened":
+        refused(TEAM_NOT_OPENED);
+        return;
+      case "too-many-attempts":
+      case "too-many-sign-ins":
+        refused(tryAgainIn(answer.retryAfter));
+        return;
+      case "not-answering":
+        refused(NOT_ANSWERING);
+        return;
+    }
+  }
+
+  const trimmed = reason.trim();
+  function submit(event: FormEvent) {
+    event.preventDefault();
+    if (form === "confirm") {
+      void send(trimmed === "" ? { outcome: "confirm" } : { outcome: "confirm", reason: trimmed });
+    } else if (form === "override" && verdict !== null && trimmed !== "") {
+      void send({ outcome: "override", verdict, reason: trimmed });
+    }
+  }
+
+  const refusal = line?.kind === "refused" ? line.text : null;
+  const reviewing = (worked: ControlDetail["verdict"]): ReactNode => (
+    <>
+      {line?.kind === "done" && (
+        <p className="card-line" role="status" tabIndex={-1}>
+          {line.text}
+        </p>
+      )}
+      {refusal !== null && form === null && (
+        <p className="card-line refused" role="alert">
+          {refusal}
+        </p>
+      )}
+      {props.role === null ? null : !lead ? (
+        <p className="muted control-member">{MEMBER_REVIEWS}</p>
+      ) : form === null ? (
+        <div className="card-actions" role="group" aria-label="Review">
+          <button
+            type="button"
+            className="secondary"
+            data-opener="confirm"
+            disabled={sending}
+            onClick={() => open("confirm")}
+          >
+            Confirm
+          </button>
+          <button
+            type="button"
+            className="secondary"
+            data-opener="override"
+            disabled={sending}
+            onClick={() => open("override")}
+          >
+            Override
+          </button>
+        </div>
+      ) : (
+        <ReviewFormFields
+          form={form}
+          worked={worked}
+          reason={reason}
+          onReason={setReason}
+          verdict={verdict}
+          onVerdict={setVerdict}
+          ready={form === "confirm" || (verdict !== null && trimmed !== "")}
+          busy={sending}
+          refusal={refusal}
+          onSubmit={submit}
+          onCancel={cancel}
+        />
+      )}
+    </>
+  );
+
   return (
-    <section className="detail-card control-card" aria-labelledby={titleId}>
+    <section ref={cardRef} className="detail-card control-card" aria-labelledby={titleId}>
       <div className="detail-card-top">
         <code className="detail-ids">{control.ref}</code>
         <button
@@ -114,6 +306,7 @@ export function ControlCard(props: {
           products={products}
           userId={props.userId}
           clerkUsers={props.clerkUsers}
+          reviewing={reviewing(result.detail.verdict)}
         />
       ) : result.kind === "not-found" ? (
         <p className="muted">{result.error ?? NO_CONTROL}</p>
@@ -145,6 +338,8 @@ function Detail(props: {
   products: readonly Product[] | null;
   userId: string | null;
   clerkUsers: Map<string, ClerkUser>;
+  /** Under the reviews: the review form, its row of buttons and its lines, or a Member's line. */
+  reviewing: ReactNode;
 }) {
   const { detail } = props;
   const { evidence } = detail;
@@ -211,8 +406,96 @@ function Detail(props: {
             ))}
           </ol>
         )}
+        {props.reviewing}
       </section>
     </>
+  );
+}
+
+/**
+ * Confirm's form (an optional Reason) or Override's (the Verdict, from every reviewed Verdict but the worked-out one,
+ * and a required Reason), as the Finding card's decision forms are drawn. Its submit is disabled until it's ready, and
+ * busy while the review runs; Esc cancels it.
+ */
+function ReviewFormFields(props: {
+  form: ReviewForm;
+  /** The read's worked-out Verdict: an override must change it, so it isn't offered. */
+  worked: ControlDetail["verdict"];
+  reason: string;
+  onReason: (reason: string) => void;
+  verdict: ReviewedVerdict | null;
+  onVerdict: (verdict: ReviewedVerdict) => void;
+  ready: boolean;
+  busy: boolean;
+  refusal: string | null;
+  onSubmit: (event: FormEvent) => void;
+  onCancel: () => void;
+}) {
+  const radios = useId();
+  const confirms = props.form === "confirm";
+  const label = confirms ? "Confirm" : "Override";
+  // Marked handled, so a floating panel's Esc, which listens on the document, leaves the panel open.
+  function onKeyDown(event: KeyboardEvent) {
+    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    props.onCancel();
+  }
+  return (
+    <form
+      className="decision-form"
+      aria-label={`${label} the Verdict`}
+      noValidate
+      onSubmit={props.onSubmit}
+      onKeyDown={onKeyDown}
+    >
+      {!confirms && (
+        <fieldset className="field candidates">
+          <legend className="field-label">Verdict</legend>
+          {ReviewedVerdict.options
+            .filter((option) => option !== props.worked)
+            .map((option) => (
+              <label key={option} className="candidate">
+                <input
+                  type="radio"
+                  name={radios}
+                  value={option}
+                  checked={props.verdict === option}
+                  onChange={() => props.onVerdict(option)}
+                />
+                <span>{VOUCH_VERDICT_WORDS[option]}</span>
+              </label>
+            ))}
+        </fieldset>
+      )}
+      <label className="field">
+        <span className="field-label">{confirms ? "Reason (optional)" : "Reason"}</span>
+        <textarea
+          rows={3}
+          maxLength={2000}
+          aria-required={confirms ? undefined : "true"}
+          value={props.reason}
+          onChange={(event) => props.onReason(event.target.value)}
+        />
+      </label>
+      {props.refusal !== null && (
+        <p className="card-line refused" role="alert">
+          {props.refusal}
+        </p>
+      )}
+      <div className="form-actions">
+        <button
+          type="submit"
+          className="primary"
+          disabled={!props.ready || props.busy}
+          aria-busy={props.busy ? "true" : undefined}
+        >
+          {label}
+        </button>
+        <button type="button" className="secondary" onClick={props.onCancel}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 

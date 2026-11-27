@@ -5,9 +5,13 @@
 // 1.3.3 through the API, the Member reads the review, and after the Admin marks the Finding a False positive the
 // Verdict worked out now differs from the one reviewed.
 //
-// Serial, in one worker: the review and the False positive can't be undone, so they run last, after the tests that
-// read 1.3.3 as the seed left it.
-import { FindingsBody, type Finding } from "@warden/contracts";
+// Slice 7b: Fir's Admin confirms 4.1.3 and overrides 5.2.4 in their cards (story 4), a double click on Confirm's submit
+// for 1.3.4 stores one review, the open forms' layout at three widths, and the Member sees only the line saying a Lead
+// or an Admin reviews a Control (story 5).
+//
+// Serial, in one worker: the reviews and the False positive can't be undone, so they run after the tests that read
+// the seed's Controls as it left them, each review on its own Control.
+import { ControlDetail, FindingsBody, type Finding } from "@warden/contracts";
 import type { Locator, Page } from "@playwright/test";
 import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
 import {
@@ -53,13 +57,23 @@ const rowButton = (page: Page, ref: string) =>
 
 const panel = (page: Page) => page.getByRole("complementary", { name: "Ask Warden" });
 const card = (page: Page): Locator => panel(page).getByRole("region", { name: QUESTION });
+/** The one Control card the panel shows, whichever Control it is. */
+const anyCard = (page: Page): Locator => panel(page).locator(".control-card");
 
-/** Opens Overview at `width` and 1.3.3's card from its row, once its read has answered. */
-async function openCard(page: Page, width = 1600) {
+/** Opens Overview at `width` and `ref`'s card from its row, once its read has answered. */
+async function openCard(page: Page, width = 1600, ref = "1.3.3") {
   await page.setViewportSize({ width, height: 900 });
   await page.goto("/overview");
-  await rowButton(page, "1.3.3").click();
-  await expect(card(page).getByRole("region", { name: "Verdict" })).toBeVisible();
+  await rowButton(page, ref).click();
+  await expect(anyCard(page).getByRole("region", { name: "Verdict" })).toBeVisible();
+}
+
+/** `ref`'s reviews in Fir, read through the API as its Admin. */
+async function firReviews(ref: string) {
+  const { origin, headers } = await asAdmin(FIR);
+  const res = await fetch(`${origin}${ISA_PATH}/controls/${ref}`, { headers });
+  if (!res.ok) throw new Error(`reading Fir's ${ref}: ${res.status} ${await res.text()}`);
+  return ControlDetail.parse(await res.json()).reviews;
 }
 
 test("stories 2 and 3: 1.3.3's card shows its Verdict, reason, credit, and the Open Finding as a link to it on Findings", async ({
@@ -138,6 +152,134 @@ for (const width of [390, 1024, 1600]) {
   });
 }
 
+for (const width of [390, 1024, 1600]) {
+  test(`at ${width}px, the open Confirm and Override forms scroll nothing sideways; their buttons, radios, submits and Cancel are 44px targets with a focus ring`, async ({
+    page,
+    signIn,
+  }) => {
+    await signIn(FRANCES, FIR);
+    await openCard(page, width);
+    const shown = card(page);
+    const actions = shown.getByRole("group", { name: "Review" });
+    const openers = [
+      actions.getByRole("button", { name: "Confirm" }),
+      actions.getByRole("button", { name: "Override" }),
+    ];
+    await expectTargets(openers);
+    await expectRings(page, openers);
+
+    await openers[0]!.click();
+    const confirm = shown.getByRole("form", { name: "Confirm the Verdict" });
+    await expect(confirm).toBeVisible();
+    await expectNoSidewaysScroll(page);
+    const confirmButtons = [
+      confirm.getByRole("button", { name: "Confirm" }),
+      confirm.getByRole("button", { name: "Cancel" }),
+    ];
+    await expectTargets(confirmButtons);
+    await expectRings(page, confirmButtons);
+    await confirm.getByRole("button", { name: "Cancel" }).click();
+
+    await actions.getByRole("button", { name: "Override" }).click();
+    const override = shown.getByRole("form", { name: "Override the Verdict" });
+    await expect(override).toBeVisible();
+    await expectNoSidewaysScroll(page);
+    // A radio's target is its whole row: the label it sits in.
+    await expectTargets(await override.locator("label.candidate").all());
+    // Each radio picked first, so the keyboard's Tab into the group lands on it, not on the group's first.
+    for (const radio of await override.getByRole("radio").all()) {
+      await radio.check();
+      await expectRings(page, [radio]);
+    }
+    await override.getByRole("textbox", { name: "Reason" }).fill("Measured at this width");
+    const overrideButtons = [
+      override.getByRole("button", { name: "Override" }),
+      override.getByRole("button", { name: "Cancel" }),
+    ];
+    await expectTargets(overrideButtons);
+    await expectRings(page, overrideButtons);
+  });
+}
+
+test("story 4: Frances confirms 4.1.3 in its card; its Reviews gain hers, and its row reads Reviewed and Gap without a reload", async ({
+  page,
+  signIn,
+}) => {
+  await signIn(FRANCES, FIR);
+  await openCard(page, 1600, "4.1.3");
+  const shown = anyCard(page);
+  await shown
+    .getByRole("group", { name: "Review" })
+    .getByRole("button", { name: "Confirm" })
+    .click();
+  await shown
+    .getByRole("form", { name: "Confirm the Verdict" })
+    .getByRole("button", { name: "Confirm" })
+    .click();
+
+  await expect(shown.getByRole("status")).toHaveText("Confirmed.");
+  await expect(shown.getByRole("status")).toBeFocused();
+  const reviews = shown.getByRole("list", { name: "Reviews" }).getByRole("listitem");
+  await expect(reviews).toHaveCount(1);
+  await expect(reviews.locator(".control-review-outcome")).toHaveText("Confirmed: Not evidenced");
+  await expect(reviews.locator(".control-review-by")).toContainText("By you");
+  const row = rowButton(page, "4.1.3");
+  await expect(row.locator(".audit-review")).toHaveText("Reviewed");
+  await expect(row.locator(".audit-gap")).toHaveText("Gap");
+});
+
+test("story 4: Frances overrides 5.2.4 to Not applicable with a reason, and its row reads Not applicable and Reviewed", async ({
+  page,
+  signIn,
+}) => {
+  await signIn(FRANCES, FIR);
+  await openCard(page, 1600, "5.2.4");
+  const shown = anyCard(page);
+  await shown
+    .getByRole("group", { name: "Review" })
+    .getByRole("button", { name: "Override" })
+    .click();
+  const form = shown.getByRole("form", { name: "Override the Verdict" });
+  const submit = form.getByRole("button", { name: "Override" });
+  await form.getByRole("radio", { name: "Not applicable" }).check();
+  await expect(submit).toBeDisabled();
+  await form.getByRole("textbox", { name: "Reason" }).fill("Fir builds no software for customers.");
+  await submit.click();
+
+  await expect(shown.getByRole("status")).toHaveText("Overridden to Not applicable.");
+  const reviews = shown.getByRole("list", { name: "Reviews" }).getByRole("listitem");
+  await expect(reviews.locator(".control-review-reason")).toHaveText(
+    "Fir builds no software for customers.",
+  );
+  const row = rowButton(page, "5.2.4");
+  await expect(row.locator(".audit-verdict")).toHaveText("Not applicable");
+  await expect(row.locator(".audit-review")).toHaveText("Reviewed");
+});
+
+test("one review per submit: a double click on Confirm's submit for 1.3.4 stores one review", async ({
+  page,
+  signIn,
+}) => {
+  const before = (await firReviews("1.3.4")).length;
+  await signIn(FRANCES, FIR);
+  await openCard(page, 1600, "1.3.4");
+  const shown = anyCard(page);
+  await shown
+    .getByRole("group", { name: "Review" })
+    .getByRole("button", { name: "Confirm" })
+    .click();
+  await shown
+    .getByRole("form", { name: "Confirm the Verdict" })
+    .getByRole("button", { name: "Confirm" })
+    .dblclick();
+
+  await expect(shown.getByRole("status")).toHaveText("Confirmed.");
+  await expect(shown.getByRole("list", { name: "Reviews" }).getByRole("listitem")).toHaveCount(
+    before + 1,
+  );
+  expect(await firReviews("1.3.4")).toHaveLength(before + 1);
+});
+
 test("stories 5 and 7: Joan reads Frances's confirmation, and after the Finding is a False positive, the card says the Verdict changed", async ({
   page,
   signIn,
@@ -154,8 +296,10 @@ test("stories 5 and 7: Joan reads Frances's confirmation, and after the Finding 
     "Confirmed: Partly evidenced",
   );
   await expect(reviews.locator(".control-review-by")).toContainText("By Frances Allen, ");
-  // A Member sees the same card, with nothing in it to change the review.
+  // Story 5: a Member sees the same card, with nothing in it to change the review, only the line saying who can.
   await expect(shown.getByRole("button")).toHaveText(["✕"]);
+  await expect(shown.getByRole("form")).toHaveCount(0);
+  await expect(shown.getByText("A Lead or an Admin reviews this Control.")).toBeVisible();
 
   const { id } = await firFinding();
   await sendAsAdmin(FIR, "POST", `/api/findings/${id}/false-positive`, {

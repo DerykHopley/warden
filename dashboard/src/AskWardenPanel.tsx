@@ -274,6 +274,8 @@ export function AskWardenPanel(props: {
             team={team}
             getToken={getToken}
             userId={props.userId}
+            role={props.role}
+            refreshMe={props.refreshMe}
             clerkUsers={clerkUsers}
             onClear={() => {
               focusNext.current = "input";

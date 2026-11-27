@@ -1744,6 +1744,18 @@ button[aria-busy="true"],
   color: var(--muted);
 }
 
+/* A review's row of buttons, its form and its lines (slice 7b), under Reviews as the Finding card's are under its
+   fields; the section keeps their right margin already. */
+.control-section > .card-actions,
+.control-section > .decision-form,
+.control-section > .card-line {
+  margin: 12px 0 0;
+}
+
+.control-section > .control-member {
+  margin-top: 8px;
+}
+
 /* A changed Verdict says so in words, set apart by weight, not colour, as a stale Proposal does. */
 .control-changed {
   font-weight: 600;
