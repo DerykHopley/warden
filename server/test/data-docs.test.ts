@@ -80,10 +80,12 @@ describe("docs/data.md", () => {
     }
   });
 
-  it("marks the Agent events and Agent session records rows built (#183), naming their tables", () => {
+  it("marks the Agent events and Agent session records rows built (#183), the events redacted at their tier (#184)", () => {
     const events = row("Cloud SQL: Agent events");
     const sessions = row("Cloud SQL: Agent session records");
-    expect(events).toMatch(/Built: [^|]*`agent_events`[^|]*Metadata fields[^|]*#183/);
+    expect(events).toMatch(
+      /Built: [^|]*`agent_events`[^|]*#183[^|]*Privacy tier[^|]*redacted[^|]*#184/,
+    );
     expect(sessions).toMatch(/Built: [^|]*`agent_sessions`[^|]*refused[^|]*#183/);
     expect(events).not.toMatch(/\| Designed: Guard spec \|$/);
     expect(sessions).not.toMatch(/\| Designed: Guard spec \|$/);

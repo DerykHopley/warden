@@ -4,6 +4,10 @@
 import { sql, type Generated } from "kysely";
 import type { WithTeam } from "../../with-team.ts";
 
+/** A value JSON can hold, as an Agent event's kept fields are stored in `agent_events.fields` (jsonb). */
+export type JsonValue =
+  string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
 /**
  * Guard's Agent session tables, added to `withTeam`'s transaction with `$extendTables`, so `schema.ts` stays as it
  * is. A type, not an interface: `$extendTables` needs the index signature a type alias has.
@@ -30,19 +34,19 @@ export type AgentSessionTables = {
     received_at: Generated<Date>;
     name: string;
     tool: string | null;
-    fields: Record<string, string>;
+    fields: Record<string, JsonValue>;
   };
 };
 
-/** One event to store, already filtered to the Team's Privacy tier. */
+/** One event to store, already filtered to the Team's Privacy tier and redacted. */
 export type StoredEvent = {
   sessionId: string;
   /** Claude Code's hook_event_name. */
   name: string;
   /** Its tool_name on a tool event, else null. */
   tool: string | null;
-  /** What the Team's Privacy tier kept. */
-  fields: Record<string, string>;
+  /** What the Team's Privacy tier kept, redacted. */
+  fields: Record<string, JsonValue>;
   /** The developer's pseudonym, or null when the event named none. */
   developer: string | null;
   /** Whether the event ends the session (SessionEnd). */

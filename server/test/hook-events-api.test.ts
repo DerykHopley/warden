@@ -1,6 +1,6 @@
 // The hook endpoint (spec #225, slice 1, #183): `POST /api/hook/events` takes Claude Code's hook events with the Team's
-// hook token and stores their Metadata fields under the token's Team and the developer's pseudonym (stories 8 and 15,
-// in part; threats H1, H2, H3, H6, H7). Through the real app with the hook event routes, on the suite's shared
+// hook token and stores the fields the Team's Privacy tier keeps, redacted, under the token's Team and the developer's
+// pseudonym (story 8, story 15 in part; threats H1, H2, H3, H6, H7, H8). Through the real app with the hook event routes, on the suite's shared
 // database, each case with Teams of its own and an endpoint (so its limits) of its own.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { PrivacyTier } from "@warden/contracts";
@@ -23,6 +23,7 @@ import { pseudonym } from "../src/modules/guard/pseudonym.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { ADMIN, newTeam, testApp, testKey } from "./helpers.ts";
+import { ANTHROPIC_KEY, AWS_KEY, GITHUB_TOKEN, mask, STRIPE_KEY } from "./secret-fixtures.ts";
 
 let publicPem: string;
 let pool: pg.Pool;
@@ -519,42 +520,131 @@ describe("POST /api/hook/events: the shape", () => {
   });
 });
 
-describe("POST /api/hook/events: only the Metadata fields are stored (story 8, in part)", () => {
-  it.each(["metadata", "details", "content"] as const)(
-    "keeps a Bash PostToolUse's Metadata fields and none of its others at %s",
-    async (tier) => {
-      const { team, token } = await teamWithToken(tier);
-      const { app, flush } = eventsApp();
-      const session = newSession();
+/** The secrets the tier cases plant, each in a field only some tiers keep. */
+const PLANTED_SECRETS = [AWS_KEY, GITHUB_TOKEN, ANTHROPIC_KEY, STRIPE_KEY];
 
-      const res = await post(app, {
-        token,
-        headers: { "X-Warden-Developer": "alice" },
-        body: event(session, "PostToolUse", {
-          tool_name: "Bash",
-          tool_use_id: "toolu_01ABC",
-          cwd: "/home/alice/app",
-          tool_input: { command: `cat /home/alice/.env # ${PLANTED}` },
-          tool_response: { stdout: PLANTED },
-          something_new: `alice ${PLANTED}`,
-        }),
-      });
-      flush();
-
-      expect(res.status).toBe(204);
-      const { events } = await tables(team);
-      expect(events.map((row) => [row.name, row.tool, row.fields])).toEqual([
-        [
-          "PostToolUse",
-          "Bash",
-          { hook_event_name: "PostToolUse", tool_name: "Bash", tool_use_id: "toolu_01ABC" },
-        ],
-      ]);
-      const text = await tablesAsText(team);
-      expect(text).not.toContain("alice");
-      expect(text).not.toContain(PLANTED);
+describe("POST /api/hook/events: each tier's fields, redacted on arrival (story 8; threat H8)", () => {
+  const metadata = {
+    hook_event_name: "PostToolUse",
+    tool_name: "Bash",
+    tool_use_id: "toolu_01ABC",
+  };
+  const details = {
+    ...metadata,
+    cwd: "~/app",
+    transcript_path: "~/.claude/projects/~/s.jsonl",
+    tool_input: {
+      command: `cd ~/app && AWS_ACCESS_KEY_ID=${mask(AWS_KEY)} gh auth login --with-token ${mask(GITHUB_TOKEN)}`,
     },
-  );
+  };
+  const content = {
+    ...details,
+    tool_response: { stdout: `${PLANTED} ANTHROPIC_API_KEY=${mask(ANTHROPIC_KEY)}` },
+  };
+
+  it.each([
+    ["metadata", metadata],
+    ["details", details],
+    ["content", content],
+  ] as const)("stores a Bash PostToolUse's %s fields, redacted", async (tier, stored) => {
+    const { team, token } = await teamWithToken(tier);
+    const { app, flush } = eventsApp();
+
+    const res = await post(app, {
+      token,
+      headers: { "X-Warden-Developer": "alice" },
+      body: event(newSession(), "PostToolUse", {
+        tool_name: "Bash",
+        tool_use_id: "toolu_01ABC",
+        cwd: "/home/alice/app",
+        transcript_path: "/home/alice/.claude/projects/-home-alice-app/s.jsonl",
+        tool_input: {
+          command: `cd /home/alice/app && AWS_ACCESS_KEY_ID=${AWS_KEY} gh auth login --with-token ${GITHUB_TOKEN}`,
+        },
+        tool_response: { stdout: `${PLANTED} ANTHROPIC_API_KEY=${ANTHROPIC_KEY}` },
+        something_new: `alice ${PLANTED}`,
+      }),
+    });
+    flush();
+
+    expect(res.status).toBe(204);
+    const { events } = await tables(team);
+    expect(events.map((row) => [row.name, row.tool, row.fields])).toEqual([
+      ["PostToolUse", "Bash", stored],
+    ]);
+    const text = await tablesAsText(team);
+    for (const kept of ["alice", ...PLANTED_SECRETS]) expect(text).not.toContain(kept);
+    if (tier === "content") expect(text).toContain(PLANTED);
+    else expect(text).not.toContain(PLANTED);
+  });
+
+  it.each([
+    ["metadata", { hook_event_name: "UserPromptSubmit" }],
+    ["details", { hook_event_name: "UserPromptSubmit" }],
+    ["content", { hook_event_name: "UserPromptSubmit", prompt: `deploy with ${mask(STRIPE_KEY)}` }],
+  ] as const)("stores a UserPromptSubmit's prompt only at content: %s", async (tier, stored) => {
+    const { team, token } = await teamWithToken(tier);
+    const { app, flush } = eventsApp();
+
+    const res = await post(app, {
+      token,
+      body: event(newSession(), "UserPromptSubmit", { prompt: `deploy with ${STRIPE_KEY}` }),
+    });
+    flush();
+
+    expect(res.status).toBe(204);
+    expect((await tables(team)).events.map((row) => row.fields)).toEqual([stored]);
+    expect(await tablesAsText(team)).not.toContain(STRIPE_KEY);
+  });
+
+  it.each([
+    ["metadata", undefined],
+    ["details", undefined],
+    ["content", `fatal: ~/app: bad credentials ${mask(GITHUB_TOKEN)}`],
+  ] as const)("stores a PostToolUseFailure's error only at content: %s", async (tier, error) => {
+    const { team, token } = await teamWithToken(tier);
+    const { app, flush } = eventsApp();
+
+    const res = await post(app, {
+      token,
+      headers: { "X-Warden-Developer": "alice" },
+      body: event(newSession(), "PostToolUseFailure", {
+        tool_name: "Bash",
+        error: `fatal: /home/alice/app: bad credentials ${GITHUB_TOKEN}`,
+      }),
+    });
+    flush();
+
+    expect(res.status).toBe(204);
+    const [stored] = (await tables(team)).events;
+    expect(stored?.fields.error).toEqual(error);
+    const text = await tablesAsText(team);
+    expect(text).not.toContain("alice");
+    expect(text).not.toContain(GITHUB_TOKEN);
+  });
+
+  it("stores a tool_response holding a NUL and a lone surrogate, in a nested string and a key, with U+FFFD", async () => {
+    const { team, token } = await teamWithToken("content");
+    const { app, flush } = eventsApp();
+
+    const res = await post(app, {
+      token,
+      body: event(newSession(), "PostToolUse", {
+        tool_name: "Bash",
+        tool_response: {
+          stdout: "fine",
+          nested: [{ text: "a\u0000b\ud800c" }],
+          ["key\u0000\udc00"]: "value",
+        },
+      }),
+    });
+    flush();
+
+    expect(res.status).toBe(204);
+    expect((await tables(team)).events.map((row) => row.fields.tool_response)).toEqual([
+      { stdout: "fine", nested: [{ text: "a�b�c" }], ["key��"]: "value" },
+    ]);
+  });
 });
 
 describe("POST /api/hook/events: the Agent session record", () => {
@@ -644,7 +734,13 @@ describe("POST /api/hook/events: the logs (threat H7)", () => {
     // Every line any case in this file wrote.
     expect(allLines.length).toBeGreaterThan(lines.length);
     for (const line of allLines) {
-      for (const secret of [PLANTED, token, "alice", pseudonym(PSEUDONYM_KEY, team, "alice")]) {
+      for (const secret of [
+        PLANTED,
+        ...PLANTED_SECRETS,
+        token,
+        "alice",
+        pseudonym(PSEUDONYM_KEY, team, "alice"),
+      ]) {
         expect(line).not.toContain(secret);
       }
     }

@@ -360,7 +360,8 @@ function permissionSkip(
   const first = places[0]!.line;
   const count = places.length;
   const kinds = [...new Set(places.map((place) => place.kind))].join(", ");
-  const verb = count === 1 ? "place skips" : "places skip";
+  const may = places.some(({ kind }) => kind === TOO_DEEP);
+  const verb = `${count === 1 ? "place" : "places"} ${may ? "may skip" : count === 1 ? "skips" : "skip"}`;
   return observation(
     asset,
     PERMISSION_SKIP,
@@ -400,9 +401,9 @@ type Position = {
   /**
    * It follows the first word after `coproc`, whose role is still open: that word is the coprocess's name when this
    * word starts a compound command, and otherwise was the command word. `asCommand` is where this word stands in the
-   * second case, and `pendingStart` where that word's run of the agent starts, if it runs it.
+   * second case, and `pendingStart` the run that word starts, if it runs the agent or a shell.
    */
-  afterCoprocWord: { asCommand: Position; pendingStart: number | undefined } | undefined;
+  afterCoprocWord: { asCommand: Position; pendingStart: RunStart | undefined } | undefined;
 };
 
 /** The first word of a command, as after `;`, `&&`, `|`, a newline, `(` or an opening backquote. */
@@ -488,15 +489,27 @@ const commandName = (word: string) => word.slice(word.lastIndexOf("/") + 1);
 /** Whether a word, its backslashes removed, runs the agent: `claude`, or `claude-code` as `npx` runs it. */
 const isAgent = (word: string) => /^claude(?:-code)?$/.test(commandName(word));
 
+/** Whether a word, its backslashes removed, runs a shell whose `-c` string is read as a command. */
+const isShell = (word: string) => /^(?:sh|bash|zsh|dash)$/.test(commandName(word));
+
+/** Where a run's arguments start, just after the word that runs it, and whether that word is a shell's. */
+type RunStart = { start: number; shell: boolean };
+
+/** The run `word`, which ends at `end`, starts when it stands where a command runs: the agent's, or a shell's. */
+const runOf = (word: string, end: number): RunStart | undefined => {
+  const shell = isShell(word);
+  return shell || isAgent(word) ? { start: end, shell } : undefined;
+};
+
 /**
- * Where a run of the agent starts if `word`, which ends at `end`, starts one from `at` (at `end`, or at the end of the
- * word after `coproc` when this word shows that one was the command word), and where the word after it stands.
+ * The run `word`, which ends at `end`, starts from `at` (at `end`, or at the end of the word after `coproc` when this
+ * word shows that one was the command word), and where the word after it stands.
  */
 function readWord(
   at: Position,
   word: string,
   end: number,
-): [start: number | undefined, next: Position] {
+): [run: RunStart | undefined, next: Position] {
   if (at.target) return [undefined, { ...at, target: false }];
   // A compound command after `coproc`, or after the word that follows it (then the coprocess's name), is read as it
   // is anywhere.
@@ -508,7 +521,12 @@ function readWord(
     const [start, next] = readWord(asCommand, word, end);
     return [pendingStart ?? start, next];
   }
-  if (!at.command) return at.wrapped && isAgent(word) ? [end, AFTER_COMMAND] : [undefined, at];
+  if (!at.command) {
+    const run = at.wrapped ? runOf(word, end) : undefined;
+    // A wrapper's search for its command word goes on past a shell's: that word may be an option's value (`sudo -u
+    // bash claude …`), and its run then reads no `-c` string.
+    return [run, run !== undefined && !run.shell ? AFTER_COMMAND : at];
+  }
   const option = at.timeOptions.indexOf(word);
   if (option >= 0) return [undefined, { ...at, timeOptions: at.timeOptions.slice(option + 1) }];
   if (at.timeProgram && word.startsWith("-")) {
@@ -535,7 +553,8 @@ function readWord(
     return [undefined, { ...at, timeOptions: [], target: true }];
   }
   if (!at.prefixed && word === COPROC) return [undefined, { ...COMMAND_START, coproc: true }];
-  if (isAgent(word)) return [end, AFTER_COMMAND];
+  const run = runOf(word, end);
+  if (run !== undefined) return [run, AFTER_COMMAND];
   if (commandName(word) === TIME) {
     return [undefined, { ...COMMAND_START, prefixed: true, timeProgram: true }];
   }
@@ -543,24 +562,24 @@ function readWord(
 }
 
 /**
- * Where each run of the agent's arguments starts, in a command with its quotes masked: just after each word that runs
- * it. Reads command words, not the whole shell grammar. A word ends at unescaped white space, `;`, `&`, `|`, `(`, `)`
- * or a backquote; a backslash joins the character it escapes to the word, and a line continuation joins the words
- * either side. A word runs the agent when it is the command word (the first of a command, past `NAME=value`, a
- * redirect and reserved words such as `then` or `!`, and `time`'s `-p` and `--`), the `time` program's command word
- * (past its options and their values), or any later word after a wrapper (`env`, `sudo`, `npx`, …). A word is a
- * reserved word only before any assignment or redirect in its command; after one, it is the command word, and `time`
- * is the `time` program, as it is by path (`/usr/bin/time`). After the reserved word `coproc`, a compound command is
- * read as it is anywhere; any other word is its command word, unless a compound command follows that word, which makes
- * it the coprocess's name. An unescaped `#` at a word's start hides the rest of its line. Each `(` and backquote
- * starts a command, and its close restores where the word before it stood; inside backquotes, an escaped
- * backquote opens or closes a nested one. A backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the
- * word: it goes on after the close. After a `)` that closes nothing (a `case` pattern's) or one whose `(` came after a
- * command's word (a `case` pattern's `(a)`, a function's `()`), a command starts; so it does after `function` and the
- * name that follows it.
+ * Where each run of the agent's or a shell's arguments starts, in a command with its quotes masked: just after each
+ * word that runs it (`isAgent`, `isShell`). Reads command words, not the whole shell grammar. A word ends at unescaped
+ * white space, `;`, `&`, `|`, `(`, `)` or a backquote; a backslash joins the character it escapes to the word, and a
+ * line continuation joins the words either side. A word runs the agent or a shell when it is the command word (the
+ * first of a command, past `NAME=value`, a redirect and reserved words such as `then` or `!`, and `time`'s `-p` and
+ * `--`), the `time` program's command word (past its options and their values), or any later word after a wrapper
+ * (`env`, `sudo`, `npx`, …), up to the agent's word, past a shell's. A word is a reserved word only before any
+ * assignment or redirect in its command; after one, it is the command word, and `time` is the `time` program, as it is
+ * by path (`/usr/bin/time`). After the reserved word `coproc`, a compound command is read as it is anywhere; any other
+ * word is its command word, unless a compound command follows that word, which makes it the coprocess's name. An
+ * unescaped `#` at a word's start hides the rest of its line. Each `(` and backquote starts a command, and its close
+ * restores where the word before it stood; inside backquotes, an escaped backquote opens or closes a nested one. A
+ * backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the word: it goes on after the close. After
+ * a `)` that closes nothing (a `case` pattern's) or one whose `(` came after a command's word (a `case` pattern's
+ * `(a)`, a function's `()`), a command starts; so it does after `function` and the name that follows it.
  */
-function agentRunStarts(masked: string): number[] {
-  const starts: number[] = [];
+function runStarts(masked: string): RunStart[] {
+  const starts: RunStart[] = [];
   // What each open `(`, backquote (`` ` ``) or nested backquote (`` \` ``) interrupted: where the next word stands at
   // its close, and the word it is inside (`x=$`), which goes on after the close.
   const open: { by: string; after: Position; word: string | undefined }[] = [];
@@ -569,8 +588,8 @@ function agentRunStarts(masked: string): number[] {
   let word: string | undefined;
   const endWord = (index: number) => {
     if (word === undefined) return;
-    const [start, next] = readWord(at, word, index);
-    if (start !== undefined) starts.push(start);
+    const [run, next] = readWord(at, word, index);
+    if (run !== undefined) starts.push(run);
     at = next;
     word = undefined;
   };
@@ -588,10 +607,9 @@ function agentRunStarts(masked: string): number[] {
   for (let index = 0; index < masked.length; index++) {
     const char = masked[index]!;
     if (char === "\\") {
-      const length = escapedLength(masked, index);
-      const escaped = masked.slice(index + 1, index + 1 + length);
-      index += length;
-      if (escaped === "\n" || escaped === "\r\n" || escaped === "") continue;
+      const escaped = escapedAt(masked, index);
+      index += escaped.length;
+      if (isContinuation(escaped) || escaped === "") continue;
       if (escaped !== "`" || !inBackquotes()) {
         word = (word ?? "") + escaped;
         continue;
@@ -625,7 +643,7 @@ function agentRunStarts(masked: string): number[] {
   }
   endWord(masked.length);
   // A run after `coproc` is known only at the next word, after any run inside that word: `coproc claude $(claude …)`.
-  return starts.sort((a, b) => a - b);
+  return starts.sort((a, b) => a.start - b.start);
 }
 
 /**
@@ -677,6 +695,13 @@ function escapedLength(masked: string, index: number): number {
   return masked.startsWith("\r\n", index + 1) ? 2 : 1;
 }
 
+/** The text the backslash at `index` escapes (`escapedLength`): empty when the backslash ends the text. */
+const escapedAt = (text: string, index: number) =>
+  text.slice(index + 1, index + 1 + escapedLength(text, index));
+
+/** Whether a backslash's escaped text is a line continuation, which the shell removes with the backslash. */
+const isContinuation = (escaped: string) => escaped === "\n" || escaped === "\r\n";
+
 /** Whether the `&` or `|` at `index` belongs to a redirect: `>&`, `<&`, `&>` (`&>>` too) or `>|`. */
 function isRedirect(masked: string, index: number): boolean {
   const before = masked[index - 1];
@@ -686,14 +711,18 @@ function isRedirect(masked: string, index: number): boolean {
 
 /**
  * A backslash and the character it escapes, or a single- or double-quoted argument (to the end of the text when it
- * isn't closed). In double quotes a backslash escapes the next character; in single quotes nothing is escaped.
+ * isn't closed), with the text inside its quotes captured: a double-quoted one's first, a single-quoted one's second.
+ * In double quotes a backslash escapes the next character; in single quotes nothing is escaped.
  */
-const ESCAPE_OR_QUOTED = /\\[\s\S]|"(?:[^"\\]|\\[\s\S])*"?|'[^']*'?/g;
+const ESCAPE_OR_QUOTED = /\\[\s\S]|"((?:[^"\\]|\\[\s\S])*)"?|'([^']*)'?/g;
+
+/** `ESCAPE_OR_QUOTED` at its `lastIndex` only, to read the quoted argument that starts there. */
+const QUOTED_AT = new RegExp(ESCAPE_OR_QUOTED.source, "y");
 
 /**
  * A shell command with each quoted argument, its quotes too, masked by `_`, so its length and every index stay the
- * same, except those `keep` leaves as written: text inside quotes is never a command word. `bash -c "claude …"` is
- * missed, as a guard hook that greps for the flag is the commoner case.
+ * same, except those `keep` leaves as written: text inside quotes is never a command word, so a guard hook that greps
+ * for the flag isn't a run. A shell's `-c` string (`bash -c "claude …"`) is read apart, by `agentRuns`.
  */
 const withQuotesMasked = (command: string, keep: (quoted: string) => boolean = () => false) =>
   command.replace(ESCAPE_OR_QUOTED, (match) =>
@@ -704,35 +733,134 @@ const withQuotesMasked = (command: string, keep: (quoted: string) => boolean = (
 const isOneWord = (quoted: string) => !/\s/.test(quoted);
 
 /**
- * Each run of the agent in a shell command, as its own arguments: the flag or mode value may be quoted, so a one-word
- * quoted argument stays as written. The next run is looked for after this one ends, so no text is in two.
+ * How many shell runs `agentRuns` reads in one settings command, nested or not, so a hostile config can't make it
+ * recurse without end, or reread the command once per shell's name in it.
  */
-function agentRuns(command: string): string[] {
+const SHELL_LIMIT = 4;
+
+/** A command's place past `SHELL_LIMIT`: its shells aren't read, so it may skip the checks. */
+const TOO_DEEP = `more than ${SHELL_LIMIT} shells in one command, nested too deep to check`;
+
+/** The shell runs a settings command may still read, and whether it had more. */
+type Shells = { left: number; tooDeep: boolean };
+
+/**
+ * Each run of the agent in a shell command, as its own arguments: the flag or mode value may be quoted, so a one-word
+ * quoted argument stays as written. A shell run's `-c` string is read the same way, as a command of its own, while
+ * `shells` has any left. The next run is looked for after an agent run ends, so no text is in two; a shell run hides
+ * nothing, as the runs among its arguments (`bash script.sh $(claude …)`) are outside its `-c` string's quotes and run
+ * before it.
+ */
+function agentRuns(command: string, shells: Shells): string[] {
   const masked = withQuotesMasked(command);
   const runs: string[] = [];
   let end = 0;
-  for (const start of agentRunStarts(masked)) {
-    // A run inside an earlier run's arguments (`claude -p $(claude -p y)`) is part of that run.
+  for (const { start, shell } of runStarts(masked)) {
+    // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run.
     if (start < end) continue;
-    end = runArgumentsEnd(masked, start);
-    runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
+    if (!shell) {
+      end = runArgumentsEnd(masked, start);
+      runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
+    } else if (shells.left === 0) shells.tooDeep = true;
+    else {
+      shells.left--;
+      const script = commandString(
+        shellWords(command.slice(start, runArgumentsEnd(masked, start))),
+      );
+      if (script !== undefined) runs.push(...agentRuns(script, shells));
+    }
   }
   return runs;
 }
 
+/** A short option cluster (`-e`, `-lc`, `+o`): it holds `c` when it starts with `-`, and an `o` takes the next word. */
+const SHORT_OPTIONS = /^[-+][A-Za-z]+$/;
+
+/** A long option (`--login`, `--norc`). */
+const LONG_OPTION = /^--[A-Za-z]/;
+
 /**
- * Each run of the agent in each command the settings run (a hook's, the `statusLine`'s, the `apiKeyHelper`), once per
- * flag in that run's own arguments, on the command value's line. A later command, or a quoted argument of more than
- * one word (a prompt), isn't one of them.
+ * The string a shell runs from its `-c`, from the words after the shell's own: the first word past its options (short
+ * clusters, `-o`/`+o` and its value, long options, then maybe `--`), when one of them held `c`. Any later words (`$0`,
+ * positional arguments) aren't read, nor split.
+ */
+function commandString(words: Iterator<string, undefined>): string | undefined {
+  let runsString = false;
+  for (let word = words.next().value; word !== undefined; word = words.next().value) {
+    if (word === "--") return runsString ? words.next().value : undefined;
+    if (LONG_OPTION.test(word)) continue;
+    if (!SHORT_OPTIONS.test(word)) return runsString ? word : undefined;
+    runsString ||= word.startsWith("-") && word.includes("c");
+    if (word.includes("o")) words.next();
+  }
+  return undefined;
+}
+
+/** The characters a backslash keeps its meaning before inside double quotes, besides a line continuation. */
+const ESCAPED_IN_DOUBLE_QUOTES = new Set(['"', "\\", "$", "`"]);
+
+/**
+ * The text inside double quotes as the shell reads it: a backslash before `"`, `\`, `$` or a backquote is removed, and
+ * a line continuation (`escapedAt`, so a CRLF one too) with its backslash.
+ */
+function doubleQuoted(inside: string): string {
+  let text = "";
+  for (let i = 0; i < inside.length; i++) {
+    const escaped = inside[i] === "\\" ? escapedAt(inside, i) : "";
+    if (isContinuation(escaped)) i += escaped.length;
+    else if (ESCAPED_IN_DOUBLE_QUOTES.has(escaped)) text += inside[++i];
+    else text += inside[i];
+  }
+  return text;
+}
+
+/**
+ * A command's arguments as the shell splits and joins them, with no expansion: words end at unquoted white space;
+ * single quotes are kept as written; double quotes as `doubleQuoted` reads them; unquoted, a backslash escape keeps the
+ * character it escapes, and a line continuation joins the words either side. A quote that never closes runs to the
+ * end, as `ESCAPE_OR_QUOTED` reads it. Each word is split only when it is asked for.
+ */
+function* shellWords(text: string): Generator<string, undefined> {
+  let word: string | undefined;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]!;
+    if (/[ \t\r\n]/.test(char)) {
+      if (word !== undefined) yield word;
+      word = undefined;
+      continue;
+    }
+    word ??= "";
+    if (char === "\\") {
+      const escaped = escapedAt(text, i);
+      i += escaped.length;
+      if (!isContinuation(escaped)) word += escaped;
+    } else if (char === "'" || char === '"') {
+      QUOTED_AT.lastIndex = i;
+      const [quoted, inDouble, inSingle] = QUOTED_AT.exec(text)!;
+      word += inSingle ?? doubleQuoted(inDouble!);
+      i += quoted.length - 1;
+    } else word += char;
+  }
+  if (word !== undefined) yield word;
+  return undefined;
+}
+
+/**
+ * Each run of the agent in each command the settings run (a hook's, the `statusLine`'s, the `apiKeyHelper`), a
+ * shell's `-c` string among them, once per flag in that run's own arguments, on the command value's line. A later
+ * command, or a quoted argument of more than one word (a prompt), isn't one of them. A command with more shell runs
+ * than `SHELL_LIMIT` is one more place, `TOO_DEEP`.
  */
 const commandPlaces = ({ hooks, otherCommands }: ClaudeSettings): Place[] =>
-  [...hooks, ...otherCommands].flatMap(({ command, line }) =>
-    agentRuns(command).flatMap((args) =>
+  [...hooks, ...otherCommands].flatMap(({ command, line }) => {
+    const shells = { left: SHELL_LIMIT, tooDeep: false };
+    const places = agentRuns(command, shells).flatMap((args) =>
       SKIP_FLAGS.flatMap(({ kind, pattern }) =>
         Array.from(args.matchAll(pattern), () => ({ kind, line })),
       ),
-    ),
-  );
+    );
+    return shells.tooDeep ? [...places, { kind: TOO_DEEP, line }] : places;
+  });
 
 function flagPlaces(text: string): Place[] {
   const lines = text.split("\n");

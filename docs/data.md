@@ -30,7 +30,7 @@ Where this document and an ADR disagree, the ADR wins.
 | Cloud SQL: Vouch Catalogues | Which Catalogues each Team has turned on (`team_catalogues`): the Catalogue's id, on or off, who set it (an Admin's Clerk user id) and when, one row per Team and Catalogue. A Catalogue with no row is off. A change replaces the row, with no history | Team; the setting Admin's Clerk user id | Cloud SQL Postgres, europe-west1 | Life of the Team | Deleting the Team removes them at once | Built: the `team_catalogues` table, with the Vouch module's store; read with `GET /api/vouch/catalogues` (any person in the Team) and set with `PUT /api/vouch/catalogues/:id`, Admin-only (Vouch spec #341, #345) |
 | Cloud SQL: Vouch reviews | The review log (`control_reviews`): each review a Lead (or an Admin) made of a judged Control's Verdict, one row per review. A row holds the Catalogue and the Control's ref, the Verdict Warden worked out when it was written, whether it was confirmed or overridden, the reviewed Verdict (not applicable among them), the reason (required on an override, optional on a confirm), who reviewed (the Lead's Clerk user id) and when | Team; the reviewing Lead's or Admin's Clerk user id | Cloud SQL Postgres, europe-west1 | Life of the Team: the rows are audit evidence of each Verdict's review | The app can't edit or delete a row: a trigger refuses every update, delete and truncate, by the app or the table's owner; deleting the Team removes them at once | Built: the append-only `control_reviews` table, with the Vouch module's store; written with `POST /api/vouch/catalogues/:id/controls/:ref/reviews` (a Lead or an Admin), and read with the Controls reads, any person in the Team (Vouch spec #341, #366). Designed: Team deletion, which needs a marked way past the trigger |
 | Warden's server image: the VDA ISA Catalogue | The VDA ISA 2027.1 text: 14 controls in English and German, and the two xlsx files they were taken from, with its source and licence in `NOTICE.md` (the ENX Association's credit, CC BY-ND 4.0). The same for every Team, not Team data. The server reads the English text; only four judged Controls' questions and ISO 27001 references are shown | Warden; the text is the ENX Association's, under CC BY-ND 4.0 | The server image, in Artifact Registry, europe-west1 | Until a release replaces it | Replaced only with a release | Built: the Catalogue's files and loader (#344); loaded at start-up and shown through the API (#345) |
-| Cloud SQL: Agent events | What the hook sends, at the Team's Privacy tier, redacted on arrival before it's stored | Team; the developer, by pseudonym | Cloud SQL Postgres, europe-west1 | Until the Agent session is judged, and at most 7 days. An Agent event lasts at most 15 days in any form: up to 7 days live, up to 1 more until the daily delete job runs, then up to 7 in backups (recovery logs keep 6) | A daily job deletes every Agent event that is judged or older than 7 days. Deleting the Team removes them at once | Built: `agent_events`, one row per event the hook endpoint stores, holding only the Metadata fields at every tier so far (#183; #184 adds the Details and Content fields, with redaction). Designed: dropping judged events and the daily delete (Guard spec) |
+| Cloud SQL: Agent events | What the hook sends, at the Team's Privacy tier, redacted on arrival before it's stored | Team; the developer, by pseudonym | Cloud SQL Postgres, europe-west1 | Until the Agent session is judged, and at most 7 days. An Agent event lasts at most 15 days in any form: up to 7 days live, up to 1 more until the daily delete job runs, then up to 7 in backups (recovery logs keep 6) | A daily job deletes every Agent event that is judged or older than 7 days. Deleting the Team removes them at once | Built: `agent_events`, one row per event the hook endpoint stores (#183), holding the fields the Team's Privacy tier keeps, redacted on arrival (#184; "The Privacy tier", below). Designed: dropping judged events and the daily delete (Guard spec) |
 | Cloud SQL: Agent session records | One record per Agent session, without content: Team, pseudonymous developer, agent, start and end times, judged or not, outcome | Team; the developer, by pseudonym | Cloud SQL Postgres, europe-west1 | Life of the Team (evidence that logs are checked, ISA2027 5.2.4) | Deleting the Team removes them at once | Built: `agent_sessions`, one row per Agent session the hook endpoint stores an event for, with its pseudonymous developer, its agent (`claude-code`), its start, last event and end, and the count of its events refused for the Team's rate limit (`refused_events`) (#183). Designed: judged or not, and the outcome (Guard spec) |
 | Cloud SQL: Real-world run Findings | Findings from scans of real repos whose owners opted in, such as a cohort member's. Never eval data | The repo's owner | Cloud SQL Postgres, europe-west1 | Life of the Team that holds them, which only the repo's owner belongs to | The repo's owner deletes that Team, and the rows go at once | Designed: Guard spec |
 | Cloud SQL: embeddings | Vectors (pgvector) of text Warden searches, such as CVE text or a Team's Policy | Team, or Warden for public text | Cloud SQL Postgres, europe-west1 | As long as the text they come from | Deleted with the text they come from; deleting the Team removes the Team's at once | Designed: Patch and Vouch specs |
@@ -141,7 +141,7 @@ The owner's rules for what Warden keeps about people and their work:
 
 - **Redact on arrival, always,** at every Privacy tier. That includes the developer's home folder name in `cwd`,
   `transcript_path`, and every path in the tool input and tool output, which would otherwise name the person
-  (designed, Guard spec).
+  (built, #184: "The Privacy tier", below, says what's masked).
 - **Safeagents scrubs on the laptop** where it runs, before events leave (designed, Guard spec).
 - **Judge, then drop.** Agent events are deleted once judged, and never kept past 7 days (designed, Guard spec).
 - **A flagged session's Finding keeps only** the masked events the Judge used, and a SHA-256 hash of the redacted
@@ -181,12 +181,44 @@ How much of an Agent session's content the hook sends to Warden, set per Team by
 stored per Team, and the managed settings an Admin reads from `GET /api/hook` (Guard spec slice 9a-ii, #154). The
 block leaves out only `UserPromptSubmit` below Content: its `PostToolUse` and `PostToolUseFailure` hooks run at
 every tier, and Claude Code posts each hook's whole JSON input, so every tier still sends the tool events' full
-input (`tool_input`) and output (`tool_response`) to Warden. Designed (Guard spec slice 10): the filter on arrival,
-which applies the tier, and Warden redacting what arrives, whatever the tier.
+input (`tool_input`) and output (`tool_response`) to Warden. Built (#184): the filter on arrival, which applies the
+tier, and Warden redacting what arrives, whatever the tier.
 
-- **Metadata:** tool names and outcomes.
-- **Details (the default):** also commands, file paths and URLs.
-- **Content:** also tool output and prompts.
+- **Metadata:** tool names and outcomes. Kept: `hook_event_name`, `tool_name`, `tool_use_id`, `permission_mode`,
+  `agent_id`, `agent_type`, `source`, `reason` and `model`, each only as a string of at most 256 characters with no
+  NUL and no lone surrogate (#183). The same rule holds for these fields at every tier.
+- **Details (the default):** also commands, file paths and URLs. Kept: `cwd` and `transcript_path` when each is a
+  string, and from `tool_input`, when it's an object, only the keys `command`, `description`, `file_path`, `path`,
+  `notebook_path`, `url`, `pattern` and `glob` whose values are strings (no `tool_input` when none is). Never
+  written or fetched content (`content`, `old_string`, `new_string`, `edits`, `new_source`, a tool's `prompt`), nor
+  an MCP tool's other keys.
+- **Content:** also tool output and prompts. Kept: the whole `tool_input` and `tool_response`, whatever their JSON
+  type, and `error` and `prompt` when each is a string.
+
+Every other field is dropped. The bounds at Details and Content (#184):
+
+- **Size:** no bound per field beyond the endpoint's 1 MiB body limit, so a long command is kept whole and padding
+  can't hide what it does.
+- **Depth:** a field nested more than 64 levels deep (objects and arrays) is dropped whole.
+- **What Postgres refuses:** each NUL and each lone surrogate, in every string and object key at any depth, becomes
+  U+FFFD; the rest of the value is kept.
+- **Objects:** a `__proto__` key is kept as an ordinary key and never sets an object's prototype.
+
+**Redaction on arrival (built, #184).** What the tier keeps is redacted before it's stored, at every tier: every
+string value and every object key, at any depth, in this order.
+
+1. **The home folder becomes `~`:** `/home/<name>`, `/var/home/<name>`, `/Users/<name>` and `<drive>:\Users\<name>`,
+   in any case (macOS ignores it), with `/`, `\`, doubled or JSON-escaped separators, wherever the path is in the
+   string: a command, straight after a flag (`-I/home/<name>`), deeper in another path, a `file://` URL. A web URL's
+   own path (`https://example.com/home/x`) is left as it is. `<name>` runs to the next separator, whitespace, quote
+   or shell operator. Claude Code's encoded project folder after `.claude/projects/` that starts with an encoded home
+   folder (`-home-`, `-var-home-`, `-Users-`, `C--Users-`, in any case) becomes `~` whole. The developer's name
+   elsewhere (a shell prompt, `whoami` output) isn't masked.
+2. **Guard's nine secret types** (`maskSecrets`, over the patterns the secret Rules use) become their mask: the
+   first 4 characters, then 8 `*`. Placeholders are left as they are. A private key is masked from its `BEGIN` line
+   through its matching `END` line, or to the string's end.
+3. **The log redactor's patterns:** Bearer tokens, JWTs, `sk_test_` keys, a Postgres URL's password and URL query
+   values.
 
 Claude Code's hook sends every field of each event it's set for: a tool event always carries the tool's input
 (its command, path or URL), and its result carries the tool's output. So the tier is kept in two places: the
