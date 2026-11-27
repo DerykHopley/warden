@@ -1894,72 +1894,13 @@
         max-height: 34vh;
         overflow: auto;
       }
-      .e-ov {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 13.5px;
+      .e-tot {
+        font-size: 14.5px;
       }
-      .e-ov th,
-      .e-ov td {
-        border: 1px solid var(--line);
-        padding: 6px 10px;
-        text-align: right;
-        white-space: nowrap;
+      .e-pin .e-sum {
+        margin-top: 8px;
       }
-      .e-ov th:first-child,
-      .e-ov td:first-child {
-        text-align: left;
-      }
-      .e-ov thead th {
-        font-size: 12px;
-        color: var(--muted);
-        font-weight: 700;
-        background: var(--bg);
-      }
-      .e-ov thead th.critical {
-        color: var(--sev-crit);
-        box-shadow: inset 0 3px 0 var(--sev-crit);
-      }
-      .e-ov thead th.high {
-        color: var(--sev-high);
-        box-shadow: inset 0 3px 0 var(--sev-high);
-      }
-      .e-ov thead th.medium {
-        color: var(--sev-med);
-        box-shadow: inset 0 3px 0 var(--sev-med);
-      }
-      .e-ov thead th.low {
-        color: var(--sev-low);
-        box-shadow: inset 0 3px 0 var(--sev-low);
-      }
-      .e-ov thead th.w {
-        color: var(--st-wait);
-      }
-      .e-ov thead th.f {
-        color: var(--st-fixed);
-      }
-      .e-ov tbody tr.ag {
-        cursor: pointer;
-        box-shadow: inset 4px 0 0 var(--ag);
-      }
-      .e-ov tbody tr.ag:hover {
-        background: var(--bg);
-      }
-      .e-ov td.nm {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-weight: 700;
-        padding-left: 14px;
-      }
-      .e-ov tr.tot td {
-        font-weight: 700;
-        background: var(--bg);
-      }
-      .e-ov td.zero {
-        color: var(--muted);
-      }
-      .e-ov td.chg {
+      .e-pin .chg {
         animation: e-chg 2.4s ease-out;
       }
       @keyframes e-chg {
@@ -1968,14 +1909,8 @@
           outline: 2px solid var(--st-wait);
         }
         100% {
-          background: transparent;
           outline-color: transparent;
         }
-      }
-      .e-pin .upd {
-        color: var(--muted);
-        font-size: 12px;
-        margin-top: 6px;
       }
       .e-wl {
         display: flex;
@@ -2016,21 +1951,14 @@
         font-size: 12.5px;
         white-space: nowrap;
       }
-      .e-ov .av2.sm,
       .e-wl .av2.sm {
         width: 20px;
         height: 20px;
       }
-      .e-ov .av2.sm::before,
-      .e-ov .av2.sm::after,
       .e-wl .av2.sm::before,
       .e-wl .av2.sm::after {
         width: 4px;
         height: 4px;
-      }
-      .e-ov th,
-      .e-ov td {
-        padding: 4px 10px;
       }
       .e-wl button {
         padding: 4px 10px;
@@ -2039,10 +1967,12 @@
         padding-top: 8px;
         padding-bottom: 8px;
       }
-      .e-pin .upd {
-        margin-top: 4px;
-      }
       @media (max-width: 899px) {
+        /* On a phone the pinned pair never takes more than 40% of the screen: it scrolls inside itself. */
+        .e-pinned {
+          max-height: 40vh;
+          overflow: auto;
+        }
         .e-pin > button.ph {
           padding: 9px 16px;
           min-height: 44px;
@@ -2052,13 +1982,6 @@
         }
         .e-pin.wait .pb {
           max-height: 30vh;
-        }
-        .e-ov .hide-s {
-          display: none;
-        }
-        .e-ov th,
-        .e-ov td {
-          padding: 6px 7px;
         }
         .e-wl button {
           grid-template-columns: 22px minmax(0, 1fr);
@@ -3149,50 +3072,24 @@
           })),
         ];
       }
-      function eCounts(list) {
-        const open = list.filter((f) => f.status === "open" && !f.proposal && !f.unconfirmed);
-        const c = { open: open.length };
-        for (const k of ["critical", "high", "medium", "low"])
-          c[k] = open.filter((f) => f.sev === k).length;
-        c.pr = list.filter((f) => f.fix === "open" && f.status === "open").length;
-        c.wait = list.filter((f) => f.proposal || f.unconfirmed).length;
-        c.fixed = list.filter((f) => f.status === "fixed").length;
-        return c;
-      }
       function eWardenPinned() {
-        const rows = {
-          guard: eCounts(F.filter((f) => f.mod === "guard")),
-          patch: eCounts(F.filter((f) => f.mod === "patch")),
-          all: eCounts(F),
+        // The simple summary from the earlier E: a totals line and a card per module.
+        const open = F.filter((f) => f.status === "open");
+        const now = {
+          tot: `<b>${open.length} open Findings</b>, ${open.filter((f) => f.sev === "critical").length} Critical. Level: Quick.`,
         };
-        const cols = [
-          ["open", "Open", ""],
-          ["critical", "Critical", "critical"],
-          ["high", "High", "high hide-s"],
-          ["medium", "Medium", "medium hide-s"],
-          ["low", "Low", "low hide-s"],
-          ["pr", "Fix PR open", "hide-s"],
-          ["wait", "Waiting", "w"],
-          ["fixed", "Fixed", "f"],
-        ];
+        for (const m of ["guard", "patch", "vouch"]) now[m] = `${eWait(m)}|${eLast(m)}`;
         const prev = ePrevCounts;
-        ePrevCounts = JSON.parse(JSON.stringify(rows));
-        const cell = (r, k, cls) => {
-          const v = rows[r][k];
-          const chg = prev && prev[r][k] !== v ? " chg" : "";
-          return `<td class="${cls.replace(/critical|high|medium|low|\bw\b|\bf\b/g, "")}${v ? "" : " zero"}${chg}">${v}</td>`;
-        };
-        const tr = (r) =>
-          r === "all"
-            ? `<tr class="tot"><td>All modules</td>${cols.map(([k, , c]) => cell(r, k, c)).join("")}</tr>`
-            : `<tr class="ag ag-${r}" data-agent="${r}" tabindex="0" title="Open ${AGENTS[r].name}'s feed"><td class="nm">${eAvatar(r, "sm")}${AGENTS[r].name}</td>${cols.map(([k, , c]) => cell(r, k, c)).join("")}</tr>`;
+        ePrevCounts = now;
+        const chg = (k) => (prev && prev[k] !== now[k] ? " chg" : "");
+        const card = (m) =>
+          `<button class="ag-${m}${chg(m)}" data-agent="${m}"><b>${eAvatar(m, "sm")}${AGENTS[m].name}${eWait(m) ? `<span class="wbadge">${eWait(m)} waiting</span>` : ""}</b><span class="muted" style="font-size:13px">${eLast(m)}</span></button>`;
         const wl = eWaitList();
-        const a = rows.all;
         const head = (key, title, sum, cls) =>
           `<button class="ph" data-epin="${key}" aria-expanded="${S.ePin[key]}"><h2>${title}</h2><span class="sum">${sum}</span><span class="chev" aria-hidden="true">${S.ePin[key] ? "▲ Hide" : "▼ Show"}</span></button>`;
         return `<div class="e-pinned">
-          <section class="e-pin ov">${head("ov", "Findings", `${a.open} open · ${a.critical} Critical · ${a.wait} waiting · ${a.fixed} Fixed`)}
-            ${S.ePin.ov ? `<div class="pb"><table class="e-ov"><thead><tr><th>Module</th>${cols.map(([, w, c]) => `<th class="${c}">${w}</th>`).join("")}</tr></thead><tbody>${tr("guard")}${tr("patch")}${tr("all")}</tbody></table><div class="upd">Live: counts change as Guard and Patch act. Vouch's Controls are in its feed.</div></div>` : ""}</section>
+          <section class="e-pin ov">${head("ov", "Findings", `${open.length} open · ${open.filter((f) => f.sev === "critical").length} Critical`)}
+            ${S.ePin.ov ? `<div class="pb"><div class="e-tot${chg("tot")}">${now.tot}</div><div class="e-sum">${card("guard")}${card("patch")}${card("vouch")}</div></div>` : ""}</section>
           <section class="e-pin wait">${head("wait", "Waiting on a Lead", wl.length ? `${wl.length} ${wl.length === 1 ? "thing" : "things"}` : "Nothing waits")}
             ${S.ePin.wait ? `<div class="pb">${wl.length ? `<div class="e-wl">${wl.map((w) => `<button class="ag-${w.a}" data-agent="${w.a === "warden" ? "setup" : w.a}" data-eref="${w.ref}">${eAvatar(w.a, "sm")}<span class="t"><span class="st wait">${ICON.wait}${esc(w.k)}</span>${esc(w.t)}</span><span class="go">in ${w.a === "warden" ? "Setup" : AGENTS[w.a].name} →</span></button>`).join("")}</div>` : `<div class="muted" style="font-size:13.5px">Every decision is made.</div>`}</div>` : ""}</section>
         </div>`;
