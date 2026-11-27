@@ -23,7 +23,7 @@ import { pseudonym } from "../src/modules/guard/pseudonym.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { ADMIN, newTeam, testApp, testKey } from "./helpers.ts";
-import { ANTHROPIC_KEY, AWS_KEY, GITHUB_TOKEN, STRIPE_KEY } from "./secret-fixtures.ts";
+import { ANTHROPIC_KEY, AWS_KEY, GITHUB_TOKEN, mask, STRIPE_KEY } from "./secret-fixtures.ts";
 
 let publicPem: string;
 let pool: pg.Pool;
@@ -519,9 +519,6 @@ describe("POST /api/hook/events: the shape", () => {
     expect((await tables(team)).events.map((row) => row.name)).toEqual(["UserPromptSubmit"]);
   });
 });
-
-/** What Guard's secret mask makes of a secret: its first 4 characters, then 8 `*`. */
-const mask = (secret: string) => `${secret.slice(0, 4)}********`;
 
 /** The secrets the tier cases plant, each in a field only some tiers keep. */
 const PLANTED_SECRETS = [AWS_KEY, GITHUB_TOKEN, ANTHROPIC_KEY, STRIPE_KEY];

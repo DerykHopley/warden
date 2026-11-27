@@ -82,10 +82,14 @@ function bounded(value: unknown, levels = MAX_FIELD_DEPTH): JsonValue | undefine
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
+/** `from`'s own field `name`, or undefined when it has none: a field on its prototype is never read. */
+const ownField = (from: Record<string, unknown>, name: string): unknown =>
+  Object.hasOwn(from, name) ? from[name] : undefined;
+
 /** Each named string field of `from`, storable; a field that's missing or isn't a string is left out. */
 function strings(from: Record<string, unknown>, names: readonly string[]): [string, string][] {
   return names.flatMap((name) => {
-    const value = Object.hasOwn(from, name) ? from[name] : undefined;
+    const value = ownField(from, name);
     return typeof value === "string" ? [[name, storable(value)] as [string, string]] : [];
   });
 }
@@ -103,23 +107,21 @@ export function filterToTier(
   tier: PrivacyTier,
 ): Record<string, JsonValue> {
   const kept: Record<string, JsonValue> = {};
-  const own = (field: string) => (Object.hasOwn(event, field) ? event[field] : undefined);
   for (const field of METADATA) {
-    const value = own(field);
+    const value = ownField(event, field);
     if (keptMetadata(value)) kept[field] = value;
   }
   if (tier === "metadata") return kept;
 
   Object.assign(kept, Object.fromEntries(strings(event, DETAILS_STRINGS)));
   if (tier === "details") {
-    const toolInput = detailsToolInput(own("tool_input"));
+    const toolInput = detailsToolInput(ownField(event, "tool_input"));
     if (toolInput !== undefined) kept.tool_input = toolInput;
     return kept;
   }
 
   for (const field of CONTENT_VALUES) {
-    if (!Object.hasOwn(event, field)) continue;
-    const value = bounded(event[field]);
+    const value = bounded(ownField(event, field));
     if (value !== undefined) kept[field] = value;
   }
   Object.assign(kept, Object.fromEntries(strings(event, CONTENT_STRINGS)));

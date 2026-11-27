@@ -6,8 +6,12 @@ import { redactString } from "../../redact.ts";
 import type { JsonValue } from "./agent-sessions.ts";
 import { maskSecrets } from "./secrets.ts";
 
-/** A path separator: `/` or `\`, or either JSON-escaped (`\/`, `\\`), as a command holding JSON text has them. */
-const SEP = String.raw`(?:\\\\|\\/|/|\\)`;
+/**
+ * A run of path separators: `/` and `\` in any mix, so a doubled one (`//`) and a JSON-escaped one (`\/`, `\\`), as
+ * a command holding JSON text has them, are each one separator. One character class, so a long run never backtracks
+ * more than once.
+ */
+const SEP = String.raw`[/\\]+`;
 
 /**
  * A user name: one path segment, up to the next separator, whitespace, quote, shell operator or the string's end.
@@ -16,26 +20,37 @@ const SEP = String.raw`(?:\\\\|\\/|/|\\)`;
 const NAME = String.raw`[^/\\\s"'\x60;:,|&<>()\[\]{}=]+`;
 
 /**
- * A home folder, with its user name: `/home/<name>`, `/var/home/<name>` and `/Users/<name>`, not inside a longer
- * path segment or a URL's path, and `<drive>:\Users\<name>` with the drive letter and `Users` in either case.
+ * A URL from its scheme through its path: `scheme://host` (or `scheme:\/\/host`, JSON-escaped), then anything up to
+ * whitespace, a quote or a shell operator. A home folder in it is part of the URL's path, not the person's machine,
+ * so it's left as it is. A `file:///home/<name>` has no host, so it isn't one. It starts only where a word starts,
+ * so a long word is scanned once.
  */
-const HOME_FOLDER = new RegExp(
-  String.raw`(?<![\w.~-])(?:${SEP}var)?${SEP}(?:home|Users)${SEP}${NAME}|(?<![A-Za-z0-9])[A-Za-z]:${SEP}[Uu][Ss][Ee][Rr][Ss]${SEP}${NAME}`,
-  "g",
-);
+const WEB_URL = String.raw`(?<![\w+.-])[a-z][\w+.-]*:(?://|\\/\\/)[^/\\\s"'\x60<>;|&]+[^\s"'\x60<>;|&]*`;
+
+/**
+ * A home folder, with its user name, in any case (macOS ignores it): `/home/<name>`, `/var/home/<name>` and
+ * `/Users/<name>`, wherever it starts, and `<drive>:\Users\<name>`. A match starts only at a run of separators'
+ * first one, so a long run is scanned once.
+ */
+const HOME = String.raw`(?<![/\\])(?:${SEP}var)?${SEP}(?:home|users)${SEP}${NAME}|(?<![a-z0-9])[a-z]:${SEP}users${SEP}${NAME}`;
+
+/** A URL (group 1, kept) or a home folder (masked), whichever starts first, so no home folder inside a URL matches. */
+const HOME_FOLDER = new RegExp(String.raw`(${WEB_URL})|${HOME}`, "gi");
 
 /**
  * Claude Code's encoded project folder (the one right after `.claude/projects/`) when it starts with an encoded
- * home folder: the person's name can't be split from the project's, so the folder is masked whole.
+ * home folder, in any case: the person's name can't be split from the project's, so the folder is masked whole.
  */
 const ENCODED_PROJECT = new RegExp(
-  String.raw`(\.claude${SEP}projects${SEP})(?:-home-|-var-home-|-Users-|[A-Za-z]--Users-)${NAME}`,
-  "g",
+  String.raw`(\.claude${SEP}projects${SEP})(?:-home-|-var-home-|-Users-|[a-z]--Users-)${NAME}`,
+  "gi",
 );
 
 /** `text` redacted: the home folder becomes `~`, then Guard's secrets are masked, then the log redactor's patterns. */
 function redactText(text: string): string {
-  const homeless = text.replace(HOME_FOLDER, "~").replace(ENCODED_PROJECT, "$1~");
+  const homeless = text
+    .replace(HOME_FOLDER, (_match, url: string | undefined) => url ?? "~")
+    .replace(ENCODED_PROJECT, "$1~");
   return redactString(maskSecrets(homeless));
 }
 

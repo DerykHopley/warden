@@ -71,13 +71,16 @@ const mask = (secret: string) => `${secret.slice(0, 4)}********`;
 /** One secret in a text: its type, where it starts and ends, and its value. */
 type SecretMatch = { type: string; start: number; end: number; value: string };
 
+/** A pattern's match: a secret, and a block type's end line. */
+type Candidate = SecretMatch & { endLine?: string };
+
 /**
  * Each secret in `text`, in the order they appear, placeholders left out. Where two patterns match the same text,
- * the earlier match is kept. With `blocks`, a block type's match runs on through its end line (or to the text's
- * end), and nothing inside it is answered on its own.
+ * the earlier match is kept. `endOf` gives where a kept match ends, so a match starting before that is dropped; it's
+ * called only for a match that's kept, so a block's end line is looked for once per block.
  */
-function secretsIn(text: string, { blocks }: { blocks: boolean }): SecretMatch[] {
-  const matches = SECRET_TYPES.flatMap(({ type, pattern, end }) =>
+function firstMatchesIn(text: string, endOf: (candidate: Candidate) => number): SecretMatch[] {
+  const candidates: Candidate[] = SECRET_TYPES.flatMap(({ type, pattern, end }) =>
     Array.from(text.matchAll(pattern))
       .filter((match) => !isPlaceholder(match[0], match.groups?.body))
       .map((match) => ({
@@ -85,21 +88,34 @@ function secretsIn(text: string, { blocks }: { blocks: boolean }): SecretMatch[]
         start: match.index,
         end: match.index + match[0].length,
         value: match[0],
-        endLine: blocks ? end?.(match) : undefined,
+        endLine: end?.(match),
       })),
   ).sort((a, b) => a.start - b.start);
   const kept: SecretMatch[] = [];
   let end = 0;
-  for (const { endLine, ...match } of matches) {
-    if (match.start < end) continue;
-    if (endLine !== undefined) {
-      const at = text.indexOf(endLine, match.end);
-      match.end = at === -1 ? text.length : at + endLine.length;
-    }
-    end = match.end;
-    kept.push(match);
+  for (const candidate of candidates) {
+    if (candidate.start < end) continue;
+    end = endOf(candidate);
+    kept.push({ type: candidate.type, start: candidate.start, end, value: candidate.value });
   }
   return kept;
+}
+
+/** Each secret in `text`, as `firstMatchesIn` gives them; a block type's match is its first line alone. */
+function secretsIn(text: string): SecretMatch[] {
+  return firstMatchesIn(text, (candidate) => candidate.end);
+}
+
+/**
+ * Each secret in `text` as `secretsIn` finds them, except a block type's match runs on through its end line (or to
+ * the text's end), so nothing inside the block is answered on its own.
+ */
+function secretBlocksIn(text: string): SecretMatch[] {
+  return firstMatchesIn(text, ({ end, endLine }) => {
+    if (endLine === undefined) return end;
+    const at = text.indexOf(endLine, end);
+    return at === -1 ? text.length : at + endLine.length;
+  });
 }
 
 /**
@@ -109,7 +125,7 @@ function secretsIn(text: string, { blocks }: { blocks: boolean }): SecretMatch[]
  */
 export function findSecrets(path: string, text: string): SecretEvidence[] {
   return text.split("\n").flatMap((content, i) =>
-    secretsIn(content, { blocks: false }).map((match) => ({
+    secretsIn(content).map((match) => ({
       type: match.type,
       path,
       line: i + 1,
@@ -126,7 +142,7 @@ export function findSecrets(path: string, text: string): SecretEvidence[] {
 export function maskSecrets(text: string): string {
   let masked = "";
   let from = 0;
-  for (const match of secretsIn(text, { blocks: true })) {
+  for (const match of secretBlocksIn(text)) {
     masked += text.slice(from, match.start) + mask(match.value);
     from = match.end;
   }

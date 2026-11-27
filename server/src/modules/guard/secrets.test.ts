@@ -3,11 +3,9 @@
 // by joining its parts, so the source never holds a whole one for a secret scanner to flag.
 import { Observation, SecretEvidence, type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { SECRET_OF_EACH_TYPE as SECRETS } from "../../../test/secret-fixtures.ts";
+import { join, SECRET_OF_EACH_TYPE as SECRETS } from "../../../test/secret-fixtures.ts";
 import { packRule } from "./default-pack.ts";
 import { findSecrets, secretObservations } from "./secrets.ts";
-
-const join = (...parts: string[]) => parts.join("");
 
 /** The other GitHub token prefixes, and a fine-grained one. */
 const GITHUB_TOKENS = [

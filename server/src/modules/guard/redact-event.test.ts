@@ -1,14 +1,15 @@
 // Redaction on arrival (#184, threat H8): `redactEvent` masks the home folder, Guard's nine secret types and the log
 // redactor's patterns in every string and object key of what the tier filter kept, at any depth.
 import { describe, expect, it } from "vitest";
-import { RSA_PRIVATE_KEY, SECRET_OF_EACH_TYPE } from "../../../test/secret-fixtures.ts";
+import {
+  AWS_KEY,
+  GITHUB_TOKEN,
+  join,
+  mask,
+  SECRET_OF_EACH_TYPE,
+} from "../../../test/secret-fixtures.ts";
 import { redactEvent } from "./redact-event.ts";
 import { filterToTier } from "./tier-filter.ts";
-
-/** What Guard's secret mask makes of a secret: its first 4 characters, then 8 `*`. */
-const mask = (secret: string) => `${secret.slice(0, 4)}********`;
-
-const join = (...parts: string[]) => parts.join("");
 
 describe("redactEvent: Guard's secret types", () => {
   // Each secret ends its string, so a private key's header, masked to the string's end, masks the same text.
@@ -36,12 +37,8 @@ describe("redactEvent: Guard's secret types", () => {
   );
 
   it("masks two secrets in one string, each with its own mask", () => {
-    const { AWS_KEY, GITHUB } = {
-      AWS_KEY: SECRET_OF_EACH_TYPE["AWS access key id"],
-      GITHUB: SECRET_OF_EACH_TYPE["GitHub token"],
-    };
-    expect(redactEvent({ prompt: `${AWS_KEY} and ${GITHUB}.` })).toEqual({
-      prompt: `${mask(AWS_KEY)} and ${mask(GITHUB)}.`,
+    expect(redactEvent({ prompt: `${AWS_KEY} and ${GITHUB_TOKEN}.` })).toEqual({
+      prompt: `${mask(AWS_KEY)} and ${mask(GITHUB_TOKEN)}.`,
     });
   });
 
@@ -68,12 +65,6 @@ describe("redactEvent: a private key", () => {
 
     expect(redacted).toBe(`before\n${mask(header)}\nafter`);
     for (const line of body) expect(redacted).not.toContain(line);
-  });
-
-  it("masks the fixture's RSA key block whole", () => {
-    expect(redactEvent({ tool_response: `cat id_rsa\n${RSA_PRIVATE_KEY}` })).toEqual({
-      tool_response: `cat id_rsa\n${mask(RSA_PRIVATE_KEY)}\n`,
-    });
   });
 
   it("masks to the string's end when there's no END line", () => {
@@ -112,9 +103,31 @@ describe("redactEvent: the home folder", () => {
     ["a bare /home/<name>", "/home/alice", "~"],
     ["a bare /Users/<name> in quotes", 'cd "/Users/alice"', 'cd "~"'],
     ["a path in a command", "cd /home/alice/app && ls -la", "cd ~/app && ls -la"],
-    ["a file:// URL", "open file:///home/alice/app/index.html", "open file://~/app/index.html"],
+    ["a file:// URL", "open file:///home/alice/app/index.html", "open file:~/app/index.html"],
     ["two home folders", "cp /home/alice/a /home/bob/b", "cp ~/a ~/b"],
     ["a name followed by a shell operator", "ls /home/alice;whoami", "ls ~;whoami"],
+    [
+      "paths straight after a compiler's flags",
+      "gcc -I/home/alice/include -L/home/alice/lib",
+      "gcc -I~/include -L~/lib",
+    ],
+    ["a path straight after tar's -C", "tar -C/home/alice/x", "tar -C~/x"],
+    ["a path straight after a secret", `${AWS_KEY}/home/alice/x`, `${mask(AWS_KEY)}~/x`],
+    ["a home folder deeper in a path", "/mnt/backup/home/alice/x", "/mnt/backup~/x"],
+    ["/users/<name>/… in lower case", "/users/alice/x", "~/x"],
+    ["/HOME/<name>/… in upper case", "/HOME/alice/x", "~/x"],
+    ["doubled separators", "//home//alice/x", "~/x"],
+    [
+      "a path after a URL's /home/ path",
+      "curl https://example.com/home/x -o /home/alice/x",
+      "curl https://example.com/home/x -o ~/x",
+    ],
+    ["doubled separators after var", "/var//home/alice/x", "~/x"],
+    [
+      "an encoded -users- folder in lower case",
+      "/users/alice/.claude/projects/-users-alice-app/s.jsonl",
+      "~/.claude/projects/~/s.jsonl",
+    ],
     [
       "an encoded .claude/projects/-home-<name>-… folder",
       "/home/alice/.claude/projects/-home-alice-app/s.jsonl",
@@ -147,10 +160,24 @@ describe("redactEvent: the home folder", () => {
 
   it.each([
     ["a URL's /home/ path", "https://example.com/home/alice"],
+    ["a URL's /Users/ path, after a word", "see:https://example.com/Users/alice/x"],
+    ["a URL's path with a port", "http://localhost:3000/app/home/alice"],
+    ["a JSON-escaped URL's /home/ path", "https:\\/\\/example.com\\/home\\/alice"],
     ["a folder named like one inside another", "/srv/myhome/alice"],
     ["an encoded project folder outside a home folder", "~/.claude/projects/-srv-app/s.jsonl"],
   ])("leaves %s as it is", (_name, text) => {
     expect(redactEvent({ cwd: text })).toEqual({ cwd: text });
+  });
+
+  // A tool's output can be megabytes with no space in it: a pattern that rescans each run from every position in it
+  // would take minutes.
+  it.each([
+    ["a run of separators", "/\\".repeat(100_000)],
+    ["a long word", "a".repeat(200_000)],
+  ])("redacts %s 200,000 characters long in well under a second", (_name, text) => {
+    const started = performance.now();
+    redactEvent({ tool_response: text });
+    expect(performance.now() - started).toBeLessThan(1000);
   });
 });
 

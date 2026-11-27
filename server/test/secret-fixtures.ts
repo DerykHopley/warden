@@ -1,6 +1,13 @@
 // Made-up secrets for Guard's tests, each joined from parts so the source never holds a whole one for a secret
 // scanner to flag.
 
+/** `parts` joined, so a fixture secret is never whole in the source. */
+export const join = (...parts: string[]) => parts.join("");
+
+/** What Guard's secret mask makes of a secret: its first 4 characters, then 8 `*`. Kept apart from `secrets.ts`'s
+ * own, so a test checks the mask against this, not against itself. */
+export const mask = (secret: string) => `${secret.slice(0, 4)}********`;
+
 /** A made-up AWS access key id. */
 export const AWS_KEY = ["AKIA", "Q7XJ2M4N6P8R3T5V"].join("");
 
@@ -23,8 +30,6 @@ export const RSA_PRIVATE_KEY = [
 
 /** A made-up Slack bot token. */
 export const SLACK_TOKEN = ["xox", "b-", "4821936507-", "Tq8Wn3Zr6Kd1Hm9Xc"].join("");
-
-const join = (...parts: string[]) => parts.join("");
 
 /** One made-up secret of each of Guard's nine types, by the type's name (a private key by its header line). */
 export const SECRET_OF_EACH_TYPE = {

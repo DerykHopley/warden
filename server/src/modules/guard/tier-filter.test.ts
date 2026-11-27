@@ -210,7 +210,7 @@ function nested(levels: number): unknown {
   return value;
 }
 
-describe("filterToTier: the bounds at details and content", () => {
+describe("filterToTier: the depth bound at content", () => {
   it("keeps a tool_response nested 64 levels deep and drops one nested 65 whole", () => {
     expect(filterToTier({ tool_response: nested(64) }, "content")).toEqual({
       tool_response: nested(64),
@@ -225,7 +225,9 @@ describe("filterToTier: the bounds at details and content", () => {
       {},
     );
   });
+});
 
+describe("filterToTier: storable strings at details and content", () => {
   it("replaces each NUL and lone surrogate with U+FFFD, in strings and keys at any depth", () => {
     const event = {
       cwd: "/home/a\u0000b",
@@ -246,9 +248,10 @@ describe("filterToTier: the bounds at details and content", () => {
     });
   });
 
-  it("keeps a well-formed surrogate pair as it is", () => {
-    expect(filterToTier({ prompt: "ship it \u{1F680}" }, "content")).toEqual({
-      prompt: "ship it \u{1F680}",
-    });
-  });
+  it.each(["details", "content"] as const)(
+    "keeps a well-formed surrogate pair as it is at %s",
+    (tier) => {
+      expect(filterToTier({ cwd: "/srv/\u{1F680}" }, tier)).toEqual({ cwd: "/srv/\u{1F680}" });
+    },
+  );
 });

@@ -207,12 +207,13 @@ Every other field is dropped. The bounds at Details and Content (#184):
 **Redaction on arrival (built, #184).** What the tier keeps is redacted before it's stored, at every tier: every
 string value and every object key, at any depth, in this order.
 
-1. **The home folder becomes `~`:** `/home/<name>`, `/var/home/<name>`, `/Users/<name>` and `<drive>:\Users\<name>`
-   (the drive letter and `Users` in either case), with `/`, `\` or JSON-escaped separators, wherever the path is in
-   the string (a command, a `file://` URL). `<name>` runs to the next separator, whitespace, quote or shell
-   operator. Claude Code's encoded project folder after `.claude/projects/` that starts with an encoded home folder
-   (`-home-`, `-var-home-`, `-Users-`, `C--Users-`) becomes `~` whole. The developer's name elsewhere (a shell
-   prompt, `whoami` output) isn't masked.
+1. **The home folder becomes `~`:** `/home/<name>`, `/var/home/<name>`, `/Users/<name>` and `<drive>:\Users\<name>`,
+   in any case (macOS ignores it), with `/`, `\`, doubled or JSON-escaped separators, wherever the path is in the
+   string: a command, straight after a flag (`-I/home/<name>`), deeper in another path, a `file://` URL. A web URL's
+   own path (`https://example.com/home/x`) is left as it is. `<name>` runs to the next separator, whitespace, quote
+   or shell operator. Claude Code's encoded project folder after `.claude/projects/` that starts with an encoded home
+   folder (`-home-`, `-var-home-`, `-Users-`, `C--Users-`, in any case) becomes `~` whole. The developer's name
+   elsewhere (a shell prompt, `whoami` output) isn't masked.
 2. **Guard's nine secret types** (`maskSecrets`, over the patterns the secret Rules use) become their mask: the
    first 4 characters, then 8 `*`. Placeholders are left as they are. A private key is masked from its `BEGIN` line
    through its matching `END` line, or to the string's end.
