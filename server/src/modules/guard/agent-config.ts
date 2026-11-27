@@ -770,8 +770,23 @@ const TOO_DEEP = `more than ${SHELL_LIMIT} shells in one command, nested too dee
 /** How many more shells' `-c` strings may be read, one inside another, where a command stands. */
 type ShellBudget = number;
 
-/** A shell command's runs of the agent, each as its own arguments, and whether a shell's `-c` string went unread. */
-type AgentRuns = { runs: string[]; tooDeep: boolean };
+/**
+ * A shell command's runs of the agent, each as its own arguments, whether a shell's `-c` string went unread, and
+ * whether one of its own runs (not one in a shell's string inside it) passes on the positional arguments.
+ */
+type AgentRuns = { runs: string[]; tooDeep: boolean; passesArguments: boolean };
+
+/** A run's argument that passes on its shell's positional arguments: `"$@"`, `$@`, `"$*"` or `$*`, as a whole word. */
+const PASSES_ARGUMENTS = /(?:^|\s)("?)\$[@*]\1(?=\s|$)/;
+
+/**
+ * The words after a shell's `-c` string and its `$0`, from `words` left just past the string, as the arguments of a
+ * run that passes them on: joined by spaces, a word of more than one (a prompt) masked by `_`. Nothing is expanded.
+ */
+function positionalArguments(words: Generator<string, undefined>): string {
+  words.next();
+  return Array.from(words, (word) => (isOneWord(word) ? word : "_")).join(" ");
+}
 
 /**
  * Each run of the agent in a shell command, as its own arguments: the flag or mode value may be quoted, so a one-word
@@ -785,7 +800,9 @@ type AgentRuns = { runs: string[]; tooDeep: boolean };
  * options (`sudo bash -o bash -c x`, the second) is one of its words, not a shell. The next agent run is looked for
  * after an agent run ends, so no text is in two, but a shell run inside one still has its `-c` string read, as the
  * agent run's arguments mask that string as a quote; a shell run hides nothing, as the runs among its arguments (`bash
- * script.sh $(claude …)`) are outside its `-c` string's quotes and run before it.
+ * script.sh $(claude …)`) are outside its `-c` string's quotes and run before it. When a run in a shell's string
+ * passes on its positional arguments (`claude "$@"`, `PASSES_ARGUMENTS`), the shell's words after the string's `$0`
+ * are one more run's arguments, once for that shell; a shell's string inside that string passes on its own.
  */
 function agentRuns(command: string, budget: ShellBudget): AgentRuns {
   const masked = withQuotesMasked(command);
@@ -794,6 +811,7 @@ function agentRuns(command: string, budget: ShellBudget): AgentRuns {
   const starts = runStarts(masked);
   const runs: string[] = [];
   let tooDeep = false;
+  let passesArguments = false;
   // Where the arguments of each shell whose string was read here end, innermost last.
   const holding: number[] = [];
   let end = 0;
@@ -809,7 +827,9 @@ function agentRuns(command: string, budget: ShellBudget): AgentRuns {
     const argumentsEnd = (limit?: number) => runArgumentsEnd(masked, start, inBackquotes, limit);
     if (!shell) {
       end = argumentsEnd();
-      runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
+      const args = withQuotesMasked(command.slice(start, end), isOneWord);
+      passesArguments ||= PASSES_ARGUMENTS.test(args);
+      runs.push(args);
       continue;
     }
     while (holding.length > 0 && holding.at(-1)! <= start) holding.pop();
@@ -837,12 +857,15 @@ function agentRuns(command: string, budget: ShellBudget): AgentRuns {
     // rest of that command, so the shells there share one budget. Any other shell's arguments end past an agent run's.
     holding.push(Math.max(stop, end));
     // Its words before the next run's, or to its end, held a string, so its words to its end do too.
-    const script = commandString(shellWords(command.slice(start, stop)));
+    const words = shellWords(command.slice(start, stop));
+    const script = commandString(words);
     const inner = agentRuns(typeof script === "string" ? script : "", left - 1);
     runs.push(...inner.runs);
+    // The words after its `$0` are read once, however many of the string's runs pass them on.
+    if (inner.passesArguments) runs.push(positionalArguments(words));
     tooDeep ||= inner.tooDeep;
   }
-  return { runs, tooDeep };
+  return { runs, tooDeep, passesArguments };
 }
 
 /** A short option cluster (`-e`, `-lc`, `+o`): it holds `c` when it starts with `-`, and an `o` takes the next word. */
@@ -857,8 +880,9 @@ const OPTIONS_RUN_ON = Symbol("options run on");
 /**
  * The string a shell runs from its `-c`, from the words after the shell's own: the first word past its options (short
  * clusters, `-o`/`+o` and its value, long options, then maybe `--`), when one of them held `c`. Undefined when it runs
- * none, and `OPTIONS_RUN_ON` when the words run out before a word past its options. Any later words (`$0`, positional
- * arguments) aren't read, nor split.
+ * none, and `OPTIONS_RUN_ON` when the words run out before a word past its options. It leaves `words` just past the
+ * string: the later words (`$0`, positional arguments) are read only by `positionalArguments`, for a string whose run
+ * passes them on.
  */
 function commandString(
   words: Iterator<string, undefined>,
@@ -925,7 +949,8 @@ function* shellWords(text: string): Generator<string, undefined> {
 
 /**
  * Each run of the agent in each command the settings run (a hook's, the `statusLine`'s, the `apiKeyHelper`), a
- * shell's `-c` string among them, once per flag in that run's own arguments, on the command value's line. A later
+ * shell's `-c` string among them, once per flag in that run's own arguments (with the words after the string's `$0`,
+ * when a run there passes them on), on the command value's line. A later
  * command, or a quoted argument of more than one word (a prompt), isn't one of them. A command with a shell's `-c`
  * string it didn't read, nested more than `SHELL_LIMIT` strings deep (`agentRuns`), is one more place, `TOO_DEEP`,
  * which may skip the checks; a shell with no `-c` string never makes it.
