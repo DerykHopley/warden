@@ -1,6 +1,6 @@
-// Vouch's Catalogues (spec #341, slices 5 to 7a): the calls Setup's Catalogues section makes, reading every Catalogue
+// Vouch's Catalogues (spec #341, slices 5 to 7b): the calls Setup's Catalogues section makes, reading every Catalogue
 // as the Team sees it and an Admin's switch turning one on or off, the watch that rereads them after a switch a Team
-// switch dropped, a Control's Verdict and review state in words, and the Control card's read and its lines.
+// switch dropped, a Control's Verdict and review state in words, and the Control card's read, its review and its lines.
 import {
   CataloguesBody,
   ControlDetail,
@@ -8,6 +8,7 @@ import {
   type CatalogueId,
   type ControlReview,
   type ControlRuleEvidence,
+  type ReviewBody,
   type ReviewedVerdict,
   type ReviewState,
 } from "@warden/contracts";
@@ -163,6 +164,59 @@ export async function fetchControlInTeam(
   return inTeam.kind === "team-not-opened" ? { kind: "not-answering" } : inTeam;
 }
 
+export type ReviewResult =
+  /** 201: the review is stored; the Control as it reads now, the new review first. */
+  | { kind: "reviewed"; detail: ControlDetail }
+  /** 403: the person isn't a Lead or an Admin (any more), or has no Team. */
+  | { kind: "forbidden" }
+  /** 400, 404 or another 4xx: nothing was stored; the server's words, null with none. */
+  | { kind: "refused"; error: string | null }
+  | { kind: "team-not-opened" }
+  /** No answer, a 5xx, or a 2xx whose body doesn't parse: the review may have been stored. */
+  | { kind: "maybe-saved" }
+  | Exclude<Refused, { kind: "not-answering" }>;
+
+/** `POST /api/vouch/catalogues/:id/controls/:ref/reviews` (a Lead's or an Admin's): confirms or overrides the Verdict. */
+export async function reviewControl(
+  getToken: GetToken,
+  catalogue: CatalogueId,
+  ref: string,
+  body: ReviewBody,
+): Promise<ReviewResult> {
+  const res = await callWarden(
+    getToken,
+    `/api/vouch/catalogues/${encodeURIComponent(catalogue)}/controls/${encodeURIComponent(ref)}/reviews`,
+    { method: "POST", body },
+  );
+  if (!(res instanceof Response)) {
+    return res.kind === "not-answering" ? { kind: "maybe-saved" } : res;
+  }
+  if (res.status === 403) return { kind: "forbidden" };
+  if (res.status === 409) return { kind: "team-not-opened" };
+  if (res.status >= 400 && res.status < 500) {
+    return { kind: "refused", error: await serverError(res) };
+  }
+  const detail = await parsed(res, ControlDetail);
+  return detail === undefined ? { kind: "maybe-saved" } : { kind: "reviewed", detail };
+}
+
+/**
+ * Reviews as `reviewControl` does, but only once /api/me says the session is in `team`, the Team the card was opened
+ * in, and with the token that answer was asked with (`confirmTeam`), as a Catalogue switch is sent: a review is never
+ * sent with a token for the Team just left. While /api/me names another Team, or gives no answer, nothing is sent.
+ */
+export async function reviewControlInTeam(
+  getToken: GetToken,
+  team: string | null,
+  catalogue: CatalogueId,
+  ref: string,
+  body: ReviewBody,
+): Promise<ReviewResult | TeamCheckRefused> {
+  const inTeam = await confirmTeam(getToken, team);
+  if (inTeam.kind !== "confirmed") return inTeam;
+  return reviewControl(inTeam.getToken, catalogue, ref, body);
+}
+
 export const CONTROL_LOADING = "Loading the Control…";
 export const CONTROL_FAILED = "Couldn't load the Control.";
 /** A 404 whose body names no reason. */
@@ -171,6 +225,20 @@ export const NO_CONTROL = "Warden doesn't judge this Control.";
 export const VERDICT_CHANGED = "The Verdict worked out now differs from the one last reviewed.";
 export const NO_OPEN_FINDINGS = "No Open Findings.";
 export const NO_REVIEWS = "No reviews yet.";
+
+/** A Member's line in place of the review form (story 5). */
+export const MEMBER_REVIEWS = "A Lead or an Admin reviews this Control.";
+/** A review's 400 or 404 whose body names no reason. */
+export const REVIEW_REFUSED = "Warden refused this review.";
+/** A review's 403: the person's Role may have been lowered. */
+export const REVIEW_FORBIDDEN = "Only a Lead or an Admin can review a Control.";
+/** No answer to a review's POST itself: it may have been stored, and a second one would be stored too. */
+export const MAYBE_REVIEWED =
+  "Warden's server didn't answer, so the review may have been saved. Check Reviews before you review again.";
+
+/** A stored review's Done line: "Confirmed.", or "Overridden to Not applicable." with the picked Verdict's word. */
+export const reviewDoneWords = (body: ReviewBody) =>
+  body.outcome === "confirm" ? "Confirmed." : `Overridden to ${VOUCH_VERDICT_WORDS[body.verdict]}.`;
 
 const ASSET_COUNT_WORDS: Record<ControlRuleEvidence["asset_kind"], [string, string]> = {
   repo: ["Repo", "Repos"],

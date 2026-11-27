@@ -1,12 +1,14 @@
-// The Control card (spec #341, slice 7a; docs/design.md: Control detail card): its header with the Catalogue's credit,
-// the Verdict with its review state and reason, the evidence with its Open Findings as links, the reviews, and each
-// answer its read can get. It renders ControlCard alone with spy props, Warden's server faked. The reason's, the
-// evidence's and the review lines' words are tested below the card (vouch.test.ts): here the card shows them; selecting
-// a Control on the Overview, in Overview.test.tsx.
-import { render, screen, within } from "@testing-library/react";
+// The Control card (spec #341, slices 7a and 7b; docs/design.md: Control detail card): its header with the Catalogue's
+// credit, the Verdict with its review state and reason, the evidence with its Open Findings as links, the reviews, and
+// each answer its read can get; then the review form a Lead or an Admin confirms or overrides with, one review per
+// submit, each answer its POST can get, and a Member's line. It renders ControlCard alone with spy props, Warden's
+// server faked. The reason's, the evidence's and the review lines' words, and the POST's mapping, are tested below the
+// card (vouch.test.ts): here the card shows them; selecting a Control on the Overview, in Overview.test.tsx.
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ControlDetail, ControlReview } from "@warden/contracts";
+import type { ControlDetail, ControlReview, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn } from "../src/api.ts";
 import { ControlCard } from "../src/ControlCard.tsx";
 import { dayAndTimeWords } from "../src/date-words.ts";
 import type { ClerkUser } from "../src/person-name.ts";
@@ -26,13 +28,21 @@ const REVIEWED_AT = "2026-11-25T10:30:00Z";
 const EARLIER = "2026-11-20T08:00:00Z";
 
 const me = () => json(200, { userId: "user_ada", team: TEAM, role: "member", level: "quick" });
-const answer = (fields: Partial<ControlDetail> = {}) =>
-  json(200, controlDetail("1.3.3", { question: "Is AI tool use approved?", ...fields }));
+const detailOf = (fields: Partial<ControlDetail> = {}) =>
+  controlDetail("1.3.3", { question: "Is AI tool use approved?", ...fields });
+const answer = (fields: Partial<ControlDetail> = {}) => json(200, detailOf(fields));
 
 const GRACE: ClerkUser = { firstName: "Grace", lastName: "Hopper", identifier: "grace@acme.test" };
 
-/** Renders the card on ISA2027's 1.3.3 for user_ada, its read answering `fields` unless `routes` says otherwise. */
-function show(fields: Partial<ControlDetail> = {}, routes: Routes = {}) {
+/**
+ * Renders the card on ISA2027's 1.3.3 for user_ada with `role` (a Member unless said), its read answering `fields`
+ * unless `routes` says otherwise.
+ */
+function show(
+  fields: Partial<ControlDetail> = {},
+  routes: Routes = {},
+  role: Role | null = "member",
+) {
   serve({ me, control: () => answer(fields), ...routes });
   const props = {
     focus: {
@@ -44,13 +54,17 @@ function show(fields: Partial<ControlDetail> = {}, routes: Routes = {}) {
     team: TEAM,
     getToken: vi.fn(async () => "session-token" as string | null),
     userId: "user_ada",
+    role,
+    refreshMe: vi.fn(),
     clerkUsers: new Map([["user_grace", GRACE]]),
     onClear: vi.fn(),
     onSessionEnded: vi.fn(),
   };
-  render(<ControlCard {...props} />);
+  const view = render(<ControlCard {...props} />);
   return {
     ...props,
+    props,
+    ...view,
     card: within(screen.getByRole("region", { name: "Is AI tool use approved?" })),
   };
 }
@@ -353,6 +367,8 @@ describe("the read", () => {
         team={TEAM}
         getToken={getTokens}
         userId="user_ada"
+        role="member"
+        refreshMe={vi.fn()}
         clerkUsers={new Map()}
         onClear={vi.fn()}
         onSessionEnded={vi.fn()}
@@ -364,17 +380,474 @@ describe("the read", () => {
   });
 });
 
-describe("no review control (slice 7b builds the form)", () => {
-  // The card takes no Role, so every Role sees this same card.
-  it("shows no Confirm, Override or other control but its ✕", async () => {
+describe("a Member (story 5)", () => {
+  it("sees no Confirm, Override or form, only the muted line A Lead or an Admin reviews this Control.", async () => {
     const { card } = show();
-    await section("Verdict");
+    const reviews = await section("Reviews");
+    expect(reviews.getByText("A Lead or an Admin reviews this Control.")).toHaveClass("muted");
     expect(card.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
       "Clear the focus",
     ]);
+    expect(card.queryByRole("form")).toBeNull();
     expect(card.queryByRole("textbox")).toBeNull();
     expect(card.queryByRole("radio")).toBeNull();
-    expect(card.queryByRole("combobox")).toBeNull();
-    expect(card.queryByRole("checkbox")).toBeNull();
   });
+
+  it("with the Role not yet known, sees neither the buttons nor the line", async () => {
+    const { card } = show({}, {}, null);
+    await section("Reviews");
+    expect(card.queryByText("A Lead or an Admin reviews this Control.")).toBeNull();
+    expect(card.getAllByRole("button")).toHaveLength(1);
+  });
+});
+
+const REVIEWS = `${PATH}/reviews`;
+/** Ada's confirm of the worked-out Not evidenced, as the 201's detail lists it first. */
+const ADAS_CONFIRM = review({
+  id: "r-new",
+  worked_out_verdict: "not_evidenced",
+  verdict: "not_evidenced",
+  reviewed_by: "user_ada",
+  reviewed_at: REVIEWED_AT,
+});
+const confirmed = () =>
+  json(
+    201,
+    detailOf({
+      review_state: "reviewed",
+      reviewed_verdict: "not_evidenced",
+      reviews: [ADAS_CONFIRM, review({ id: "r-1" })],
+    }),
+  );
+const sentBodies = () => callsTo(REVIEWS).map(([, init]) => JSON.parse(String(init?.body)));
+
+/** Shows 1.3.3's card to a Lead (unless said) and opens the form `name`'s button opens, once the read has answered. */
+async function openForm(
+  name: "Confirm" | "Override",
+  routes: Routes = {},
+  role: Role = "lead",
+  fields: Partial<ControlDetail> = {},
+) {
+  const shown = show(fields, routes, role);
+  await userEvent.click((await section("Reviews")).getByRole("button", { name }));
+  const form = within(screen.getByRole("form", { name: `${name} the Verdict` }));
+  return { ...shown, form, submit: () => form.getByRole("button", { name }) };
+}
+
+/** Fills Override's form: a Verdict and a reason. */
+async function fillOverride(form: ReturnType<typeof within>, verdict = "Not applicable") {
+  await userEvent.click(form.getByRole("radio", { name: verdict }));
+  await userEvent.type(form.getByRole("textbox", { name: "Reason" }), "We use no AI tools");
+}
+
+describe("the review form (story 4)", () => {
+  it.each<Role>(["lead", "admin"])(
+    "a %s sees Confirm and Override under Reviews once the read answers, as secondary buttons",
+    async (role) => {
+      const late = deferred<Response>();
+      const { card } = show({}, { control: () => late.promise }, role);
+      expect(card.queryByRole("button", { name: "Confirm" })).toBeNull();
+      late.resolve(answer());
+      const reviews = await section("Reviews");
+      const buttons = within(reviews.getByRole("group", { name: "Review" })).getAllByRole("button");
+      expect(buttons.map((button) => button.textContent)).toEqual(["Confirm", "Override"]);
+      for (const button of buttons) expect(button).toHaveClass("secondary");
+      expect(reviews.queryByText("A Lead or an Admin reviews this Control.")).toBeNull();
+    },
+  );
+
+  it.each([
+    ["reviewed", { review_state: "reviewed", reviewed_verdict: "not_evidenced" }],
+    ["changed since review", { review_state: "changed_since_review", reviewed_verdict: null }],
+  ] as const)("offers them while %s too", async (_, fields) => {
+    show(fields, {}, "lead");
+    const reviews = await section("Reviews");
+    expect(reviews.getByRole("button", { name: "Confirm" })).toBeVisible();
+    expect(reviews.getByRole("button", { name: "Override" })).toBeVisible();
+  });
+
+  it("Confirm opens its form in place of the row: an optional Reason, focused, the Confirm submit and Cancel", async () => {
+    const { card, form, submit } = await openForm("Confirm");
+    expect(card.queryByRole("group", { name: "Review" })).toBeNull();
+    const reason = form.getByRole("textbox", { name: "Reason (optional)" });
+    expect(reason).toHaveFocus();
+    expect(reason).toHaveAttribute("maxlength", "2000");
+    expect(submit()).toHaveClass("primary");
+    expect(submit()).toBeEnabled();
+    expect(form.getByRole("button", { name: "Cancel" })).toHaveClass("secondary");
+    expect(form.queryByRole("radio")).toBeNull();
+  });
+
+  it.each([
+    ["an empty reason", "", { outcome: "confirm" }],
+    ["a blank reason", "   ", { outcome: "confirm" }],
+    [
+      "a reason",
+      "  Checked the tool list  ",
+      { outcome: "confirm", reason: "Checked the tool list" },
+    ],
+  ])(
+    "Confirm with %s sends the confirm, the reason only when given, with the token /api/me confirmed the Team with",
+    async (_, typed, body) => {
+      const { form, submit, getToken } = await openForm("Confirm", { review: confirmed });
+      let tokens = 0;
+      getToken.mockImplementation(async () => `token-${++tokens}`);
+      if (typed !== "") await userEvent.type(form.getByRole("textbox"), typed);
+      await userEvent.click(submit());
+
+      await vi.waitFor(() => expect(callsTo(REVIEWS)).toHaveLength(1));
+      expect(sentBodies()).toEqual([body]);
+      const [, meInit] = callsTo("/api/me").at(-1)!;
+      const [[, init] = []] = callsTo(REVIEWS);
+      expect(init?.method).toBe("POST");
+      expect(new Headers(meInit?.headers).get("Authorization")).toBe("Bearer token-1");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer token-1");
+    },
+  );
+
+  it.each([
+    ["not evidenced", "not_evidenced", ["Evidenced", "Partly evidenced", "Not applicable"]],
+    ["partly evidenced", "partly_evidenced", ["Evidenced", "Not evidenced", "Not applicable"]],
+  ] as const)(
+    "Override, on a Control worked out as %s, offers only the other Verdicts, the first one focused",
+    async (_, verdict, offered) => {
+      const { form } = await openForm("Override", {}, "admin", { verdict });
+      const radios = form.getAllByRole("radio");
+      expect(radios.map((radio) => radio.closest("label")?.textContent)).toEqual(offered);
+      expect(radios[0]).toHaveFocus();
+      expect(form.getByRole("group", { name: "Verdict" })).toBeVisible();
+    },
+  );
+
+  it("Override stays disabled until a Verdict is picked and the reason isn't blank, then sends the override", async () => {
+    const { form, submit } = await openForm("Override", { review: confirmed });
+    const reason = form.getByRole("textbox", { name: "Reason" });
+    expect(reason).toHaveAttribute("maxlength", "2000");
+    expect(submit()).toBeDisabled();
+    await userEvent.type(reason, "We use no AI tools");
+    expect(submit()).toBeDisabled();
+    await userEvent.click(form.getByRole("radio", { name: "Not applicable" }));
+    expect(submit()).toBeEnabled();
+    await userEvent.clear(reason);
+    await userEvent.type(reason, "   ");
+    expect(submit()).toBeDisabled();
+    await userEvent.type(reason, "We use no AI tools  ");
+    expect(submit()).toBeEnabled();
+
+    await userEvent.click(submit());
+    await vi.waitFor(() => expect(callsTo(REVIEWS)).toHaveLength(1));
+    expect(sentBodies()).toEqual([
+      { outcome: "override", verdict: "not_applicable", reason: "We use no AI tools" },
+    ]);
+  });
+
+  it("a 201 shows the answer's new review first, closes the form, focuses the Done line Confirmed. and calls refreshRow once", async () => {
+    const { card, form, submit, focus } = await openForm("Confirm", { review: confirmed });
+    await userEvent.type(form.getByRole("textbox"), "Checked");
+    await userEvent.click(submit());
+
+    const done = await card.findByRole("status");
+    expect(done).toHaveTextContent(/^Confirmed\.$/);
+    expect(done).toHaveFocus();
+    expect(card.queryByRole("form")).toBeNull();
+    expect(card.getByRole("group", { name: "Review" })).toBeVisible();
+    const [newest] = within((await section("Reviews")).getByRole("list")).getAllByRole("listitem");
+    expect(within(newest!).getByText("Confirmed: Not evidenced")).toBeVisible();
+    expect(within(newest!).getByText(/^By you,/)).toBeVisible();
+    expect((await section("Verdict")).getByText("Reviewed")).toBeVisible();
+    // The answer is the card's: it isn't read again, and the row is asked for once, not again by the answer's own check.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(focus.refreshRow).toHaveBeenCalledOnce();
+    expect(callsTo(PATH)).toHaveLength(1);
+  });
+
+  it("an override's Done line names the picked Verdict: Overridden to Not applicable.", async () => {
+    const overridden = () =>
+      json(
+        201,
+        detailOf({
+          review_state: "reviewed",
+          reviewed_verdict: "not_applicable",
+          reviews: [{ ...ADAS_CONFIRM, outcome: "overridden", verdict: "not_applicable" }],
+        }),
+      );
+    const { card, form, submit, focus } = await openForm("Override", { review: overridden });
+    await fillOverride(form);
+    await userEvent.click(submit());
+
+    expect(await card.findByRole("status")).toHaveTextContent(/^Overridden to Not applicable\.$/);
+    expect((await section("Verdict")).getByText("Not applicable").tagName).toBe("STRONG");
+    expect(focus.refreshRow).toHaveBeenCalledOnce();
+  });
+
+  it.each(["Confirm", "Override"] as const)(
+    "%s's Cancel closes the form and puts focus back on the button that opened it; Esc does the same",
+    async (name) => {
+      const { card, form } = await openForm(name);
+      await userEvent.click(form.getByRole("button", { name: "Cancel" }));
+      expect(card.queryByRole("form")).toBeNull();
+      expect(card.getByRole("button", { name })).toHaveFocus();
+
+      await userEvent.click(card.getByRole("button", { name }));
+      expect(card.getByRole("form")).toBeVisible();
+      await userEvent.keyboard("{Escape}");
+      expect(card.queryByRole("form")).toBeNull();
+      expect(card.getByRole("button", { name })).toHaveFocus();
+      expect(callsTo(REVIEWS)).toHaveLength(0);
+    },
+  );
+});
+
+describe("one review per submit", () => {
+  it.each(["Confirm", "Override"] as const)(
+    "two clicks on %s's submit in the same tick send one POST",
+    async (name) => {
+      const late = deferred<Response>();
+      const { card, form, submit } = await openForm(name, { review: () => late.promise });
+      if (name === "Override") await fillOverride(form);
+      const button = submit();
+      // Both clicks land before React renders the busy button.
+      act(() => {
+        button.click();
+        button.click();
+      });
+      await vi.waitFor(() => expect(callsTo(REVIEWS)).toHaveLength(1));
+      late.resolve(confirmed());
+      expect(await card.findByRole("status")).toBeVisible();
+      expect(callsTo(REVIEWS)).toHaveLength(1);
+    },
+  );
+
+  it("pressing Enter twice in Confirm's form sends one POST, the submit disabled and aria-busy while it runs", async () => {
+    const late = deferred<Response>();
+    const { card, submit } = await openForm("Confirm", { review: () => late.promise });
+    await userEvent.tab();
+    expect(submit()).toHaveFocus();
+    await userEvent.keyboard("{Enter}{Enter}");
+
+    expect(submit()).toBeDisabled();
+    expect(submit()).toHaveAttribute("aria-busy", "true");
+    await vi.waitFor(() => expect(callsTo(REVIEWS)).toHaveLength(1));
+    await userEvent.keyboard("{Enter}");
+    late.resolve(confirmed());
+    expect(await card.findByRole("status")).toBeVisible();
+    expect(callsTo(REVIEWS)).toHaveLength(1);
+  });
+});
+
+describe("a review's refusals keep the form open with what was typed", () => {
+  const notOpened = () => json(409, { error: "not opened" });
+  const slowDown = () => json(429, {}, { "Retry-After": "30" });
+
+  it.each<[string, Routes, string]>([
+    ["a 400", { review: () => json(400, { error: "reason: Too long" }) }, "reason: Too long."],
+    ["a 404", { review: () => json(404, { error: "No such Control" }) }, "No such Control."],
+    [
+      "a 404 with no words",
+      { review: () => new Response(null, { status: 404 }) },
+      "Warden refused this review.",
+    ],
+    ["a 409", { review: notOpened }, TEAM_NOT_OPENED],
+    ["/api/me saying the Team isn't opened", { me: notOpened }, TEAM_NOT_OPENED],
+    ["a 429 with Retry-After 30", { review: slowDown }, tryAgainIn(30)],
+    ["too many sign-ins at /api/me", { me: slowDown }, tryAgainIn(30)],
+  ])("%s shows its line in the form", async (_, failing, line) => {
+    // /api/me answers the read as usual; `failing` answers from the review on.
+    let meAnswer: () => Response | Promise<Response> = me;
+    const { form, submit } = await openForm("Confirm", {
+      me: () => meAnswer(),
+      review: failing.review ?? confirmed,
+    });
+    if (failing.me) meAnswer = failing.me;
+    await userEvent.type(form.getByRole("textbox"), "Checked the tool list");
+    await userEvent.click(submit());
+
+    const alert = await form.findByRole("alert");
+    expect(alert).toHaveTextContent(line);
+    expect(alert).toHaveClass("card-line", "refused");
+    expect(form.getByRole("textbox")).toHaveValue("Checked the tool list");
+    expect(submit()).toBeEnabled();
+    expect(submit()).not.toHaveAttribute("aria-busy", "true");
+  });
+
+  it("a 403 says only a Lead or an Admin can review, and asks for the Role again; once it's lowered, the line stays with the Member's", async () => {
+    const { card, form, submit, refreshMe, rerender, props } = await openForm("Override", {
+      review: () => json(403, { error: "Lead only" }),
+    });
+    await fillOverride(form);
+    await userEvent.click(submit());
+
+    expect(await form.findByRole("alert")).toHaveTextContent(
+      "Only a Lead or an Admin can review a Control.",
+    );
+    expect(form.getByRole("textbox")).toHaveValue("We use no AI tools");
+    expect(refreshMe).toHaveBeenCalledOnce();
+
+    rerender(<ControlCard {...props} role="member" />);
+    expect(card.queryByRole("form")).toBeNull();
+    expect(card.getByRole("alert")).toHaveTextContent(
+      "Only a Lead or an Admin can review a Control.",
+    );
+    expect(card.getByText("A Lead or an Admin reviews this Control.")).toBeVisible();
+  });
+
+  it("while /api/me names another Team, sends no POST and says the server isn't answering", async () => {
+    let team = TEAM;
+    const review = vi.fn(confirmed);
+    const { form, submit } = await openForm("Confirm", {
+      me: () => json(200, { userId: "user_ada", team, role: "lead", level: "quick" }),
+      review,
+    });
+    team = "org_left";
+    await userEvent.click(submit());
+
+    expect(await form.findByRole("alert", {}, { timeout: 3000 })).toHaveTextContent(NOT_ANSWERING);
+    expect(review).not.toHaveBeenCalled();
+  });
+
+  it("an ended session ends it, with no line", async () => {
+    const { form, submit, onSessionEnded } = await openForm("Confirm", {
+      review: () => json(401, {}),
+    });
+    await userEvent.click(submit());
+    await vi.waitFor(() => expect(onSessionEnded).toHaveBeenCalledOnce());
+    expect(form.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("no answer to a review's POST", () => {
+  it.each<[string, () => Response | Promise<Response>]>([
+    ["no answer", () => Promise.reject(new TypeError("Failed to fetch"))],
+    ["an answer that doesn't parse", () => json(201, { ...detailOf(), verdict: "maybe" })],
+  ])(
+    "%s says the review may have been saved, reads the Control again and asks for the row",
+    async (_, failed) => {
+      const { card, form, submit, focus } = await openForm("Confirm", { review: failed });
+      await userEvent.type(form.getByRole("textbox"), "Checked");
+      await userEvent.click(submit());
+
+      expect(await form.findByRole("alert")).toHaveTextContent(
+        "Warden's server didn't answer, so the review may have been saved. Check Reviews before you review again.",
+      );
+      expect(form.getByRole("textbox")).toHaveValue("Checked");
+      await vi.waitFor(() => expect(callsTo(PATH)).toHaveLength(2));
+      expect(focus.refreshRow).toHaveBeenCalledOnce();
+      expect(card.getByRole("region", { name: "Verdict" })).toBeVisible();
+    },
+  );
+
+  /** Opens `name`'s form on 1.3.3 as `answer()` reads it; a review gets no answer, and the read after it `reread`. */
+  async function noAnswerThenReread(
+    name: "Confirm" | "Override",
+    reread: () => Response | Promise<Response>,
+  ) {
+    let reads = 0;
+    return openForm(name, {
+      control: () => (++reads === 1 ? answer() : reread()),
+      review: () => Promise.reject(new TypeError("Failed to fetch")),
+    });
+  }
+  const savedAfterAll = () =>
+    answer({
+      review_state: "reviewed",
+      reviewed_verdict: "not_evidenced",
+      reviews: [ADAS_CONFIRM],
+    });
+  const maybeSaved = /the review may have been saved/;
+
+  it("the submit and Cancel wait, busy, until the Control is read again, so that older read can't replace a newer review", async () => {
+    const reread = deferred<Response>();
+    const { card, form, submit } = await noAnswerThenReread("Confirm", () => reread.promise);
+    await userEvent.type(form.getByRole("textbox"), "Checked");
+    await userEvent.click(submit());
+    expect(await form.findByRole("alert")).toHaveTextContent(maybeSaved);
+    await vi.waitFor(() => expect(callsTo(PATH)).toHaveLength(2));
+
+    expect(submit()).toBeDisabled();
+    expect(submit()).toHaveAttribute("aria-busy", "true");
+    expect(form.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    act(() => submit().click());
+    expect(callsTo(REVIEWS)).toHaveLength(1);
+
+    reread.resolve(savedAfterAll());
+    const reviews = await section("Reviews");
+    expect(await reviews.findByText("Confirmed: Not evidenced")).toBeVisible();
+    expect(submit()).toBeEnabled();
+    expect(form.getByRole("textbox")).toHaveValue("Checked");
+    expect(card.getByRole("alert")).toHaveTextContent(maybeSaved);
+  });
+
+  it("the Overview is asked again once, even when the read that follows differs from the row", async () => {
+    const { form, submit, focus } = await noAnswerThenReread("Confirm", savedAfterAll);
+    await userEvent.click(submit());
+    expect(await form.findByRole("alert")).toHaveTextContent(maybeSaved);
+    expect(await (await section("Reviews")).findByText("Confirmed: Not evidenced")).toBeVisible();
+    await act(() => new Promise((resolve) => setTimeout(resolve, 20)));
+    expect(focus.refreshRow).toHaveBeenCalledOnce();
+  });
+
+  it("Override drops a picked Verdict that the read that follows works out, so it sends nothing that changes nothing", async () => {
+    const { form, submit } = await noAnswerThenReread("Override", () =>
+      answer({ verdict: "evidenced" }),
+    );
+    await fillOverride(form, "Evidenced");
+    await userEvent.click(submit());
+    expect(await form.findByRole("alert")).toHaveTextContent(maybeSaved);
+
+    await vi.waitFor(() => expect(form.queryByRole("radio", { name: "Evidenced" })).toBeNull());
+    expect(form.getAllByRole("radio").map((radio) => radio.closest("label")?.textContent)).toEqual([
+      "Partly evidenced",
+      "Not evidenced",
+      "Not applicable",
+    ]);
+    for (const radio of form.getAllByRole("radio")) expect(radio).not.toBeChecked();
+    expect(submit()).toBeDisabled();
+    await userEvent.click(form.getByRole("radio", { name: "Not evidenced" }));
+    expect(submit()).toBeEnabled();
+  });
+});
+
+describe("while a review is sending", () => {
+  it("Cancel waits (disabled) and Esc leaves the form open with what was typed; a refusal then shows in it", async () => {
+    const late = deferred<Response>();
+    const { card, form, submit } = await openForm("Confirm", { review: () => late.promise });
+    const reason = form.getByRole("textbox");
+    await userEvent.type(reason, "Checked");
+    await userEvent.click(submit());
+    await vi.waitFor(() => expect(callsTo(REVIEWS)).toHaveLength(1));
+
+    expect(form.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    act(() => reason.focus());
+    await userEvent.keyboard("{Escape}");
+    expect(card.getByRole("form")).toBeVisible();
+    expect(reason).toHaveValue("Checked");
+    expect(reason).toHaveFocus();
+
+    late.resolve(json(400, { error: "reason: Too long" }));
+    expect(await form.findByRole("alert")).toHaveTextContent("reason: Too long.");
+    expect(reason).toHaveValue("Checked");
+    expect(form.getByRole("button", { name: "Cancel" })).toBeEnabled();
+  });
+});
+
+describe("a review's answer after the card has gone", () => {
+  it.each<[string, () => Response]>([
+    ["a 201", confirmed],
+    ["no answer", () => json(500, {})],
+  ])(
+    "%s shows nothing, and still asks for the row of the Control it was sent from",
+    async (_, late) => {
+      const answerLater = deferred<Response>();
+      const { submit, focus, unmount } = await openForm("Confirm", {
+        review: () => answerLater.promise,
+      });
+      await userEvent.click(submit());
+      await vi.waitFor(() => expect(callsTo(REVIEWS)).toHaveLength(1));
+      unmount();
+
+      answerLater.resolve(late());
+      await vi.waitFor(() => expect(focus.refreshRow).toHaveBeenCalledOnce());
+      expect(callsTo(PATH)).toHaveLength(1);
+    },
+  );
 });

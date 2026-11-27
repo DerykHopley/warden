@@ -453,6 +453,79 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
     expect(cardOf("1.3.3")).toBeNull();
     expect(within(cardOf("1.3.4")!).getByText("Reason 1.3.4")).toBeVisible();
   });
+
+  // Slice 7b: a Lead's review in the card, and the row after it (story 7).
+  const REVIEWS_133 = "/api/vouch/catalogues/vda-isa-2027.1/controls/1.3.3/reviews";
+  const confirmed133 = () =>
+    json(
+      201,
+      controlDetail("1.3.3", {
+        reason: "Reason 1.3.3",
+        review_state: "reviewed",
+        reviewed_verdict: "not_evidenced",
+        reviews: [
+          {
+            id: "r-1",
+            worked_out_verdict: "not_evidenced",
+            outcome: "confirmed",
+            verdict: "not_evidenced",
+            reason: null,
+            reviewed_by: "user_ada",
+            reviewed_at: "2026-11-25T10:30:00Z",
+          },
+        ],
+      }),
+    );
+  const confirmIn = async (card: HTMLElement) => {
+    await userEvent.click(await within(card).findByRole("button", { name: "Confirm" }));
+    await userEvent.click(
+      within(within(card).getByRole("form")).getByRole("button", { name: "Confirm" }),
+    );
+  };
+
+  it("after a review in the card, the Overview asks again once, and the row shows the new review state", async () => {
+    const answers = [isaOn(), isaOn({ controls: [reviewedRow("1.3.3", "not_evidenced")] })];
+    window.history.replaceState(null, "", "/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    serve({
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      overview: () => answer({ audit: answers.shift() ?? isaOn() }),
+      control: (_, ref) => readOf(ref),
+      review: confirmed133,
+    });
+    render(<App />);
+    const row = await rowOf("1.3.3");
+    expect(row.getByText("Not reviewed")).toBeVisible();
+    await confirmIn(await vi.waitFor(() => cardOf("1.3.3")!));
+
+    expect(await within(cardOf("1.3.3")!).findByRole("status")).toHaveTextContent("Confirmed.");
+    expect(await row.findByText("Reviewed")).toBeVisible();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(callsTo(REVIEWS_133)).toHaveLength(1);
+    expect(callsTo("/api/overview")).toHaveLength(2);
+  });
+
+  it("a review's answer that arrives after the focus moved to another Control doesn't show on that Control's card, and the Overview still asks again", async () => {
+    const late = deferred<Response>();
+    openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    serve({
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      overview: () => answer({ audit: isaOn() }),
+      control: (_, ref) => readOf(ref),
+      review: () => late.promise,
+    });
+    await confirmIn(await vi.waitFor(() => cardOf("1.3.3")!));
+    await vi.waitFor(() => expect(callsTo(REVIEWS_133)).toHaveLength(1));
+
+    await userEvent.click(await rowButton("1.3.4"));
+    const card134 = within(cardOf("1.3.4")!);
+    expect(await card134.findByText("Reason 1.3.4")).toBeVisible();
+    late.resolve(confirmed133());
+    await vi.waitFor(() => expect(callsTo("/api/overview")).toHaveLength(2));
+    expect(card134.queryByRole("status")).toBeNull();
+    expect(card134.queryByText("Confirmed: Not evidenced")).toBeNull();
+    expect(card134.getByText("No reviews yet.")).toBeVisible();
+    expect(cardOf("1.3.3")).toBeNull();
+  });
 });
 
 describe("the journey with a Catalogue on (spec #341, story 9)", () => {

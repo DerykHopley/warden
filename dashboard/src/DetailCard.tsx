@@ -10,18 +10,11 @@ import {
   type ProposalDecision,
   type Role,
 } from "@warden/contracts";
-import {
-  useEffect,
-  useId,
-  useRef,
-  useState,
-  type FormEvent,
-  type KeyboardEvent,
-  type ReactNode,
-} from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { sentence, tryAgainIn, type GetToken } from "./api.ts";
 import { AssetRef } from "./AssetRef.tsx";
 import { dayAndTimeWords, dayWords } from "./date-words.ts";
+import { DecisionForm, focusInCard, OpenerButton, type FocusTarget } from "./decision-form.tsx";
 import {
   approveProposal,
   decide,
@@ -182,8 +175,8 @@ export function DetailCard(props: {
   const [closedAway, setClosedAway] = useState(0);
   const runningNow = useRef(false);
   const cardRef = useRef<HTMLElement>(null);
-  /** What takes focus once the next render lands: the line, the open form's reason, or an opener (by its key). */
-  const focusNext = useRef<string | null>(null);
+  /** What takes focus once the next render lands: the line, the open form's Reason, or an opener (by its key). */
+  const focusNext = useRef<FocusTarget | null>(null);
   const refocused = useRef(0);
 
   // A form whose action the card no longer offers closes: the Finding's Status changed (a 409, then the page's new
@@ -215,16 +208,7 @@ export function DetailCard(props: {
         (cardLineElement() ?? card.querySelector<HTMLElement>("[data-opener]"))?.focus();
       }
     }
-    if (target === null) return;
-    const element =
-      target === "line"
-        ? cardLineElement()
-        : target === "reason"
-          ? card.querySelector<HTMLElement>(".decision-form textarea")
-          : [...card.querySelectorAll<HTMLElement>("[data-opener]")].find(
-              (el) => el.dataset.opener === target,
-            );
-    element?.focus();
+    if (target !== null) focusInCard(card, target, cardLineElement);
   });
 
   /**
@@ -241,7 +225,8 @@ export function DetailCard(props: {
     setForm(action);
     setDraft(draftFor(action));
     setLine(null);
-    focusNext.current = "reason";
+    // Its first field is always Reason.
+    focusNext.current = "field";
   }
 
   function cancel() {
@@ -566,7 +551,7 @@ export function DetailCard(props: {
         ((decisions.length > 0 || proposes.length > 0) && (
           <div className="card-actions" role="group" aria-label="Decisions">
             {decisions.map((decision) => (
-              <OpenerButton
+              <ActionOpener
                 key={decision}
                 action={{ kind: "decide", decision }}
                 label={decisionLabel(decision, finding)}
@@ -575,7 +560,7 @@ export function DetailCard(props: {
               />
             ))}
             {proposes.map((decision) => (
-              <OpenerButton
+              <ActionOpener
                 key={decision}
                 action={{ kind: "propose", decision }}
                 label={PROPOSE_LABELS[decision]}
@@ -614,7 +599,7 @@ export function DetailCard(props: {
                       Approve
                     </button>
                   )}
-                  <OpenerButton
+                  <ActionOpener
                     action={{ kind: "reject", proposal: proposal.id }}
                     label="Reject"
                     waiting={running !== null}
@@ -629,26 +614,20 @@ export function DetailCard(props: {
   );
 }
 
-/**
- * A secondary button that opens its action's form; Cancel puts focus back on it, found by `data-opener`. It waits
- * (disabled) while any of the card's calls runs.
- */
-function OpenerButton(props: {
+/** The opener of an action's form, keyed by the action as its refusal line is. */
+function ActionOpener(props: {
   action: Action;
   label: string;
   waiting: boolean;
   onOpen: (action: Action) => void;
 }) {
   return (
-    <button
-      type="button"
-      className="secondary"
-      data-opener={keyOf(props.action)}
-      disabled={props.waiting}
-      onClick={() => props.onOpen(props.action)}
-    >
-      {props.label}
-    </button>
+    <OpenerButton
+      opener={keyOf(props.action)}
+      label={props.label}
+      waiting={props.waiting}
+      onOpen={() => props.onOpen(props.action)}
+    />
   );
 }
 
@@ -675,22 +654,16 @@ function ActionForm(props: {
   const accepts = props.until !== null;
   const untilId = useId();
   const hintId = useId();
-  // Esc anywhere in the form cancels it (focus back on its opener). Marked handled, so a floating panel's Esc, which
-  // listens on the document, leaves the panel open.
-  function onKeyDown(event: KeyboardEvent) {
-    if (event.key !== "Escape" || event.defaultPrevented || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    props.onCancel();
-  }
+  // A Reopens on day under `min` is refused by submit, in the form's words.
   return (
-    // noValidate: a Reopens on day under `min` would otherwise stop the submit with the browser's own bubble; submit
-    // refuses it in the form's words instead. `min` stays, so the picker greys out the days before it.
-    <form
-      className="decision-form"
-      aria-label={props.name}
-      noValidate
+    <DecisionForm
+      name={props.name}
+      submitLabel={props.submitLabel}
+      ready={props.ready}
+      busy={props.busy}
+      refusal={props.refusal}
       onSubmit={props.onSubmit}
-      onKeyDown={onKeyDown}
+      onCancel={props.onCancel}
     >
       <label className="field">
         <span className="field-label">{accepts ? "Why accept this risk?" : "Reason"}</span>
@@ -746,25 +719,7 @@ function ActionForm(props: {
             ))}
           </fieldset>
         ))}
-      {props.refusal !== null && (
-        <p className="card-line refused" role="alert">
-          {props.refusal}
-        </p>
-      )}
-      <div className="form-actions">
-        <button
-          type="submit"
-          className="primary"
-          disabled={!props.ready || props.busy}
-          aria-busy={props.busy ? "true" : undefined}
-        >
-          {props.submitLabel}
-        </button>
-        <button type="button" className="secondary" onClick={props.onCancel}>
-          Cancel
-        </button>
-      </div>
-    </form>
+    </DecisionForm>
   );
 }
 
