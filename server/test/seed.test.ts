@@ -230,38 +230,56 @@ describe("seedRefusal", () => {
     }
   });
 
+  /**
+   * Expects the database `where` names (on 127.0.0.1 unless it sets PGHOST) to count as hosted: WARDEN_SEED_DEMO must
+   * name it, it seeds once named, warden is never seeded, and both refusals name `signal`.
+   */
+  function expectHosted(
+    where: Record<string, string>,
+    fileExists: (path: string) => boolean,
+    signal: RegExp,
+  ) {
+    const env = { PGHOST: "127.0.0.1", ...where };
+    const unnamed = seedRefusal(
+      { ...env, PGDATABASE: "warden_preview", WARDEN_SEED_DEMO: "1" },
+      fileExists,
+    );
+    expect(unnamed).toMatch(/WARDEN_SEED_DEMO must name the database, warden_preview/);
+    expect(unnamed).toMatch(signal);
+    expect(
+      seedRefusal(
+        { ...env, PGDATABASE: "warden_preview", WARDEN_SEED_DEMO: "warden_preview" },
+        fileExists,
+      ),
+    ).toBeUndefined();
+    const live = seedRefusal(
+      { ...env, PGDATABASE: "warden", WARDEN_SEED_DEMO: "warden" },
+      fileExists,
+    );
+    expect(live).toMatch(/live database, warden/);
+    expect(live).toMatch(signal);
+  }
+
+  it("elsewhere, or with a password (the Cloud SQL Auth Proxy listens locally), needs the database's name and never seeds warden", () => {
+    expectHosted(
+      { PGHOST: "/cloudsql/project:europe-west1:warden-db" },
+      noPgpass,
+      /PGHOST is \/cloudsql\/project:europe-west1:warden-db/,
+    );
+    expectHosted({ PGHOST: "10.0.0.5" }, noPgpass, /PGHOST is 10\.0\.0\.5/);
+    expectHosted({ PGPASSWORD: "x" }, noPgpass, /PGPASSWORD is set/);
+  });
+
   // The Cloud SQL Auth Proxy listens on 127.0.0.1, and pg finds a password in PGPASSFILE's file, PGSERVICE's entry or
   // ~/.pgpass as well as PGPASSWORD: any of them makes the database count as hosted (#396).
   describe("on 127.0.0.1 with a password from a file or a service", () => {
-    const pgpassAt =
+    /** A file check that says every path it's asked about exists, and records each one in `asked`. */
+    const pgpassEverywhere =
       (asked: string[]) =>
       (path: string): boolean => {
         asked.push(path);
         return true;
       };
-
-    function expectHosted(
-      where: Record<string, string>,
-      fileExists: (path: string) => boolean,
-      signal: RegExp,
-    ) {
-      const env = { PGHOST: "127.0.0.1", ...where };
-      expect(
-        seedRefusal({ ...env, PGDATABASE: "warden_preview", WARDEN_SEED_DEMO: "1" }, fileExists),
-      ).toMatch(/WARDEN_SEED_DEMO must name the database, warden_preview/);
-      expect(
-        seedRefusal(
-          { ...env, PGDATABASE: "warden_preview", WARDEN_SEED_DEMO: "warden_preview" },
-          fileExists,
-        ),
-      ).toBeUndefined();
-      const live = seedRefusal(
-        { ...env, PGDATABASE: "warden", WARDEN_SEED_DEMO: "warden" },
-        fileExists,
-      );
-      expect(live).toMatch(/live database, warden/);
-      expect(live).toMatch(signal);
-    }
 
     it("with PGPASSFILE set, needs the database's name and never seeds warden", () => {
       expectHosted({ PGPASSFILE: "/some/file" }, noPgpass, /PGPASSFILE/);
@@ -273,7 +291,7 @@ describe("seedRefusal", () => {
 
     it("with a .pgpass in HOME, needs the database's name and never seeds warden", () => {
       const asked: string[] = [];
-      expectHosted({ HOME: "/home/dev" }, pgpassAt(asked), /~\/\.pgpass/);
+      expectHosted({ HOME: "/home/dev" }, pgpassEverywhere(asked), /~\/\.pgpass/);
       expect(new Set(asked)).toEqual(new Set(["/home/dev/.pgpass"]));
     });
 
@@ -287,31 +305,6 @@ describe("seedRefusal", () => {
       );
       expect(refusal).toMatch(/live database, warden/);
       expect(refusal).toMatch(/~\/\.pgpass/);
-    });
-
-    it("names the signal in the refusal that asks for the database's name too", () => {
-      expect(
-        seedRefusal(
-          {
-            PGHOST: "127.0.0.1",
-            PGPASSFILE: "/some/file",
-            PGDATABASE: "warden_preview",
-            WARDEN_SEED_DEMO: "1",
-          },
-          noPgpass,
-        ),
-      ).toMatch(/PGPASSFILE/);
-      expect(
-        seedRefusal(
-          {
-            PGHOST: "127.0.0.1",
-            HOME: "/home/dev",
-            PGDATABASE: "warden_preview",
-            WARDEN_SEED_DEMO: "1",
-          },
-          () => true,
-        ),
-      ).toMatch(/~\/\.pgpass/);
     });
 
     it("looks for .pgpass on disk when no fileExists is given", () => {
@@ -333,44 +326,16 @@ describe("seedRefusal", () => {
 
     it("takes an empty PGPASSFILE or PGSERVICE, or no HOME, as no password", () => {
       const asked: string[] = [];
-      const pgpassAnywhere = pgpassAt(asked);
       for (const where of [{ PGPASSFILE: "" }, { PGSERVICE: "" }, { HOME: "" }, {}]) {
         expect(
           seedRefusal(
             { PGHOST: "127.0.0.1", ...where, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
-            pgpassAnywhere,
+            pgpassEverywhere(asked),
           ),
         ).toBeUndefined();
       }
       expect(asked).toEqual([]);
     });
-  });
-
-  it("elsewhere, or with a password (the Cloud SQL Auth Proxy listens locally), needs the database's name", () => {
-    const hosted = [
-      { PGHOST: "/cloudsql/project:europe-west1:warden-db" },
-      { PGHOST: "10.0.0.5" },
-      { PGHOST: "127.0.0.1", PGPASSWORD: "x" },
-    ];
-    for (const where of hosted) {
-      expect(
-        seedRefusal({ ...where, PGDATABASE: "warden_preview", WARDEN_SEED_DEMO: "1" }),
-      ).toMatch(/WARDEN_SEED_DEMO must name the database, warden_preview/);
-      expect(
-        seedRefusal({ ...where, PGDATABASE: "warden_preview", WARDEN_SEED_DEMO: "warden_preview" }),
-      ).toBeUndefined();
-    }
-  });
-
-  it("never seeds the live database, warden, on a hosted server", () => {
-    expect(
-      seedRefusal({
-        PGHOST: "127.0.0.1",
-        PGPASSWORD: "x",
-        PGDATABASE: "warden",
-        WARDEN_SEED_DEMO: "warden",
-      }),
-    ).toMatch(/live database/);
   });
 });
 
