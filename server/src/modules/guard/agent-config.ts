@@ -780,7 +780,8 @@ type AgentRuns = { runs: string[]; tooDeep: boolean };
  * read, and spends nothing. The budget is per command and per nesting: a shell's string is read while fewer than
  * `budget` strings read here hold it among their arguments, so a command after `;`, `&&`, `||`, `|`, `&` or a newline
  * starts with all of it, while shells among one command's own words (`sudo bash -c x bash -c y`), whose arguments
- * each run to that command's end, share it. A string past it isn't read, and `tooDeep` says so. The next run is
+ * each run to that command's end, share it. A string past it isn't read, and `tooDeep` says so. A shell named among
+ * an earlier shell's options (`sudo bash -o bash -c x`, the second) is one of its words, not a shell. The next run is
  * looked for after an agent run ends, so no text is in two; a shell run hides nothing, as the runs among its arguments
  * (`bash script.sh $(claude …)`) are outside its `-c` string's quotes and run before it.
  */
@@ -794,10 +795,13 @@ function agentRuns(command: string, budget: ShellBudget): AgentRuns {
   // Where the arguments of each shell whose string was read here end, innermost last.
   const holding: number[] = [];
   let end = 0;
+  // Up to where an earlier shell's words were all its options and their values.
+  let options = -1;
   for (let i = 0; i < starts.length; i++) {
     const { start, shell } = starts[i]!;
-    // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run.
-    if (start < end) continue;
+    // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run, and a shell named
+    // among an earlier shell's options (`-o`'s value) is one of that shell's words.
+    if (start < end || (shell && start <= options)) continue;
     const inBackquotes = inBackquotesAt(start);
     const argumentsEnd = (limit?: number) => runArgumentsEnd(masked, start, inBackquotes, limit);
     if (!shell) {
@@ -806,9 +810,20 @@ function agentRuns(command: string, budget: ShellBudget): AgentRuns {
       continue;
     }
     while (holding.length > 0 && holding.at(-1)! <= start) holding.pop();
-    // Whether it has a string, from its words before the next run's only, so no shell's name is read again per shell.
-    const next = starts[i + 1]?.start;
-    if (commandString(shellWords(command.slice(start, argumentsEnd(next)))) === undefined) continue;
+    // Whether it has a string, from its words before the next run's, so no shell's name is read again per shell. Words
+    // that run out among its options there (a name as `-o`'s value: `sudo bash -c -o bash 'x'`) are read on past the
+    // run after, then past twice as many runs each time, up to its end; the shells named among those options are
+    // skipped, so a long line of them is read about once.
+    let found: ReturnType<typeof commandString>;
+    for (let ahead = 1; ; ahead *= 2) {
+      const to = starts[i + ahead]?.start;
+      const stop = argumentsEnd(to);
+      found = commandString(shellWords(command.slice(start, stop)));
+      if (found !== OPTIONS_RUN_ON) break;
+      options = stop;
+      if (stop !== to) break;
+    }
+    if (typeof found !== "string") continue;
     const left = budget - holding.length;
     if (left <= 0) {
       tooDeep = true;
@@ -816,8 +831,9 @@ function agentRuns(command: string, budget: ShellBudget): AgentRuns {
     }
     const stop = argumentsEnd();
     holding.push(stop);
-    // Its words before the next run's held a string, so its words to its end do too.
-    const inner = agentRuns(commandString(shellWords(command.slice(start, stop))) ?? "", left - 1);
+    // Its words before the next run's, or to its end, held a string, so its words to its end do too.
+    const script = commandString(shellWords(command.slice(start, stop)));
+    const inner = agentRuns(typeof script === "string" ? script : "", left - 1);
     runs.push(...inner.runs);
     tooDeep ||= inner.tooDeep;
   }
@@ -830,21 +846,27 @@ const SHORT_OPTIONS = /^[-+][A-Za-z]+$/;
 /** A long option (`--login`, `--norc`). */
 const LONG_OPTION = /^--[A-Za-z]/;
 
+/** `commandString`'s answer for words that ran out among a shell's options: a later word may still be its string. */
+const OPTIONS_RUN_ON = Symbol("options run on");
+
 /**
  * The string a shell runs from its `-c`, from the words after the shell's own: the first word past its options (short
- * clusters, `-o`/`+o` and its value, long options, then maybe `--`), when one of them held `c`. Any later words (`$0`,
- * positional arguments) aren't read, nor split.
+ * clusters, `-o`/`+o` and its value, long options, then maybe `--`), when one of them held `c`. Undefined when it runs
+ * none, and `OPTIONS_RUN_ON` when the words run out before a word past its options. Any later words (`$0`, positional
+ * arguments) aren't read, nor split.
  */
-function commandString(words: Iterator<string, undefined>): string | undefined {
+function commandString(
+  words: Iterator<string, undefined>,
+): string | undefined | typeof OPTIONS_RUN_ON {
   let runsString = false;
   for (let word = words.next().value; word !== undefined; word = words.next().value) {
-    if (word === "--") return runsString ? words.next().value : undefined;
+    if (word === "--") return runsString ? (words.next().value ?? OPTIONS_RUN_ON) : undefined;
     if (LONG_OPTION.test(word)) continue;
     if (!SHORT_OPTIONS.test(word)) return runsString ? word : undefined;
     runsString ||= word.startsWith("-") && word.includes("c");
     if (word.includes("o")) words.next();
   }
-  return undefined;
+  return OPTIONS_RUN_ON;
 }
 
 /** The characters a backslash keeps its meaning before inside double quotes, besides a line continuation. */
