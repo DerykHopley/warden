@@ -1,42 +1,34 @@
 // Guard's agent-config Rules (Guard spec, story 3): `agentConfigCheck(asset).see(file)` reads a Claude Code settings
 // file's allow rules, `defaultMode` and the commands it runs (hooks, `statusLine`, `apiKeyHelper`), and any other text
 // file for the flag that skips permission checks, and answers at most one Observation per Rule for the file; `end()`
-// answers the whole-repo Rules from the root settings files. The flag and the mode are built here by joining their
-// parts, so this file never holds a whole one for a Guard Scan of Warden's own repo to report.
+// answers the whole-repo Rules from the root settings files. The flag and the mode come joined from their parts
+// (`test/agent-settings.ts`), so this file never holds a whole one for a Guard Scan of Warden's own repo to report.
 import { readdirSync, readFileSync } from "node:fs";
-import { Observation, type Asset } from "@warden/contracts";
+import { Observation } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
+import {
+  BYPASS,
+  FLAG,
+  hooks,
+  join,
+  MODE,
+  repo,
+  see,
+  settings,
+  SKIP,
+} from "../../../test/agent-settings.ts";
 import { lineWith } from "../../../test/text-lines.ts";
 import { agentConfigCheck } from "./agent-config.ts";
 import { packRule } from "./default-pack.ts";
 import type { RepoFile } from "./repo-reader.ts";
 
-const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
-
 const BLANKET = "guard/blanket-bash-allow";
-const SKIP = "guard/permission-skip";
 
-const join = (...parts: string[]) => parts.join("");
-/** The flag that starts Claude Code with its permission checks off. */
-const FLAG = join("--dangerously", "-skip-permissions");
-const MODE = join("--permission", "-mode");
-const BYPASS = join("bypass", "Permissions");
-
-/** A settings file's text, pretty-printed as Claude Code writes it: each allow entry on a line of its own. */
-const settings = (permissions: Record<string, unknown>, rest: Record<string, unknown> = {}) =>
-  `${JSON.stringify({ $schema: "https://json.schemastore.org/claude-code-settings.json", permissions, ...rest }, null, 2)}\n`;
-
-const see = (path: string, text: string) => agentConfigCheck(repo).see({ path, text });
 const ofRule = (path: string, text: string, rule: string) =>
   see(path, text).filter((observation) => observation.rule_id === rule);
 
 const READ_ENV = "guard/agent-can-read-env";
 const NO_GUARD = "guard/no-runtime-guard";
-
-/** A settings file's `hooks` key: one matcher group under `event`, holding one command hook. */
-const hooks = (event: string, command: string) => ({
-  hooks: { [event]: [{ matcher: "*", hooks: [{ type: "command", command }] }] },
-});
 
 /** A repo's whole-repo Observations: each file seen, each path reported unread, then the end pass. */
 function endOf(files: RepoFile[], unread: string[] = []) {
@@ -1256,6 +1248,7 @@ describe("agentConfigCheck", () => {
         .filter((entry) => entry.isFile())
         .map((entry) => `src/modules/guard/${entry.name}`),
       "test/guard-scan-api.test.ts",
+      "test/agent-settings.ts",
     ];
 
     const found = paths.flatMap((path) =>

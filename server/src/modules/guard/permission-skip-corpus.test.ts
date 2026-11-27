@@ -4,25 +4,16 @@
 // through `see` as a settings file's one hook. Its places (count and kinds) are compared with the committed snapshot,
 // `permission-skip-corpus.jsonl`, of what the code finds today. A change that drops a place or a kind from any command
 // fails, naming the commands; so does one that adds places, listing them, until the snapshot is refreshed with
-// `REFRESH_COMMAND` for the places the ticket asks for. The same file holds the 1 MiB worst-shape rows, sized to
-// `ARCHIVE_LIMITS.fileBytes`. The flag and the mode are written `{FLAG}`, `{MODE}` and `{BYPASS}` in the corpus and the
-// snapshot, and built here by joining their parts, so neither file holds a whole one for a Guard Scan of Warden's own
-// repo to report.
+// `REFRESH_COMMAND` for the places the ticket asks for; the refresh itself refuses while a place, a kind or a command
+// would be lost. The same file holds the 1 MiB worst-shape rows, sized to `ARCHIVE_LIMITS.fileBytes`. The flag and the
+// mode are written `{FLAG}`, `{MODE}` and `{BYPASS}` in the corpus and the snapshot, and come joined from their parts
+// (`test/agent-settings.ts`), so neither file holds a whole one for a Guard Scan of Warden's own repo to report.
 import { readFileSync, writeFileSync } from "node:fs";
-import type { Asset } from "@warden/contracts";
-import { describe, expect, it } from "vitest";
-import { agentConfigCheck } from "./agent-config.ts";
+import { beforeAll, describe, expect, it } from "vitest";
+import { BYPASS, FLAG, hooks, MODE, see, settings, SKIP } from "../../../test/agent-settings.ts";
 import { ARCHIVE_LIMITS } from "./tarball.ts";
 
-const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
-const SKIP = "guard/permission-skip";
 const path = ".claude/settings.json";
-
-const join = (...parts: string[]) => parts.join("");
-/** The flag that starts Claude Code with its permission checks off. */
-const FLAG = join("--dangerously", "-skip-permissions");
-const MODE = join("--permission", "-mode");
-const BYPASS = join("bypass", "Permissions");
 
 /** Each placeholder the corpus and the snapshot write, with the text it stands for. */
 const PLACEHOLDERS: readonly [placeholder: string, text: string][] = [
@@ -30,21 +21,10 @@ const PLACEHOLDERS: readonly [placeholder: string, text: string][] = [
   ["{MODE}", MODE],
   ["{BYPASS}", BYPASS],
 ];
-const expand = (text: string) =>
+const fromPlaceholders = (text: string) =>
   PLACEHOLDERS.reduce((out, [placeholder, real]) => out.replaceAll(placeholder, real), text);
-const contract = (text: string) =>
+const toPlaceholders = (text: string) =>
   PLACEHOLDERS.reduce((out, [placeholder, real]) => out.replaceAll(real, placeholder), text);
-
-/** A settings file's text, pretty-printed as Claude Code writes it. */
-const settings = (permissions: Record<string, unknown>, rest: Record<string, unknown> = {}) =>
-  `${JSON.stringify({ $schema: "https://json.schemastore.org/claude-code-settings.json", permissions, ...rest }, null, 2)}\n`;
-
-/** A settings file's `hooks` key: one matcher group under `event`, holding one command hook. */
-const hooks = (event: string, command: string) => ({
-  hooks: { [event]: [{ matcher: "*", hooks: [{ type: "command", command }] }] },
-});
-
-const see = (path: string, text: string) => agentConfigCheck(repo).see({ path, text });
 
 /** A word in single quotes, a `'` in it closed, escaped and reopened. */
 const sq = (text: string) => `'${text.replaceAll("'", `'\\''`)}'`;
@@ -263,24 +243,27 @@ const KIND = /[^,]*, nested too deep to check|[^,]+/g;
 
 /** The places `agentConfigCheck` finds in a settings file whose one hook runs `template`, with its placeholders filled. */
 function placesOf(template: string): Places {
-  const found = see(path, settings({}, hooks("Stop", expand(template)))).filter(
+  const found = see(path, settings({}, hooks("Stop", fromPlaceholders(template)))).filter(
     (observation) => observation.rule_id === SKIP,
   );
   if (found.length === 0) return { places: 0, kinds: [] };
   const summary = found[0]!.evidence.summary;
   const match = SUMMARY.exec(summary);
   if (found.length > 1 || match === null) {
-    throw new Error(`Can't read the places of ${JSON.stringify(expand(template))}: ${summary}`);
+    throw new Error(
+      `Can't read the places of ${JSON.stringify(fromPlaceholders(template))}: ${summary}`,
+    );
   }
   return {
     places: Number(match[1]),
-    kinds: Array.from(match[2]!.matchAll(KIND), ([kind]) => contract(kind.trim())),
+    kinds: Array.from(match[2]!.matchAll(KIND), ([kind]) => toPlaceholders(kind.trim())),
   };
 }
 
 const SNAPSHOT = new URL("./permission-skip-corpus.jsonl", import.meta.url);
 const REFRESH = "REFRESH_PERMISSION_SKIP_CORPUS";
-const REFRESH_COMMAND = `${REFRESH}=1 pnpm --filter @warden/server exec vitest run src/modules/guard/permission-skip-corpus.test.ts`;
+/** The refresh, run with `vitest.corpus.config.ts`: this file alone, with no database to set up. */
+const REFRESH_COMMAND = `${REFRESH}=1 pnpm --filter @warden/server exec vitest run --config vitest.corpus.config.ts`;
 
 /** The snapshot's text: one command a line, as `[command, places, ...kinds]`, in the corpus's order. */
 const snapshotText = (results: ReadonlyMap<string, Places>) =>
@@ -307,11 +290,11 @@ function readSnapshot(): Map<string, Places> {
 }
 
 const shown = ({ places, kinds }: Places) =>
-  places === 0 ? "0" : `${places} (${kinds.map(expand).join(", ")})`;
+  places === 0 ? "0" : `${places} (${kinds.map(fromPlaceholders).join(", ")})`;
 
 /** One line of a failure: the command as it runs, and its places in the snapshot and now. */
 const changeLine = (command: string, was: Places, now: Places) =>
-  `  ${JSON.stringify(expand(command))}: ${shown(was)} -> ${shown(now)}`;
+  `  ${JSON.stringify(fromPlaceholders(command))}: ${shown(was)} -> ${shown(now)}`;
 
 const lostFrom = (was: Places, now: Places) =>
   now.places < was.places || was.kinds.some((kind) => !now.kinds.includes(kind));
@@ -330,25 +313,100 @@ function changes(
   });
 }
 
+/** The snapshot's commands the corpus no longer builds, each as it runs. */
+const goneFrom = (snapshot: ReadonlyMap<string, Places>, now: ReadonlyMap<string, Places>) =>
+  [...snapshot.keys()]
+    .filter((command) => !now.has(command))
+    .map((command) => `  ${JSON.stringify(fromPlaceholders(command))}`);
+
+/** Why refreshing the snapshot with `now` would lose a place, a kind or a command it holds; nothing when it loses none. */
+function refreshRefusal(
+  snapshot: ReadonlyMap<string, Places>,
+  now: ReadonlyMap<string, Places>,
+): string | undefined {
+  const lost = changes(snapshot, now, lostFrom);
+  const gone = goneFrom(snapshot, now);
+  if (lost.length === 0 && gone.length === 0) return undefined;
+  return [
+    "The snapshot isn't refreshed: it would lose what main finds. A change keeps every place, kind and command it holds.",
+    "If the ticket drops these on purpose, edit or delete their lines in permission-skip-corpus.jsonl by hand, then refresh.",
+    `Lost a place or a kind (${lost.length}, snapshot -> now):`,
+    ...lost,
+    `No longer in the corpus (${gone.length}):`,
+    ...gone,
+  ].join("\n");
+}
+
+describe("refreshing the corpus's snapshot", () => {
+  const none: Places = { places: 0, kinds: [] };
+  const flag: Places = { places: 1, kinds: ["{FLAG}"] };
+  const snapshot = new Map([
+    ["claude {FLAG}", flag],
+    ["claude -p x", none],
+    ["sh claude {FLAG}", flag],
+  ]);
+
+  it("goes ahead when every command keeps its places, though some gain one and new commands come in", () => {
+    const now = new Map([
+      ["claude {FLAG}", flag],
+      ["claude -p x", flag],
+      ["sh claude {FLAG}", flag],
+      ["bash claude {FLAG}", flag],
+    ]);
+
+    expect(refreshRefusal(snapshot, now)).toBeUndefined();
+  });
+
+  it("refuses while a command loses a place or leaves the corpus, naming each as it runs", () => {
+    const now = new Map([
+      ["claude {FLAG}", none],
+      ["claude -p x", flag],
+    ]);
+
+    const refusal = refreshRefusal(snapshot, now);
+
+    expect(refusal).toContain(`  ${JSON.stringify(`claude ${FLAG}`)}: 1 (${FLAG}) -> 0`);
+    expect(refusal).toContain(`  ${JSON.stringify(`sh claude ${FLAG}`)}`);
+    expect(refusal).not.toContain("claude -p x");
+  });
+});
+
 describe("guard/permission-skip's corpus of hook commands", () => {
-  const commands = corpus();
-  const now = new Map(commands.map((command) => [command, placesOf(command)]));
-  if (process.env[REFRESH] === "1") writeFileSync(SNAPSHOT, snapshotText(now));
-  const snapshot = readSnapshot();
+  // Read in a hook, not the describe's body, so a command `placesOf` can't read fails these tests by name.
+  let commands: string[] = [];
+  let now = new Map<string, Places>();
+  let snapshot = new Map<string, Places>();
+  beforeAll(() => {
+    commands = corpus();
+    now = new Map(commands.map((command) => [command, placesOf(command)]));
+    snapshot = readSnapshot();
+  });
+
+  it.runIf(process.env[REFRESH] === "1")(
+    "refreshes the snapshot when it would lose no place, kind or command",
+    () => {
+      const refusal = refreshRefusal(snapshot, now);
+      if (refusal !== undefined) expect.fail(refusal);
+
+      writeFileSync(SNAPSHOT, snapshotText(now));
+      snapshot = readSnapshot();
+    },
+  );
 
   it("holds at least 2,000 commands, the same ones as the snapshot", () => {
     const unsnapped = commands.filter((command) => !snapshot.has(command));
-    const gone = [...snapshot.keys()].filter((command) => !now.has(command));
+    const gone = goneFrom(snapshot, now);
 
     expect(commands.length).toBeGreaterThanOrEqual(2000);
     if (unsnapped.length > 0 || gone.length > 0) {
       expect.fail(
         [
-          `The corpus and its snapshot hold different commands: refresh the snapshot with ${REFRESH_COMMAND}`,
+          "The corpus and its snapshot hold different commands.",
+          `New commands are added by refreshing the snapshot with ${REFRESH_COMMAND}; a dropped command's line is deleted from it by hand first.`,
           `Not in the snapshot (${unsnapped.length}):`,
-          ...unsnapped.map((command) => `  ${JSON.stringify(expand(command))}`),
+          ...unsnapped.map((command) => `  ${JSON.stringify(fromPlaceholders(command))}`),
           `No longer in the corpus (${gone.length}):`,
-          ...gone.map((command) => `  ${JSON.stringify(expand(command))}`),
+          ...gone,
         ].join("\n"),
       );
     }
