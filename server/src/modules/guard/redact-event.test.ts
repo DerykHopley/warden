@@ -202,6 +202,24 @@ describe("redactEvent: the home folder", () => {
     ).toEqual({ tool_response: { "~/a.ts": [{ path: "~/b" }] } });
   });
 
+  // #435: two keys that mask to the same text both reach the Judge.
+  it("keeps both values of two keys that mask to the same text, under distinct keys", () => {
+    const { tool_response: redacted } = redactEvent({
+      tool_response: { "/home/alice/a": 1, "/home/bob/a": 2 },
+    });
+
+    expect(redacted).toEqual({ "~/a": 1, "~/a (2)": 2 });
+    expect(JSON.stringify(redacted)).not.toMatch(/alice|bob/);
+  });
+
+  it("keeps a key already named like a renamed one apart from it", () => {
+    expect(
+      redactEvent({
+        keys: { "/home/alice/a": 1, "/home/bob/a": 2, "~/a (2)": 3, "/Users/c/a": 4 },
+      }),
+    ).toEqual({ keys: { "~/a": 1, "~/a (2)": 2, "~/a (2) (2)": 3, "~/a (3)": 4 } });
+  });
+
   it.each([
     ["a folder named like one inside another", "/srv/myhome/alice"],
     ["a URL with no home folder in it", "https://example.com/app/x?y#z"],

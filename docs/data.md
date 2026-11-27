@@ -221,6 +221,9 @@ string value and every object key, at any depth, in this order.
 3. **The log redactor's patterns:** Bearer tokens, JWTs, `sk_test_` keys, a Postgres URL's password and URL query
    values.
 
+Two keys of one object that redact to the same text are both kept, the later one numbered (`~/a`, `~/a (2)`), so no
+value is lost.
+
 Claude Code's hook sends every field of each event it's set for: a tool event always carries the tool's input
 (its command, path or URL), and its result carries the tool's output. So the tier is kept in two places: the
 managed settings send only the events the tier needs (prompts only at Content), and the endpoint drops every field

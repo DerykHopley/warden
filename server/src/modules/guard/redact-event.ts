@@ -48,14 +48,35 @@ function redactText(text: string): string {
   return redactString(maskSecrets(homeless));
 }
 
+/**
+ * `value`'s keys redacted, each kept apart: a key that redacts to one already taken (`/home/alice/a` and
+ * `/home/bob/a` both become `~/a`) is numbered, `~/a (2)`, then `~/a (3)`, so no value is lost (#435). Each text's
+ * next number is remembered, so many keys masking alike are numbered in one pass.
+ */
+function distinctKeys(keys: string[]): string[] {
+  const taken = new Set<string>();
+  const nextNumber = new Map<string, number>();
+  return keys.map((key) => {
+    let distinct = redactText(key);
+    if (taken.has(distinct)) {
+      let n = nextNumber.get(distinct) ?? 2;
+      while (taken.has(`${distinct} (${n})`)) n++;
+      nextNumber.set(distinct, n + 1);
+      distinct = `${distinct} (${n})`;
+    }
+    taken.add(distinct);
+    return distinct;
+  });
+}
+
 function redactValue(value: JsonValue): JsonValue {
   if (typeof value === "string") return redactText(value);
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(redactValue);
+  const entries = Object.entries(value);
+  const keys = distinctKeys(entries.map(([key]) => key));
   // `Object.fromEntries` keeps a `__proto__` key an ordinary key, so the copy's prototype is always Object.prototype.
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [redactText(key), redactValue(item)]),
-  );
+  return Object.fromEntries(entries.map(([, item], i) => [keys[i], redactValue(item)]));
 }
 
 /**
