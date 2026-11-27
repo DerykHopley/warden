@@ -28,7 +28,8 @@ export const DECISION_TAKES: Readonly<Record<Decision, readonly Status[]>> = {
 
 /** Postgres can't store a NUL in text and would refuse the write as a 500, so a field holding one is a 400. */
 export const NUL_MESSAGE = "holds a NUL character, which Warden can't store";
-const storable = <T extends z.ZodString>(schema: T) =>
+/** The string schema, refusing a NUL with `NUL_MESSAGE`: for a body's field that Postgres stores or reads. */
+export const storable = <T extends z.ZodString>(schema: T) =>
   schema.refine((value) => !value.includes("\0"), NUL_MESSAGE);
 
 /** Why a person decided: 1 to 2,000 characters, not only whitespace, and no NUL. */

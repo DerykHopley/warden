@@ -1,6 +1,7 @@
 // A Scan someone starts (ADR 0009), as the API takes and answers it: queued under the session's Team, then run by the
 // Scan Job, which moves its state. The Team and who asked come from the session, never the body, and aren't answered.
 import { z } from "zod";
+import { storable } from "./decisions.ts";
 import { Asset, assetKey, DateTime, Id, Module, RuleId } from "./finding.ts";
 
 /** Where a queued Scan is: waiting for the Job, being run by it, or ended either way. */
@@ -11,13 +12,21 @@ export type ScanState = z.infer<typeof ScanState>;
 export const MAX_SCAN_ASSETS = 100;
 
 /**
+ * An Asset as a body names it: Postgres reads and stores its ref, so it holds no NUL either (#304). Finding v1's own
+ * `Asset` is left as it is, so the published format doesn't change.
+ */
+const StorableAsset = Asset.unwrap()
+  .extend({ ref: storable(Asset.unwrap().shape.ref) })
+  .readonly();
+
+/**
  * `POST /api/scans`: the module and the Assets to scan, 1 to 100, each listed once, never an Agent session (as `Scan`
  * refuses). The Rules are the module's scanner's, so the body doesn't name them.
  */
 export const StartScanBody = z
   .strictObject({
     module: Module,
-    assets: z.array(Asset).min(1).max(MAX_SCAN_ASSETS),
+    assets: z.array(StorableAsset).min(1).max(MAX_SCAN_ASSETS),
   })
   .superRefine((body, ctx) => {
     const seen = new Map<string, number>();

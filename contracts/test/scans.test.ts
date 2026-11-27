@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ScanBody, StartScanBody } from "../src/index.ts";
+import { NUL_MESSAGE, ScanBody, StartScanBody } from "../src/index.ts";
 import { expectIssueAt, expectRefused } from "./refused.ts";
 
 const repo = (n: number) => ({ kind: "repo", ref: `https://github.com/example/app-${n}` }) as const;
@@ -50,6 +50,16 @@ describe("StartScanBody", () => {
       { module: "guard", assets: [repo(1), { kind: "agent_session", ref: "s-1" }] },
       ["assets", 1],
       /never rescanned/,
+    );
+  });
+
+  // Postgres can't store a NUL in text, so an Asset's ref refuses one, naming it (#304, as #248's decision bodies).
+  it("refuses an Asset's ref holding a NUL, naming it", () => {
+    expectIssueAt(
+      StartScanBody,
+      { module: "guard", assets: [repo(1), { kind: "repo", ref: "https://github.com/a\0b" }] },
+      ["assets", 1, "ref"],
+      new RegExp(`^${NUL_MESSAGE}$`),
     );
   });
 });
