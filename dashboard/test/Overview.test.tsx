@@ -656,23 +656,30 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
       });
       localStorage.setItem("warden.askWardenPanel", JSON.stringify({ mode: chosen, width: 400 }));
       await confirmIn(await openThen(NO_CATALOGUE));
-      await expectNotice(
-        "Confirmed. Your review of 1.3.3 is stored, but VDA ISA 2027.1 is off now, so the Overview doesn't show it.",
-      );
+      const words =
+        "Confirmed. Your review of 1.3.3 is stored, but VDA ISA 2027.1 is off now, so the Overview doesn't show it.";
+      await expectNotice(words);
       await vi.waitFor(() => expect(panel()?.dataset.shown ?? null).toBe(shownAfter));
+      if (shownAfter === "pinned") {
+        // #453: a panel the notice doesn't close keeps focus from moving to the notice.
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(document.activeElement).not.toBe(screen.getByText(words));
+      }
     });
 
     // #453: focus in a panel the notice closes would fall to <body>, and the first Tab to the closed Ask Warden button.
-    it.each<[number, string, "floating" | "pinned", boolean]>([
-      [390, "closes the full-screen panel and takes focus", "floating", true],
-      [1024, "closes the floating panel and takes focus", "floating", true],
-      [1600, "leaves the pinned panel, and focus doesn't move to it", "pinned", false],
-    ])("at %ipx, with focus in the card, the notice %s", async (width, _, chosen, toNotice) => {
+    it.each<[number, string]>([
+      [390, "closes the full-screen panel and takes focus"],
+      [1024, "closes the floating panel and takes focus"],
+    ])("at %ipx, with focus in the card, the notice %s", async (width) => {
       window.innerWidth = width;
       onTestFinished(() => {
         window.innerWidth = 1024;
       });
-      localStorage.setItem("warden.askWardenPanel", JSON.stringify({ mode: chosen, width: 400 }));
+      localStorage.setItem(
+        "warden.askWardenPanel",
+        JSON.stringify({ mode: "floating", width: 400 }),
+      );
       const card = await openThen(without133());
       await confirmIn(card);
       // The card's Done line takes focus, in the panel, before the Overview's answer comes back.
@@ -681,12 +688,6 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
         "Confirmed. Your review of 1.3.3 is stored, but the Overview no longer shows it.";
       await expectNotice(words);
       const notice = screen.getByText(words);
-      if (!toNotice) {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        expect(panel()).toBeVisible();
-        expect(document.activeElement).not.toBe(notice);
-        return;
-      }
       await vi.waitFor(() => expect(panel()).toBeNull());
       await vi.waitFor(() => expect(document.activeElement).toBe(notice));
       await userEvent.tab();

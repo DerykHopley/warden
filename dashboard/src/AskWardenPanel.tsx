@@ -20,14 +20,17 @@ import { DetailCard } from "./DetailCard.tsx";
 import { shortId } from "./findings.ts";
 import {
   askWardenLabel,
+  coversPage,
   PANEL_STORAGE_KEY,
   PANEL_WIDTH,
   panelReducer,
   panelShownAs,
   PIN_FROM,
   startingPanel,
+  type PagePanel,
   type PanelContext,
   type PanelMode,
+  type PanelShownAs,
   type PanelState,
 } from "./panel.ts";
 import { useClerkUsers } from "./person-name.ts";
@@ -79,17 +82,16 @@ export type PanelControls = {
   commit: () => void;
   /** Opens the panel floating when it's closed, without storing it; an open or pinned panel stays as it is. */
   openFloating: () => void;
-  /**
-   * Closes a panel over the page at the window's width now, without storing it; a pinned one beside it stays. Focus
-   * that was in the panel it closes moves to `notice`.
-   */
-  uncover: (notice?: RefObject<HTMLElement | null>) => void;
+  /** As the page's `uncover`, at the window's width now. */
+  uncover: PagePanel["uncover"];
 };
 
-/** Whether focus is in the panel while it covers the page (floating, or full screen): the panel `uncover` closes. */
+/** Whether focus is in the panel while it covers the page: the panel `uncover` closes. */
 function focusInPanelOverPage(): boolean {
-  const shownAs = document.activeElement?.closest<HTMLElement>(".ask-warden")?.dataset.shown;
-  return shownAs === "floating" || shownAs === "full-screen";
+  // The shell writes `data-shown` from `panelShownAs`.
+  const shownAs = document.activeElement?.closest<HTMLElement>(".ask-warden")?.dataset.shown as
+    PanelShownAs | undefined;
+  return shownAs !== undefined && coversPage(shownAs);
 }
 
 /**
@@ -112,17 +114,18 @@ export function usePanelState(): PanelControls {
   const commit = useCallback(() => dispatch({ type: "commit" }), []);
   const openFloating = useCallback(() => dispatch({ type: "open" }), []);
   // Focus in a panel that closes would fall to the page's body: it goes to the page's notice once the panel has gone,
-  // which is after the render the close brings (a notice set in the same update has rendered by then too).
-  const focusAfterUncover = useRef<RefObject<HTMLElement | null> | null>(null);
+  // which is after the render the close brings (a notice set in the same update has rendered by then too). Each
+  // uncover that moves focus is a new request, so the effect runs once for it, in the same render as the close.
+  const [focusAfterUncover, setFocusAfterUncover] = useState<{
+    notice: RefObject<HTMLElement | null>;
+  } | null>(null);
   const uncover = useCallback((notice?: RefObject<HTMLElement | null>) => {
-    focusAfterUncover.current = notice !== undefined && focusInPanelOverPage() ? notice : null;
+    setFocusAfterUncover(notice !== undefined && focusInPanelOverPage() ? { notice } : null);
     dispatch({ type: "uncover", windowWidth: window.innerWidth });
   }, []);
   useEffect(() => {
-    const notice = focusAfterUncover.current;
-    focusAfterUncover.current = null;
-    notice?.current?.focus();
-  });
+    focusAfterUncover?.notice.current?.focus();
+  }, [focusAfterUncover]);
   return { state: shown, choose, show, resize, commit, openFloating, uncover };
 }
 

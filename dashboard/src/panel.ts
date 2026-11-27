@@ -99,24 +99,27 @@ export function panelReducer(store: PanelStore, action: PanelAction): PanelStore
       return { ...store, shown: { ...store.shown, width: clampWidth(action.width) } };
     case "commit":
       return { ...store, chosen: store.shown };
-    case "uncover": {
-      const shownAs = panelShownAs(store.shown.mode, action.windowWidth);
-      return shownAs === "floating" || shownAs === "full-screen"
+    case "uncover":
+      return coversPage(panelShownAs(store.shown.mode, action.windowWidth))
         ? panelReducer(store, { type: "show", mode: "closed" })
         : store;
-    }
   }
 }
 
+/** How a panel shows at a window width (`panelShownAs`). */
+export type PanelShownAs = "closed" | "floating" | "pinned" | "full-screen";
+
 /** How a mode shows at a window width: an open panel fills a phone's screen, and floats where pinning isn't offered. */
-export function panelShownAs(
-  mode: PanelMode,
-  windowWidth: number,
-): "closed" | "floating" | "pinned" | "full-screen" {
+export function panelShownAs(mode: PanelMode, windowWidth: number): PanelShownAs {
   if (mode === "closed") return "closed";
   if (windowWidth < FULL_SCREEN_UNDER) return "full-screen";
   if (mode === "pinned" && windowWidth < PIN_FROM) return "floating";
   return mode;
+}
+
+/** Whether a panel shown as `shownAs` covers the page (floating, or full screen): the panel `uncover` closes. */
+export function coversPage(shownAs: PanelShownAs): boolean {
+  return shownAs === "floating" || shownAs === "full-screen";
 }
 
 /**
