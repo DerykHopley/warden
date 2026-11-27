@@ -10,6 +10,7 @@ import {
   startsScans,
   type Finding,
   type Level,
+  type ListedRepoBody,
   type Product,
   type Role,
 } from "@warden/contracts";
@@ -265,17 +266,29 @@ function LevelLine({ level }: { level: Level }) {
 type ReposLineProps = Pick<PageProps, "getToken" | "onSessionEnded"> & { role: Role | null };
 
 /**
+ * The Team's linked repos, for a line under the summary. `null` while they're asked for, or when they can't be read
+ * (a 403, a 409, a body that doesn't parse): the line is a pointer, so it shows nothing rather than a notice.
+ */
+function useListedRepos(
+  getToken: PageProps["getToken"],
+  onSessionEnded: PageProps["onSessionEnded"],
+): ListedRepoBody[] | null {
+  const ask = useCallback(() => fetchRepos(getToken), [getToken]);
+  const repos = useWardenCall<ReposResult>(ask, onSessionEnded);
+  if (repos.result === "loading" || repos.result.kind !== "repos") return null;
+  return repos.result.repos;
+}
+
+/**
  * With no Findings, the line under the summary that says how the first Findings come. While the Team has no linked
  * repos, an Admin gets the link to connect GitHub on Setup, and a Lead or Member is told who connects it; with linked
- * repos, it's the Scan now line. Nothing while the repos are asked for, or when they can't be read: the line is a
- * pointer, and the summary already says there are no Findings.
+ * repos, it's the Scan now line for a Lead or an Admin. Nothing while the repos are asked for, or when they can't be
+ * read: the summary already says there are no Findings.
  */
 function NoFindingsLine(props: ReposLineProps) {
-  const { getToken } = props;
-  const ask = useCallback(() => fetchRepos(getToken), [getToken]);
-  const repos = useWardenCall<ReposResult>(ask, props.onSessionEnded);
-  if (repos.result === "loading" || repos.result.kind !== "repos") return null;
-  if (repos.result.repos.length > 0) return <ScanLine role={props.role} />;
+  const repos = useListedRepos(props.getToken, props.onSessionEnded);
+  if (repos === null) return null;
+  if (repos.length > 0) return startsScans(props.role) ? <ScanLine /> : null;
   if (props.role !== "admin") {
     return <p className="setup-line">An Admin connects GitHub on Setup to run the first Scan.</p>;
   }
@@ -298,20 +311,16 @@ function FindingsScanLine(props: ReposLineProps) {
 
 /** Its own component, so the repos are asked for only once the Role is known to start Scans. */
 function ScanLineOnceLinked(props: ReposLineProps) {
-  const { getToken } = props;
-  const ask = useCallback(() => fetchRepos(getToken), [getToken]);
-  const repos = useWardenCall<ReposResult>(ask, props.onSessionEnded);
-  if (repos.result === "loading" || repos.result.kind !== "repos") return null;
-  if (repos.result.repos.length === 0) return null;
-  return <ScanLine role={props.role} />;
+  const repos = useListedRepos(props.getToken, props.onSessionEnded);
+  if (repos === null || repos.length === 0) return null;
+  return <ScanLine />;
 }
 
 /**
  * A Lead's or an Admin's line under the summary (#342): Scans start from Setup's Scan now, so "Scan now" links to
- * Setup's Repos, where the button is. A Member starts no Scan, so gets nothing.
+ * Setup's Repos, where the button is. Its callers show it only to a Role that `startsScans`.
  */
-function ScanLine({ role }: { role: Role | null }) {
-  if (!startsScans(role)) return null;
+function ScanLine() {
   return (
     <p className="setup-line">
       <a href={`/setup#${REPOS_ANCHOR}`}>Scan now</a> on Setup.
