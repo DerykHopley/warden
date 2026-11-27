@@ -99,11 +99,16 @@ function controlsReviewedNote(audit: AuditAnswer): string {
   return changed > 0 ? `${note}, ${changed} changed since` : note;
 }
 
+/** Quick's next step while the Team has no Scan, whether Quick is current or passed without one. */
+const NO_SCAN_YET = { progress: 0, notes: ["Next: the first Scan"] };
+
 /**
- * The three journey cards, Quick, Standard, Audit-ready, for a Team at `level`: a Level before it is done (a full
- * bar), after it not started (an empty bar). Quick's one part in the foundation is a Scan, so while current its bar
- * and next step follow `lastScanAt`. Standard has no parts yet, and Warden has no Standard rule: at Audit-ready it is
- * not started, never done, and says so. Audit-ready's note counts the Controls with a review in `audit`; current, its bar
+ * The three journey cards, Quick, Standard, Audit-ready, for a Team at `level`: a Level after it not started (an
+ * empty bar); a Level before it done (a full bar) only when its own rule holds, as the Level can pass it without:
+ * Audit-ready is reached on reviews alone. Quick's one part in the foundation is a Scan, so while current its bar
+ * and next step follow `lastScanAt`, and before the Level it is done only with a Scan, otherwise not started with the
+ * first Scan as its next step. Standard has no parts yet, and Warden has no Standard rule: at Audit-ready it is not
+ * started, never done, and says so. Audit-ready's note counts the Controls with a review in `audit`; current, its bar
  * is full, as the Level needs every Control reviewed.
  */
 export function journeyCards(
@@ -115,6 +120,9 @@ export function journeyCards(
   return Level.options.map((cardLevel, i) => {
     const state: JourneyState = i < at ? "done" : i === at ? "current" : "not-started";
     const card = { level: cardLevel, word: LEVEL_WORDS[cardLevel], adds: ADDS[cardLevel], state };
+    if (cardLevel === "quick" && state === "done" && lastScanAt === null) {
+      return { ...card, state: "not-started", ...NO_SCAN_YET };
+    }
     if (cardLevel === "standard" && level === "audit_ready") {
       return {
         ...card,
@@ -133,7 +141,7 @@ export function journeyCards(
     if (state === "done") return { ...card, progress: 100, notes: [] };
     if (state === "not-started" || cardLevel !== "quick")
       return { ...card, progress: 0, notes: [] };
-    if (lastScanAt === null) return { ...card, progress: 0, notes: ["Next: the first Scan"] };
+    if (lastScanAt === null) return { ...card, ...NO_SCAN_YET };
     return {
       ...card,
       progress: 100,
