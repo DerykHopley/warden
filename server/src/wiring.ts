@@ -69,7 +69,8 @@ export type { Judge, JudgeRunOutcome } from "./modules/guard/judge.ts";
  * anything (#489). Tests hand
  * it a fake `fetch` (for OpenRouter's call), a stub `resolve` (for the Team's own model's host) and a short timeout.
  * With Langfuse's keys in `settings.langfuse`, each run's paid calls are traced there (slice 7b), and a trace it
- * couldn't send goes to `logger`; tests hand it Langfuse's own fake `fetch` and timeout in `langfuse`.
+ * couldn't send goes to `logger`; tests hand it Langfuse's own fake `fetch` and timeout in `langfuse`, which default to
+ * the global `fetch` and TRACE_TIMEOUT_MS.
  */
 export function judge({
   withTeam,
@@ -85,7 +86,7 @@ export function judge({
   fetch?: Fetch;
   resolve?: UrlRule["resolve"];
   timeoutMs?: number;
-  logger?: Logger;
+  logger: Logger;
   langfuse?: { fetch?: Fetch; timeoutMs?: number };
 }): Judge {
   const judgeModels = createJudgeModels({ withTeam });
@@ -93,15 +94,10 @@ export function judge({
     agentSessions: createAgentSessions({ withTeam }),
     findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
     spending: createSpending({ withTeam }),
-    tracer:
+    tracing:
       settings.langfuse === undefined
         ? undefined
-        : createTracer({
-            ...settings.langfuse,
-            fetch: langfuse?.fetch ?? globalThis.fetch,
-            timeoutMs: langfuse?.timeoutMs,
-          }),
-    logger,
+        : { tracer: createTracer({ ...settings.langfuse, ...langfuse }), logger },
     async modelFor(team) {
       const own = await judgeModels.read(team);
       if (own !== undefined) {

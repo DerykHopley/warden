@@ -7,7 +7,7 @@
 // cost, for the spending ledger.
 import { z } from "zod";
 import { ConfigError } from "../../config.ts";
-import { CallFailed, callJson, timedOut, type Fetch } from "../../http-call.ts";
+import { CallFailed, callJson, failureCode, timedOut, type Fetch } from "../../http-call.ts";
 import { AddressRefused, type UrlRule } from "./judge-url.ts";
 import { AnswerTooLarge, pinnedFetch } from "./pinned-fetch.ts";
 
@@ -129,8 +129,7 @@ function callFailure(error: CallFailed): string {
     return `the Judge's model call was refused: ${cause.message}`;
   if (cause instanceof AnswerTooLarge) return `the Judge's model call failed: ${cause.message}`;
   if (timedOut(cause)) return error.message;
-  const code = (cause as { code?: unknown } | undefined)?.code;
-  const named = typeof code === "string" ? code : cause instanceof Error ? cause.name : "an error";
+  const named = failureCode(cause) ?? (cause instanceof Error ? cause.name : "an error");
   return `the Judge's model call failed: ${named}`;
 }
 

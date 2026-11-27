@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, inject, it } from "vi
 import { DEFAULT_JUDGE_MODEL, judgeSettings, type JudgeSettings } from "../src/config.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import type { Fetch } from "../src/http-call.ts";
+import { createTracer } from "../src/langfuse.ts";
 import { createLogger } from "../src/log.ts";
 import {
   createAgentSessions,
@@ -1061,6 +1062,55 @@ describe("a Judge run's trace (story 10, threat J7)", () => {
       "failed",
       "failed",
     ]);
+  });
+
+  it("sends a trace with the outcome limited for a run the limit stopped after a paid call", async () => {
+    const { team, sessionId } = await teamWithSession();
+    await spent(team, 0.96);
+    const langfuse = fakeLangfuse();
+
+    const { code } = await runJob(
+      team,
+      sessionId,
+      fakeOpenRouter(() => new Response("upstream error", { status: 500 })).fetch,
+      { settings: traced, langfuse: { fetch: langfuse.fetch } },
+    );
+
+    expect(code).toBe(0);
+    expect(langfuse.calls).toHaveLength(1);
+    expect(traceOutcome(langfuse.calls[0]!)).toBe("limited");
+    expect(generationsOf(langfuse.calls[0]!)).toEqual([
+      { outcome: "failed", cost: { total: UNPRICED_CALL_USD } },
+    ]);
+  });
+
+  it("still sends the trace when releasing a limited run's claim throws", async () => {
+    const { team, sessionId } = await teamWithSession();
+    await spent(team, 0.96);
+    const langfuse = fakeLangfuse();
+    const released = new Error("planted release failure");
+
+    const run = createJudge({
+      agentSessions: { ...sessions, release: () => Promise.reject(released) },
+      findings,
+      spending,
+      modelFor: () =>
+        Promise.resolve(
+          openRouterModel({
+            apiKey: KEY,
+            model: settings.model,
+            fetch: fakeOpenRouter(() => new Response("upstream error", { status: 500 })).fetch,
+          }),
+        ),
+      tracing: {
+        tracer: createTracer({ ...traced.langfuse!, fetch: langfuse.fetch }),
+        logger: createLogger(() => {}),
+      },
+    }).run(team, sessionId);
+
+    await expect(run).rejects.toBe(released);
+    expect(langfuse.calls).toHaveLength(1);
+    expect(traceOutcome(langfuse.calls[0]!)).toBe("limited");
   });
 
   it("calls a refused answer refused, and the run needs human review", async () => {

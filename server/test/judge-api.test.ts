@@ -163,6 +163,7 @@ it("opens one Open High Finding on the Agent session for a key sent to a pastebi
       withTeam,
       settings: judgeSettings({ OPENROUTER_API_KEY: KEY, WARDEN_JUDGE_MODEL: MODEL }),
       fetch: fake.fetch,
+      logger: createLogger(() => {}),
     }),
     logger: createLogger((line) => jobLines.push(line)),
   });
@@ -232,6 +233,7 @@ it("makes no call for a Team at its daily spending limit: the session stays unju
       withTeam,
       settings: judgeSettings({ OPENROUTER_API_KEY: KEY, WARDEN_JUDGE_MODEL: MODEL }),
       fetch: fake.fetch,
+      logger: createLogger(() => {}),
     }),
     logger: createLogger((line) => jobLines.push(line)),
   });
@@ -290,6 +292,7 @@ describe.each(INJECTION_CASES)("the injection fixture: $name", (injectionCase) =
         withTeam,
         settings: judgeSettings({ OPENROUTER_API_KEY: KEY, WARDEN_JUDGE_MODEL: MODEL }),
         fetch: fake.fetch,
+        logger: createLogger(() => {}),
       }),
       logger: createLogger(() => {}),
     });

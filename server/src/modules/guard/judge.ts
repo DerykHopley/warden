@@ -103,25 +103,33 @@ const FREE: Meter = {
 const cutEnding = (read: number, total: number) =>
   `The Judge read the last ${read} of ${total} events; the earlier ones were over its input cap.`;
 
+/** Where a run's trace goes when Langfuse's keys are set: the tracer, and the logger for a trace it couldn't send. */
+export type JudgeTracing = { tracer: Tracer; logger: Pick<Logger, "warn"> };
+
+/** The trace outcome for a run that ended as `ran`, or threw (undefined). */
+const traceOutcome = (ran: JudgeRunOutcome | undefined): JudgeTrace["outcome"] => {
+  if (ran?.kind === "judged") return ran.outcome;
+  if (ran?.kind === "limited") return "limited";
+  return "failed";
+};
+
 /**
  * `modelFor` gives the Team's model, asked only when there is a session to judge: its own (slice 6a) or OpenRouter's.
- * `spending` is the Team's ledger, read and added to only for a paid model. `tracer`, when Langfuse's keys are set,
- * gets each run's paid calls; `logger` gets a trace it couldn't send.
+ * `spending` is the Team's ledger, read and added to only for a paid model. `tracing`, when Langfuse's keys are set,
+ * gets each run's paid calls.
  */
 export function createJudge({
   agentSessions,
   findings,
   spending,
   modelFor,
-  tracer,
-  logger,
+  tracing,
 }: {
   agentSessions: Pick<AgentSessions, "claim" | "release" | "readEnded" | "markJudged">;
   findings: Pick<Findings, "report" | "listByRules">;
   spending: Spending;
   modelFor: (team: string) => Promise<JudgeModel>;
-  tracer?: Tracer;
-  logger?: Pick<Logger, "warn">;
+  tracing?: JudgeTracing;
 }): Judge {
   /** The Team's meter for `model`: the spending ledger's, for a paid model. */
   function meterFor(team: string, model: JudgeModel): Meter {
@@ -155,41 +163,31 @@ export function createJudge({
       if ("limited" in charge) return charge;
       let answer: ModelAnswer;
       const startedAt = new Date();
+      /** Adds this call to `traced`, for a paid model. */
+      const record = (
+        cost: Pick<TracedCall, "inputTokens" | "outputTokens" | "costUsd">,
+        outcome: TracedCall["outcome"],
+      ) => {
+        if (model.paid) {
+          traced.push({ model: model.model, ...cost, startedAt, endedAt: new Date(), outcome });
+        }
+      };
       try {
         answer = await model.complete(messages, {
           name: VERDICT_SCHEMA_NAME,
           schema: VERDICT_JSON_SCHEMA,
         });
       } catch (error) {
-        if (model.paid) {
-          traced.push({
-            model: model.model,
-            inputTokens: null,
-            outputTokens: null,
-            costUsd: mayBeBilled(error) ? UNPRICED_CALL_USD : 0,
-            startedAt,
-            endedAt: new Date(),
-            outcome: "failed",
-          });
-        }
+        const costUsd = mayBeBilled(error) ? UNPRICED_CALL_USD : 0;
+        record({ inputTokens: null, outputTokens: null, costUsd }, "failed");
         if (!mayBeBilled(error)) await charge.unbilled();
         if (!(error instanceof ModelCallFailed && error.retry) || call >= JUDGE_RUN_CALL_BUDGET) {
           throw error;
         }
         continue;
       }
-      if (model.paid) {
-        const { inputTokens, outputTokens, costUsd } = answeredCost(answer.usage);
-        traced.push({
-          model: model.model,
-          inputTokens,
-          outputTokens,
-          costUsd,
-          startedAt,
-          endedAt: new Date(),
-          outcome: answer.refusal ? "refused" : "answered",
-        });
-      }
+      const { inputTokens, outputTokens, costUsd } = answeredCost(answer.usage);
+      record({ inputTokens, outputTokens, costUsd }, answer.refusal ? "refused" : "answered");
       await charge.settle(answer.usage);
       return { answer };
     }
@@ -265,18 +263,13 @@ export function createJudge({
     outcome: JudgeTrace["outcome"],
     calls: TracedCall[],
   ): Promise<void> {
-    if (tracer === undefined || calls.length === 0) return;
+    if (tracing === undefined || calls.length === 0) return;
     try {
-      await tracer.sendJudgeRun({ team, outcome, calls });
+      await tracing.tracer.sendJudgeRun({ team, outcome, calls });
     } catch (error) {
       // The status or the connection's code alone: never Langfuse's answer body.
-      const reason =
-        error instanceof TraceNotSent
-          ? error.status === undefined
-            ? { code: error.code }
-            : { status: error.status }
-          : { code: "unknown" };
-      logger?.warn("judge trace not sent", reason);
+      const reason = error instanceof TraceNotSent ? error.reason : { code: "unknown" };
+      tracing.logger.warn("judge trace not sent", reason);
     }
   }
 
@@ -286,19 +279,22 @@ export function createJudge({
       if (claim.kind === "busy") return { kind: "busy" };
       if (claim.kind === "absent") return { kind: "skipped" };
       const traced: TracedCall[] = [];
-      let ran: JudgeRunOutcome;
+      let ran: JudgeRunOutcome | undefined;
       try {
-        ran = await judgeClaimed(team, sessionId, claim, traced);
-      } catch (error) {
-        // The run's own error is the one to report; a claim not cleared runs out after JUDGE_CLAIM_MINUTES.
-        await agentSessions.release(team, sessionId, claim).catch(() => undefined);
-        await sendTrace(team, "failed", traced);
-        throw error;
+        try {
+          ran = await judgeClaimed(team, sessionId, claim, traced);
+        } catch (error) {
+          // The run's own error is the one to report; a claim not cleared runs out after JUDGE_CLAIM_MINUTES.
+          await agentSessions.release(team, sessionId, claim).catch(() => undefined);
+          throw error;
+        }
+        if (ran.kind !== "judged") await agentSessions.release(team, sessionId, claim);
+        return ran;
+      } finally {
+        // After the session is marked or released, or the run threw: the trace is the last thing a run does, can't
+        // hold up its outcome, and is sent whatever the release did.
+        await sendTrace(team, traceOutcome(ran), traced);
       }
-      if (ran.kind !== "judged") await agentSessions.release(team, sessionId, claim);
-      // After the session is marked: the trace is the last thing a run does, and can't hold up its outcome.
-      await sendTrace(team, ran.kind === "judged" ? ran.outcome : "failed", traced);
-      return ran;
     },
   };
 }

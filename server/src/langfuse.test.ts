@@ -69,6 +69,30 @@ describe("createTracer", () => {
     expect(call!.headers.get("x-langfuse-ingestion-version")).toBe("4");
   });
 
+  it.each([
+    ["https://langfuse.test/langfuse", "https://langfuse.test/langfuse/api/public/otel/v1/traces"],
+    ["https://langfuse.test/langfuse/", "https://langfuse.test/langfuse/api/public/otel/v1/traces"],
+    ["https://langfuse.test/", "https://langfuse.test/api/public/otel/v1/traces"],
+  ])("keeps the base URL's path: %s posts to %s", async (baseUrl, url) => {
+    const fake = fakeLangfuse();
+    await createTracer({ ...KEYS, baseUrl, fetch: fake.fetch }).sendJudgeRun(RUN);
+
+    expect(fake.calls[0]!.url).toBe(url);
+  });
+
+  it("counts a 2xx as sent even when its body is lost", async () => {
+    const lostBody = new ReadableStream({
+      start(controller) {
+        controller.error(new Error("connection reset"));
+      },
+    });
+    const fake = fakeLangfuse(() => new Response(lostBody, { status: 200 }));
+
+    await expect(
+      createTracer({ ...KEYS, baseUrl: BASE_URL, fetch: fake.fetch }).sendJudgeRun(RUN),
+    ).resolves.toBeUndefined();
+  });
+
   it("holds a root span with the Team and the run's outcome, from the first call's start to the last one's end", async () => {
     const fake = fakeLangfuse();
     await createTracer({ ...KEYS, baseUrl: BASE_URL, fetch: fake.fetch }).sendJudgeRun(RUN);
@@ -135,7 +159,7 @@ describe("createTracer", () => {
     );
 
     expect(error).toBeInstanceOf(TraceNotSent);
-    expect(error).toMatchObject({ status: 500, code: undefined });
+    expect(error).toMatchObject({ reason: { status: 500 } });
   });
 
   it("throws TraceNotSent with the code timeout when Langfuse never answers within its timeout", async () => {
@@ -147,7 +171,7 @@ describe("createTracer", () => {
     );
 
     expect(error).toBeInstanceOf(TraceNotSent);
-    expect(error).toMatchObject({ status: undefined, code: "timeout" });
+    expect(error).toMatchObject({ reason: { code: "timeout" } });
     expect(TRACE_TIMEOUT_MS).toBe(5000);
   });
 
@@ -162,6 +186,6 @@ describe("createTracer", () => {
     );
 
     expect(error).toBeInstanceOf(TraceNotSent);
-    expect(error).toMatchObject({ status: undefined, code: "ECONNREFUSED" });
+    expect(error).toMatchObject({ reason: { code: "ECONNREFUSED" } });
   });
 });

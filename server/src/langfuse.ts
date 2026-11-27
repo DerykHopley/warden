@@ -6,7 +6,7 @@
 // only the Team id, the outcomes, and each call's model, tokens, cost and times: never a prompt, an event, an answer,
 // a summary, a session id or a developer, so nothing else handed to it can be sent.
 import { randomBytes } from "node:crypto";
-import { callJson, CallFailed, timedOut, type Fetch } from "./http-call.ts";
+import { callJson, CallFailed, failureCode, type Fetch } from "./http-call.ts";
 
 /** How long one trace may take to send: a run never waits longer on Langfuse. */
 export const TRACE_TIMEOUT_MS = 5_000;
@@ -31,23 +31,24 @@ export type TracedCall = {
 /** One Judge run that made at least one call: its Team, its outcome and its calls, in order. */
 export type JudgeTrace = {
   team: string;
-  outcome: "flagged" | "clean" | "needs_human_review" | "failed";
+  outcome: "flagged" | "clean" | "needs_human_review" | "limited" | "failed";
   calls: readonly TracedCall[];
 };
 
-/** A trace Langfuse didn't take: its answer's status, or the connection's error code (`timeout` for a timeout). */
+/** Why a trace wasn't sent: Langfuse's answer's status, or the connection's error code (`timeout` for a timeout). */
+export type NotSentReason = { status: number } | { code: string };
+
+/** A trace Langfuse didn't take; its `reason` is safe to log as is, never holding Langfuse's answer body. */
 export class TraceNotSent extends Error {
   override name = "TraceNotSent";
-  readonly status: number | undefined;
-  readonly code: string | undefined;
-  constructor(reason: { status: number } | { code: string }) {
+  readonly reason: NotSentReason;
+  constructor(reason: NotSentReason) {
     super(
       "status" in reason
         ? `Langfuse answered ${reason.status}`
         : `the trace wasn't sent: ${reason.code}`,
     );
-    this.status = "status" in reason ? reason.status : undefined;
-    this.code = "code" in reason ? reason.code : undefined;
+    this.reason = reason;
   }
 }
 
@@ -64,16 +65,6 @@ const attribute = (key: string, value: string): Attribute => ({
 
 const nanos = (at: Date) => (BigInt(at.getTime()) * 1_000_000n).toString();
 const hexId = (bytes: number) => randomBytes(bytes).toString("hex");
-
-/** The first `code` on the error or its causes: fetch puts a refused connection's on its cause. */
-function codeOf(error: unknown): string {
-  for (let at: unknown = error; at instanceof Error; at = at.cause) {
-    if (timedOut(at)) return "timeout";
-    const code = (at as { code?: unknown }).code;
-    if (typeof code === "string") return code;
-  }
-  return "unknown";
-}
 
 /** The OTLP/HTTP JSON body: a root span for the run, and a generation span per call under it. */
 function otlpBody(trace: JudgeTrace) {
@@ -124,15 +115,20 @@ function otlpBody(trace: JudgeTrace) {
   };
 }
 
+/** Langfuse's OTLP trace endpoint under `baseUrl`, keeping any path it has (a self-hosted Langfuse under `/langfuse`). */
+const tracesUrl = (baseUrl: string) =>
+  new URL("api/public/otel/v1/traces", baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).toString();
+
+/** The tracer for Langfuse at `baseUrl`; tests hand it a fake `fetch` and a short timeout. */
 export function createTracer({
   publicKey,
   secretKey,
   baseUrl,
-  fetch,
+  fetch = globalThis.fetch,
   timeoutMs = TRACE_TIMEOUT_MS,
-}: LangfuseSettings & { fetch: Fetch; timeoutMs?: number }): Tracer {
+}: LangfuseSettings & { fetch?: Fetch; timeoutMs?: number }): Tracer {
   const authorization = `Basic ${Buffer.from(`${publicKey}:${secretKey}`).toString("base64")}`;
-  const url = new URL("/api/public/otel/v1/traces", baseUrl).toString();
+  const url = tracesUrl(baseUrl);
   return {
     async sendJudgeRun(trace) {
       let answer;
@@ -153,10 +149,12 @@ export function createTracer({
           timeoutMs,
         });
       } catch (error) {
+        // An answer came before its body was lost: a 2xx means Langfuse took the trace.
         if (error instanceof CallFailed && error.status !== undefined) {
+          if (error.status >= 200 && error.status < 300) return;
           throw new TraceNotSent({ status: error.status });
         }
-        throw new TraceNotSent({ code: codeOf(error instanceof CallFailed ? error.cause : error) });
+        throw new TraceNotSent({ code: failureCode(error) ?? "unknown" });
       }
       if (!answer.ok) throw new TraceNotSent({ status: answer.status });
     },

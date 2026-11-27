@@ -260,17 +260,17 @@ export type JudgeSettings = {
 
 /**
  * LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, with LANGFUSE_BASE_URL or Langfuse's EU region: undefined with neither
- * key, so nothing is traced. One key without the other, or a base URL that isn't https, throws ConfigError naming the
- * variable, never its value.
+ * key, so nothing is traced and the base URL isn't read. One key without the other, or with the keys a base URL that
+ * isn't https, throws ConfigError naming the variable, never its value.
  */
 function readLangfuse(env: Record<string, string | undefined>): LangfuseSettings | undefined {
   const publicKey = env.LANGFUSE_PUBLIC_KEY || undefined;
   const secretKey = env.LANGFUSE_SECRET_KEY || undefined;
+  if (publicKey === undefined && secretKey === undefined) return undefined;
   const baseUrl = env.LANGFUSE_BASE_URL || DEFAULT_LANGFUSE_BASE_URL;
   if (!URL.canParse(baseUrl) || new URL(baseUrl).protocol !== "https:") {
     throw new ConfigError(["LANGFUSE_BASE_URL"]);
   }
-  if (publicKey === undefined && secretKey === undefined) return undefined;
   if (publicKey === undefined) throw new ConfigError(["LANGFUSE_PUBLIC_KEY"]);
   if (secretKey === undefined) throw new ConfigError(["LANGFUSE_SECRET_KEY"]);
   return { publicKey, secretKey, baseUrl };
