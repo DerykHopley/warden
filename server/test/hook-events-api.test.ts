@@ -778,7 +778,7 @@ describe("POST /api/hook/events: a SessionEnd starts the Judge (story 9, #444)",
 
   it("still answers 204 when the start throws, the session ended, with one line of its own: the Team and the error", async () => {
     const { team, token } = await teamWithToken();
-    const judge = fakeJudge(new Error("The Scan Job's jobs.run answered HTTP 503"));
+    const judge = fakeJudge(new Error("The Judge run's jobs.run answered HTTP 503"));
     const { app, lines, ownLines, flush } = eventsApp({ startJudgeJob: judge.start });
     const session = newSession();
 
@@ -798,7 +798,7 @@ describe("POST /api/hook/events: a SessionEnd starts the Judge (story 9, #444)",
       expect.objectContaining({
         severity: "WARNING",
         team,
-        error: expect.objectContaining({ message: "The Scan Job's jobs.run answered HTTP 503" }),
+        error: expect.objectContaining({ message: "The Judge run's jobs.run answered HTTP 503" }),
       }),
     ]);
     for (const line of [...lines, ...ownLines]) {

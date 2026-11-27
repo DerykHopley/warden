@@ -8,28 +8,44 @@ import { localJudgeJobStarter, localScanJobStarter, type Spawn } from "./local-s
 import type { Logger } from "./log.ts";
 import type { JudgeJobStarter, ScanJobStarter } from "./scans.ts";
 
-type Choice = Pick<Config, "scanJob" | "behindCloudRun">;
-type Deps = { logger: Logger; fetch?: Fetch; spawn?: Spawn };
+/** The config the choice reads: the named Cloud Run Job, if any, and whether the server runs on Cloud Run. */
+type StarterConfig = Pick<Config, "scanJob" | "behindCloudRun">;
+/** What either starter is built with: its logger, and the fetch or spawn it calls. */
+type StarterDeps = { logger: Logger; fetch?: Fetch; spawn?: Spawn };
 
-export function scanJobStarterFor(
-  config: Choice,
-  { logger, fetch, spawn }: Deps,
-): ScanJobStarter | undefined {
+/** The one choice both starters make, given the Cloud Run and the local factory. */
+function starterFor<Starter>(
+  config: StarterConfig,
+  { logger, fetch, spawn }: StarterDeps,
+  factories: {
+    cloudRun: (deps: { job: string; logger: Logger; fetch?: Fetch }) => Starter;
+    local: (deps: { logger: Logger; spawn?: Spawn }) => Starter;
+  },
+): Starter | undefined {
   if (config.scanJob !== undefined) {
-    return cloudRunScanJobStarter({ job: config.scanJob, logger, fetch });
+    return factories.cloudRun({ job: config.scanJob, logger, fetch });
   }
   if (config.behindCloudRun) return undefined;
-  return localScanJobStarter({ logger, spawn });
+  return factories.local({ logger, spawn });
+}
+
+export function scanJobStarterFor(
+  config: StarterConfig,
+  deps: StarterDeps,
+): ScanJobStarter | undefined {
+  return starterFor(config, deps, {
+    cloudRun: cloudRunScanJobStarter,
+    local: localScanJobStarter,
+  });
 }
 
 /** The Judge run's starter (#444), chosen as `scanJobStarterFor` chooses, from the same config. */
 export function judgeJobStarterFor(
-  config: Choice,
-  { logger, fetch, spawn }: Deps,
+  config: StarterConfig,
+  deps: StarterDeps,
 ): JudgeJobStarter | undefined {
-  if (config.scanJob !== undefined) {
-    return cloudRunJudgeJobStarter({ job: config.scanJob, logger, fetch });
-  }
-  if (config.behindCloudRun) return undefined;
-  return localJudgeJobStarter({ logger, spawn });
+  return starterFor(config, deps, {
+    cloudRun: cloudRunJudgeJobStarter,
+    local: localJudgeJobStarter,
+  });
 }

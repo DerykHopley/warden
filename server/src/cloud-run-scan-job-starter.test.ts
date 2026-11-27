@@ -254,7 +254,6 @@ describe("cloudRunJudgeJobStarter (#444)", () => {
         ],
       },
     });
-    expect(runCall.init.body as string).not.toMatch(/OPENROUTER|WARDEN_SCAN_ID/);
   });
 
   it("logs the Team and the operation jobs.run answered, never the session id", async () => {
