@@ -413,23 +413,51 @@ function optionWidth(words: readonly string[], i: number, options: Options): 1 |
   return options.takesValue(word, words[i + 1]) ? 2 : 1;
 }
 
-/** The index of the first word from `i` on that isn't an option or an option's value, `--` included. */
-function afterOptions(words: readonly string[], i: number, options: Options): number {
+/** One option as written: its name, and its value (`--opt=value`, or `--opt value`) when it has one. */
+type RunnerOption = { name: string; value: string | undefined };
+
+/** Called with each option a walk over a command's words steps over. */
+type OnOption = (option: RunnerOption) => void;
+
+/**
+ * The index of the first word from `i` on that isn't an option or an option's value, `--` included. `onOption` is
+ * told each option stepped over.
+ */
+function afterOptions(
+  words: readonly string[],
+  i: number,
+  options: Options,
+  onOption?: OnOption,
+): number {
   let at = i;
-  while (words[at]?.startsWith("-") && words[at] !== "--") at += optionWidth(words, at, options);
+  while (words[at]?.startsWith("-") && words[at] !== "--") {
+    const word = words[at]!;
+    const width = optionWidth(words, at, options);
+    const equals = word.indexOf("=");
+    onOption?.(
+      equals < 0
+        ? { name: word, value: width === 2 ? words[at + 1] : undefined }
+        : { name: word.slice(0, equals), value: word.slice(equals + 1) },
+    );
+    at += width;
+  }
   return at;
 }
 
 /**
  * Where the words after `runner` start when `words` start with it: its command by `commandName`, in any case, then
- * each subcommand word exactly, with the command's own options allowed before each.
+ * each subcommand word exactly, with the command's own options allowed before each. `onOption` is told each of those.
  */
-function argsAfterRunner(words: readonly string[], runner: Runner): number | undefined {
+function argsAfterRunner(
+  words: readonly string[],
+  runner: Runner,
+  onOption?: OnOption,
+): number | undefined {
   const [command, ...subcommand] = runner.words;
   if (words[0] === undefined || commandName(words[0]) !== command) return undefined;
   let at = 1;
   for (const word of subcommand) {
-    at = afterOptions(words, at, runner.globals ?? runner.options);
+    at = afterOptions(words, at, runner.globals ?? runner.options, onOption);
     if (words[at] !== word) return undefined;
     at += 1;
   }
@@ -461,12 +489,10 @@ function runnerTarget(
   return undefined;
 }
 
-/** One of a runner's own options as written: its name, and its value (`--opt=value`, or `--opt value`) when it has one. */
-type RunnerOption = { name: string; value: string | undefined };
-
 /**
- * A runner's own options: those between its words (`npm --registry x exec`), then those after them up to the first
- * argument or `--`, past a `fromOptions` package (`npx -p pkg --registry x bin`). What follows is the server's own.
+ * A runner's own options, by the walk that finds its words: those between its words (`npm --registry x exec`), then
+ * those after them up to the first argument or `--`, past a `fromOptions` package (`npx -p pkg --registry x bin`).
+ * What follows is the server's own. Empty when `words` don't start with `runner`.
  */
 function runnerOptions(
   words: readonly string[],
@@ -474,26 +500,15 @@ function runnerOptions(
   fromOptions: readonly string[],
 ): RunnerOption[] {
   const found: RunnerOption[] = [];
-  const read = (from: number, options: Options) => {
-    let at = from;
-    while (words[at]?.startsWith("-") && words[at] !== "--") {
-      const word = words[at]!;
-      const width = fromOptions.includes(word) ? 2 : optionWidth(words, at, options);
-      const equals = word.indexOf("=");
-      found.push(
-        equals < 0
-          ? { name: word, value: width === 2 ? words[at + 1] : undefined }
-          : { name: word.slice(0, equals), value: word.slice(equals + 1) },
-      );
-      at += width;
-    }
-    return at;
+  const onOption: OnOption = (option) => found.push(option);
+  const at = argsAfterRunner(words, runner, onOption);
+  if (at === undefined) return [];
+  const withPackage: Options = {
+    takesValue: (option, next) =>
+      fromOptions.includes(option) || runner.options.takesValue(option, next),
+    clusters: runner.options.clusters,
   };
-  let at = 1;
-  for (let i = 1; i < runner.words.length; i += 1) {
-    at = read(at, runner.globals ?? runner.options) + 1;
-  }
-  read(at, runner.options);
+  afterOptions(words, at, withPackage, onOption);
   return found;
 }
 
@@ -503,18 +518,10 @@ const isNpmRegistryOption = (name: string) =>
 /** The env keys npm reads as a registry, in any case: `npm_config_registry` and a scope's own. */
 const NPM_REGISTRY_ENV = /^npm_config_(?:@[^:]+:)?registry$/i;
 
-/** uv's and pipx's options that point a runner at an index other than PyPI, or at local packages. */
-const PYTHON_INDEX_OPTIONS = new Set([
-  "--index",
-  "--default-index",
-  "-i",
-  "--index-url",
-  "--extra-index-url",
-  "-f",
-  "--find-links",
-]);
-/** pip's own such options, which pipx passes through `--pip-args`. */
+/** pip's options that point it at an index other than PyPI, or at local packages; pipx passes them in `--pip-args`. */
 const PIP_INDEX_OPTIONS = ["-i", "--index-url", "--extra-index-url", "-f", "--find-links"];
+/** uv's and pipx's such options: pip's, and uv's own `--index` and `--default-index`. */
+const PYTHON_INDEX_OPTIONS = new Set([...PIP_INDEX_OPTIONS, "--index", "--default-index"]);
 /** The env keys uv and pip read as an index or a place to find packages. */
 const PYTHON_INDEX_ENV = new Set([
   ...["UV_INDEX", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_FIND_LINKS"],
@@ -522,7 +529,7 @@ const PYTHON_INDEX_ENV = new Set([
 ]);
 
 /** Whether a `--pip-args` value, split on white space with any quotes around it dropped, holds an index option. */
-const pipArgsSetIndex = (value: string | undefined) =>
+const pipArgsHaveIndex = (value: string | undefined) =>
   (value ?? "")
     .split(/\s+/)
     .map((word) => word.replace(/^["']|["']$/g, ""))
@@ -541,7 +548,7 @@ const CUSTOM_REGISTRY: Record<
   },
   pypi: {
     option: ({ name, value }) =>
-      PYTHON_INDEX_OPTIONS.has(name) || (name === "--pip-args" && pipArgsSetIndex(value)),
+      PYTHON_INDEX_OPTIONS.has(name) || (name === "--pip-args" && pipArgsHaveIndex(value)),
     envKey: (key) => PYTHON_INDEX_ENV.has(key),
   },
 };
@@ -557,8 +564,8 @@ function customRegistry(
 ): string | undefined {
   if (source === "container") return undefined;
   const { option, envKey } = CUSTOM_REGISTRY[source];
-  const set = options.find(option)?.name;
-  if (set !== undefined || !isObject(env)) return set;
+  const optionName = options.find(option)?.name;
+  if (optionName !== undefined || !isObject(env)) return optionName;
   return Object.entries(env).find(
     ([key, value]) => typeof value === "string" && value !== "" && envKey(key),
   )?.[0];
