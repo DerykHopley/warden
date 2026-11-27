@@ -3,24 +3,9 @@
 // by joining its parts, so the source never holds a whole one for a secret scanner to flag.
 import { Observation, SecretEvidence, type Asset } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { AWS_KEY, GITHUB_TOKEN } from "../../../test/secret-fixtures.ts";
+import { join, SECRET_OF_EACH_TYPE as SECRETS } from "../../../test/secret-fixtures.ts";
 import { packRule } from "./default-pack.ts";
 import { findSecrets, secretObservations } from "./secrets.ts";
-
-const join = (...parts: string[]) => parts.join("");
-
-/** One made-up secret of each type, with the type's name. */
-const SECRETS = {
-  "AWS access key id": AWS_KEY,
-  "GitHub token": GITHUB_TOKEN,
-  "private key": join("-----BEGIN ", "RSA PRIVATE KEY-----"),
-  "Stripe live secret key": join("sk", "_live_", "4eC39HqLyjWDarjtT1zdp7dc"),
-  "Slack token": join("xox", "b-", "123456789012-1234567890123-", "AbCdEfGhIjKlMnOpQrStUvWx"),
-  "Anthropic key": join("sk-", "ant-api03-", "Ab3".repeat(31)),
-  "OpenRouter key": join("sk-", "or-v1-", "0123456789abcdef".repeat(4)),
-  "OpenAI key": join("sk-", "proj-", "Zx9_Yw8-Vu7".repeat(4)),
-  "Google API key": join("AIza", "SyD3x9Kq2Lm8Np4Rs6Tv1Wx5Yz7Ab0Cd2Ef"),
-} as const;
 
 /** The other GitHub token prefixes, and a fine-grained one. */
 const GITHUB_TOKENS = [

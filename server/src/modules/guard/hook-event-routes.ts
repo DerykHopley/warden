@@ -1,6 +1,6 @@
 // The hook endpoint (spec #225, slice 1, #183): `POST /api/hook/events` takes each event Claude Code's managed hook
-// posts, with the Team's hook token, and stores what the Team's Privacy tier keeps of it under the developer's
-// pseudonym. Mounted by the app through `moduleRoutes` (ADR 0005), with no session sign-in: the hook token is the only
+// posts, with the Team's hook token, and stores what the Team's Privacy tier keeps of it, redacted (#184), under the
+// developer's pseudonym. Mounted by the app through `moduleRoutes` (ADR 0005), with no session sign-in: the hook token is the only
 // credential, and the Team comes from it alone, never from the body or another header (story 15, threat H2).
 // Nothing here logs (threat H7): the app's request line is the only line, and it holds no body, token or developer.
 import type { Context } from "hono";
@@ -14,6 +14,7 @@ import type { AgentSessions } from "./agent-sessions.ts";
 import type { HookSettings } from "./hook-settings.ts";
 import { HOOK_EVENTS, HOOK_EVENTS_PATH } from "./managed-settings.ts";
 import { developerOf, pseudonym } from "./pseudonym.ts";
+import { redactEvent } from "./redact-event.ts";
 import { filterToTier } from "./tier-filter.ts";
 
 /** Refused hook tokens an address may send in a minute; the next is held back for the rest of it (threat H1). */
@@ -182,14 +183,14 @@ export function hookEventRoutes({
       if (!STORED_EVENTS.has(name)) return c.body(null, 204);
 
       const { privacyTier } = await hookSettings.read(team);
-      const fields = filterToTier(event, privacyTier);
+      const fields = redactEvent(filterToTier(event, privacyTier));
       const developer = developerOf(c.req.header("X-Warden-Developer"));
       const refusedEvents = refused.take(team, sessionId);
       try {
         await agentSessions.store(team, {
           sessionId,
           name,
-          tool: fields.tool_name ?? null,
+          tool: typeof fields.tool_name === "string" ? fields.tool_name : null,
           fields,
           developer: developer === undefined ? null : pseudonym(pseudonymKey, team, developer),
           ended: name === "SessionEnd",
