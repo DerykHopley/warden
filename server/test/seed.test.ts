@@ -275,12 +275,13 @@ describe("seedRefusal", () => {
   // The Cloud SQL Auth Proxy listens on 127.0.0.1, and pg finds a password in PGPASSFILE's file, PGSERVICE's entry or
   // ~/.pgpass as well as PGPASSWORD: any of them makes the database count as hosted (#396).
   describe("on 127.0.0.1 with a password from a file or a service", () => {
-    /** A file check that says every path it's asked about exists, and records each one in `asked`. */
-    const pgpassEverywhere =
-      (asked: string[]) =>
+    /** A file check that gives the same answer, `exists`, for every path it's asked about, and records each one in
+     * `asked`. */
+    const recordingPgpass =
+      (exists: boolean, asked: string[]) =>
       (path: string): boolean => {
         asked.push(path);
-        return true;
+        return exists;
       };
     /** A file check that can't tell whether any path exists. */
     const cantTell = () => {
@@ -297,7 +298,7 @@ describe("seedRefusal", () => {
 
     it("with a .pgpass in HOME, needs the database's name and never seeds warden", () => {
       const asked: string[] = [];
-      expectHosted({ HOME: "/home/dev" }, pgpassEverywhere(asked), /~\/\.pgpass/);
+      expectHosted({ HOME: "/home/dev" }, recordingPgpass(true, asked), /~\/\.pgpass/);
       expect(new Set(asked)).toEqual(new Set(["/home/dev/.pgpass"]));
     });
 
@@ -329,12 +330,15 @@ describe("seedRefusal", () => {
 
     it("takes an empty PGPASSFILE or PGSERVICE, or no HOME, as no password", () => {
       for (const where of [{ PGPASSFILE: "" }, { PGSERVICE: "" }, { HOME: "" }, {}]) {
+        const asked: string[] = [];
         expect(
           seedRefusal(
             { PGHOST: "127.0.0.1", ...where, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
-            noPgpass,
+            recordingPgpass(false, asked),
           ),
         ).toBeUndefined();
+        // None of these sets HOME, so pg would read .pgpass in the working folder: that's where it looks (#476).
+        expect(asked).toEqual([".pgpass"]);
       }
     });
 
@@ -347,7 +351,7 @@ describe("seedRefusal", () => {
       ] as const) {
         it(`${name}: a .pgpass in the working folder needs the database's name and never seeds warden`, () => {
           const asked: string[] = [];
-          expectHosted(noHome, pgpassEverywhere(asked), /\.\/\.pgpass exists/);
+          expectHosted(noHome, recordingPgpass(true, asked), /\.\/\.pgpass exists/);
           expect(new Set(asked)).toEqual(new Set([".pgpass"]));
         });
 
