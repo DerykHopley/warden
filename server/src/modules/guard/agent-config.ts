@@ -780,10 +780,12 @@ type AgentRuns = { runs: string[]; tooDeep: boolean };
  * read, and spends nothing. The budget is per command and per nesting: a shell's string is read while fewer than
  * `budget` strings read here hold it among their arguments, so a command after `;`, `&&`, `||`, `|`, `&` or a newline
  * starts with all of it, while shells among one command's own words (`sudo bash -c x bash -c y`), whose arguments
- * each run to that command's end, share it. A string past it isn't read, and `tooDeep` says so. A shell named among
- * an earlier shell's options (`sudo bash -o bash -c x`, the second) is one of its words, not a shell. The next run is
- * looked for after an agent run ends, so no text is in two; a shell run hides nothing, as the runs among its arguments
- * (`bash script.sh $(claude …)`) are outside its `-c` string's quotes and run before it.
+ * each run to that command's end, share it, as do the shells inside one agent run's arguments (`claude -p $(bash -c
+ * x) $(bash -c y)`). A string past it isn't read, and `tooDeep` says so. A shell named among an earlier shell's
+ * options (`sudo bash -o bash -c x`, the second) is one of its words, not a shell. The next agent run is looked for
+ * after an agent run ends, so no text is in two, but a shell run inside one still has its `-c` string read, as the
+ * agent run's arguments mask that string as a quote; a shell run hides nothing, as the runs among its arguments (`bash
+ * script.sh $(claude …)`) are outside its `-c` string's quotes and run before it.
  */
 function agentRuns(command: string, budget: ShellBudget): AgentRuns {
   const masked = withQuotesMasked(command);
@@ -799,9 +801,10 @@ function agentRuns(command: string, budget: ShellBudget): AgentRuns {
   let options = -1;
   for (let i = 0; i < starts.length; i++) {
     const { start, shell } = starts[i]!;
-    // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run, and a shell named
-    // among an earlier shell's options (`-o`'s value) is one of that shell's words.
-    if (start < end || (shell && start <= options)) continue;
+    // An agent run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run, and a shell
+    // named among an earlier shell's options (`-o`'s value) is one of that shell's words. A shell run inside an agent
+    // run's arguments (`claude -p $(bash -c '…')`) still has its string read: those arguments mask it as a quote.
+    if ((!shell && start < end) || (shell && start <= options)) continue;
     const inBackquotes = inBackquotesAt(start);
     const argumentsEnd = (limit?: number) => runArgumentsEnd(masked, start, inBackquotes, limit);
     if (!shell) {
@@ -830,7 +833,9 @@ function agentRuns(command: string, budget: ShellBudget): AgentRuns {
       continue;
     }
     const stop = argumentsEnd();
-    holding.push(stop);
+    // A shell inside an agent run's arguments holds the rest of them, as a shell among one command's words holds the
+    // rest of that command, so the shells there share one budget. Any other shell's arguments end past an agent run's.
+    holding.push(Math.max(stop, end));
     // Its words before the next run's, or to its end, held a string, so its words to its end do too.
     const script = commandString(shellWords(command.slice(start, stop)));
     const inner = agentRuns(typeof script === "string" ? script : "", left - 1);
