@@ -223,4 +223,26 @@ describe("localJudgeJobStarter (#444)", () => {
     ]);
     for (const line of lines) expect(line).not.toContain(SESSION.sessionId);
   });
+
+  it("with waitForExit (the daily Job's sweep, #499), resolves only once the run has exited, whatever its code", async () => {
+    const fake = fakeSpawn();
+    const start = localJudgeJobStarter({
+      logger: createLogger(() => {}),
+      env: SERVER_ENV,
+      spawn: fake.spawn,
+      waitForExit: true,
+    });
+    let resolved = false;
+    const started = start(SESSION).then(() => {
+      resolved = true;
+    });
+
+    fake.child.emit("spawn");
+    await new Promise((settle) => setImmediate(settle));
+    expect(resolved).toBe(false);
+
+    fake.child.emit("exit", 1, null);
+    await started;
+    expect(resolved).toBe(true);
+  });
 });

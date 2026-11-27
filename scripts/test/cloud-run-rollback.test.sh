@@ -180,7 +180,8 @@ assert_equal "the daily Job's whole configuration is set: daily-expiry.ts, one r
 assert_equal "the daily Job's whole configuration is set: its plain values" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_app
-PGDATABASE=warden" \
+PGDATABASE=warden
+WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan" \
   "$(gcloud_dict "$(flag set-env-vars "$job")")"
 job_secrets=$(gcloud_dict "$(flag set-secrets "$job")")
 assert_equal "the daily Job's whole configuration is set: its two passwords" \

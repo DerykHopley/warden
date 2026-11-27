@@ -9,7 +9,8 @@ Cloud Scheduler. Nothing long runs in the service after it answers, and nothing 
 | A Scan started by a request (a Lead's "scan now", a webhook) | One execution of the Scan job | Warden's service, after the Role check (ADR 0008), through `jobs.run` with the Scan's id and Team as an override |
 | The daily expiry job (reopens Accepted Findings past their expiry) | One execution of the daily job | Cloud Scheduler, once a day, through `jobs.run` |
 | Patch's CVE refresh (built: Patch spec #101, #159) | A step in the daily job, run for each Team after its expiry: one Patch Scan per Product, plus one per Product Asset with an Open or Accepted Patch Finding and no Product row (a delete whose Scan failed), which turns those Findings Fixed | Cloud Scheduler, with the daily job |
-| The Judge (Guard spec) | One execution of the Scan Job per ended Agent session, as a Spot run, with `WARDEN_SESSION_ID` and `WARDEN_TEAM` as its only override (#443, #444) | Warden's service on each stored `SessionEnd` (#444), plus a scheduled sweep for any missed (Guard spec, slice 8) |
+| Guard's delete and sweep (built: Guard spec #225, #499) | A step in the daily job, run for each Team after Patch's: deletes the Team's Agent events received more than 7 days ago, then starts a Judge run for each missed Agent session (ended over 10 minutes ago, holding events, with no claim in force) | Cloud Scheduler, with the daily job |
+| The Judge (Guard spec) | One execution of the Scan Job per ended Agent session, as a Spot run, with `WARDEN_SESSION_ID` and `WARDEN_TEAM` as its only override (#443, #444) | Warden's service on each stored `SessionEnd` (#444), plus the daily Job's Guard step, which starts one for each missed session, at most 50 a Team a day, oldest first (#499) |
 
 ## How
 
@@ -43,6 +44,9 @@ Cloud Scheduler. Nothing long runs in the service after it answers, and nothing 
   Run's advice), with `roles/secretmanager.secretAccessor` on each secret it needs. Who may start each job:
   - Warden's service account, with `roles/run.jobsExecutorWithOverrides` on the Scan job only. `roles/run.invoker`
     can't pass overrides.
+  - The daily Job's account, `warden-daily`, with the same role on the live Scan job only, never a preview's: its
+    Guard step starts a Judge run for each missed Agent session, with the session's id and Team as the override
+    (#499). It names the job in `WARDEN_SCAN_JOB` and reads no model or Langfuse key: the run reads its own.
   - Cloud Scheduler, as its own service account `warden-scheduler`, with `roles/run.invoker` on the daily job
     (`warden-daily-expiry`) only. Scheduler starts it without overrides, and `run.invoker` holds `run.jobs.run`
     (the limits table below), so it needs nothing wider than that: narrower than `run.jobsExecutorWithOverrides`.

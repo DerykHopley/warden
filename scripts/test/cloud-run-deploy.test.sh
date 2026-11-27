@@ -551,13 +551,14 @@ assert_equal "release: the daily Job runs node server/src/daily-expiry.ts" "node
 assert_equal "release: the daily Job has the Cloud SQL instance attached" "$connection" \
   "$(flag set-cloudsql-instances "$daily")"
 assert_equal "release: the daily Job retries once" 1 "$(flag max-retries "$daily")"
-assert_equal "release: the daily Job's plain values: as warden_app on warden" \
+assert_equal "release: the daily Job's plain values: as warden_app on warden, starting Judge runs as warden-scan (#499)" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_app
-PGDATABASE=warden" \
+PGDATABASE=warden
+WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan" \
   "$(gcloud_dict "$(flag set-env-vars "$daily")")"
 daily_secrets=$(gcloud_dict "$(flag set-secrets "$daily")")
-assert_equal "release: the daily Job's secrets: the app password and the admin password" \
+assert_equal "release: the daily Job's secrets: the app password and the admin password, no model or Langfuse key" \
   "PGPASSWORD=warden-db-app-password
 WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
   "$(sed 's/:[^:]*$//' <<<"$daily_secrets")"
@@ -645,6 +646,15 @@ for mode in preview release; do
     "${args[0]}" "${scan_names[@]}" judge
   assert_no_match "$mode with the Judge's keys: the revision gets none of them" \
     'OPENROUTER|LANGFUSE|openrouter|langfuse' "$(call_of "gcloud run deploy $service ")"
+  if [[ $mode == release ]]; then
+    # The daily Job starts Judge runs as the Scan Job, which reads its own keys (#499).
+    daily=$(call_of "gcloud run jobs update warden-daily-expiry ")
+    assert_line "release with the Judge's keys: the daily Job names the Scan Job in WARDEN_SCAN_JOB" \
+      "WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan" \
+      "$(gcloud_dict "$(flag set-env-vars "$daily")")"
+    assert_no_match "release with the Judge's keys: the daily Job still gets no model or Langfuse secret" \
+      'OPENROUTER|LANGFUSE|openrouter|langfuse' "$daily"
+  fi
 
   run_deploy 200 ok WARDEN_JUDGE_KEYS= -- "${args[@]}"
   [[ $code == 0 ]] || fail "$mode with WARDEN_JUDGE_KEYS empty failed (exit $code): $out"

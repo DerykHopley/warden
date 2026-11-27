@@ -49,3 +49,25 @@ export function judgeJobStarterFor(
     local: localJudgeJobStarter,
   });
 }
+
+/**
+ * The daily Job's Judge run starter (#499), for Guard's sweep of missed sessions. The Job loads no server config, so
+ * the same choice is made from its own environment: WARDEN_SCAN_JOB names the Cloud Run Job (an empty value counts as
+ * unset, as in `loadConfig`), and CLOUD_RUN_JOB, which Cloud Run sets in every Job's task, says it runs there. On
+ * Cloud Run the Job keeps no model key: the run it starts reads its own. Off Cloud Run, the child it starts gets the
+ * Job's own Judge variables, as the server's does, and each start waits for the child's exit, so a sweep of up to
+ * JUDGE_SWEEP_LIMIT sessions per Team runs one child at a time.
+ */
+export function dailyJudgeJobStarterFor(
+  env: Record<string, string | undefined>,
+  deps: StarterDeps,
+): JudgeJobStarter | undefined {
+  return starterFor(
+    { scanJob: env.WARDEN_SCAN_JOB || undefined, behindCloudRun: Boolean(env.CLOUD_RUN_JOB) },
+    deps,
+    {
+      cloudRun: cloudRunJudgeJobStarter,
+      local: (local) => localJudgeJobStarter({ ...local, waitForExit: true }),
+    },
+  );
+}

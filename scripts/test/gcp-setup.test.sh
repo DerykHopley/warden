@@ -132,8 +132,9 @@ assert_equal "only the two services and the two Scan Jobs' accounts read warden-
 --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com" \
   "$(grep -F "add-iam-policy-binding warden-github-app-private-key " <<<"$output" | grep -o -- '--member=[^ ]*' |
     sort)"
-assert_equal "executor with overrides: warden-run on warden-scan and warden-preview-run on warden-scan-preview, no other" \
+assert_equal "executor with overrides: warden-run and warden-daily on warden-scan, warden-preview-run on warden-scan-preview, no other" \
   "gcloud run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides --project=$project
+gcloud run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-daily@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides --project=$project
 gcloud run jobs add-iam-policy-binding warden-scan-preview --region=europe-west1 --member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides --project=$project" \
   "$(grep -F 'roles/run.jobsExecutorWithOverrides' <<<"$output")"
 
@@ -179,11 +180,17 @@ iam warden-scan@$project.iam.gserviceaccount.com roles/iam.serviceAccountUser
 projects $project roles/run.developer" \
   "$(bindings_to warden-deploy)"
 
-assert_equal "warden-daily gets Cloud SQL client and the app and admin passwords, nothing else" \
+# Guard's daily step (#499) starts a Judge run for each missed Agent session as an execution of the live Scan Job,
+# with the session's id and Team as an override: executor with overrides on warden-scan alone, never a preview Job, and
+# no model or Langfuse key, which the run reads as warden-scan.
+assert_equal "warden-daily gets Cloud SQL client, the app and admin passwords and executor with overrides on warden-scan, nothing else" \
   "projects $project roles/cloudsql.client
+run warden-scan roles/run.jobsExecutorWithOverrides
 secrets warden-db-admin-password roles/secretmanager.secretAccessor
 secrets warden-db-app-password roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-daily)"
+assert_equal "warden-daily binds on no preview Job" "" \
+  "$(grep -F -- "--member=serviceAccount:warden-daily@" <<<"$output" | grep -E 'preview' || true)"
 assert_line "it makes the warden-daily service account" \
   "gcloud iam service-accounts create warden-daily '--display-name=Warden: warden-daily' --project=$project"
 assert_equal "only warden-daily reads the admin password" \
@@ -225,8 +232,9 @@ assert_equal "the preview Scan Job's only members are warden-preview-run and war
   "--member=serviceAccount:warden-preview-deploy@$project.iam.gserviceaccount.com
 --member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com" \
   "$(grep -F 'add-iam-policy-binding warden-scan-preview ' <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
-assert_equal "the live Scan Job's only member is warden-run" \
-  "--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
+assert_equal "the live Scan Job's only members are warden-run and warden-daily (#499)" \
+  "--member=serviceAccount:warden-daily@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-run@$project.iam.gserviceaccount.com" \
   "$(grep -F 'add-iam-policy-binding warden-scan ' <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
 
 assert_equal "warden-preview-migrate gets Cloud SQL client and the preview migrate password, nothing else" \
@@ -1037,7 +1045,8 @@ for binding in \
   "secrets add-iam-policy-binding warden-langfuse-public-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "secrets add-iam-policy-binding warden-langfuse-secret-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "iam service-accounts add-iam-policy-binding warden-scan@$project.iam.gserviceaccount.com --member=serviceAccount:warden-deploy@$project.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser" \
-  "run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides"; do
+  "run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides" \
+  "run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-daily@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides"; do
   assert_line "a rerun before the Scan Job binds: ${binding%% --member*} ${binding##*--role=}" "$binding" "$calls"
 done
 
