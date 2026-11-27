@@ -27,7 +27,7 @@ export async function fetchHookSettings(getToken: GetToken): Promise<HookSetting
 }
 
 /** A change's refusals: nothing was changed. */
-type ChangeRefused =
+export type ChangeRefused =
   /** 403: only an Admin changes the hook. */
   | { kind: "forbidden" }
   /** Any other refusal, in the server's words when it gave some. */

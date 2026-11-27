@@ -1592,6 +1592,124 @@ describe("SetupPage: Agent hook (story 7)", () => {
     expect(stored(sessionStorage)).not.toContain(TOKEN);
     expect(location.href).not.toContain(TOKEN);
   });
+
+  it("asks /api/me again on each later 403, after a section's 403 has already asked once", async () => {
+    const { refreshMe } = renderSetup("admin", {
+      githubApp: () => json(403, { error: "Only an Admin can do this" }),
+      issueHookToken: () => json(403, { error: "Only an Admin can do this" }),
+    });
+    await vi.waitFor(() => expect(refreshMe).toHaveBeenCalledOnce());
+    const issue = await hook().findByRole("button", { name: "Issue a hook token" });
+
+    await userEvent.click(issue);
+    await hook().findByRole("alert");
+    await vi.waitFor(() => expect(refreshMe).toHaveBeenCalledTimes(2));
+    await userEvent.click(issue);
+    await vi.waitFor(() => expect(refreshMe).toHaveBeenCalledTimes(3));
+  });
+
+  it("keeps the tier picker still while the confirm is open, so Rotate is never left disabled with no Cancel", async () => {
+    renderSetup("admin", {
+      hook: () => json(200, hookSettings({ issuedAt: ISSUED_AT, previousUntil: PREVIOUS_UNTIL })),
+    });
+    const rotate = await hook().findByRole("button", { name: "Rotate the hook token" });
+
+    await userEvent.click(rotate);
+    expect(picker()).toBeDisabled();
+    await userEvent.click(hook().getByRole("button", { name: "Cancel" }));
+
+    expect(picker()).toBeEnabled();
+    expect(rotate).toBeEnabled();
+  });
+
+  it("reads the settings again after a failed rotation, so a second rotation still asks first", async () => {
+    let reads = 0;
+    renderSetup("admin", {
+      // Another Admin rotated while this page was open: the second read has a token before the current one.
+      hook: () =>
+        json(
+          200,
+          hookSettings({
+            issuedAt: ISSUED_AT,
+            previousUntil: ++reads === 1 ? null : PREVIOUS_UNTIL,
+          }),
+        ),
+      issueHookToken: () => json(500, { error: "Internal error" }),
+    });
+    const rotate = await hook().findByRole("button", { name: "Rotate the hook token" });
+
+    await userEvent.click(rotate);
+    await hook().findByRole("alert");
+    await vi.waitFor(() => expect(callsTo("/api/hook")).toHaveLength(2));
+    await hook().findByText(`The token before it works until ${dayAndTimeWords(PREVIOUS_UNTIL)}.`);
+    await userEvent.click(rotate);
+
+    expect(hook().getByRole("group")).toBeInTheDocument();
+    expect(tokenPosts()).toHaveLength(1);
+  });
+
+  it("puts the held token in the block only while the settings describe that token", async () => {
+    const NEWER = "2026-11-26T11:00:00.000Z";
+    renderSetup("admin", { issueHookToken: () => issued(), setPrivacyTier: tierSet(NEWER) });
+    await userEvent.click(await hook().findByRole("button", { name: "Issue a hook token" }));
+    await hook().findByText(TOKEN);
+
+    // The PUT's answer describes a token another Admin issued since.
+    await userEvent.selectOptions(picker(), "content");
+
+    await vi.waitFor(() => expect(block().hooks).toHaveProperty("UserPromptSubmit"));
+    expect(authorizations().every((header) => header === `Bearer ${HOOK_TOKEN_PLACEHOLDER}`)).toBe(
+      true,
+    );
+  });
+
+  it("keeps Rotate and the tier picker from running at once", async () => {
+    const post = deferred<Response>();
+    const put = deferred<Response>();
+    renderSetup("admin", {
+      hook: () => json(200, hookSettings({ issuedAt: ISSUED_AT })),
+      issueHookToken: () => post.promise,
+      setPrivacyTier: () => put.promise,
+    });
+    const rotate = await hook().findByRole("button", { name: "Rotate the hook token" });
+
+    await userEvent.click(rotate);
+    await vi.waitFor(() => expect(tokenPosts()).toHaveLength(1));
+    expect(picker()).toBeDisabled();
+    await act(async () => post.resolve(issued()));
+    await hook().findByText(TOKEN);
+
+    await userEvent.selectOptions(picker(), "content");
+    await vi.waitFor(() => expect(callsTo("/api/hook/privacy-tier")).toHaveLength(1));
+    expect(rotate).toBeDisabled();
+    await act(async () => put.resolve(tierSet(ISSUED_AT)({ privacy_tier: "content" })));
+    await vi.waitFor(() => expect(rotate).toBeEnabled());
+  });
+
+  it("drops Copied. once a tier change changes the block", async () => {
+    renderSetup("admin", { setPrivacyTier: tierSet(null) });
+    await userEvent.click(await hook().findByRole("button", { name: "Copy block" }));
+    expect(await hook().findByText(COPIED)).toBeInTheDocument();
+
+    await userEvent.selectOptions(picker(), "content");
+
+    await vi.waitFor(() => expect(block().hooks).toHaveProperty("UserPromptSubmit"));
+    expect(hook().queryByText(COPIED)).toBeNull();
+  });
+
+  it("on a refused Rotate again, puts focus on Rotate", async () => {
+    renderSetup("admin", {
+      hook: () => json(200, hookSettings({ issuedAt: ISSUED_AT, previousUntil: PREVIOUS_UNTIL })),
+      issueHookToken: () => json(500, { error: "Internal error" }),
+    });
+    const rotate = await hook().findByRole("button", { name: "Rotate the hook token" });
+    await userEvent.click(rotate);
+
+    await userEvent.click(hook().getByRole("button", { name: "Rotate again" }));
+
+    await hook().findByRole("alert");
+    await vi.waitFor(() => expect(rotate).toHaveFocus());
+  });
 });
 
 function renderGitHubSetup(search: string, role: Role = "admin", routes: Routes = {}) {

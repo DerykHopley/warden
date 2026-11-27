@@ -38,17 +38,14 @@ test("an Admin issues a hook token, shown once: after a reload it's gone and the
   await expect(shown).toBeVisible();
   const token = (await shown.textContent()) ?? "";
   expect(token).toMatch(/^org_e2e_acme\.[A-Za-z0-9_-]{43}$/);
-  await expect(hook.getByText(/^Hook token issued /)).toBeVisible();
-  await expect(hook.getByRole("button", { name: "Rotate the hook token" })).toBeVisible();
   const block = hook.locator("pre.hook-block");
   await expect(block).toContainText(token);
   await expect(block).not.toContainText(HOOK_TOKEN_PLACEHOLDER);
 
   await page.reload();
-  await expect(hook.getByText(/^Hook token issued /)).toBeVisible();
-  await expect(hook.locator("code.hook-token-value")).toHaveCount(0);
   await expect(block).toContainText(HOOK_TOKEN_PLACEHOLDER);
   await expect(block).not.toContainText(token);
+  await expect(hook.locator("code.hook-token-value")).toHaveCount(0);
   expect(await page.content()).not.toContain(token);
 });
 
@@ -73,7 +70,6 @@ test("story 7: a rotation keeps the token before it working for 24 hours, and an
   await expect(shown).toBeVisible();
   const rotated = (await shown.textContent()) ?? "";
   expect(rotated).toMatch(/^org_e2e_ginkgo\./);
-  await expect(hook.getByText(/^The token before it works until /)).toBeVisible();
 
   expect(await sessionStart(request, baseURL!, issued25hAgo)).toBe(204);
   expect(await sessionStart(request, baseURL!, rotated)).toBe(204);

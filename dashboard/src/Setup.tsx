@@ -38,6 +38,12 @@ import { HookSection } from "./HookSection.tsx";
 import { useLandOnAnchor } from "./land-on-anchor.ts";
 import { goTo } from "./navigate.ts";
 import {
+  useReportAnswered,
+  type AskingSection,
+  type OnAnswered,
+  type SectionProps,
+} from "./setup-section.ts";
+import {
   CATALOGUES_ANCHOR,
   cataloguesChanged,
   fetchCatalogues,
@@ -53,8 +59,6 @@ const READ_AGAIN_MS = 5_000;
 const findLandingHeading = (anchor: string) =>
   anchor === REPOS_ANCHOR || anchor === CATALOGUES_ANCHOR ? document.getElementById(anchor) : null;
 
-/** A Setup section that asks Warden's server something before it shows, its waiting line in its place until then. */
-type AskingSection = "github" | "write" | "grants" | "repos" | "catalogues" | "hook";
 /** The sections that ask for anyone: only an Admin's GitHub and agent hook sections ask for their settings. */
 const ASKING_FOR_ANYONE: readonly AskingSection[] = ["grants", "repos", "catalogues"];
 const ASKING_FOR_AN_ADMIN: readonly AskingSection[] = [
@@ -65,16 +69,6 @@ const ASKING_FOR_AN_ADMIN: readonly AskingSection[] = [
 ];
 /** Setup's anchor for the Agent hook section. */
 const HOOK_ANCHOR = "setup-hook";
-/** Tells Setup a section's call has answered, so its waiting line is gone. */
-type OnAnswered = (section: AskingSection) => void;
-type SectionProps = PageProps & { onAnswered: OnAnswered };
-
-/** Once `answered` first turns true, tells Setup that `section` has. */
-function useReportAnswered(answered: boolean, section: AskingSection, onAnswered: OnAnswered) {
-  useEffect(() => {
-    if (answered) onAnswered(section);
-  }, [answered, section, onAnswered]);
-}
 const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
 /** The write app's Setup URL's path, `WriteAppSetupPage`'s route. */
 const WRITE_SETUP_PATH = "/setup/github/write";
@@ -138,7 +132,8 @@ function useOnce(call: () => void): () => void {
 
 export function SetupPage(props: PageProps) {
   // Each app's 403 says the same thing, that the Role changed since /api/me answered, so the app sections share one
-  // ask for the Role (#325). Scan now's 403 is a later click, so the repo list keeps the shell's own refreshMe.
+  // ask for the Role (#325), and the agent hook's settings join it. Scan now's 403, and a hook rotation's or tier
+  // change's, are later clicks, so the repo list and the hook's changes keep the shell's own refreshMe.
   const roleChanged = useOnce(props.refreshMe);
   // Opened at `#setup-repos` (Findings' "Scan now" link, #342) or `#setup-catalogues` (the Overview's Setup pointer),
   // the heading comes into view once every section that asks has answered: one still waiting above it would push it
@@ -154,7 +149,6 @@ export function SetupPage(props: PageProps) {
     findLandingHeading,
   );
   const sectionProps = { ...props, onAnswered };
-  const hookAnswered = useCallback(() => onAnswered("hook"), [onAnswered]);
   return (
     <>
       <h1>Setup</h1>
@@ -182,7 +176,7 @@ export function SetupPage(props: PageProps) {
       </section>
       <section className="setup-section" aria-labelledby={HOOK_ANCHOR}>
         <h2 id={HOOK_ANCHOR}>Agent hook</h2>
-        <HookSection {...props} refreshMe={roleChanged} onAnswered={hookAnswered} />
+        <HookSection {...sectionProps} roleChanged={roleChanged} />
       </section>
     </>
   );

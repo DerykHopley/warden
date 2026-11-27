@@ -219,6 +219,8 @@ agent hook."
    - Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
 
    The block sends the laptop's `USER` as `X-Warden-Developer`: Warden stores only a pseudonym of it, never the name.
+   Windows sets `USERNAME`, not `USER`, so a Windows laptop sends no developer unless `USER` is set there, and its
+   sessions are stored without a pseudonym.
    Moving the tier to or from Content changes the block (Content adds the prompt event), so paste it again on every
    laptop after such a change.
 4. **Rotate a token that leaked.** Choose **Rotate the hook token** and paste the new block. The token before it keeps

@@ -4,17 +4,16 @@
 import { PrivacyTier, type HookSettingsBody } from "@warden/contracts";
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn } from "./api.ts";
-import type { PageProps } from "./App.tsx";
 import { dayAndTimeWords } from "./date-words.ts";
 import {
   blockText,
   fetchHookSettings,
   issueHookToken,
   setPrivacyTier,
+  type ChangeRefused,
   type HookSettingsResult,
-  type IssueResult,
-  type TierResult,
 } from "./hook.ts";
+import { useReportAnswered, type SectionProps } from "./setup-section.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 const ADMIN_DOES = "An Admin turns on the agent hook.";
@@ -29,10 +28,13 @@ const TIER_WORDS: Record<PrivacyTier, string> = {
   content: "Content: adds tool output and prompts",
 };
 
+/** What takes focus once the next render lands: the confirm's Cancel, Rotate, or Copy token. */
+type FocusTarget = "cancel" | "rotate" | "copy-token";
+/** What a Copy button copies. */
+type CopyWhat = "token" | "block";
+
 /** A refused change in words, or null for a session that ended (the shell signs out). */
-function refusalWords(
-  result: Exclude<IssueResult | TierResult, { kind: "issued" | "set" }>,
-): string | null {
+function refusalWords(result: ChangeRefused): string | null {
   switch (result.kind) {
     case "forbidden":
       return ONLY_ADMIN;
@@ -62,11 +64,14 @@ async function copied(text: string): Promise<boolean> {
   }
 }
 
-type HookSectionProps = PageProps & { onAnswered: () => void };
+type HookSectionProps = SectionProps & {
+  /** Setup's one ask for the Role, which the GitHub sections' 403s share as the page opens. */
+  roleChanged: () => void;
+};
 
 /**
- * An Admin's hook settings; a Lead or a Member reads who turns it on, and the hook routes are never called. `onAnswered`
- * tells Setup the settings have answered: only an Admin's Setup waits for them.
+ * An Admin's hook settings; a Lead or a Member reads who turns it on, and the hook routes are never called. Only an
+ * Admin's Setup waits for the settings to answer.
  */
 export function HookSection(props: HookSectionProps) {
   return props.me.role === "admin" ? (
@@ -76,22 +81,30 @@ export function HookSection(props: HookSectionProps) {
   );
 }
 
-function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: HookSectionProps) {
+function HookSettings({
+  getToken,
+  me,
+  onSessionEnded,
+  refreshMe,
+  roleChanged,
+  onAnswered,
+}: HookSectionProps) {
   const ask = useCallback(() => fetchHookSettings(getToken), [getToken]);
   const call = useWardenCall<HookSettingsResult>(ask, onSessionEnded);
   const { setResult } = call;
-  const answered = call.result !== "loading";
-  useEffect(() => {
-    if (answered) onAnswered();
-  }, [answered, onAnswered]);
-  // A 403: the person's Role changed since /api/me answered, so the shell asks again, once the page has rendered.
+  useReportAnswered(call.result !== "loading", "hook", onAnswered);
+  // A 403 as the page opens: the person's Role changed since /api/me answered, so Setup asks again, once the page has
+  // rendered. A 403 on a later click asks the shell itself (`refused`): the Role may have changed again since.
   const notAdmin = call.result !== "loading" && call.result.kind === "not-admin";
   useEffect(() => {
-    if (notAdmin) refreshMe();
-  }, [notAdmin, refreshMe]);
+    if (notAdmin) roleChanged();
+  }, [notAdmin, roleChanged]);
 
-  /** The token the last POST answered: shown this once, and put in the block in the placeholder's place. */
-  const [heldToken, setHeldToken] = useState<string | null>(null);
+  /**
+   * The token the last POST answered, with when it was issued: shown this once, and put in the block in the
+   * placeholder's place while the settings still describe it.
+   */
+  const [held, setHeld] = useState<{ token: string; issuedAt: string } | null>(null);
   const [issuing, setIssuing] = useState(false);
   // Set at the click itself, before React renders the disabled button: one POST per click.
   const issueCall = useRef(false);
@@ -100,17 +113,14 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
   /** The tier a PUT under way is setting: the picker shows it until the answer. */
   const [pendingTier, setPendingTier] = useState<PrivacyTier | null>(null);
   const [tierRefusal, setTierRefusal] = useState<string | null>(null);
-  /** The last copy, by what it copied: whether the clipboard took it. */
-  const [copy, setCopy] = useState<{ what: "token" | "block"; ok: boolean } | null>(null);
+  /** The last copy: what it copied, the text, and whether the clipboard took it. Its line shows while that text does. */
+  const [copy, setCopy] = useState<{ what: CopyWhat; text: string; ok: boolean } | null>(null);
 
   const rotateButton = useRef<HTMLButtonElement>(null);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const copyTokenButton = useRef<HTMLButtonElement>(null);
-  /**
-   * What takes focus once the next render lands: the confirm's Cancel, Rotate, or Copy token. Each is set beside the
-   * state change that renders it, as the Ask Warden panel does.
-   */
-  const focusNext = useRef<"cancel" | "rotate" | "copy-token" | null>(null);
+  /** Each is set beside the state change that renders it, as the Ask Warden panel does. */
+  const focusNext = useRef<FocusTarget | null>(null);
   useEffect(() => {
     const next = focusNext.current;
     if (next === null) return;
@@ -119,7 +129,7 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
       next
     ].current?.focus();
   });
-  const setFocusNext = (next: "cancel" | "rotate" | "copy-token") => {
+  const setFocusNext = (next: FocusTarget) => {
     focusNext.current = next;
   };
 
@@ -134,6 +144,14 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
         : { kind: "settings", settings: update(old.settings) },
     );
 
+  /** A refused change: a 403 asks the shell for the Role again, an ended session signs out, and `say` says the rest. */
+  function refused(result: ChangeRefused, say: (words: string) => void) {
+    if (result.kind === "forbidden") refreshMe();
+    const words = refusalWords(result);
+    if (words === null) return onSessionEnded();
+    say(words);
+  }
+
   async function issue() {
     if (issueCall.current) return;
     issueCall.current = true;
@@ -141,12 +159,17 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
     setIssuing(true);
     setIssueRefusal(null);
     const result = await issueHookToken(getToken, me.team);
+    if (result.kind !== "issued" && result.kind !== "session-ended") {
+      // Another Admin may have rotated since the settings were read, or this POST may have landed with its answer lost:
+      // read them again, busy still, so the next rotation asks first when an older token still works.
+      const reread = await fetchHookSettings(getToken);
+      if (reread.kind === "settings") updateSettings(() => reread.settings);
+    }
     issueCall.current = false;
     setIssuing(false);
     if (result.kind === "issued") {
       const { token, issued_at, previous_valid_until, managed_settings } = result.issued;
-      setHeldToken(token);
-      setCopy(null);
+      setHeld({ token, issuedAt: issued_at });
       updateSettings((old) => ({
         ...old,
         token: { issued_at },
@@ -156,10 +179,9 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
       setFocusNext("copy-token");
       return;
     }
-    if (result.kind === "forbidden") refreshMe();
-    const words = refusalWords(result);
-    if (words === null) return onSessionEnded();
-    setIssueRefusal(words);
+    // "Rotate again" has gone with the confirm: focus goes back to Rotate.
+    setFocusNext("rotate");
+    refused(result, setIssueRefusal);
   }
 
   async function changeTier(tier: PrivacyTier) {
@@ -171,14 +193,11 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
       updateSettings(() => result.settings);
       return;
     }
-    if (result.kind === "forbidden") refreshMe();
-    const words = refusalWords(result);
-    if (words === null) return onSessionEnded();
-    setTierRefusal(words);
+    refused(result, setTierRefusal);
   }
 
-  async function copyText(what: "token" | "block", text: string) {
-    setCopy({ what, ok: await copied(text) });
+  async function copyText(what: CopyWhat, text: string) {
+    setCopy({ what, text, ok: await copied(text) });
   }
 
   function cancelConfirm() {
@@ -205,11 +224,18 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
     );
   }
   const { settings } = call.result;
-  const block = blockText(settings.managed_settings, heldToken);
+  // Another Admin's rotation since this page issued leaves the held token out: the block describes the newer one.
+  const heldIsCurrent = held !== null && held.issuedAt === settings.token?.issued_at;
+  const block = blockText(settings.managed_settings, heldIsCurrent ? held.token : null);
   const previousUntil = settings.previous_valid_until;
+  // The confirm shows, and keeps Rotate disabled, only while an older token still works.
+  const confirmOpen = confirming && previousUntil !== null;
+  // A rotation and a tier change each answer with a block: one at a time, so the block matches the picker.
+  const changing = issuing || pendingTier !== null;
 
-  const copyLine = (what: "token" | "block") =>
-    copy?.what !== what ? null : copy.ok ? (
+  /** The last copy's line, while what `what` copies is still the text it copied. */
+  const copyLine = (what: CopyWhat, text: string) =>
+    copy?.what !== what || copy.text !== text ? null : copy.ok ? (
       <span className="muted" role="status">
         {COPIED}
       </span>
@@ -229,21 +255,21 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
       {previousUntil !== null && (
         <p className="muted">The token before it works until {dayAndTimeWords(previousUntil)}.</p>
       )}
-      {heldToken !== null && (
+      {held !== null && (
         <div className="hook-token">
           <p>
-            <code className="hook-token-value">{heldToken}</code>
+            <code className="hook-token-value">{held.token}</code>
           </p>
           <div className="hook-copy">
             <button
               ref={copyTokenButton}
               type="button"
               className="secondary"
-              onClick={() => void copyText("token", heldToken)}
+              onClick={() => void copyText("token", held.token)}
             >
               Copy token
             </button>
-            {copyLine("token")}
+            {copyLine("token", held.token)}
           </div>
           <p className="muted">Shown this once. Copy it now: Warden keeps only its hash.</p>
         </div>
@@ -253,7 +279,7 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
           ref={rotateButton}
           type="button"
           className={settings.token === null ? "primary" : "secondary"}
-          disabled={issuing || confirming}
+          disabled={changing || confirmOpen}
           aria-busy={issuing}
           onClick={() => {
             if (previousUntil !== null && settings.token !== null) {
@@ -267,7 +293,7 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
           {settings.token === null ? "Issue a hook token" : "Rotate the hook token"}
         </button>
       </div>
-      {confirming && previousUntil !== null && (
+      {confirmOpen && (
         <div
           className="delete-confirm"
           role="group"
@@ -312,7 +338,8 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
           id={pickerId}
           className="role-picker"
           value={pendingTier ?? settings.privacy_tier}
-          disabled={pendingTier !== null}
+          // Still while the confirm is open too, so its words and Rotate's state can't change under it.
+          disabled={changing || confirmOpen}
           aria-busy={pendingTier !== null}
           onChange={(event) => void changeTier(PrivacyTier.parse(event.target.value))}
         >
@@ -337,7 +364,7 @@ function HookSettings({ getToken, me, onSessionEnded, refreshMe, onAnswered }: H
         <button type="button" className="secondary" onClick={() => void copyText("block", block)}>
           Copy block
         </button>
-        {copyLine("block")}
+        {copyLine("block", block)}
       </div>
     </div>
   );
