@@ -528,9 +528,12 @@ function runnerOptions(
   return found;
 }
 
-/** npm's options that point a runner at a registry: `--registry`, its `--reg` shorthand, and a scope's own. */
+/**
+ * npm's options that point a runner at a registry: `--registry`, its `--reg` shorthand, and a scope's own; and pnpm's
+ * `--config.registry` and `--config.@<scope>:registry`, as its `--config.<key>=<value>` sets any config key (#404).
+ */
 const isNpmRegistryOption = (name: string) =>
-  name === "--registry" || name === "--reg" || /^--@[^:]+:registry$/.test(name);
+  name === "--reg" || /^--(?:config\.)?(?:@[^:]+:)?registry$/.test(name);
 /**
  * The env keys that point an npm runner at a registry, or at a config file that can set one: npm's
  * `npm_config_registry`, a scope's own and `npm_config_userconfig`, and Yarn's `YARN_NPM_REGISTRY_SERVER`, each in any
