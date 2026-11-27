@@ -134,6 +134,25 @@ describe("a Judge run", () => {
     expect((await findings.list(team)).map((f) => f.rule_id)).toEqual([AGENT_READS_SECRETS]);
   });
 
+  it("saves a Finding whose summary drops the NUL and the lone surrogate Postgres can't store, and marks the session judged", async () => {
+    const { team, sessionId } = await teamWithSession();
+    const fake = fakeOpenRouter(() =>
+      verdict([
+        { rule_id: AGENT_READS_SECRETS, summary: "Read\u0000 .env\uDC00 twice", event_seqs: [1] },
+      ]),
+    );
+
+    const { code } = await runJob(team, sessionId, fake.fetch);
+
+    expect(code).toBe(0);
+    expect((await sessionState(team, sessionId)).session).toEqual({
+      judged_at: expect.any(Date),
+      outcome: "flagged",
+    });
+    const [finding] = await findings.list(team);
+    expect(finding!.evidence.summary).toBe("Read .env twice");
+  });
+
   it("opens no Finding for a clean session, drops its events, and records a Guard Spot run at its start", async () => {
     const { team, sessionId } = await teamWithSession();
     const before = await sessionState(team, sessionId);
