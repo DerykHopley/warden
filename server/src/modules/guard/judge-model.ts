@@ -55,10 +55,32 @@ export interface JudgeModel {
   ): Promise<ModelAnswer>;
 }
 
-/** The model call failed: the Judge leaves the session as it was, for a retry. */
+/**
+ * The model call failed: the Judge leaves the session as it was. `retry`: whether the same call might answer next time
+ * (a timeout, a lost connection, an answer that isn't a chat completion, a 429 or a 5xx). `billed`: whether the
+ * provider may have charged for it, so its reserved cost stands (all but a non-2xx answer under 500 other than 408:
+ * those refuse the call before it runs).
+ */
 export class ModelCallFailed extends Error {
   override name = "ModelCallFailed";
+  readonly retry: boolean;
+  readonly billed: boolean;
+  constructor(
+    message: string,
+    { retry = true, billed = true }: { retry?: boolean; billed?: boolean } = {},
+  ) {
+    super(message);
+    this.retry = retry;
+    this.billed = billed;
+  }
 }
+
+/** A non-2xx answer: a 429 or a 5xx may answer next time; a 5xx or a 408 may have run, and been billed. */
+const answeredStatus = (status: number) =>
+  new ModelCallFailed(`the Judge's model call answered ${status}`, {
+    retry: status === 429 || status >= 500,
+    billed: status === 408 || status >= 500,
+  });
 
 /** The part of a chat completion the Judge reads. */
 const Completion = z.object({
@@ -98,10 +120,26 @@ function readUsage(usage: unknown): ModelUsage | undefined {
 }
 
 /**
+ * Why a call failed, without the URL, the prompt or the answer: the pinned connection's reason, the timeout, an
+ * answer over the cap, or the connection error's code (ECONNREFUSED and the like).
+ */
+function callFailure(error: CallFailed): string {
+  const cause = error.cause;
+  if (cause instanceof AddressRefused)
+    return `the Judge's model call was refused: ${cause.message}`;
+  if (cause instanceof AnswerTooLarge) return `the Judge's model call failed: ${cause.message}`;
+  if (timedOut(cause)) return error.message;
+  const code = (cause as { code?: unknown } | undefined)?.code;
+  const named = typeof code === "string" ? code : cause instanceof Error ? cause.name : "an error";
+  return `the Judge's model call failed: ${named}`;
+}
+
+/**
  * A model behind an OpenAI-compatible `POST <baseUrl>/chat/completions`, with `apiKey` as the Bearer token (no
  * Authorization header without one) and `extraBody` added to each request's body. With `jsonModeFallback`, a 400 to
  * the JSON-schema request is followed by one more request in JSON mode (`{ type: "json_object" }`), for a server that
- * doesn't take a schema; the verdict is checked against the schema either way. `fetch` is a test's fake.
+ * doesn't take a schema; the verdict is checked against the schema either way. `fetch` is a test's fake. A call that
+ * times out or loses its connection throws ModelCallFailed naming the reason (`callFailure`), as a non-2xx answer does.
  */
 export function chatCompletionsModel({
   baseUrl,
@@ -133,20 +171,30 @@ export function chatCompletionsModel({
       },
       timeoutMs,
     });
-  return {
-    model,
-    paid: false,
-    async complete(messages, { name, schema }) {
-      let answer = await call(messages, {
+  const answerTo = async (
+    messages: ChatMessage[],
+    { name, schema }: Parameters<JudgeModel["complete"]>[1],
+  ) => {
+    try {
+      const answer = await call(messages, {
         type: "json_schema",
         json_schema: { name, strict: true, schema },
       });
       if (jsonModeFallback && answer.status === 400) {
-        answer = await call(messages, { type: "json_object" });
+        return await call(messages, { type: "json_object" });
       }
-      if (!answer.ok) {
-        throw new ModelCallFailed(`the Judge's model call answered ${answer.status}`);
-      }
+      return answer;
+    } catch (error) {
+      if (error instanceof CallFailed) throw new ModelCallFailed(callFailure(error));
+      throw error;
+    }
+  };
+  return {
+    model,
+    paid: false,
+    async complete(messages, schema) {
+      const answer = await answerTo(messages, schema);
+      if (!answer.ok) throw answeredStatus(answer.status);
       const completion = Completion.safeParse(answer.body);
       if (!completion.success) {
         throw new ModelCallFailed("the Judge's model call answered no chat completion");
@@ -185,21 +233,6 @@ export function judgeModel({
 }
 
 /**
- * Why a local call failed, without the URL, the prompt or the answer: the pinned connection's reason, the timeout, an
- * answer over the cap, or the connection error's code (ECONNREFUSED and the like).
- */
-function localFailure(error: CallFailed): string {
-  const cause = error.cause;
-  if (cause instanceof AddressRefused)
-    return `the Judge's model call was refused: ${cause.message}`;
-  if (cause instanceof AnswerTooLarge) return `the Judge's model call failed: ${cause.message}`;
-  if (timedOut(cause)) return error.message;
-  const code = (cause as { code?: unknown } | undefined)?.code;
-  const named = typeof code === "string" ? code : cause instanceof Error ? cause.name : "an error";
-  return `the Judge's model call failed: ${named}`;
-}
-
-/**
  * A Team's own model (spec #225, slice 6a, story 10): its OpenAI-compatible URL and model name, through the pinned
  * connection (`pinnedFetch`), with no key and no OpenRouter routing, and the JSON-mode fallback. A call the connection
  * refuses, or that fails, throws ModelCallFailed naming the reason, never the URL.
@@ -214,30 +247,18 @@ export function localModel({
   model: string;
   timeoutMs?: number;
 } & UrlRule): JudgeModel {
-  const inner = chatCompletionsModel({
+  return chatCompletionsModel({
     baseUrl: url,
     model,
     jsonModeFallback: true,
     fetch: pinnedFetch(rule),
     timeoutMs,
   });
-  return {
-    ...inner,
-    async complete(messages, schema) {
-      try {
-        return await inner.complete(messages, schema);
-      } catch (error) {
-        if (error instanceof CallFailed) throw new ModelCallFailed(localFailure(error));
-        throw error;
-      }
-    },
-  };
 }
 
 /**
  * The Judge's model on OpenRouter, with its routing (`OPENROUTER_PROVIDER`): paid, its usage block read from every
- * answer (OpenRouter always sends one; no request field asks for it). A call that times out or loses its connection
- * throws ModelCallFailed, as a non-2xx answer does, so the Judge retries it.
+ * answer (OpenRouter always sends one; no request field asks for it).
  */
 export function openRouterModel(options: {
   apiKey: string;
@@ -250,16 +271,5 @@ export function openRouterModel(options: {
     baseUrl: OPENROUTER_BASE_URL,
     extraBody: { provider: OPENROUTER_PROVIDER },
   });
-  return {
-    ...inner,
-    paid: true,
-    async complete(messages, schema) {
-      try {
-        return await inner.complete(messages, schema);
-      } catch (error) {
-        if (error instanceof CallFailed) throw new ModelCallFailed(error.message, { cause: error });
-        throw error;
-      }
-    },
-  };
+  return { ...inner, paid: true };
 }

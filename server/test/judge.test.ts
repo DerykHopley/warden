@@ -455,7 +455,15 @@ const ledger = (team: string) =>
   withTeam(team, (tx) =>
     tx
       .selectFrom("spending_ledger")
-      .select(["path", "model", "input_tokens", "output_tokens", "cost_usd", "cost_basis"])
+      .select([
+        "path",
+        "model",
+        "input_tokens",
+        "output_tokens",
+        "cost_usd",
+        "cost_basis",
+        "corrects",
+      ])
       .orderBy("id")
       .execute(),
   );
@@ -471,44 +479,55 @@ const spent = (team: string, usd: number) =>
     costBasis: "stated",
   });
 
-/** The row an unpriced call records. */
-const assumedRow = {
+/** A ledger row as `ledger` reads it. */
+type LedgerRow = Awaited<ReturnType<typeof ledger>>[number];
+
+/** The row a paid call's reservation adds before the call, which a call that may have been billed keeps. */
+const assumedRow: LedgerRow = {
   path: "judge",
   model: settings.model,
   input_tokens: null,
   output_tokens: null,
   cost_usd: String(UNPRICED_CALL_USD),
   cost_basis: "assumed",
+  corrects: null,
 };
+
+/** The row correcting the reservation before it: the answer's tokens, and the difference to its cost. */
+const correctionRow = (row: Partial<LedgerRow>) => ({
+  ...assumedRow,
+  corrects: expect.any(String),
+  ...row,
+});
 
 /** A clean verdict with OpenRouter's usage block. */
 const pricedVerdict = () =>
   withUsage(verdict([]), { prompt_tokens: 1234, completion_tokens: 56, cost: 0.00321 });
 
 describe("a Judge run's spending (story 10)", () => {
-  it("records a paid call in the ledger with its path, model, the tokens and the cost OpenRouter stated", async () => {
+  it("reserves a paid call at UNPRICED_CALL_USD, then corrects it to the tokens and the cost OpenRouter stated", async () => {
     const { team, sessionId } = await teamWithSession();
 
     const { code } = await runJob(team, sessionId, fakeOpenRouter(pricedVerdict).fetch);
 
     expect(code).toBe(0);
     expect(await ledger(team)).toEqual([
-      {
-        path: "judge",
-        model: settings.model,
+      assumedRow,
+      correctionRow({
         input_tokens: 1234,
         output_tokens: 56,
-        cost_usd: "0.00321",
+        cost_usd: "-0.04679",
         cost_basis: "stated",
-      },
+      }),
     ]);
+    expect(await spending.spentToday(team)).toBeCloseTo(0.00321, 9);
   });
 
   it.each<[string, (call: FakeCall, init: RequestInit) => unknown]>([
     ["answers 500", () => new Response("upstream error", { status: 500 })],
     ["times out", neverAnswers],
   ])(
-    "records a call that %s at UNPRICED_CALL_USD, marked assumed, then the retry's stated cost",
+    "keeps the reservation of a call that %s, then corrects the retry's to its stated cost",
     async (_name, failure) => {
       const { team, sessionId } = await teamWithSession();
       const answers = [failure, pricedVerdict];
@@ -519,12 +538,14 @@ describe("a Judge run's spending (story 10)", () => {
       expect(code).toBe(0);
       expect(await ledger(team)).toEqual([
         assumedRow,
-        expect.objectContaining({ cost_usd: "0.00321", cost_basis: "stated" }),
+        assumedRow,
+        expect.objectContaining({ cost_usd: "-0.04679", cost_basis: "stated" }),
       ]);
+      expect(await spending.spentToday(team)).toBeCloseTo(UNPRICED_CALL_USD + 0.00321, 9);
     },
   );
 
-  it("records an answer with tokens but no usage.cost at UNPRICED_CALL_USD, marked assumed, with its tokens", async () => {
+  it("keeps an answer with tokens but no usage.cost at UNPRICED_CALL_USD, adding its tokens", async () => {
     const { team, sessionId } = await teamWithSession();
     const fake = fakeOpenRouter(() =>
       withUsage(verdict([]), { prompt_tokens: 900, completion_tokens: 12 }),
@@ -532,30 +553,38 @@ describe("a Judge run's spending (story 10)", () => {
 
     await runJob(team, sessionId, fake.fetch);
 
-    expect(await ledger(team)).toEqual([{ ...assumedRow, input_tokens: 900, output_tokens: 12 }]);
+    expect(await ledger(team)).toEqual([
+      assumedRow,
+      correctionRow({ input_tokens: 900, output_tokens: 12, cost_usd: "0.00" }),
+    ]);
+    expect(await spending.spentToday(team)).toBe(UNPRICED_CALL_USD);
   });
 
-  it("makes no call for a Team at its daily limit: the session stays unjudged with its events, and the run exits 0", async () => {
+  it("books nothing for a call refused with a 4xx other than 429, and doesn't retry it: one call, exit 1", async () => {
     const { team, sessionId } = await teamWithSession();
-    await spent(team, TEAM_DAILY_SPENDING_LIMIT_USD);
-    const before = await sessionState(team, sessionId);
-    const fake = fakeOpenRouter(pricedVerdict);
+    const fake = fakeOpenRouter(() => new Response("forbidden", { status: 403 }));
 
-    const { code, entries } = await runJob(team, sessionId, fake.fetch);
+    const { code } = await runJob(team, sessionId, fake.fetch);
+
+    expect(code).toBe(1);
+    expect(fake.calls).toHaveLength(1);
+    expect(await ledger(team)).toEqual([
+      assumedRow,
+      correctionRow({ cost_usd: "-0.05", cost_basis: "unbilled" }),
+    ]);
+    expect(await spending.spentToday(team)).toBe(0);
+  });
+
+  it("retries a call answering 429, booking nothing for it", async () => {
+    const { team, sessionId } = await teamWithSession();
+    const answers = [() => new Response("rate limited", { status: 429 }), pricedVerdict];
+    const fake = fakeOpenRouter(() => answers.shift()!());
+
+    const { code } = await runJob(team, sessionId, fake.fetch);
 
     expect(code).toBe(0);
-    expect(fake.calls).toEqual([]);
-    expect(await sessionState(team, sessionId)).toEqual({ ...before, session: unjudged });
-    expect(await ledger(team)).toHaveLength(1);
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        message:
-          "judge run: the Team's daily spending limit is reached; the session stays unjudged",
-        team,
-        sessionId,
-        spent: TEAM_DAILY_SPENDING_LIMIT_USD,
-      }),
-    );
+    expect(fake.calls).toHaveLength(2);
+    expect(await spending.spentToday(team)).toBeCloseTo(0.00321, 9);
   });
 
   it("checks the limit before the retry too: at $0.96, a failed call recorded at $0.05 gets no retry", async () => {
@@ -574,6 +603,41 @@ describe("a Judge run's spending (story 10)", () => {
     expect(entries).toContainEqual(
       expect.objectContaining({ message: expect.stringContaining("daily spending limit"), team }),
     );
+  });
+
+  it("lets one call out for two overlapping runs of one Team at $0.96: the first reserves its cost before calling, so the second is limited", async () => {
+    const team = await newTeam(withTeam);
+    const sessionIds = [`sess-${randomUUID()}`, `sess-${randomUUID()}`];
+    for (const sessionId of sessionIds) {
+      await store(team, sessionId, "SessionStart", { source: "startup" });
+      await store(team, sessionId, "SessionEnd", { reason: "exit" });
+    }
+    await spent(team, 0.96);
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    let secondCall!: () => void;
+    const secondCalled = new Promise<void>((resolve) => (secondCall = resolve));
+    const fake = fakeOpenRouter(async () => {
+      if (fake.calls.length === 2) secondCall();
+      await answered;
+      return pricedVerdict();
+    });
+
+    const runs = sessionIds.map((sessionId) => runJob(team, sessionId, fake.fetch));
+    // The limited run ends while the other's call waits; without the reservation, both calls go out instead.
+    await Promise.race([...runs, secondCalled]);
+    answer();
+    const done = await Promise.all(runs);
+
+    expect(fake.calls).toHaveLength(1);
+    expect(done.map((run) => run.code)).toEqual([0, 0]);
+    expect(done.flatMap((run) => run.entries.map((entry) => entry.message))).toEqual(
+      expect.arrayContaining([
+        "judge run done",
+        "judge run: the Team's daily spending limit is reached; the session stays unjudged",
+      ]),
+    );
+    expect(await spending.spentToday(team)).toBeCloseTo(0.96 + 0.00321, 9);
   });
 
   it("neither limits nor records the Team's own model: at the limit, it judges through the Team's model", async () => {
@@ -680,18 +744,46 @@ describe("a Judge run over the input cap", () => {
   });
 });
 
+/** Runs the session's claim out, as JUDGE_CLAIM_MINUTES passing does. */
+const expireClaim = (team: string, sessionId: string) =>
+  withTeam(team, (tx) =>
+    tx
+      .$extendTables<AgentSessionTables>()
+      .updateTable("agent_sessions")
+      .set({ judging_until: sql<Date>`now() - interval '1 second'` })
+      .where("session_id", "=", sessionId)
+      .execute(),
+  );
+
 describe("one Judge run per session at a time", () => {
+  it("keeps the next run's claim when a run that outlived its own releases the session or marks it judged", async () => {
+    const { team, sessionId } = await teamWithSession();
+    const outlived = await sessions.claim(team, sessionId);
+    if (outlived.kind !== "claimed") throw new Error("expected a claim");
+    await expireClaim(team, sessionId);
+    expect(await sessions.claim(team, sessionId)).toMatchObject({ kind: "claimed" });
+
+    await sessions.release(team, sessionId, outlived);
+    expect(await sessions.claim(team, sessionId)).toEqual({ kind: "busy" });
+    await sessions.markJudged(team, sessionId, outlived, { outcome: "clean", rowSeqs: [] });
+    expect(await sessions.claim(team, sessionId)).toEqual({ kind: "busy" });
+  });
+
   it("makes one model call for two runs started at once: one judges, the other is busy, changes nothing and exits 0", async () => {
     const { team, sessionId } = await teamWithSession();
     let answer!: () => void;
     const answered = new Promise<void>((resolve) => (answer = resolve));
+    let called!: () => void;
+    const firstCall = new Promise<void>((resolve) => (called = resolve));
     const fake = fakeOpenRouter(async () => {
+      called();
       await answered;
       return verdict([]);
     });
 
     const runs = [runJob(team, sessionId, fake.fetch), runJob(team, sessionId, fake.fetch)];
     const busy = await Promise.race(runs);
+    await firstCall;
     expect(fake.calls).toHaveLength(1);
     answer();
     const [first, second] = await Promise.all(runs);
@@ -728,12 +820,18 @@ describe("one Judge run per session at a time", () => {
 
   it("judges the session after a limited run: the limited run released its claim", async () => {
     const { team, sessionId } = await teamWithSession();
-    let today = TEAM_DAILY_SPENDING_LIMIT_USD;
+    let limited = true;
     const run = () =>
       createJudge({
         agentSessions: sessions,
         findings,
-        spending: { ...spending, spentToday: () => Promise.resolve(today) },
+        spending: {
+          ...spending,
+          reserve: (...args) =>
+            limited
+              ? Promise.resolve({ limited: TEAM_DAILY_SPENDING_LIMIT_USD })
+              : spending.reserve(...args),
+        },
         modelFor: () =>
           Promise.resolve(
             openRouterModel({
@@ -743,22 +841,18 @@ describe("one Judge run per session at a time", () => {
             }),
           ),
       }).run(team, sessionId);
-    await expect(run()).resolves.toEqual({ kind: "limited", spent: today });
+    await expect(run()).resolves.toEqual({
+      kind: "limited",
+      spent: TEAM_DAILY_SPENDING_LIMIT_USD,
+    });
 
-    today = 0;
+    limited = false;
     await expect(run()).resolves.toMatchObject({ kind: "judged", outcome: "clean" });
   });
 
   it(`doesn't let a claim older than JUDGE_CLAIM_MINUTES (${JUDGE_CLAIM_MINUTES}) block a new run`, async () => {
     const { team, sessionId } = await teamWithSession();
-    await withTeam(team, (tx) =>
-      tx
-        .$extendTables<AgentSessionTables>()
-        .updateTable("agent_sessions")
-        .set({ judging_until: sql<Date>`now() - interval '1 second'` })
-        .where("session_id", "=", sessionId)
-        .execute(),
-    );
+    await expireClaim(team, sessionId);
 
     const { code } = await runJob(team, sessionId, fakeOpenRouter(() => verdict([])).fetch);
 

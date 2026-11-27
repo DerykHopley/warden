@@ -63,10 +63,9 @@ export type { Judge, JudgeRunOutcome } from "./modules/guard/judge.ts";
 /**
  * Guard's Judge, which the Scan Job runs for one ended Agent session, built here as the Job may not import Guard (ADR
  * 0005): the Agent sessions, Findings and the spending ledger on `withTeam`, and the Team's model: its own
- * (`judge_models`, slice 6a)
- * through the pinned connection with `settings.allowLocalhost`, else OpenRouter's. On OpenRouter with no key in
- * `settings`, the run throws ConfigError naming OPENROUTER_API_KEY before any call. Tests hand it a fake `fetch` (for
- * OpenRouter's call), a stub `resolve` (for the Team's own model's host) and a short timeout.
+ * (`judge_models`, slice 6a) through the pinned connection with `settings.allowLocalhost`, else OpenRouter's. On
+ * OpenRouter with no key in `settings`, the run throws ConfigError naming OPENROUTER_API_KEY before any call. Tests hand
+ * it a fake `fetch` (for OpenRouter's call), a stub `resolve` (for the Team's own model's host) and a short timeout.
  */
 export function judge({
   withTeam,

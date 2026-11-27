@@ -43,8 +43,11 @@ export type RoleChange = "created_team" | "joined" | "changed";
 /** What made a paid model call, as 0021_spending_ledger's check lists it: the Judge, until Scans and chat add theirs. */
 export type SpendingPath = "judge";
 
-/** Where a ledger row's cost came from: the provider's answer, or the assumed cost of a call it didn't price. */
-export type CostBasis = "stated" | "assumed";
+/**
+ * Where a ledger row's cost came from: the provider's answer, the assumed cost of a call it didn't price, or (on a
+ * correction only) nothing, as the provider refused the call unbilled.
+ */
+export type CostBasis = "stated" | "assumed" | "unbilled";
 
 export interface Database {
   /** One row per Team, keyed by its Clerk Organization id; every later Team-owned table points at it. */
@@ -226,9 +229,10 @@ export interface Database {
   };
 
   /**
-   * One paid model call made for the Team (0021_spending_ledger): its spending path, model, tokens (null when the
-   * answer stated none) and cost in US dollars, stated by the provider or assumed. Append-only. Written only by the
-   * shared spending store (spending.ts). The cost is `numeric`, read back as a string.
+   * One paid model call made for the Team (0021_spending_ledger), or a correction to one (`corrects` set): its spending
+   * path, model, tokens (null when the answer stated none) and cost in US dollars, stated by the provider or assumed,
+   * a correction's being the difference from its reservation. Append-only. Written only by the shared spending store
+   * (spending.ts). The cost is `numeric`, read back as a string, and so is the bigint `corrects`.
    */
   spending_ledger: {
     team_id: string;
@@ -240,6 +244,7 @@ export interface Database {
     output_tokens: number | null;
     cost_usd: ColumnType<string, number, never>;
     cost_basis: CostBasis;
+    corrects: ColumnType<string | null, string | null | undefined, never>;
   };
 
   /**

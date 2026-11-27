@@ -1,10 +1,18 @@
-// A Team's spending ledger (spec #225, slice 7a, story 10): the shared spending store records one row per paid model
-// call and sums the Team's spending since the start of the current UTC day, which the per-Team limit reads. On the
-// suite's shared database, each case with Teams of its own.
+// A Team's spending ledger (spec #225, slice 7a, story 10): the shared spending store records each paid model call,
+// reserving its assumed cost before the call under a per-Team lock and correcting it after, and sums the Team's
+// spending since the start of the current UTC day, which the per-Team limit reads. On the suite's shared database,
+// each case with Teams of its own.
 import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import { createSpending, type Spending, type SpendingEntry } from "../src/spending.ts";
+import {
+  createSpending,
+  TEAM_DAILY_SPENDING_LIMIT_USD,
+  UNBILLED,
+  UNPRICED_CALL_USD,
+  type Spending,
+  type SpendingEntry,
+} from "../src/spending.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { newTeam } from "./helpers.ts";
@@ -107,5 +115,86 @@ describe("the spending store", () => {
 
     expect(await spending.spentToday(team)).toBeCloseTo(0.425, 9);
     expect(await spending.spentToday(other)).toBeCloseTo(0.5, 9);
+  });
+});
+
+describe("a paid call's reservation", () => {
+  const CALL = { path: "judge", model: "test/judge-model" } as const;
+
+  it("records the assumed cost before the call, then a correction row to the stated cost, keeping the ledger append-only", async () => {
+    const team = await newTeam(withTeam);
+
+    const reserved = await spending.reserve(team, CALL);
+    if ("limited" in reserved) throw new Error("expected a reservation");
+    expect(await spending.spentToday(team)).toBe(UNPRICED_CALL_USD);
+    await spending.settle(team, reserved, {
+      inputTokens: 1200,
+      outputTokens: 80,
+      costUsd: 0.00321,
+      costBasis: "stated",
+    });
+
+    expect(await rows(team)).toEqual([
+      expect.objectContaining({
+        id: reserved.id,
+        input_tokens: null,
+        output_tokens: null,
+        cost_usd: "0.05",
+        cost_basis: "assumed",
+        corrects: null,
+      }),
+      expect.objectContaining({
+        path: "judge",
+        model: "test/judge-model",
+        input_tokens: 1200,
+        output_tokens: 80,
+        cost_usd: "-0.04679",
+        cost_basis: "stated",
+        corrects: reserved.id,
+      }),
+    ]);
+    expect(await spending.spentToday(team)).toBeCloseTo(0.00321, 9);
+  });
+
+  it("settles a call that wasn't billed to nothing", async () => {
+    const team = await newTeam(withTeam);
+    const reserved = await spending.reserve(team, CALL);
+    if ("limited" in reserved) throw new Error("expected a reservation");
+
+    await spending.settle(team, reserved, UNBILLED);
+
+    expect((await rows(team)).at(-1)).toEqual(
+      expect.objectContaining({ cost_usd: "-0.05", cost_basis: "unbilled", corrects: reserved.id }),
+    );
+    expect(await spending.spentToday(team)).toBe(0);
+  });
+
+  it("refuses a second correction of one reservation", async () => {
+    const team = await newTeam(withTeam);
+    const reserved = await spending.reserve(team, CALL);
+    if ("limited" in reserved) throw new Error("expected a reservation");
+    await spending.settle(team, reserved, UNBILLED);
+
+    await expect(spending.settle(team, reserved, UNBILLED)).rejects.toThrow(/corrects/);
+  });
+
+  it(`reserves nothing for a Team at its limit ($${TEAM_DAILY_SPENDING_LIMIT_USD}), and answers what it spent`, async () => {
+    const team = await newTeam(withTeam);
+    await spending.record(team, entry(TEAM_DAILY_SPENDING_LIMIT_USD));
+
+    expect(await spending.reserve(team, CALL)).toEqual({ limited: TEAM_DAILY_SPENDING_LIMIT_USD });
+    expect(await rows(team)).toHaveLength(1);
+  });
+
+  it("takes turns per Team: of ten reservations at once at $0.96, one goes through", async () => {
+    const team = await newTeam(withTeam);
+    await spending.record(team, entry(0.96));
+
+    const reserved = await Promise.all(
+      Array.from({ length: 10 }, () => spending.reserve(team, CALL)),
+    );
+
+    expect(reserved.filter((one) => !("limited" in one))).toHaveLength(1);
+    expect(await spending.spentToday(team)).toBeCloseTo(0.96 + UNPRICED_CALL_USD, 9);
   });
 });

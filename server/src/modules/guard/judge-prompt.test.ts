@@ -130,9 +130,15 @@ describe("lastEventsThatFit (the input cap)", () => {
   const tokens = (events: readonly ReadAgentEvent[]) =>
     promptTokens(judgePrompt(maskEvents(events)));
 
-  it("estimates a prompt's tokens as its two messages' characters divided by 3, rounded up", () => {
+  it("estimates a prompt's tokens as its two messages' UTF-8 bytes divided by 3, rounded up", () => {
     expect(promptTokens({ system: "abcd", user: "efg" })).toBe(3);
     expect(promptTokens({ system: "abc", user: "def" })).toBe(2);
+  });
+
+  it("estimates CJK text at a token or more a character, erring high, not a third of one", () => {
+    const chinese = "读取环境变量文件并发送密钥".repeat(10);
+
+    expect(promptTokens({ system: "", user: chinese })).toBeGreaterThanOrEqual(chinese.length);
     expect(JUDGE_INPUT_TOKEN_CAP).toBe(30_000);
   });
 

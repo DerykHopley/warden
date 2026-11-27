@@ -96,7 +96,7 @@ describe("localModel", () => {
     });
 
     await expect(model(server.port).complete(MESSAGES, SCHEMA)).rejects.toThrow(
-      new ModelCallFailed("the Judge's model call answered 302"),
+      new ModelCallFailed("the Judge's model call answered 302", { retry: false, billed: false }),
     );
     expect(target.received).toEqual([]);
   });
@@ -179,11 +179,45 @@ describe("openRouterModel (story 10)", () => {
     expect(answer).toEqual({ refusal: false, content: '{"broken_rules":[]}' });
   });
 
-  it("throws ModelCallFailed for a call that times out, so the Judge retries it", async () => {
+  it("throws ModelCallFailed for a call that times out, to retry and to book as billed", async () => {
     await expect(openRouter(neverAnswers).complete(MESSAGES, SCHEMA)).rejects.toThrow(
-      new ModelCallFailed("the Judge's model call timed out after 50 ms"),
+      new ModelCallFailed("the Judge's model call timed out after 50 ms", {
+        retry: true,
+        billed: true,
+      }),
     );
   });
+
+  it("throws ModelCallFailed to retry and book as billed for an answer that isn't a chat completion", async () => {
+    await expect(
+      openRouter(() => ({ error: "mid-generation" })).complete(MESSAGES, SCHEMA),
+    ).rejects.toThrow(
+      new ModelCallFailed("the Judge's model call answered no chat completion", {
+        retry: true,
+        billed: true,
+      }),
+    );
+  });
+
+  it.each([
+    [400, { retry: false, billed: false }],
+    [401, { retry: false, billed: false }],
+    [402, { retry: false, billed: false }],
+    [403, { retry: false, billed: false }],
+    [404, { retry: false, billed: false }],
+    [408, { retry: false, billed: true }],
+    [429, { retry: true, billed: false }],
+    [500, { retry: true, billed: true }],
+    [502, { retry: true, billed: true }],
+    [503, { retry: true, billed: true }],
+  ])(
+    "throws ModelCallFailed for an answer of %i, saying whether to retry it and book it",
+    async (status, failed) => {
+      await expect(
+        openRouter(() => new Response("refused", { status })).complete(MESSAGES, SCHEMA),
+      ).rejects.toThrow(new ModelCallFailed(`the Judge's model call answered ${status}`, failed));
+    },
+  );
 });
 
 describe("judgeModel without a key", () => {

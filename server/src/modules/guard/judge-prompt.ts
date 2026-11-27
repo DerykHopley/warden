@@ -68,11 +68,12 @@ export function judgePrompt(events: readonly MaskedAgentEvent[]): { system: stri
 export const JUDGE_INPUT_TOKEN_CAP = 30_000;
 
 /**
- * A prompt's size in estimated tokens: its two messages' characters divided by 3, rounded up. No tokenizer: code and
- * JSON run denser than prose's 4 characters a token, so this overestimates.
+ * A prompt's size in estimated tokens: its two messages' UTF-8 bytes divided by 3, rounded up. No tokenizer, and it
+ * errs high: code and JSON run denser than prose's 4 characters a token, and a CJK character (3 bytes) counts a whole
+ * token, as tokenizers spend about one on each, where characters divided by 3 would count a third.
  */
 export const promptTokens = ({ system, user }: { system: string; user: string }) =>
-  Math.ceil((system.length + user.length) / 3);
+  Math.ceil((Buffer.byteLength(system, "utf8") + Buffer.byteLength(user, "utf8")) / 3);
 
 /**
  * The events the Judge reads of `events` (stored order): all of them when their prompt fits `cap`; otherwise the most

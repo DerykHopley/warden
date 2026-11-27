@@ -24,7 +24,7 @@ import { judge } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
 import { fakeOpenRouter, verdict } from "./fake-openrouter.ts";
-import { ADMIN, call, newTeam, testApp, testKey } from "./helpers.ts";
+import { ADMIN, call, logEntries, newTeam, testApp, testKey } from "./helpers.ts";
 
 const MEMBER = "user_member";
 
@@ -249,6 +249,13 @@ it("makes no call for a Team at its daily spending limit: the session stays unju
   const read = await call(app, key, "GET", "/api/findings", { as: MEMBER, teamId: team });
   expect(FindingsBody.parse(read.body).findings).toEqual([]);
   const logged = jobLines.join("");
-  expect(logged).toContain("daily spending limit is reached");
+  expect(logEntries(logged)).toContainEqual(
+    expect.objectContaining({
+      message: "judge run: the Team's daily spending limit is reached; the session stays unjudged",
+      team,
+      sessionId,
+      spent: TEAM_DAILY_SPENDING_LIMIT_USD,
+    }),
+  );
   for (const kept of [PLANTED, KEY]) expect([...lines, logged].join("")).not.toContain(kept);
 });

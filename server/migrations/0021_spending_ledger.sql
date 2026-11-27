@@ -4,6 +4,11 @@
 -- every key, row-level security enabled and forced, one `for all` policy on the Team `withTeam` sets (ADR 0006).
 -- Append-only the way `fix_prs` is. Only the shared spending store (server/src/spending.ts) writes it, through
 -- `withTeam`.
+--
+-- A call's cost is reserved before the call: under a per-Team advisory lock, the store sums today's rows and, below the
+-- limit, adds a row at the assumed cost, so overlapping runs of one Team can't each pass the check. After the answer,
+-- a correction row (`corrects` set) adds the difference to the cost the answer stated, or takes the assumed cost back
+-- for a call the provider refused unbilled. A call that timed out or failed upstream keeps its reservation.
 create table spending_ledger (
   team_id text not null references teams (id),
   id bigint generated always as identity,
@@ -12,13 +17,22 @@ create table spending_ledger (
   path text not null check (path in ('judge')),
   -- The model's name, as the call sent it.
   model text not null check (model ~ '\S'),
-  -- The tokens the provider's answer stated; null when it stated none (a failed call, or an answer without them).
+  -- The tokens the provider's answer stated; null when it stated none (a reservation, a failed call, or an answer
+  -- without them).
   input_tokens integer check (input_tokens >= 0),
   output_tokens integer check (output_tokens >= 0),
-  -- The call's cost in US dollars: the provider's stated cost, or the assumed cost of an unpriced call.
-  cost_usd numeric not null check (cost_usd >= 0),
-  cost_basis text not null check (cost_basis in ('stated', 'assumed')),
-  primary key (team_id, id)
+  -- The call's cost in US dollars: the provider's stated cost, or the assumed cost of an unpriced call. On a
+  -- correction, the difference from its reservation, below 0 when the call cost less.
+  cost_usd numeric not null,
+  -- 'unbilled' only on a correction: the provider refused the call before it ran (a 4xx), so it cost nothing.
+  cost_basis text not null check (cost_basis in ('stated', 'assumed', 'unbilled')),
+  -- The reservation this row corrects, at most once; null on a reservation or a call recorded at its known cost.
+  corrects bigint,
+  primary key (team_id, id),
+  unique (team_id, corrects),
+  foreign key (team_id, corrects) references spending_ledger (team_id, id),
+  check (cost_usd >= 0 or corrects is not null),
+  check (cost_basis <> 'unbilled' or corrects is not null)
 );
 
 -- Today's spending, which the limit reads before each paid call.
