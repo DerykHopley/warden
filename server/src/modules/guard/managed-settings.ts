@@ -10,13 +10,16 @@ export const HOOK_EVENTS_PATH = "/api/hook/events";
 /** Seconds Claude Code waits for Warden before going on, so a slow Warden can't hold up a session. */
 const TIMEOUT_SECONDS = 5;
 
-/** The events every tier sends; `content` adds the developer's prompts (docs/data.md, "The Privacy tier"). */
-const EVERY_TIER = ["SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"] as const;
+/**
+ * The events every tier sends; `content` adds the developer's prompts (docs/data.md, "The Privacy tier"). No
+ * SessionStart: Claude Code runs only `command` hooks for it and skips an `http` one (#465).
+ */
+const EVERY_TIER = ["PostToolUse", "PostToolUseFailure", "SessionEnd"] as const;
 const CONTENT_ONLY = ["UserPromptSubmit"] as const;
 
 type HookEvent = (typeof EVERY_TIER)[number] | (typeof CONTENT_ONLY)[number];
 
-/** Every event the block sends, at one tier or another: the only ones the hook endpoint stores. */
+/** Every event the block sends, at one tier or another. The hook endpoint stores these, and SessionStart. */
 export const HOOK_EVENTS: readonly HookEvent[] = [...EVERY_TIER, ...CONTENT_ONLY];
 
 /** Events whose matcher is the tool's name: `*` matches every tool. */

@@ -36,8 +36,11 @@ const MINUTE_MS = 60_000;
 /** The most sessions whose refused events are kept in memory; past it, the oldest is forgotten. */
 const MAX_REFUSED_SESSIONS = 10_000;
 
-/** The events the managed-settings block sends at any tier: the only ones stored. */
-const STORED_EVENTS: ReadonlySet<string> = new Set(HOOK_EVENTS);
+/**
+ * The only events stored: the ones the managed-settings block sends at any tier, and SessionStart, which the block
+ * leaves out (Claude Code skips an `http` hook for it, #465) but an older block or a command hook may still send.
+ */
+const STORED_EVENTS: ReadonlySet<string> = new Set([...HOOK_EVENTS, "SessionStart"]);
 
 /** What the endpoint reads of an event before the tier filter: its session and its name. */
 const EventShape = z.object({

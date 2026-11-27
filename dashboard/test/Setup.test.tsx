@@ -113,7 +113,7 @@ const hookBlock = (tier: PrivacyTier, token: string = HOOK_TOKEN_PLACEHOLDER) =>
     allowedEnvVars: ["USER"],
     timeout: 5,
   };
-  const events = ["SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"];
+  const events = ["PostToolUse", "PostToolUseFailure", "SessionEnd"];
   if (tier === "content") events.push("UserPromptSubmit");
   return { hooks: Object.fromEntries(events.map((event) => [event, [{ hooks: [hook] }]])) };
 };
@@ -1494,7 +1494,7 @@ describe("SetupPage: Agent hook (story 7)", () => {
     await userEvent.selectOptions(picker(), "content");
 
     await vi.waitFor(() => expect(block().hooks).toHaveProperty("UserPromptSubmit"));
-    expect(authorizations()).toHaveLength(5);
+    expect(authorizations()).toHaveLength(4);
     expect(authorizations().every((header) => header === `Bearer ${TOKEN}`)).toBe(true);
   });
 
