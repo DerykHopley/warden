@@ -295,7 +295,8 @@ export function ProductsPage({ getToken, me, onSessionEnded, refreshMe }: PagePr
   });
 
   // Opened at `#product-<id>` (a Product Asset's link on Findings, #210), that Product's entry comes into view and its
-  // name takes focus once the list first shows. An anchor no listed Product has moves nothing.
+  // name takes focus once the list first shows, and again each time only the address's anchor changes to another
+  // Product (#353). An anchor no listed Product has moves nothing.
   const listed = view?.products;
   const findEntry = useCallback(
     (anchor: string) =>

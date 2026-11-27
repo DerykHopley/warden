@@ -52,7 +52,8 @@ afterEach(() => {
 
 /**
  * Renders ProductsPage alone as `role` in org_a, with its calls (and /api/me, which a save asks first) answered unless
- * `routes` says otherwise. `rerender` gives the page a new Team or Role, as App does after /api/me answers again.
+ * `routes` says otherwise. `rerender` gives the page a new Team or Role, as App does after /api/me answers again;
+ * `unmount` takes it away, as leaving Products does.
  */
 function renderProducts(role: Role, routes: Routes = {}) {
   serve({
@@ -71,7 +72,7 @@ function renderProducts(role: Role, routes: Routes = {}) {
   const page = render(<ProductsPage {...props} />);
   const rerender = (me: { team?: string; role?: Role }, getToken = props.getToken) =>
     page.rerender(<ProductsPage {...props} getToken={getToken} me={{ ...props.me, ...me }} />);
-  return { ...props, rerender };
+  return { ...props, rerender, unmount: page.unmount };
 }
 
 /** One Product's entry in the list, found by its name. */
@@ -1495,5 +1496,72 @@ describe("ProductsPage opened at a Product's anchor", () => {
     await vi.waitFor(() => expect(callsTo("/api/products").length).toBeGreaterThanOrEqual(2));
     expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus();
     expect(scrolled).toHaveBeenCalledTimes(1);
+  });
+
+  /** Changes only the address's anchor, as editing it in the address bar does, and waits for its `hashchange`. */
+  async function changeAnchor(hash: string) {
+    await act(async () => {
+      const changed = new Promise((resolve) =>
+        window.addEventListener("hashchange", resolve, { once: true }),
+      );
+      location.hash = hash;
+      await changed;
+    });
+  }
+
+  it("lands on another Product when only the address's anchor changes to it", async () => {
+    window.history.replaceState(null, "", "/products#product-prod_search");
+    renderProducts("member");
+    await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
+
+    await changeAnchor("#product-prod_chat");
+    expect(nameOf("Chat assistant")).toHaveFocus();
+    expect(scrolled).toHaveBeenCalledTimes(2);
+    expect(scrolled.mock.contexts[1]).toBe(nameOf("Chat assistant").closest("li"));
+  });
+
+  it("moves nothing when the anchor changes to one no listed Product has, or to none", async () => {
+    window.history.replaceState(null, "", "/products#product-prod_search");
+    renderProducts("member");
+    await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
+
+    await changeAnchor("#product-prod_gone");
+    expect(nameOf("Search")).toHaveFocus();
+    await changeAnchor("");
+    expect(nameOf("Search")).toHaveFocus();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't move when the list is read again after an anchor change", async () => {
+    window.history.replaceState(null, "", "/products#product-prod_search");
+    renderProducts("admin", { deleteProduct: noContent });
+    await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
+    await changeAnchor("#product-prod_chat");
+    expect(scrolled).toHaveBeenCalledTimes(2);
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete Search" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await vi.waitFor(() => expect(callsTo("/api/products").length).toBeGreaterThanOrEqual(2));
+    await vi.waitFor(() =>
+      expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus(),
+    );
+    expect(scrolled).toHaveBeenCalledTimes(2);
+  });
+
+  it("moves nothing on an anchor change once the page has gone, and lands once when it's opened again", async () => {
+    window.history.replaceState(null, "", "/products#product-prod_search");
+    const { unmount } = renderProducts("member");
+    await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
+
+    unmount();
+    await changeAnchor("#product-prod_chat");
+    expect(scrolled).toHaveBeenCalledTimes(1);
+
+    // Back on Products, a listener the first page left behind would land a second time on each change.
+    renderProducts("member");
+    await vi.waitFor(() => expect(nameOf("Chat assistant")).toHaveFocus());
+    await changeAnchor("#product-prod_search");
+    expect(nameOf("Search")).toHaveFocus();
+    expect(scrolled).toHaveBeenCalledTimes(3);
   });
 });
