@@ -200,6 +200,33 @@ Only an Admin grants write access; a Lead or a Member sees "An Admin grants writ
 Setup URL is the live dashboard's, so after an install note the `installation_id` in that address and open
 `<preview URL>/setup/github/write?installation_id=<id>` on the preview.
 
+## Turning on the agent hook
+
+Guard records each developer's Claude Code sessions through a hook that Claude Code's managed settings turn on, on
+every laptop. An Admin sets it up from Setup's "Agent hook" section; a Lead or a Member sees "An Admin turns on the
+agent hook."
+
+1. **Issue the token, and copy it at once.** Choose **Issue a hook token**. Setup shows the token this once, with
+   **Copy token**: Warden keeps only its hash, so after a reload it's gone, and the only way to a new one is to rotate.
+2. **Pick the Privacy tier.** Metadata sends tool names and outcomes; Details (the default) adds commands, file paths
+   and URLs; Content adds tool output and prompts. The tier is the Team's, and Warden applies it to each event it
+   stores.
+3. **Copy the block into every laptop's managed settings.** Choose **Copy block**: while Setup still shows the token,
+   the block holds it; otherwise it holds a placeholder for the token you copied. Paste it as Claude Code's managed
+   settings file, which takes precedence over each developer's own settings:
+   - macOS: `/Library/Application Support/ClaudeCode/managed-settings.json`
+   - Linux and WSL: `/etc/claude-code/managed-settings.json`
+   - Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
+
+   The block sends the laptop's `USER` as `X-Warden-Developer`: Warden stores only a pseudonym of it, never the name.
+   Windows sets `USERNAME`, not `USER`, so a Windows laptop sends no developer unless `USER` is set there, and its
+   sessions are stored without a pseudonym.
+   Moving the tier to or from Content changes the block (Content adds the prompt event), so paste it again on every
+   laptop after such a change.
+4. **Rotate a token that leaked.** Choose **Rotate the hook token** and paste the new block. The token before it keeps
+   working for 24 hours, so laptops can catch up. Rotating again inside those 24 hours stops that older token at once
+   (Setup asks first): laptops that haven't got the current token stop sending.
+
 ## CVE data
 
 Patch matches a Team's Products against a frozen snapshot of public CVE data, **as of 2026-10-13**. It ships in the

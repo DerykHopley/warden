@@ -2,7 +2,8 @@
 // Assets with each one's last Scan, and a Lead or an Admin starts a Scan of them. GitHub sends the Admin back from
 // installing the app to `/setup/github`, its Setup URL, which asks them to sign in with GitHub so Warden can link that
 // installation to the Team. An Admin grants write access the same way, with Warden's second GitHub app, the write app
-// (#224, story 5): its Setup URL is `/setup/github/write`, and everyone in the Team sees the grant.
+// (#224, story 5): its Setup URL is `/setup/github/write`, and everyone in the Team sees the grant. Last, an Admin turns
+// on the agent hook (story 7, `HookSection.tsx`): the hook token, the Privacy tier and the managed-settings block.
 import { useOrganization } from "@clerk/react";
 import {
   assetKey,
@@ -33,8 +34,15 @@ import {
   type WardenApp,
   type WriteGrantsResult,
 } from "./github-setup.ts";
+import { HookSection } from "./HookSection.tsx";
 import { useLandOnAnchor } from "./land-on-anchor.ts";
 import { goTo } from "./navigate.ts";
+import {
+  useReportAnswered,
+  type AskingSection,
+  type OnAnswered,
+  type SectionProps,
+} from "./setup-section.ts";
 import {
   CATALOGUES_ANCHOR,
   cataloguesChanged,
@@ -51,21 +59,16 @@ const READ_AGAIN_MS = 5_000;
 const findLandingHeading = (anchor: string) =>
   anchor === REPOS_ANCHOR || anchor === CATALOGUES_ANCHOR ? document.getElementById(anchor) : null;
 
-/** A Setup section that asks Warden's server something before it shows, its waiting line in its place until then. */
-type AskingSection = "github" | "write" | "grants" | "repos" | "catalogues";
-/** The sections that ask for anyone: only an Admin's GitHub sections ask for their app's settings. */
+/** The sections that ask for anyone: only an Admin's GitHub and agent hook sections ask for their settings. */
 const ASKING_FOR_ANYONE: readonly AskingSection[] = ["grants", "repos", "catalogues"];
-const ASKING_FOR_AN_ADMIN: readonly AskingSection[] = ["github", "write", ...ASKING_FOR_ANYONE];
-/** Tells Setup a section's call has answered, so its waiting line is gone. */
-type OnAnswered = (section: AskingSection) => void;
-type SectionProps = PageProps & { onAnswered: OnAnswered };
-
-/** Once `answered` first turns true, tells Setup that `section` has. */
-function useReportAnswered(answered: boolean, section: AskingSection, onAnswered: OnAnswered) {
-  useEffect(() => {
-    if (answered) onAnswered(section);
-  }, [answered, section, onAnswered]);
-}
+const ASKING_FOR_AN_ADMIN: readonly AskingSection[] = [
+  "github",
+  "write",
+  ...ASKING_FOR_ANYONE,
+  "hook",
+];
+/** Setup's anchor for the Agent hook section. */
+const HOOK_ANCHOR = "setup-hook";
 const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
 /** The write app's Setup URL's path, `WriteAppSetupPage`'s route. */
 const WRITE_SETUP_PATH = "/setup/github/write";
@@ -129,7 +132,8 @@ function useOnce(call: () => void): () => void {
 
 export function SetupPage(props: PageProps) {
   // Each app's 403 says the same thing, that the Role changed since /api/me answered, so the app sections share one
-  // ask for the Role (#325). Scan now's 403 is a later click, so the repo list keeps the shell's own refreshMe.
+  // ask for the Role (#325), and the agent hook's settings join it. Scan now's 403, and a hook rotation's or tier
+  // change's, are later clicks, so the repo list and the hook's changes keep the shell's own refreshMe.
   const roleChanged = useOnce(props.refreshMe);
   // Opened at `#setup-repos` (Findings' "Scan now" link, #342) or `#setup-catalogues` (the Overview's Setup pointer),
   // the heading comes into view once every section that asks has answered: one still waiting above it would push it
@@ -169,6 +173,10 @@ export function SetupPage(props: PageProps) {
       <section className="setup-section" aria-labelledby={CATALOGUES_ANCHOR}>
         <h2 id={CATALOGUES_ANCHOR}>Catalogues</h2>
         <CatalogueSection {...sectionProps} />
+      </section>
+      <section className="setup-section" aria-labelledby={HOOK_ANCHOR}>
+        <h2 id={HOOK_ANCHOR}>Agent hook</h2>
+        <HookSection {...sectionProps} roleChanged={roleChanged} />
       </section>
     </>
   );

@@ -2,13 +2,10 @@
 // to turn the hook on for every laptop of the Team. Names are Claude Code's own, from its hooks reference
 // (https://code.claude.com/docs/en/hooks). It holds only Warden's hooks: no setting that would change hooks the Team
 // didn't get from Warden (`allowManagedHooksOnly`, `httpHookAllowedEnvVars`).
-import type { PrivacyTier } from "@warden/contracts";
+import { HOOK_TOKEN_PLACEHOLDER, type PrivacyTier } from "@warden/contracts";
 
 /** Where the hook sends its events, on Warden's own origin. Slice 10 serves it. */
 export const HOOK_EVENTS_PATH = "/api/hook/events";
-
-/** What stands in the token's place when there is no token to give: every read after the answer that issued it. */
-export const HOOK_TOKEN_PLACEHOLDER = "<rotate the hook token in Warden to get a new one>";
 
 /** Seconds Claude Code waits for Warden before going on, so a slow Warden can't hold up a session. */
 const TIMEOUT_SECONDS = 5;

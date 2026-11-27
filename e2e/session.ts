@@ -148,6 +148,31 @@ export const FIR = {
   people: [FRANCES, JOAN],
 };
 
+export const BARBARA: Person = {
+  userId: "user_e2e_barbara",
+  firstName: "Barbara",
+  lastName: "Liskov",
+  email: "barbara@ginkgo.test",
+};
+
+/**
+ * A seventh Team for the Guard spec's story 7 (e2e/hook.spec.ts): the global setup issues it two hook tokens, 50 and 25
+ * hours before the run (`E2E_HOOK_TOKENS`), and the test rotates in the page, so no other spec reads Ginkgo's hook.
+ */
+export const GINKGO = {
+  id: "org_e2e_ginkgo",
+  name: "Ginkgo",
+  admin: BARBARA,
+  people: [BARBARA],
+};
+
+/** The hook tokens the global setup issued Ginkgo, from the environment it left for the test workers. */
+export function seededHookTokens(): { issued50hAgo: string; issued25hAgo: string } {
+  const tokens = process.env.E2E_HOOK_TOKENS;
+  if (!tokens) throw new Error("E2E_HOOK_TOKENS is unset: run the browser tests with `pnpm e2e`");
+  return JSON.parse(tokens) as { issued50hAgo: string; issued25hAgo: string };
+}
+
 /** Fir's one Repo Asset, linked by the global setup. */
 export const FIR_REPO = { ref: "https://github.com/fir/assistant", githubId: 5251 };
 

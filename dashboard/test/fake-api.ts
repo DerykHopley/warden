@@ -60,6 +60,12 @@ export type Routes = {
   control?: (catalogue: string, ref: string) => Answer;
   /** POST /api/vouch/catalogues/:id/controls/:ref/reviews, with the Catalogue id, the Control's ref and the parsed body. */
   review?: (catalogue: string, ref: string, body: unknown) => Answer;
+  /** GET /api/hook: the Team's hook settings (story 7), never a token. */
+  hook?: () => Answer;
+  /** POST /api/hook/token: issues or rotates the Team's hook token. */
+  issueHookToken?: () => Answer;
+  /** PUT /api/hook/privacy-tier, with the parsed body. */
+  setPrivacyTier?: (body: unknown) => Answer;
 };
 
 const sentBody = (init: RequestInit | undefined): unknown =>
@@ -151,6 +157,13 @@ export function serve(routes: Routes) {
     if (reviewed && method === "POST" && routes.review) {
       const [, catalogue = "", ref = ""] = reviewed;
       return routes.review(decodeURIComponent(catalogue), decodeURIComponent(ref), sentBody(init));
+    }
+    if (url === "/api/hook" && method === "GET" && routes.hook) return routes.hook();
+    if (url === "/api/hook/token" && method === "POST" && routes.issueHookToken) {
+      return routes.issueHookToken();
+    }
+    if (url === "/api/hook/privacy-tier" && method === "PUT" && routes.setPrivacyTier) {
+      return routes.setPrivacyTier(sentBody(init));
     }
     throw new Error(`The test gave no answer for ${method} ${url}`);
   });
