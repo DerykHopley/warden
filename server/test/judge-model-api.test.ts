@@ -324,7 +324,14 @@ async function runJob(
   const code = await runJudgeJob({
     team,
     sessionId,
-    judge: judge({ withTeam, settings, fetch: openRouter.fetch, resolve, timeoutMs: 2_000 }),
+    judge: judge({
+      withTeam,
+      settings,
+      fetch: openRouter.fetch,
+      resolve,
+      timeoutMs: 2_000,
+      logger: createLogger(() => {}),
+    }),
     logger: createLogger((line) => lines.push(line)),
   });
   return { code, openRouter, output: lines.join("") };

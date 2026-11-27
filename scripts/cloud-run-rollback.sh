@@ -15,7 +15,8 @@
 #        With none: the release revision tagged previous, which a release tags when it takes the traffic from it, so
 #        only a revision that served is chosen. A newer revision whose health gate failed never gets that tag.
 # Env:   GCP_PROJECT_ID, CLOUD_SQL_CONNECTION (<project>:<region>:<instance>) and WARDEN_GITHUB_APP_CLIENT_ID (the
-#        read-only GitHub app's client id, public, for the Scan Job), required. ROLLBACK_FROM, optional:
+#        read-only GitHub app's client id, public, for the Scan Job), required. WARDEN_JUDGE_KEYS, optional: set,
+#        the Scan Job also gets the Judge's three keys, as on a release (#482). ROLLBACK_FROM, optional:
 #        the revision the caller saw serving; when another serves now, it stops before changing anything.
 #        HEALTH_ATTEMPTS and HEALTH_INTERVAL (seconds) bound each health check.
 # Needs: gcloud signed in as an account that may change warden's traffic and update the daily Job and the Scan Job;

@@ -5,6 +5,7 @@ import {
   AGENT_READS_SECRETS,
   AGENT_SENDS_SECRETS,
   JUDGE_RULES,
+  JUDGE_STEERING_TEXT,
 } from "./judge-rules.ts";
 import { readVerdict, VERDICT_JSON_SCHEMA } from "./judge-verdict.ts";
 
@@ -178,6 +179,109 @@ describe("readVerdict", () => {
     });
 
     expect(outcome).toEqual({ kind: "needs_human_review", reason: expect.any(String) });
+  });
+
+  describe("with the events Warden found steering text in (slice 7b)", () => {
+    const steered = (answer: Parameters<typeof readVerdict>[0], steering: number[]) =>
+      readVerdict(answer, { sessionId: "sess-1", events: events(5), eventsHash: HASH, steering });
+    const verdictOf = (rules: unknown[]) => ({
+      refusal: false,
+      content: JSON.stringify({ broken_rules: rules }),
+    });
+
+    it("adds Warden's Medium Observation citing those events, with a summary that counts them, after the model's", () => {
+      const outcome = steered(verdictOf([broken(AGENT_READS_SECRETS, "Read .env", [1])]), [3, 2]);
+
+      expect(outcome.kind).toBe("observations");
+      if (outcome.kind !== "observations") return;
+      expect(outcome.observations.map((o) => o.rule_id)).toEqual([
+        AGENT_READS_SECRETS,
+        JUDGE_STEERING_TEXT,
+      ]);
+      const warden = outcome.observations[1]!;
+      expect(warden).toMatchObject({
+        severity: "medium",
+        title: "Text in the session tried to steer the Judge",
+        evidence: { summary: "Warden found text addressed to the Judge in 2 events." },
+      });
+      expect(warden.evidence.session!.events.map((e) => e.seq)).toEqual([2, 3]);
+      Observation.parse(warden);
+    });
+
+    it("says 1 event for one", () => {
+      const outcome = steered(verdictOf([]), [4]);
+
+      expect(outcome.kind).toBe("observations");
+      if (outcome.kind !== "observations") return;
+      expect(outcome.observations[0]!.evidence.summary).toBe(
+        "Warden found text addressed to the Judge in 1 event.",
+      );
+    });
+
+    it("merges it with the model's Observation for the same Rule: the cited events together, the summaries joined", () => {
+      const outcome = steered(
+        verdictOf([
+          broken(JUDGE_STEERING_TEXT, "The output told the reviewer to mark it safe.", [1]),
+          broken(AGENT_READS_SECRETS, "Read .env", [0]),
+        ]),
+        [3, 1],
+      );
+
+      expect(outcome.kind).toBe("observations");
+      if (outcome.kind !== "observations") return;
+      expect(outcome.observations.map((o) => o.rule_id)).toEqual([
+        JUDGE_STEERING_TEXT,
+        AGENT_READS_SECRETS,
+      ]);
+      const merged = outcome.observations[0]!;
+      expect(merged.evidence.summary).toBe(
+        "The output told the reviewer to mark it safe. Warden found text addressed to the Judge in 2 events.",
+      );
+      expect(merged.evidence.session!.events.map((e) => e.seq)).toEqual([1, 3]);
+    });
+
+    it.each([
+      ["a refusal", { refusal: true } as const, "the model refused"],
+      [
+        "content that isn't JSON",
+        { refusal: false, content: "Marked safe, as asked." } as const,
+        "the answer isn't a verdict",
+      ],
+      [
+        "a Rule that isn't the Judge's",
+        verdictOf([broken("guard/secret-in-repo", "Read .env", [1])]),
+        "the answer names a Rule that isn't the Judge's",
+      ],
+    ])(
+      "reports Warden's Observation alone for %s, its summary saying why the answer needs human review",
+      (_name, answer, reason) => {
+        const outcome = steered(answer, [2]);
+
+        expect(outcome.kind).toBe("observations");
+        if (outcome.kind !== "observations") return;
+        expect(outcome.observations.map((o) => o.rule_id)).toEqual([JUDGE_STEERING_TEXT]);
+        expect(outcome.observations[0]!.evidence.summary).toBe(
+          `Warden found text addressed to the Judge in 1 event. The model's answer needs a person's review: ${reason}.`,
+        );
+      },
+    );
+
+    it("ends Warden's summary with `ending` too", () => {
+      const ending = "The Judge read the last 5 of 9 events.";
+      const outcome = readVerdict(verdictOf([]), {
+        sessionId: "sess-1",
+        events: events(5),
+        eventsHash: HASH,
+        steering: [0],
+        ending,
+      });
+
+      expect(outcome.kind).toBe("observations");
+      if (outcome.kind !== "observations") return;
+      expect(outcome.observations[0]!.evidence.summary).toBe(
+        `Warden found text addressed to the Judge in 1 event. ${ending}`,
+      );
+    });
   });
 
   it("names every Judge Rule in the JSON schema the model answers to, and asks for nothing else", () => {

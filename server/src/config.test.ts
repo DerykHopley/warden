@@ -455,23 +455,82 @@ describe("judgeSettings (the Scan Job's, for a Judge run)", () => {
   it("reads the key and the model", () => {
     expect(
       judgeSettings({ OPENROUTER_API_KEY: "sk-or-v1-abc", WARDEN_JUDGE_MODEL: "test/model" }),
-    ).toEqual({ apiKey: "sk-or-v1-abc", model: "test/model", allowLocalhost: false });
+    ).toEqual({
+      apiKey: "sk-or-v1-abc",
+      model: "test/model",
+      allowLocalhost: false,
+      langfuse: undefined,
+    });
   });
 
   it.each([
     ["unset", {}],
-    ["empty", { OPENROUTER_API_KEY: "", WARDEN_JUDGE_MODEL: "", WARDEN_JUDGE_LOCALHOST: "" }],
+    [
+      "empty",
+      {
+        OPENROUTER_API_KEY: "",
+        WARDEN_JUDGE_MODEL: "",
+        WARDEN_JUDGE_LOCALHOST: "",
+        LANGFUSE_PUBLIC_KEY: "",
+        LANGFUSE_SECRET_KEY: "",
+        LANGFUSE_BASE_URL: "",
+      },
+    ],
   ])(
-    "leaves the key undefined, takes Claude Haiku 5.5 and keeps localhost off when they're %s",
+    "leaves the key undefined, takes Claude Haiku 5.5, keeps localhost off and traces nothing when they're %s",
     (_name, env) => {
       expect(judgeSettings(env)).toEqual({
         apiKey: undefined,
         model: DEFAULT_JUDGE_MODEL,
         allowLocalhost: false,
+        langfuse: undefined,
       });
       expect(DEFAULT_JUDGE_MODEL).toBe("anthropic/claude-haiku-5.5");
     },
   );
+
+  it("reads both Langfuse keys, with Langfuse's EU region unless LANGFUSE_BASE_URL names another", () => {
+    const keys = { LANGFUSE_PUBLIC_KEY: "pk-lf-1", LANGFUSE_SECRET_KEY: "sk-lf-1" };
+    expect(judgeSettings(keys).langfuse).toEqual({
+      publicKey: "pk-lf-1",
+      secretKey: "sk-lf-1",
+      baseUrl: "https://cloud.langfuse.com",
+    });
+    expect(
+      judgeSettings({ ...keys, LANGFUSE_BASE_URL: "https://us.cloud.langfuse.com" }).langfuse
+        ?.baseUrl,
+    ).toBe("https://us.cloud.langfuse.com");
+  });
+
+  it.each([
+    ["LANGFUSE_PUBLIC_KEY", { LANGFUSE_PUBLIC_KEY: "pk-lf-planted" }, "LANGFUSE_SECRET_KEY"],
+    ["LANGFUSE_SECRET_KEY", { LANGFUSE_SECRET_KEY: "sk-lf-planted" }, "LANGFUSE_PUBLIC_KEY"],
+  ])("refuses %s alone, naming the one missing and no value", (_name, env, missing) => {
+    const error = configError(() => judgeSettings(env));
+    expect(error.variables).toEqual([missing]);
+    expect(error.message).not.toContain("planted");
+  });
+
+  it.each(["http://langfuse.example", "langfuse.example", "ftp://langfuse.example"])(
+    "refuses LANGFUSE_BASE_URL=%s, which isn't https, naming the variable",
+    (url) => {
+      const error = configError(() =>
+        judgeSettings({
+          LANGFUSE_PUBLIC_KEY: "pk-lf-1",
+          LANGFUSE_SECRET_KEY: "sk-lf-1",
+          LANGFUSE_BASE_URL: url,
+        }),
+      );
+      expect(error.variables).toEqual(["LANGFUSE_BASE_URL"]);
+      expect(error.message).not.toContain("langfuse.example");
+    },
+  );
+
+  it("traces nothing, and doesn't stop the run, for a LANGFUSE_BASE_URL that isn't https with neither key set", () => {
+    expect(
+      judgeSettings({ LANGFUSE_BASE_URL: "http://langfuse.example" }).langfuse,
+    ).toBeUndefined();
+  });
 
   it("turns localhost on with WARDEN_JUDGE_LOCALHOST=1", () => {
     expect(judgeSettings({ WARDEN_JUDGE_LOCALHOST: "1" }).allowLocalhost).toBe(true);

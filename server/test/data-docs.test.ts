@@ -111,6 +111,27 @@ describe("docs/data.md", () => {
     expect(leaves).toMatch(/2 calls/);
   });
 
+  it("names the Judge's three secrets, read by the Scan Jobs' accounts only, and marks Langfuse built (#482)", () => {
+    const secretManager = row("Secret Manager");
+    for (const secret of [
+      "warden-openrouter-api-key",
+      "warden-langfuse-public-key",
+      "warden-langfuse-secret-key",
+    ]) {
+      expect(secretManager).toContain(`\`${secret}\``);
+    }
+    expect(secretManager).toMatch(
+      /Judge's three[^|]*read only by `warden-scan` and `warden-preview-scan`/,
+    );
+    expect(secretManager).not.toMatch(/Designed: Guard spec \(OpenRouter and Langfuse keys\)/);
+
+    const langfuse = row("Langfuse Cloud");
+    expect(langfuse).toMatch(/\| Built: [^|]*#482[^|]*\|$/);
+    const langfuseLeaves = /^- \*\*Langfuse:\*\*[\s\S]*?(?=^- )/m.exec(leaves)?.[0] ?? "";
+    expect(langfuseLeaves).toMatch(/built, #482/);
+    expect(langfuseLeaves).not.toMatch(/designed, Guard spec/);
+  });
+
   it("names one Warden pseudonym key, each Team's key derived from it, in The pseudonym", () => {
     const section = /^## The pseudonym\n([\s\S]*?)(?=^## )/m.exec(data)?.[1] ?? "";
     expect(section).toContain("`WARDEN_PSEUDONYM_KEY`");

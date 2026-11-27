@@ -6,7 +6,7 @@ import type { MaskedAgentEvent, Observation } from "@warden/contracts";
 import { z } from "zod";
 import type { ModelAnswer } from "./judge-model.ts";
 import { cut } from "./cut.ts";
-import { JUDGE_RULES, judgeRule } from "./judge-rules.ts";
+import { JUDGE_RULES, JUDGE_STEERING_TEXT, judgeRule } from "./judge-rules.ts";
 
 /** The most cited events one Finding keeps, as the contracts' `SessionEvidence` holds them. */
 const MAX_CITED_EVENTS = 50;
@@ -75,13 +75,42 @@ function parseJson(text: string): unknown {
   }
 }
 
+type BrokenRule = z.infer<typeof Verdict>["broken_rules"][number];
+
+/** The answer's broken Rules, each the Judge's, citing events it read; or why a person must review it. */
+function brokenRules(
+  answer: ModelAnswer,
+  eventsRead: number,
+): { rules: BrokenRule[] } | { reason: string } {
+  if (answer.refusal) return { reason: "the model refused" };
+  const parsed = Verdict.safeParse(parseJson(answer.content));
+  if (!parsed.success) return { reason: "the answer isn't a verdict" };
+  for (const { rule_id, event_seqs } of parsed.data.broken_rules) {
+    if (judgeRule(rule_id) === undefined)
+      return { reason: "the answer names a Rule that isn't the Judge's" };
+    if (event_seqs.length === 0) return { reason: "the answer cites no event for a Rule" };
+    if (event_seqs.some((seq) => seq >= eventsRead)) {
+      return { reason: "the answer cites an event the Judge didn't read" };
+    }
+  }
+  return {
+    rules: parsed.data.broken_rules.map((rule) => ({ ...rule, summary: rule.summary.trim() })),
+  };
+}
+
+/** Warden's own summary for steering text in `count` events: it counts them, and never quotes the text. */
+const steeringSummary = (count: number) =>
+  `Warden found text addressed to the Judge in ${count} ${count === 1 ? "event" : "events"}.`;
+
 /**
  * The model's answer as Observations on the session `sessionId`: one per broken Rule, a Rule listed twice merged into
  * one (its summaries joined, its events together), with the Rule's severity and title, the summary without the NULs
  * and lone surrogate halves Postgres can't store (#450) and cut to 2,000, and
  * at most the first 50 cited events in session order beside `events_read` and `events_hash`. With `ending` (slice
- * 7a: what the Judge left unread), each summary ends with it, the model's text cut to leave it room. The reason a
- * person must review it otherwise; the reason never holds the answer's text.
+ * 7a: what the Judge left unread), each summary ends with it, the model's text cut to leave it room. With `steering`
+ * (slice 7b: the seqs Warden's own patterns matched), a `guard/judge-steering-text` Observation citing them, merged
+ * with the model's for that Rule, and reported even when the answer needs review, its summary then naming the reason.
+ * The reason a person must review it otherwise; the reason never holds the answer's text.
  */
 export function readVerdict(
   answer: ModelAnswer,
@@ -90,33 +119,40 @@ export function readVerdict(
     events,
     eventsHash,
     ending,
+    steering = [],
   }: {
     sessionId: string;
     events: readonly MaskedAgentEvent[];
     eventsHash: string;
     ending?: string;
+    steering?: readonly number[];
   },
 ): VerdictOutcome {
   const summarise = (text: string) =>
     ending === undefined
       ? cut(text, MAX_SUMMARY_LENGTH)
       : `${cut(text, MAX_SUMMARY_LENGTH - ending.length - 1)} ${ending}`;
-  if (answer.refusal) return review("the model refused");
-  const parsed = Verdict.safeParse(parseJson(answer.content));
-  if (!parsed.success) return review("the answer isn't a verdict");
+  const answered = brokenRules(answer, events.length);
+  if ("reason" in answered && steering.length === 0) return review(answered.reason);
 
   const byRule = new Map<string, { summaries: string[]; seqs: Set<number> }>();
-  for (const { rule_id, summary, event_seqs } of parsed.data.broken_rules) {
-    if (judgeRule(rule_id) === undefined)
-      return review("the answer names a Rule that isn't the Judge's");
-    if (event_seqs.length === 0) return review("the answer cites no event for a Rule");
-    if (event_seqs.some((seq) => seq >= events.length)) {
-      return review("the answer cites an event the Judge didn't read");
-    }
-    const entry = byRule.get(rule_id) ?? { summaries: [], seqs: new Set<number>() };
-    entry.summaries.push(summary.trim());
-    for (const seq of event_seqs) entry.seqs.add(seq);
-    byRule.set(rule_id, entry);
+  const add = (ruleId: string, summary: string, seqs: readonly number[]) => {
+    const entry = byRule.get(ruleId) ?? { summaries: [], seqs: new Set<number>() };
+    entry.summaries.push(summary);
+    for (const seq of seqs) entry.seqs.add(seq);
+    byRule.set(ruleId, entry);
+  };
+  // An answer a person must review adds no Observation: Warden's own stands alone, its summary saying why.
+  if ("rules" in answered) {
+    for (const { rule_id, summary, event_seqs } of answered.rules)
+      add(rule_id, summary, event_seqs);
+  }
+  if (steering.length > 0) {
+    const why =
+      "reason" in answered
+        ? ` The model's answer needs a person's review: ${answered.reason}.`
+        : "";
+    add(JUDGE_STEERING_TEXT, `${steeringSummary(steering.length)}${why}`, steering);
   }
 
   const observations = [...byRule].map(([ruleId, { summaries, seqs }]): Observation => {

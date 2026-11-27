@@ -3,6 +3,7 @@
 // answers 400, and never follows a redirect. Against fake model servers on 127.0.0.1, with a stub resolver. Slice 7a:
 // `openRouterModel` reads each answer's usage block for the spending ledger, and is the one paid model.
 import { afterEach, describe, expect, it } from "vitest";
+import { ConfigError } from "../../config.ts";
 import {
   closeFakeModelServers,
   completion,
@@ -221,10 +222,9 @@ describe("openRouterModel (story 10)", () => {
 });
 
 describe("judgeModel without a key", () => {
-  it("is paid, so a run is checked against the Team's limit before its ConfigError", () => {
-    expect(judgeModel({ apiKey: undefined, model: "test/judge-model" })).toMatchObject({
-      model: "test/judge-model",
-      paid: true,
-    });
+  it("throws ConfigError naming OPENROUTER_API_KEY, so a run stops before it reserves anything (#489)", () => {
+    expect(() => judgeModel({ apiKey: undefined, model: "test/judge-model" })).toThrow(
+      new ConfigError(["OPENROUTER_API_KEY"]),
+    );
   });
 });

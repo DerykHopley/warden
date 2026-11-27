@@ -10,9 +10,14 @@
 // loaded; it makes at most JUDGE_RUN_CALL_BUDGET calls (a call that may answer next time gets one retry); and before
 // each paid call it reserves the call's assumed cost in the spending ledger, under the Team's daily limit, then settles
 // it to what the answer stated. A Team's own model costs Warden nothing: neither limited nor recorded.
+//
+// Slice 7b (story 10, threats J1 and J7): Warden reads the events itself for text addressed to the Judge, and reports
+// it as its own Observation whatever the model answered. A run that made paid calls sends one Langfuse trace when it
+// ends, metadata only; a trace Langfuse doesn't take is logged and never changes the run's outcome.
 import { agentEventsHash, Status, type SpotRun } from "@warden/contracts";
-import { ConfigError } from "../../config.ts";
 import type { Findings } from "../../findings/index.ts";
+import { TraceNotSent, type JudgeTrace, type TracedCall, type Tracer } from "../../langfuse.ts";
+import type { Logger } from "../../log.ts";
 import { UNBILLED, UNPRICED_CALL_USD, type Settlement, type Spending } from "../../spending.ts";
 import type { AgentSessions, HeldClaim, SessionOutcome } from "./agent-sessions.ts";
 import {
@@ -24,6 +29,7 @@ import {
 } from "./judge-model.ts";
 import { judgePrompt, lastEventsThatFit, maskEvents } from "./judge-prompt.ts";
 import { JUDGE_RULES } from "./judge-rules.ts";
+import { steeringEvents } from "./judge-steering.ts";
 import { readVerdict, VERDICT_JSON_SCHEMA } from "./judge-verdict.ts";
 
 /** The verdict schema's name in the request's `response_format`. */
@@ -79,9 +85,8 @@ function answeredCost(usage: ModelUsage | undefined): Settlement {
     : { ...tokens, costUsd: usage.costUsd, costBasis: "stated" };
 }
 
-/** Whether a failed call may have cost money: all but a ConfigError (nothing sent) and a call refused before it ran. */
-const mayBeBilled = (error: unknown) =>
-  !(error instanceof ConfigError) && !(error instanceof ModelCallFailed && !error.billed);
+/** Whether a failed call may have cost money: all but a call refused before it ran. */
+const mayBeBilled = (error: unknown) => !(error instanceof ModelCallFailed && !error.billed);
 
 /** One call's reserved cost: settled to what an answer stated, or taken back when the call wasn't billed. */
 type Charge = { settle(usage: ModelUsage | undefined): Promise<void>; unbilled(): Promise<void> };
@@ -98,20 +103,33 @@ const FREE: Meter = {
 const cutEnding = (read: number, total: number) =>
   `The Judge read the last ${read} of ${total} events; the earlier ones were over its input cap.`;
 
+/** Where a run's trace goes when Langfuse's keys are set: the tracer, and the logger for a trace it couldn't send. */
+export type JudgeTracing = { tracer: Tracer; logger: Pick<Logger, "warn"> };
+
+/** The trace outcome for a run that ended as `ran`, or threw (undefined). */
+const traceOutcome = (ran: JudgeRunOutcome | undefined): JudgeTrace["outcome"] => {
+  if (ran?.kind === "judged") return ran.outcome;
+  if (ran?.kind === "limited") return "limited";
+  return "failed";
+};
+
 /**
  * `modelFor` gives the Team's model, asked only when there is a session to judge: its own (slice 6a) or OpenRouter's.
- * `spending` is the Team's ledger, read and added to only for a paid model.
+ * `spending` is the Team's ledger, read and added to only for a paid model. `tracing`, when Langfuse's keys are set,
+ * gets each run's paid calls.
  */
 export function createJudge({
   agentSessions,
   findings,
   spending,
   modelFor,
+  tracing,
 }: {
   agentSessions: Pick<AgentSessions, "claim" | "release" | "readEnded" | "markJudged">;
   findings: Pick<Findings, "report" | "listByRules">;
   spending: Spending;
   modelFor: (team: string) => Promise<JudgeModel>;
+  tracing?: JudgeTracing;
 }): Judge {
   /** The Team's meter for `model`: the spending ledger's, for a paid model. */
   function meterFor(team: string, model: JudgeModel): Meter {
@@ -131,30 +149,45 @@ export function createJudge({
   /**
    * The model's answer within the run's call budget, or the Team's spending when it reached the limit before a paid
    * call. Each call's cost is reserved before it's made, so a failed call that may have been billed keeps its
-   * reservation, which the retry's check counts. Only a failure that may answer next time is retried.
+   * reservation, which the retry's check counts. Only a failure that may answer next time is retried. Each paid call
+   * made, answered or not, is added to `traced`.
    */
   async function complete(
     meter: Meter,
     model: JudgeModel,
     messages: ChatMessage[],
+    traced: TracedCall[],
   ): Promise<{ answer: ModelAnswer } | { limited: number }> {
     for (let call = 1; ; call++) {
       const charge = await meter.reserve();
       if ("limited" in charge) return charge;
       let answer: ModelAnswer;
+      const startedAt = new Date();
+      /** Adds this call to `traced`, for a paid model. */
+      const record = (
+        cost: Pick<TracedCall, "inputTokens" | "outputTokens" | "costUsd">,
+        outcome: TracedCall["outcome"],
+      ) => {
+        if (model.paid) {
+          traced.push({ model: model.model, ...cost, startedAt, endedAt: new Date(), outcome });
+        }
+      };
       try {
         answer = await model.complete(messages, {
           name: VERDICT_SCHEMA_NAME,
           schema: VERDICT_JSON_SCHEMA,
         });
       } catch (error) {
+        const costUsd = mayBeBilled(error) ? UNPRICED_CALL_USD : 0;
+        record({ inputTokens: null, outputTokens: null, costUsd }, "failed");
         if (!mayBeBilled(error)) await charge.unbilled();
-        // A ConfigError (no key) never left the machine, and a retry would fail the same way.
         if (!(error instanceof ModelCallFailed && error.retry) || call >= JUDGE_RUN_CALL_BUDGET) {
           throw error;
         }
         continue;
       }
+      const { inputTokens, outputTokens, costUsd } = answeredCost(answer.usage);
+      record({ inputTokens, outputTokens, costUsd }, answer.refusal ? "refused" : "answered");
       await charge.settle(answer.usage);
       return { answer };
     }
@@ -165,6 +198,7 @@ export function createJudge({
     team: string,
     sessionId: string,
     claim: HeldClaim,
+    traced: TracedCall[],
   ): Promise<JudgeRunOutcome> {
     const read = await agentSessions.readEnded(team, sessionId);
     if (read === undefined) return { kind: "skipped" };
@@ -175,15 +209,22 @@ export function createJudge({
     const eventsHash = await agentEventsHash(events);
     const { system, user } = judgePrompt(events);
     const model = await modelFor(team);
-    const called = await complete(meterFor(team, model), model, [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ]);
+    const called = await complete(
+      meterFor(team, model),
+      model,
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      traced,
+    );
     if ("limited" in called) return { kind: "limited", spent: called.limited };
     const verdict = readVerdict(called.answer, {
       sessionId,
       events,
       eventsHash,
+      // Read by Warden, not the model, so a model the text steered still reports it.
+      steering: steeringEvents(events),
       ...(eventsCut > 0 ? { ending: cutEnding(kept.length, read.length) } : {}),
     });
 
@@ -216,21 +257,44 @@ export function createJudge({
     return { kind: "judged", outcome: marked, eventsRead: kept.length, eventsCut, opened };
   }
 
+  /** Sends the run's trace when it made a paid call; a trace Langfuse didn't take is logged, never thrown. */
+  async function sendTrace(
+    team: string,
+    outcome: JudgeTrace["outcome"],
+    calls: TracedCall[],
+  ): Promise<void> {
+    if (tracing === undefined || calls.length === 0) return;
+    try {
+      await tracing.tracer.sendJudgeRun({ team, outcome, calls });
+    } catch (error) {
+      // The status or the connection's code alone: never Langfuse's answer body.
+      const reason = error instanceof TraceNotSent ? error.reason : { code: "unknown" };
+      tracing.logger.warn("judge trace not sent", reason);
+    }
+  }
+
   return {
     async run(team, sessionId) {
       const claim = await agentSessions.claim(team, sessionId);
       if (claim.kind === "busy") return { kind: "busy" };
       if (claim.kind === "absent") return { kind: "skipped" };
-      let ran: JudgeRunOutcome;
+      const traced: TracedCall[] = [];
+      let ran: JudgeRunOutcome | undefined;
       try {
-        ran = await judgeClaimed(team, sessionId, claim);
-      } catch (error) {
-        // The run's own error is the one to report; a claim not cleared runs out after JUDGE_CLAIM_MINUTES.
-        await agentSessions.release(team, sessionId, claim).catch(() => undefined);
-        throw error;
+        try {
+          ran = await judgeClaimed(team, sessionId, claim, traced);
+        } catch (error) {
+          // The run's own error is the one to report; a claim not cleared runs out after JUDGE_CLAIM_MINUTES.
+          await agentSessions.release(team, sessionId, claim).catch(() => undefined);
+          throw error;
+        }
+        if (ran.kind !== "judged") await agentSessions.release(team, sessionId, claim);
+        return ran;
+      } finally {
+        // After the session is marked or released, or the run threw: the trace is the last thing a run does, can't
+        // hold up its outcome, and is sent whatever the release did.
+        await sendTrace(team, traceOutcome(ran), traced);
       }
-      if (ran.kind !== "judged") await agentSessions.release(team, sessionId, claim);
-      return ran;
     },
   };
 }

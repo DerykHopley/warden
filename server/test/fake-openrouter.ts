@@ -48,7 +48,7 @@ export function fakeOpenRouter(
 }
 
 /** An answer that never comes: it rejects when the call's signal fires, as fetch does on its timeout. */
-export const neverAnswers = (_call: FakeCall, init: RequestInit) =>
+export const neverAnswers = (_call: unknown, init: RequestInit) =>
   new Promise<never>((_, reject) => {
     init.signal?.addEventListener("abort", () => reject(init.signal!.reason as Error));
   });

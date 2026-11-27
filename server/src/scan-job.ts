@@ -303,7 +303,7 @@ async function judgeMain(
     return await runJudgeJob({
       team,
       sessionId,
-      judge: judge({ withTeam: createWithTeam(pool), settings: judging.settings }),
+      judge: judge({ withTeam: createWithTeam(pool), settings: judging.settings, logger }),
       logger,
     });
   } catch (error) {

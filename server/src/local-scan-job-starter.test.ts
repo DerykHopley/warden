@@ -131,17 +131,20 @@ describe("localScanJobStarter", () => {
     await started;
 
     const env = fake.calls[0]!.env;
-    expect(env).not.toHaveProperty("OPENROUTER_API_KEY");
-    expect(env).not.toHaveProperty("WARDEN_JUDGE_LOCALHOST");
-    expect(env).not.toHaveProperty("WARDEN_SESSION_ID");
+    for (const name of [...Object.keys(JUDGE_ENV), "WARDEN_SESSION_ID"]) {
+      expect(env).not.toHaveProperty(name);
+    }
   });
 });
 
-/** The Judge's three variables, as the server's environment holds them locally. */
+/** The Judge's variables, as the server's environment holds them locally: its model's, then Langfuse's (slice 7b). */
 const JUDGE_ENV = {
   OPENROUTER_API_KEY: "sk-or-v1-the-judge-key",
   WARDEN_JUDGE_MODEL: "anthropic/claude-haiku-5.5",
   WARDEN_JUDGE_LOCALHOST: "1",
+  LANGFUSE_PUBLIC_KEY: "pk-lf-the-public-key",
+  LANGFUSE_SECRET_KEY: "sk-lf-the-secret-key",
+  LANGFUSE_BASE_URL: "https://cloud.langfuse.com",
 };
 
 function judgeStarter(spawn: Spawn, env: NodeJS.ProcessEnv) {
@@ -157,7 +160,7 @@ function judgeStarter(spawn: Spawn, env: NodeJS.ProcessEnv) {
 const SESSION = { sessionId: "sess-1", team: "org_a" };
 
 describe("localJudgeJobStarter (#444)", () => {
-  it("runs scan-job.ts with the session's id and Team, the Judge's three variables, and the Scan Job's own", async () => {
+  it("runs scan-job.ts with the session's id and Team, the Judge's variables (Langfuse's too), and the Scan Job's own", async () => {
     const fake = fakeSpawn();
     const { start } = judgeStarter(fake.spawn, {
       ...SERVER_ENV,
@@ -203,9 +206,7 @@ describe("localJudgeJobStarter (#444)", () => {
     await started;
 
     const env = fake.calls[0]!.env;
-    expect(env).not.toHaveProperty("OPENROUTER_API_KEY");
-    expect(env).not.toHaveProperty("WARDEN_JUDGE_MODEL");
-    expect(env).not.toHaveProperty("WARDEN_JUDGE_LOCALHOST");
+    for (const name of Object.keys(JUDGE_ENV)) expect(env).not.toHaveProperty(name);
   });
 
   it("logs the run's exit with the Team and exit code, never the session id", async () => {

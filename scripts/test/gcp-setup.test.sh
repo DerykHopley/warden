@@ -77,6 +77,8 @@ bindings_to() {
 # The write app's two secrets (#334): only the two services read them, so Fix PRs open from the service alone. No
 # Scan Job reads either: Scans stay read-only.
 write_secrets="warden-github-write-app-client-secret warden-github-write-app-private-key"
+# The Judge's three keys (#482), made by hand: the Scan Jobs call OpenRouter and trace to Langfuse with them.
+judge_secrets="warden-openrouter-api-key warden-langfuse-public-key warden-langfuse-secret-key"
 # assert_write_secrets_services_only <label> <text>: in the text (a dry run's output, or a real run's recorded calls),
 # each write-app secret is granted to warden-run and warden-preview-run, and to no other account.
 assert_write_secrets_services_only() {
@@ -136,12 +138,23 @@ gcloud run jobs add-iam-policy-binding warden-scan-preview --region=europe-west1
   "$(grep -F 'roles/run.jobsExecutorWithOverrides' <<<"$output")"
 
 # The Scan Job (ADR 0009): it lists no Teams, so it reads the app password, never the admin one; and the GitHub app's
-# private key, never its client secret.
-assert_equal "warden-scan gets Cloud SQL client, the app password and the GitHub app's private key, nothing else" \
+# private key, never its client secret. A Judge run (#482) calls OpenRouter and traces to Langfuse with the three
+# Judge keys.
+assert_equal "warden-scan gets Cloud SQL client, the app password, the GitHub app's private key and the Judge's keys, nothing else" \
   "projects $project roles/cloudsql.client
 secrets warden-db-app-password roles/secretmanager.secretAccessor
-secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
+secrets warden-github-app-private-key roles/secretmanager.secretAccessor
+secrets warden-langfuse-public-key roles/secretmanager.secretAccessor
+secrets warden-langfuse-secret-key roles/secretmanager.secretAccessor
+secrets warden-openrouter-api-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-scan)"
+# The Judge's keys (#482): the two Scan Jobs' accounts only, never a service's.
+for secret in $judge_secrets; do
+  assert_equal "only warden-scan and warden-preview-scan read $secret" \
+    "--member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com
+--member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com" \
+    "$(grep -F "add-iam-policy-binding $secret " <<<"$output" | grep -o -- '--member=[^ ]*' | sort)"
+done
 assert_line "it makes the warden-scan service account" \
   "gcloud iam service-accounts create warden-scan '--display-name=Warden: warden-scan' --project=$project"
 assert_line "the Scan Job runs as warden-scan, with Google's placeholder job image, in europe-west1" \
@@ -191,10 +204,13 @@ secrets warden-preview-pseudonym-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-preview-run)"
 
 # The preview Scan Job (#275): the live one's twin on the preview database, as its own account.
-assert_equal "warden-preview-scan gets Cloud SQL client, the preview app password and the GitHub app's private key, nothing else" \
+assert_equal "warden-preview-scan gets Cloud SQL client, the preview app password, the GitHub app's private key and the Judge's keys, nothing else" \
   "projects $project roles/cloudsql.client
 secrets warden-db-preview-app-password roles/secretmanager.secretAccessor
-secrets warden-github-app-private-key roles/secretmanager.secretAccessor" \
+secrets warden-github-app-private-key roles/secretmanager.secretAccessor
+secrets warden-langfuse-public-key roles/secretmanager.secretAccessor
+secrets warden-langfuse-secret-key roles/secretmanager.secretAccessor
+secrets warden-openrouter-api-key roles/secretmanager.secretAccessor" \
   "$(bindings_to warden-preview-scan)"
 assert_line "it makes the warden-preview-scan service account" \
   "gcloud iam service-accounts create warden-preview-scan '--display-name=Warden: warden-preview-scan' --project=$project"
@@ -294,7 +310,7 @@ for secret in $generated; do
     "<random value> | gcloud secrets create $secret --replication-policy=user-managed --locations=europe-west1 --data-file=- --project=$project"
 done
 for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-  warden-github-app-client-secret warden-github-app-private-key $write_secrets $generated; do
+  warden-github-app-client-secret warden-github-app-private-key $judge_secrets $write_secrets $generated; do
   assert_line "$secret's replication is printed" \
     "gcloud secrets describe $secret '--format=yaml(name,replication)' --project=$project"
 done
@@ -350,7 +366,7 @@ trigger_line=$(line_of "$daily_trigger")
 pass "the Scheduler job is printed after the daily Job and its binding"
 
 variables=$(grep -E '^gh variable set' <<<"$output" | awk '{ print $4 }' | sort)
-assert_equal "a gh variable line for each of the eight variables" \
+assert_equal "a gh variable line for each of the nine variables" \
   "CLOUD_SQL_CONNECTION
 GCP_DEPLOY_SA
 GCP_PREVIEW_DEPLOY_SA
@@ -358,8 +374,12 @@ GCP_PROJECT_ID
 GCP_WIF_PROVIDER
 VITE_CLERK_PUBLISHABLE_KEY
 WARDEN_GITHUB_APP_CLIENT_ID
-WARDEN_GITHUB_WRITE_APP_CLIENT_ID" \
+WARDEN_GITHUB_WRITE_APP_CLIENT_ID
+WARDEN_JUDGE_KEYS" \
   "$variables"
+# The Judge's three secrets exist once preflight passes, so the line that lets a deploy pin them is printed (#482).
+assert_line "the Judge's keys variable switches them on for the Scan Jobs" \
+  "gh variable set WARDEN_JUDGE_KEYS --body on --repo $repo"
 write_variable="gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID --body \"\$(secret-tool lookup service warden-github-write-app-client-id)\" --repo $repo"
 assert_equal "the write app's client id is read from the keyring when the line is pasted" \
   "$write_variable" "$(grep -F 'gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID ' <<<"$output")"
@@ -505,6 +525,8 @@ case "$*" in
       warden-github-write-app-private-key)
         [[ $FAKE_STATE != no-write-app && $FAKE_STATE != one-write-secret ]] && exit 0 ;;
       warden-pseudonym-key | warden-preview-pseudonym-key) [[ $FAKE_STATE == pseudonym-keys ]] && exit 0 ;;
+      warden-openrouter-api-key | warden-langfuse-public-key | warden-langfuse-secret-key)
+        [[ $FAKE_STATE != no-judge-keys ]] && exit 0 ;;
     esac
     not_found secrets.describe "NOT_FOUND: Secret [projects/1/secrets/$3] not found or has no versions." ;;
   "sql instances describe"*)
@@ -645,6 +667,17 @@ assert_line "it names the missing client secret" "secret warden-github-app-clien
 assert_line "it names the missing private key" "secret warden-github-app-private-key" "$out"
 assert_line "it says where to read how to make them" "make these first" "$out"
 assert_no_line "it names no secret that exists" "secret warden-clerk" "$out"
+assert_no_line "it doesn't name the instance, which exists" "Cloud SQL instance" "$out"
+assert_equal "it changes nothing" "" "$(changes)"
+
+# The Judge's three keys are made by hand (#482): a run without them stops before any change, naming each.
+real_run no-judge-keys no-judge-keys
+assert_equal "before the Judge's keys exist: exit 1" 1 "$code"
+for secret in $judge_secrets; do
+  assert_line "it names the missing $secret" "secret $secret" "$out"
+done
+assert_line "it says where to read how to make them" "make these first" "$out"
+assert_no_line "it names no secret that exists" "secret warden-github" "$out"
 assert_no_line "it doesn't name the instance, which exists" "Cloud SQL instance" "$out"
 assert_equal "it changes nothing" "" "$(changes)"
 
@@ -1000,6 +1033,9 @@ for binding in \
   "projects add-iam-policy-binding $project --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/cloudsql.client" \
   "secrets add-iam-policy-binding warden-db-app-password --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "secrets add-iam-policy-binding warden-github-app-private-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-openrouter-api-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-langfuse-public-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-langfuse-secret-key --member=serviceAccount:warden-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "iam service-accounts add-iam-policy-binding warden-scan@$project.iam.gserviceaccount.com --member=serviceAccount:warden-deploy@$project.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser" \
   "run jobs add-iam-policy-binding warden-scan --region=europe-west1 --member=serviceAccount:warden-run@$project.iam.gserviceaccount.com --role=roles/run.jobsExecutorWithOverrides"; do
   assert_line "a rerun before the Scan Job binds: ${binding%% --member*} ${binding##*--role=}" "$binding" "$calls"
@@ -1018,6 +1054,9 @@ for binding in \
   "projects add-iam-policy-binding $project --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/cloudsql.client" \
   "secrets add-iam-policy-binding warden-db-preview-app-password --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "secrets add-iam-policy-binding warden-github-app-private-key --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-openrouter-api-key --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-langfuse-public-key --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
+  "secrets add-iam-policy-binding warden-langfuse-secret-key --member=serviceAccount:warden-preview-scan@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "secrets add-iam-policy-binding warden-github-app-client-secret --member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "secrets add-iam-policy-binding warden-github-app-private-key --member=serviceAccount:warden-preview-run@$project.iam.gserviceaccount.com --role=roles/secretmanager.secretAccessor" \
   "iam service-accounts add-iam-policy-binding warden-preview-scan@$project.iam.gserviceaccount.com --member=serviceAccount:warden-preview-deploy@$project.iam.gserviceaccount.com --role=roles/iam.serviceAccountUser" \

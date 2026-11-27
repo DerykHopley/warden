@@ -104,5 +104,7 @@ jobs:
           # The write app's client id (#334): optional; a preview shares the live write app, and runs with Fix PRs off
           # while it's unset.
           WARDEN_GITHUB_WRITE_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_WRITE_APP_CLIENT_ID }}
+          # The Judge's keys (#482): optional; a preview's Scan Job shares the live keys once they're switched on.
+          WARDEN_JUDGE_KEYS: ${{ vars.WARDEN_JUDGE_KEYS }}
           PREVIEW_NAME: ${{ needs.check.outputs.name }}
         run: scripts/cloud-run-deploy.sh "$IMAGE" preview "$PREVIEW_NAME"
