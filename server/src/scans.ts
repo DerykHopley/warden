@@ -84,6 +84,12 @@ export type ScanJobStarter = (input: { scanId: string; team: string }) => Promis
 export const SCAN_ID_VARIABLE = "WARDEN_SCAN_ID";
 export const TEAM_VARIABLE = "WARDEN_TEAM";
 
+/** The variable that starts the Scan Job as a Judge run for one ended Agent session, beside TEAM_VARIABLE (#443). */
+export const SESSION_ID_VARIABLE = "WARDEN_SESSION_ID";
+
+/** An Agent session's id, as the hook endpoint takes Claude Code's `session_id` and the Judge run takes it. */
+export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
 /**
  * What a starter throws when it can't tell whether the Job started: its request may have reached the Job's host before
  * the answer was lost. The Scan stays queued, as a failed start would make the Lead start another; if the Job never

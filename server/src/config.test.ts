@@ -1,7 +1,13 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { FRONTEND_API_HOST, testPublishableKey as publishableKey } from "../test/helpers.ts";
-import { ConfigError, gitHubReaderSettings, loadConfig } from "./config.ts";
+import {
+  ConfigError,
+  DEFAULT_JUDGE_MODEL,
+  gitHubReaderSettings,
+  judgeSettings,
+  loadConfig,
+} from "./config.ts";
 
 /** A GitHub App's key as GitHub downloads it: PKCS#1 PEM, `BEGIN RSA PRIVATE KEY`. */
 const { privateKey: appKey, publicKey } = generateKeyPairSync("rsa", {
@@ -416,5 +422,21 @@ describe("gitHubReaderSettings (the Scan Job's)", () => {
     expect(error.variables).toEqual(["GITHUB_APP_PRIVATE_KEY"]);
     expect(error.message).not.toContain(value);
     expect(error.message).not.toContain("BEGIN");
+  });
+});
+
+describe("judgeSettings (the Scan Job's, for a Judge run)", () => {
+  it("reads the key and the model", () => {
+    expect(
+      judgeSettings({ OPENROUTER_API_KEY: "sk-or-v1-abc", WARDEN_JUDGE_MODEL: "test/model" }),
+    ).toEqual({ apiKey: "sk-or-v1-abc", model: "test/model" });
+  });
+
+  it.each([
+    ["unset", {}],
+    ["empty", { OPENROUTER_API_KEY: "", WARDEN_JUDGE_MODEL: "" }],
+  ])("leaves the key undefined and takes Claude Haiku 5.5 when they're %s", (_name, env) => {
+    expect(judgeSettings(env)).toEqual({ apiKey: undefined, model: DEFAULT_JUDGE_MODEL });
+    expect(DEFAULT_JUDGE_MODEL).toBe("anthropic/claude-haiku-5.5");
   });
 });

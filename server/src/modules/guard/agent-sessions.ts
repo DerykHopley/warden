@@ -1,6 +1,7 @@
 // A Team's Agent sessions and their Agent events (spec #225, slice 1, #183): what the hook endpoint stores from each
-// event Claude Code posts (0019_agent_sessions). Every call runs inside `withTeam`, so row-level security keeps each
-// Team's rows to itself (ADR 0006); the Team is always the hook token's, never the event's.
+// event Claude Code posts (0019_agent_sessions), and what the Judge reads of an ended session then drops (slice 5a,
+// #443). Every call runs inside `withTeam`, so row-level security keeps each Team's rows to itself (ADR 0006); the Team
+// is always the hook token's or the Job's, never the event's.
 import { sql, type Generated } from "kysely";
 import type { WithTeam } from "../../with-team.ts";
 
@@ -55,12 +56,39 @@ export type StoredEvent = {
   refusedEvents: number;
 };
 
+/** One stored event as the Judge reads it. */
+export type ReadAgentEvent = {
+  /** Its place in the Team's events (a bigint, as text): what `markJudged` drops it by. */
+  seq: string;
+  receivedAt: Date;
+  name: string;
+  tool: string | null;
+  fields: Record<string, JsonValue>;
+};
+
+/** What the Judge found in a session: one Finding or more, none, or an answer a person must read. */
+export type SessionOutcome = "flagged" | "clean" | "needs_human_review";
+
 export interface AgentSessions {
   /**
    * Stores one event in one transaction: makes the session on its first event (or updates it: its last event's time,
    * its end, its refused count, and its developer when it had none yet), then adds the event.
    */
   store(team: string, event: StoredEvent): Promise<void>;
+  /**
+   * An ended session's events, in stored order: undefined when the Team holds no such session, it hasn't ended, or it
+   * holds no events (none sent, or the Judge already dropped them).
+   */
+  readEnded(team: string, sessionId: string): Promise<ReadAgentEvent[] | undefined>;
+  /**
+   * In one transaction, marks the session judged now with `outcome`, and drops exactly the events `seqs` names: the
+   * ones the Judge read. An event stored after the read stays, for its own run.
+   */
+  markJudged(
+    team: string,
+    sessionId: string,
+    judged: { outcome: SessionOutcome; seqs: readonly string[] },
+  ): Promise<void>;
 }
 
 export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): AgentSessions {
@@ -100,6 +128,49 @@ export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): Agent
             // jsonb goes in as its JSON text, as schema.ts's JSON columns do.
             fields: sql`${JSON.stringify(event.fields)}::jsonb`,
           })
+          .execute();
+      });
+    },
+
+    readEnded(team, sessionId) {
+      return withTeam(team, async (tx) => {
+        const db = tx.$extendTables<AgentSessionTables>();
+        const session = await db
+          .selectFrom("agent_sessions")
+          .select("ended_at")
+          .where("session_id", "=", sessionId)
+          .executeTakeFirst();
+        if (session?.ended_at == null) return undefined;
+        const rows = await db
+          .selectFrom("agent_events")
+          .select(["seq", "received_at", "name", "tool", "fields"])
+          .where("session_id", "=", sessionId)
+          .orderBy("seq")
+          .execute();
+        if (rows.length === 0) return undefined;
+        return rows.map((row) => ({
+          seq: String(row.seq),
+          receivedAt: row.received_at,
+          name: row.name,
+          tool: row.tool,
+          fields: row.fields,
+        }));
+      });
+    },
+
+    markJudged(team, sessionId, { outcome, seqs }) {
+      return withTeam(team, async (tx) => {
+        const db = tx.$extendTables<AgentSessionTables>();
+        await db
+          .updateTable("agent_sessions")
+          .set({ judged_at: sql<Date>`now()`, outcome })
+          .where("session_id", "=", sessionId)
+          .execute();
+        // One array parameter, however many events the run read.
+        await db
+          .deleteFrom("agent_events")
+          .where("session_id", "=", sessionId)
+          .where(sql<boolean>`seq = any(${[...seqs]}::bigint[])`)
           .execute();
       });
     },

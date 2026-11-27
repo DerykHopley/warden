@@ -52,6 +52,63 @@ describe("the Scan Job's process", () => {
     expect(output).not.toMatch(/ECONNREFUSED/);
   });
 
+  it.each([
+    [
+      "both WARDEN_SCAN_ID and WARDEN_SESSION_ID set",
+      { WARDEN_SCAN_ID: "scan-value-1", WARDEN_SESSION_ID: "sess-value-1" },
+      ["WARDEN_SCAN_ID", "WARDEN_SESSION_ID"],
+      ["scan-value-1", "sess-value-1"],
+    ],
+    [
+      "a WARDEN_SESSION_ID outside the session pattern",
+      { WARDEN_SESSION_ID: "sess value/../1" },
+      ["WARDEN_SESSION_ID"],
+      ["sess value/../1"],
+    ],
+    [
+      "a WARDEN_SESSION_ID past 128 characters",
+      { WARDEN_SESSION_ID: "s".repeat(129) },
+      ["WARDEN_SESSION_ID"],
+      ["s".repeat(129)],
+    ],
+  ])(
+    "exits 1 before connecting with %s, naming the variables and no value",
+    async (_name, env, variables, values) => {
+      const { code, output } = await runJob({
+        WARDEN_TEAM: "org_a",
+        ...env,
+        PGHOST: "127.0.0.1",
+        PGPORT: String(await closedPort()),
+      });
+
+      expect(code, output).toBe(1);
+      expect(logEntries(output)).toContainEqual(
+        expect.objectContaining({ severity: "ERROR", variables }),
+      );
+      for (const value of values) expect(output).not.toContain(value);
+      expect(output).not.toMatch(/ECONNREFUSED/);
+    },
+  );
+
+  it("runs a Judge run for WARDEN_SESSION_ID as the app role, exiting 0 for a session the Team doesn't have", async () => {
+    const sessionId = `sess-${randomUUID()}`;
+    const { code, output } = await runJob({
+      WARDEN_SESSION_ID: sessionId,
+      WARDEN_TEAM: "org_scan_process",
+      // Nothing to judge, so no key is needed and no call is made.
+      OPENROUTER_API_KEY: "",
+    });
+
+    expect(code, output).toBe(0);
+    expect(logEntries(output)).toContainEqual(
+      expect.objectContaining({
+        severity: "INFO",
+        message: expect.stringContaining("nothing to judge"),
+        team: "org_scan_process",
+      }),
+    );
+  });
+
   it("exits 1 naming the role when PGUSER can bypass row-level security", async () => {
     const { code, output } = await runJob({
       PGUSER: "warden_migrate",
