@@ -15,6 +15,8 @@
 // check on connect: a role that can get around row-level security exits 1. Exit 0 when seeded or already seeded; 1
 // otherwise, naming why.
 import { createHash } from "node:crypto";
+import { statSync } from "node:fs";
+import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   fingerprint,
@@ -99,22 +101,63 @@ const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1"]);
 const LIVE_DATABASE = "warden";
 
 /**
- * Why the seed won't run against the database the PG* variables name, or undefined when it may. WARDEN_SEED_DEMO must
- * be set. A hosted database (PGHOST not this machine, or a password set: the Cloud SQL Auth Proxy listens on
- * 127.0.0.1) needs WARDEN_SEED_DEMO to name it, and is never the live database.
+ * Whether a file is at `path`: false only when nothing is there. Any other error (permission denied) throws, so the
+ * caller can fail closed.
  */
-export function seedRefusal(env: Record<string, string | undefined>): string | undefined {
+function fileExistsOnDisk(path: string): boolean {
+  return statSync(path, { throwIfNoEntry: false }) !== undefined;
+}
+
+/**
+ * What makes the database the PG* variables name count as hosted, one phrase per signal; empty when it's local. The
+ * Cloud SQL Auth Proxy listens on 127.0.0.1, so a password from anywhere pg looks counts too: PGPASSWORD, PGPASSFILE's
+ * file, PGSERVICE's entry, or a .pgpass where pg reads it: in HOME, or with HOME unset or empty in the working folder
+ * (pgpass 1.0.5 reads `path.join(env.HOME || './', '.pgpass')`, #476). When `fileExists` can't tell whether that
+ * .pgpass is there, it counts.
+ */
+function hostedSignals(
+  env: Record<string, string | undefined>,
+  fileExists: (path: string) => boolean,
+): string[] {
+  const signals: string[] = [];
+  if (env.PGHOST !== undefined && !LOCAL_HOSTS.has(env.PGHOST)) {
+    signals.push(`PGHOST is ${env.PGHOST}`);
+  }
+  if (env.PGPASSWORD) signals.push("PGPASSWORD is set");
+  if (env.PGPASSFILE) signals.push("PGPASSFILE is set");
+  if (env.PGSERVICE) signals.push("PGSERVICE is set");
+  const [pgpass, shownAs] = env.HOME
+    ? [join(env.HOME, ".pgpass"), "~/.pgpass"]
+    : [".pgpass", "./.pgpass"];
+  try {
+    if (fileExists(pgpass)) signals.push(`${shownAs} exists`);
+  } catch {
+    signals.push(`${shownAs} couldn't be checked`);
+  }
+  return signals;
+}
+
+/**
+ * Why the seed won't run against the database the PG* variables name, or undefined when it may. WARDEN_SEED_DEMO must
+ * be set. A hosted database (see `hostedSignals`) needs WARDEN_SEED_DEMO to name it, and is never the live database;
+ * the refusal says what made it hosted. `fileExists` is for the .pgpass check, the real file system unless given.
+ */
+export function seedRefusal(
+  env: Record<string, string | undefined>,
+  fileExists: (path: string) => boolean = fileExistsOnDisk,
+): string | undefined {
   const asked = env.WARDEN_SEED_DEMO;
   if (!asked) {
     return "Set WARDEN_SEED_DEMO to seed demo Findings (any value locally; the database's name on a hosted one)";
   }
-  const hosted = (env.PGHOST !== undefined && !LOCAL_HOSTS.has(env.PGHOST)) || !!env.PGPASSWORD;
-  if (!hosted) return undefined;
+  const signals = hostedSignals(env, fileExists);
+  if (signals.length === 0) return undefined;
+  const why = `(it counts as hosted: ${signals.join(", ")})`;
   if (env.PGDATABASE === LIVE_DATABASE) {
-    return `The demo seed never writes to the live database, ${LIVE_DATABASE}`;
+    return `The demo seed never writes to the live database, ${LIVE_DATABASE} ${why}`;
   }
   if (asked !== env.PGDATABASE) {
-    return `On a hosted database, WARDEN_SEED_DEMO must name the database, ${env.PGDATABASE}`;
+    return `On a hosted database, WARDEN_SEED_DEMO must name the database, ${env.PGDATABASE} ${why}`;
   }
   return undefined;
 }
