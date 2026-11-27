@@ -36,6 +36,9 @@ secret_version() {
     warden-github-write-app-private-key) echo 1 ;;
     warden-pseudonym-key) echo 1 ;;
     warden-preview-pseudonym-key) echo 1 ;;
+    warden-openrouter-api-key) echo 1 ;;
+    warden-langfuse-public-key) echo 1 ;;
+    warden-langfuse-secret-key) echo 1 ;;
     *)
       echo "$PROGRAM: no pinned version for the secret $1" >&2
       exit 1
@@ -154,10 +157,12 @@ scan_job_name() { echo "projects/$GCP_PROJECT_ID/locations/$REGION/jobs/$1"; }
 # execution's override holds only a Scan id and a Team; the Job works inside that Team, as the app role, so it gets the
 # app password, never the admin password or a Clerk key. It reads the Team's repos as the GitHub app (#168): the
 # client id (WARDEN_GITHUB_APP_CLIENT_ID, which each caller requires) and the private key, never the client secret, so
-# it can't sign anyone in to GitHub. Any other arguments stop the script before a gcloud call. Returns gcloud's status.
+# it can't sign anyone in to GitHub. A Judge run (#482) calls OpenRouter and traces to Langfuse, so the Job gets their
+# keys; a preview shares them, under the same $15 cap on the OpenRouter key. Any other arguments stop the script
+# before a gcloud call. Returns gcloud's status.
 update_scan_job() {
   # Read here, not inside the $(...) below, so an unset one stops the script (set -u) rather than only the subshell.
-  local client_id=$WARDEN_GITHUB_APP_CLIENT_ID app_password github_key
+  local client_id=$WARDEN_GITHUB_APP_CLIENT_ID app_password github_key openrouter_key langfuse_public langfuse_secret
   local job=$SCAN_JOB account=$SCAN_ACCOUNT database=warden user=warden_app password_secret=warden-db-app-password
   case $#:${2-} in
     1:) ;;
@@ -166,7 +171,11 @@ update_scan_job() {
   esac
   app_password=$(pinned "$password_secret") || exit 1
   github_key=$(pinned warden-github-app-private-key) || exit 1
+  openrouter_key=$(pinned warden-openrouter-api-key) || exit 1
+  langfuse_public=$(pinned warden-langfuse-public-key) || exit 1
+  langfuse_secret=$(pinned warden-langfuse-secret-key) || exit 1
   update_job "$job" "$1" "$account" server/src/scan-job.ts "$database" "$user" \
-    "$(dict "PGPASSWORD=$app_password" "GITHUB_APP_PRIVATE_KEY=$github_key")" "GITHUB_APP_CLIENT_ID=$client_id" \
-    --task-timeout=3600s
+    "$(dict "PGPASSWORD=$app_password" "GITHUB_APP_PRIVATE_KEY=$github_key" "OPENROUTER_API_KEY=$openrouter_key" \
+      "LANGFUSE_PUBLIC_KEY=$langfuse_public" "LANGFUSE_SECRET_KEY=$langfuse_secret")" \
+    "GITHUB_APP_CLIENT_ID=$client_id" --task-timeout=3600s
 }

@@ -224,8 +224,9 @@ gcloud_dict() {
 }
 # assert_scan_job <what> <call> <image> <account> <database> <user> <password secret>: that recorded update sets the
 # Scan Job's whole configuration afresh: <image>, `node server/src/scan-job.ts` as <account>, the Cloud SQL instance,
-# one retry, an hour a task, <database> as <user> with the GitHub app's client id, and two pinned secrets: the
-# password and the GitHub app's private key. Never the app's client secret, which signs people in.
+# one retry, an hour a task, <database> as <user> with the GitHub app's client id, and five pinned secrets: the
+# password, the GitHub app's private key, and the Judge's OpenRouter key and Langfuse keys (#482). Never the app's
+# client secret, which signs people in.
 assert_scan_job() {
   local what=$1 call=$2 image=$3 account=$4 database=$5 user=$6 password=$7 secrets
   assert_equal "$what runs the image" "$image" "$(flag image "$call")"
@@ -243,9 +244,12 @@ PGDATABASE=$database
 GITHUB_APP_CLIENT_ID=$github_client_id" \
     "$(gcloud_dict "$(flag set-env-vars "$call")")"
   secrets=$(gcloud_dict "$(flag set-secrets "$call")")
-  assert_equal "$what's two secrets: $password and the GitHub app's private key" \
+  assert_equal "$what's five secrets: $password, the GitHub app's private key, and the Judge's three keys" \
     "PGPASSWORD=$password
-GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key
+OPENROUTER_API_KEY=warden-openrouter-api-key
+LANGFUSE_PUBLIC_KEY=warden-langfuse-public-key
+LANGFUSE_SECRET_KEY=warden-langfuse-secret-key" \
     "$(sed 's/:[^:]*$//' <<<"$secrets")"
   assert_equal "each of $what's secrets is pinned to a version number" "" \
     "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$secrets" || true)"
@@ -321,6 +325,8 @@ assert_equal "each of the revision's secrets is pinned to a version number" "" \
 assert_equal "the revision's pseudonym key is pinned at version 1" "1" \
   "$(grep '^WARDEN_PSEUDONYM_KEY=' <<<"$service_secrets" | sed 's/.*://')"
 assert_no_match "no call of a preview names the live pseudonym key" 'warden-pseudonym-key' "$calls"
+assert_no_match "the preview's revision gets neither the Judge's OpenRouter key nor a Langfuse key" \
+  'openrouter|OPENROUTER|langfuse|LANGFUSE' "$service_deploy"
 assert_no_match "no job of a preview (migration or Scan) gets a pseudonym key" 'pseudonym|PSEUDONYM' \
   "$(grep -F 'gcloud run jobs ' <<<"$calls")"
 
@@ -506,6 +512,8 @@ assert_equal "release: the revision's pseudonym key is pinned at version 1 (#185
   "$(grep '^WARDEN_PSEUDONYM_KEY=' <<<"$service_secrets" | sed 's/.*://')"
 assert_no_match "release: no job (migration, Scan or daily) gets a pseudonym key" 'pseudonym|PSEUDONYM' \
   "$(grep -F 'gcloud run jobs ' <<<"$calls")"
+assert_no_match "release: the revision gets neither the Judge's OpenRouter key nor a Langfuse key" \
+  'openrouter|OPENROUTER|langfuse|LANGFUSE' "$service_deploy"
 assert_equal "release: the GitHub app's secrets are pinned at version 1, as #132 makes them" \
   "GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret:1
 GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key:1" \
