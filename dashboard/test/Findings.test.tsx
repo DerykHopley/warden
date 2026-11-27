@@ -65,6 +65,8 @@ const cardOf = (title: string) => {
 };
 const current = () =>
   screen.queryAllByRole("button").filter((b) => b.getAttribute("aria-current") === "true");
+/** Waits long enough for an answer the page asked for to be read and rendered, or for a call it made to be seen. */
+const settle = () => act(() => new Promise((resolve) => setTimeout(resolve, 50)));
 
 describe("the summary line and the top 5", () => {
   it("shows the summary as the page's heading", async () => {
@@ -150,17 +152,16 @@ describe("the summary line and the top 5", () => {
 
       await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(1));
       // The repos' answer is read and rendered before the line is looked for: the call alone proves nothing.
-      await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+      await settle();
       // Any case: an Admin's line starts "Connect GitHub on".
       expect(screen.queryByText(/connects? GitHub on/i)).not.toBeInTheDocument();
     },
   );
 
-  it("with Findings, has no line to Setup and doesn't ask for the repos", async () => {
+  it("with Findings, has no Connect GitHub line", async () => {
     open("/findings", demoFindings, noRepos);
     await screen.findByRole("table");
     expect(screen.queryByText(/connects? GitHub on/)).not.toBeInTheDocument();
-    expect(callsTo("/api/repos")).toEqual([]);
   });
 });
 
@@ -180,26 +181,76 @@ describe("the Scan now line (#342)", () => {
       }),
   };
 
+  /** Waits for the one GET /api/repos, then for its answer to be read and rendered: the call alone proves nothing. */
+  const reposAnswered = async () => {
+    await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(1));
+    await settle();
+  };
+
   it.each(["lead", "admin"] as const)(
-    "with Findings, shows a %s 'Scan now on Setup.' under the summary line, linking to Setup's repos, with no call of its own",
+    "with Findings and linked repos, shows a %s 'Scan now on Setup.' under the summary line, linking to Setup's repos, once the repos answer",
     async (role) => {
-      open("/findings", demoFindings, {}, role);
+      open("/findings", demoFindings, linkedRepos, role);
       const summary = await screen.findByRole("heading", { level: 1 });
-      const link = screen.getByRole("link", { name: "Scan now" });
+      const link = await screen.findByRole("link", { name: "Scan now" });
 
       expect(link).toHaveAttribute("href", "/setup#setup-repos");
       const line = link.closest("p");
       expect(line).toHaveTextContent(/^Scan now on Setup\.$/);
       expect(line).toHaveClass("setup-line");
       expect(summary.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(callsTo("/api/repos")).toEqual([]);
+      expect(callsTo("/api/repos")).toHaveLength(1);
     },
   );
 
-  it("with Findings, shows a Member no Scan now", async () => {
-    open("/findings", demoFindings, {}, "member");
+  it.each(["lead", "admin"] as const)(
+    "with Findings and no linked repos, shows a %s no Scan now line: Setup has nothing to Scan (#349)",
+    async (role) => {
+      open("/findings", demoFindings, { repos: () => json(200, { repos: [] }) }, role);
+      await screen.findByRole("table");
+      // The repos' answer is read and rendered before the line is looked for; the call is checked after, so a page that
+      // shows the line without asking fails on the line.
+      await settle();
+
+      expect(scanNow()).not.toBeInTheDocument();
+      expect(screen.queryByText(/Scan now/)).not.toBeInTheDocument();
+      expect(callsTo("/api/repos")).toHaveLength(1);
+    },
+  );
+
+  it("with Findings, shows the table and summary but no Scan now while the repos haven't answered", async () => {
+    const held = deferred<Response>();
+    open("/findings", demoFindings, { repos: () => held.promise }, "admin");
+
+    expect(await screen.findByRole("table")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { level: 1 })).toBeInTheDocument();
+    await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(1));
+    expect(scanNow()).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["a 403", () => json(403, { error: "no team" })],
+    ["a 409", () => json(409, { error: "team not opened" })],
+    ["a body that doesn't parse", () => json(200, { repos: "not a list" })],
+  ])(
+    "with Findings, shows no Scan now and no notice when the repos answer %s",
+    async (_, repos) => {
+      open("/findings", demoFindings, { repos }, "admin");
+      await screen.findByRole("table");
+      await reposAnswered();
+
+      expect(scanNow()).not.toBeInTheDocument();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
+
+  it("with Findings, shows a Member no Scan now, and doesn't ask for the repos", async () => {
+    open("/findings", demoFindings, linkedRepos, "member");
     await screen.findByRole("table");
+    // Long enough for a call the page made to be seen.
+    await settle();
     expect(screen.queryByText(/Scan now/)).not.toBeInTheDocument();
+    expect(callsTo("/api/repos")).toEqual([]);
   });
 
   it.each(["lead", "admin"] as const)(
@@ -217,7 +268,7 @@ describe("the Scan now line (#342)", () => {
     open("/findings", [], linkedRepos, "member");
     await vi.waitFor(() => expect(callsTo("/api/repos")).toHaveLength(1));
     // The repos' answer is read and rendered before the link is looked for: the call alone proves nothing.
-    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    await settle();
     expect(scanNow()).not.toBeInTheDocument();
   });
 
