@@ -36,6 +36,10 @@ describe("the demo data", () => {
     expect([...repos]).toEqual(DEMO_PRODUCT.repo_urls);
   });
 
+  it("names the Judge's Finding under the Judge's Rule for a secret sent off the machine", () => {
+    expect(DEMO_OBSERVATIONS.printed.rule_id).toBe("guard/agent-sends-secrets");
+  });
+
   it("keeps the Judge's events hash true to its events", async () => {
     expect(DEMO_EVENTS_HASH).toBe(await agentEventsHash(DEMO_EVENTS));
   });

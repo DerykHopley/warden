@@ -7,26 +7,50 @@
 // A start-up file like index.ts (ADR 0005): it wires the modules' scanners and move rules from `wiring.ts`, the list
 // the server shares, so the API's Rules and the Job's scanner can't drift apart.
 //
+// Started with WARDEN_SESSION_ID in place of WARDEN_SCAN_ID (#443), it runs Guard's Judge for that ended Agent session
+// instead (`runJudgeJob`), with the Judge `wiring.ts` builds: one model call on OpenRouter, a Guard Spot run reported,
+// then the session marked judged and the events it read dropped. A run that throws leaves the session unjudged with
+// its events, and a retry over the same events reports the same Spot run, which changes nothing.
+//
 // As its own process (the local starter spawns it; the Cloud Run Job runs it from slice 1b):
 // - WARDEN_SCAN_ID and WARDEN_TEAM name the Scan; either missing or blank exits 1 before connecting.
+// - WARDEN_SESSION_ID and WARDEN_TEAM name a session to judge instead. Both WARDEN_SCAN_ID and WARDEN_SESSION_ID set,
+//   or a session id outside the hook's session pattern, exits 1 before connecting, naming the variables, not their
+//   values. OPENROUTER_API_KEY and WARDEN_JUDGE_MODEL give the Judge its model; with the key unset, a session to
+//   judge exits 1 naming it, before any call.
 // - The pool is the PG* variables', as the app role, with the server's role check on connect: a role that can get
 //   around row-level security exits 1, naming the role and why.
 // - GITHUB_APP_CLIENT_ID and GITHUB_APP_PRIVATE_KEY give Guard its RepoReader; one without the other, or a key that
 //   isn't RSA, exits 1 before connecting, naming the variables. Neither set, a Guard Scan fails.
 // - It needs no Clerk variable, no admin password and no GitHub client secret. Exit 0 when the Scan is done; 1
 //   otherwise.
-import { ConfigError, gitHubReaderSettings, type GitHubReaderSettings } from "./config.ts";
+import {
+  ConfigError,
+  gitHubReaderSettings,
+  judgeSettings,
+  type GitHubReaderSettings,
+} from "./config.ts";
 import { createPool, guardDatabaseRole } from "./database.ts";
 import { createFindings, type Findings } from "./findings/index.ts";
 import { createLogger, type Logger } from "./log.ts";
 import {
   createScans,
   SCAN_ID_VARIABLE,
+  SESSION_ID_PATTERN,
+  SESSION_ID_RULE,
+  SESSION_ID_VARIABLE,
   TEAM_VARIABLE,
   type Scanners,
   type Scans,
 } from "./scans.ts";
-import { gitHubRepoReader, MOVE_RULES, scanners } from "./wiring.ts";
+import {
+  gitHubRepoReader,
+  judge,
+  MOVE_RULES,
+  scanners,
+  type Judge,
+  type JudgeRunOutcome,
+} from "./wiring.ts";
 import { createWithTeam } from "./with-team.ts";
 
 export async function runScanJob({
@@ -142,12 +166,129 @@ export async function runScanJob({
   return 0;
 }
 
+/**
+ * One Judge run for the Team's Agent session `sessionId` (#443): 0 when it judged the session, or found nothing to
+ * judge (no such session in this Team, an open one, or one whose events are already dropped); 1 when it threw, which
+ * leaves the session unjudged with its events. Its log lines hold the Team, the session id, the outcome and the counts:
+ * never an event's text, the prompt, the model's answer, the key or the developer.
+ */
+export async function runJudgeJob({
+  team,
+  sessionId,
+  judge,
+  logger,
+}: {
+  team: string;
+  sessionId: string;
+  judge: Judge;
+  logger: Logger;
+}): Promise<0 | 1> {
+  let run: JudgeRunOutcome;
+  try {
+    run = await judge.run(team, sessionId);
+  } catch (error) {
+    if (error instanceof ConfigError) {
+      logger.error(`judge run failed: ${error.message}; the session stays unjudged`, {
+        team,
+        sessionId,
+        variables: error.variables,
+      });
+    } else {
+      logger.error("judge run failed; the session stays unjudged with its events", {
+        team,
+        sessionId,
+        error,
+      });
+    }
+    return 1;
+  }
+  if (run.kind === "skipped") {
+    logger.info(
+      "judge run: nothing to judge (no ended session with events in this Team); nothing changed",
+      { team, sessionId },
+    );
+    return 0;
+  }
+  logger.info("judge run done", {
+    team,
+    sessionId,
+    outcome: run.outcome,
+    eventsRead: run.eventsRead,
+    opened: run.opened,
+  });
+  return 0;
+}
+
 /** The environment variable's value, or undefined when it's missing or blank. */
 const named = (value: string | undefined) => (value?.trim() ? value : undefined);
+
+/** The Job's database pool: the PG* variables', with the server's role check on connect. */
+function jobPool(logger: Logger) {
+  return createPool(logger, {
+    max: 2,
+    onConnect: guardDatabaseRole(({ role, reason }) => {
+      logger.error(`scan job: its database role can bypass row-level security. ${reason}.`, {
+        role,
+        reason,
+      });
+    }),
+  });
+}
+
+/** The Job for WARDEN_SESSION_ID: one Judge run for that session, in place of a Scan. */
+async function judgeMain(
+  env: NodeJS.ProcessEnv,
+  logger: Logger,
+  sessionId: string,
+  team: string | undefined,
+): Promise<number> {
+  // Each problem names its variables, never their values.
+  const problems: [reason: string, variables: string[]][] = [];
+  if (named(env[SCAN_ID_VARIABLE]) !== undefined) {
+    problems.push([
+      `set ${SCAN_ID_VARIABLE} or ${SESSION_ID_VARIABLE}, not both`,
+      [SCAN_ID_VARIABLE, SESSION_ID_VARIABLE],
+    ]);
+  }
+  if (!SESSION_ID_PATTERN.test(sessionId)) {
+    problems.push([`${SESSION_ID_VARIABLE} ${SESSION_ID_RULE}`, [SESSION_ID_VARIABLE]]);
+  }
+  if (team === undefined) problems.push([`set ${TEAM_VARIABLE}`, [TEAM_VARIABLE]]);
+  if (team === undefined || problems.length > 0) {
+    const variables = [...new Set(problems.flatMap(([, names]) => names))];
+    logger.error(
+      `scan job failed before connecting: ${problems.map(([reason]) => reason).join("; ")}`,
+      { variables },
+    );
+    return 1;
+  }
+  const settings = judgeSettings(env);
+  const pool = jobPool(logger);
+  try {
+    await pool.query("select 1");
+    // ADR 0005: Guard's Judge comes in through wiring.ts, as the scanners do.
+    return await runJudgeJob({
+      team,
+      sessionId,
+      judge: judge({ withTeam: createWithTeam(pool), settings }),
+      logger,
+    });
+  } catch (error) {
+    logger.error("scan job failed", { team, sessionId, error });
+    return 1;
+  } finally {
+    await pool.end();
+  }
+}
 
 async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
   const scanId = named(env[SCAN_ID_VARIABLE]);
   const team = named(env[TEAM_VARIABLE]);
+  // A session id isn't trimmed: one with a space fails the session pattern, as at the hook endpoint.
+  const sessionId = env[SESSION_ID_VARIABLE];
+  if (sessionId !== undefined && sessionId !== "") {
+    return judgeMain(env, logger, sessionId, team);
+  }
   if (scanId === undefined || team === undefined) {
     const missing = [scanId ? [] : [SCAN_ID_VARIABLE], team ? [] : [TEAM_VARIABLE]].flat();
     logger.error(`scan job failed before connecting: set ${missing.join(" and ")}`, {
@@ -165,15 +306,7 @@ async function main(env: NodeJS.ProcessEnv, logger: Logger): Promise<number> {
     });
     return 1;
   }
-  const pool = createPool(logger, {
-    max: 2,
-    onConnect: guardDatabaseRole(({ role, reason }) => {
-      logger.error(`scan job: its database role can bypass row-level security. ${reason}.`, {
-        role,
-        reason,
-      });
-    }),
-  });
+  const pool = jobPool(logger);
   try {
     await pool.query("select 1");
     const withTeam = createWithTeam(pool);

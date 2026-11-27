@@ -225,3 +225,21 @@ export function gitHubReaderSettings(
   }
   return parsed.data;
 }
+
+/** Claude Haiku 5.5's OpenRouter slug (openrouter.ai/api/v1/models): the Judge's model unless WARDEN_JUDGE_MODEL names one. */
+export const DEFAULT_JUDGE_MODEL = "anthropic/claude-haiku-5.5";
+
+/** The key and model a Judge run calls OpenRouter with. */
+export type JudgeSettings = { apiKey: string | undefined; model: string };
+
+/**
+ * The Scan Job's settings for a Judge run: OPENROUTER_API_KEY, and WARDEN_JUDGE_MODEL or `DEFAULT_JUDGE_MODEL`. An
+ * empty value counts as unset, as in `loadConfig`. An unset key isn't refused here: the run refuses it after reading
+ * the session, before its model call, so a session with nothing to judge exits 0 without it.
+ */
+export function judgeSettings(env: Record<string, string | undefined>): JudgeSettings {
+  return {
+    apiKey: env.OPENROUTER_API_KEY || undefined,
+    model: env.WARDEN_JUDGE_MODEL || DEFAULT_JUDGE_MODEL,
+  };
+}
