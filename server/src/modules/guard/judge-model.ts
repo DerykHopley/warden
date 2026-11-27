@@ -209,9 +209,9 @@ export function chatCompletionsModel({
 }
 
 /**
- * The Judge's model for a run's settings: on OpenRouter with `apiKey`, or, with none, a model whose every call
- * rejects with ConfigError naming OPENROUTER_API_KEY before anything is sent, so a run with nothing to judge still
- * exits 0 without the key.
+ * The Judge's model for a run's settings: on OpenRouter with `apiKey`. With none it throws ConfigError naming
+ * OPENROUTER_API_KEY, and as a run asks for its model only once it has a session to judge, a run with nothing to judge
+ * still exits 0 without the key, and one with a session stops before it reserves anything in the ledger (#489).
  */
 export function judgeModel({
   apiKey,
@@ -222,13 +222,7 @@ export function judgeModel({
   fetch?: Fetch;
   timeoutMs?: number;
 }): JudgeModel {
-  if (apiKey === undefined) {
-    return {
-      model: options.model,
-      paid: true,
-      complete: () => Promise.reject(new ConfigError(["OPENROUTER_API_KEY"])),
-    };
-  }
+  if (apiKey === undefined) throw new ConfigError(["OPENROUTER_API_KEY"]);
   return openRouterModel({ apiKey, ...options });
 }
 

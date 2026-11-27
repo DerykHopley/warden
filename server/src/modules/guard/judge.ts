@@ -15,7 +15,6 @@
 // it as its own Observation whatever the model answered. A run that made paid calls sends one Langfuse trace when it
 // ends, metadata only; a trace Langfuse doesn't take is logged and never changes the run's outcome.
 import { agentEventsHash, Status, type SpotRun } from "@warden/contracts";
-import { ConfigError } from "../../config.ts";
 import type { Findings } from "../../findings/index.ts";
 import { TraceNotSent, type JudgeTrace, type TracedCall, type Tracer } from "../../langfuse.ts";
 import type { Logger } from "../../log.ts";
@@ -86,9 +85,8 @@ function answeredCost(usage: ModelUsage | undefined): Settlement {
     : { ...tokens, costUsd: usage.costUsd, costBasis: "stated" };
 }
 
-/** Whether a failed call may have cost money: all but a ConfigError (nothing sent) and a call refused before it ran. */
-const mayBeBilled = (error: unknown) =>
-  !(error instanceof ConfigError) && !(error instanceof ModelCallFailed && !error.billed);
+/** Whether a failed call may have cost money: all but a call refused before it ran. */
+const mayBeBilled = (error: unknown) => !(error instanceof ModelCallFailed && !error.billed);
 
 /** One call's reserved cost: settled to what an answer stated, or taken back when the call wasn't billed. */
 type Charge = { settle(usage: ModelUsage | undefined): Promise<void>; unbilled(): Promise<void> };
@@ -163,8 +161,7 @@ export function createJudge({
           schema: VERDICT_JSON_SCHEMA,
         });
       } catch (error) {
-        // A ConfigError was never sent, so there is no call to trace.
-        if (model.paid && !(error instanceof ConfigError)) {
+        if (model.paid) {
           traced.push({
             model: model.model,
             inputTokens: null,
@@ -176,7 +173,6 @@ export function createJudge({
           });
         }
         if (!mayBeBilled(error)) await charge.unbilled();
-        // A ConfigError (no key) never left the machine, and a retry would fail the same way.
         if (!(error instanceof ModelCallFailed && error.retry) || call >= JUDGE_RUN_CALL_BUDGET) {
           throw error;
         }

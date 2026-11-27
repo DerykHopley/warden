@@ -21,11 +21,7 @@ import { createJudge, JUDGE_RUN_CALL_BUDGET } from "../src/modules/guard/judge.t
 import { openRouterModel } from "../src/modules/guard/judge-model.ts";
 import { createJudgeModels } from "../src/modules/guard/judge-models.ts";
 import { judgePrompt, maskEvents } from "../src/modules/guard/judge-prompt.ts";
-import {
-  AGENT_READS_SECRETS,
-  AGENT_SENDS_SECRETS,
-  JUDGE_STEERING_TEXT,
-} from "../src/modules/guard/judge-rules.ts";
+import { AGENT_READS_SECRETS, AGENT_SENDS_SECRETS } from "../src/modules/guard/judge-rules.ts";
 import type { Resolve } from "../src/modules/guard/judge-url.ts";
 import { runJudgeJob } from "../src/scan-job.ts";
 import {
@@ -383,7 +379,8 @@ describe("a Judge run", () => {
     },
   );
 
-  it("still reports Warden's steering-text Observation when the answer needs human review, and marks the session flagged (slice 7b)", async () => {
+  // The Observation itself is readVerdict's (judge-verdict.test); this is the run's outcome for it.
+  it("marks the session flagged for steering text when the answer needs human review (slice 7b)", async () => {
     const { team, sessionId } = await teamWithSession({ ended: false });
     await store(team, sessionId, "PostToolUse", {
       tool_name: "Bash",
@@ -399,11 +396,6 @@ describe("a Judge run", () => {
       judged_at: expect.any(Date),
       outcome: "flagged",
     });
-    const [finding, ...others] = await findings.list(team);
-    expect(others).toEqual([]);
-    expect(finding).toMatchObject({ rule_id: JUDGE_STEERING_TEXT, severity: "medium" });
-    expect(finding!.evidence.summary).toBe("Warden found text addressed to the Judge in 1 event.");
-    expect(finding!.evidence.session!.events.map((event) => event.seq)).toEqual([2]);
   });
 });
 
@@ -429,27 +421,36 @@ describe("a Judge run that fails", () => {
     },
   );
 
-  it("makes no call with OPENROUTER_API_KEY unset, leaves the session as it was, exits 1 and names the variable", async () => {
-    const { team, sessionId } = await teamWithSession();
-    const before = await sessionState(team, sessionId);
-    const fake = fakeOpenRouter(() => verdict([]));
+  it.each([
+    ["with no spending today", 0],
+    ["at the Team's daily limit (#489)", TEAM_DAILY_SPENDING_LIMIT_USD],
+  ])(
+    "makes no call with OPENROUTER_API_KEY unset %s, writes no ledger row, leaves the session as it was, exits 1 and names the variable",
+    async (_name, earlier) => {
+      const { team, sessionId } = await teamWithSession();
+      if (earlier > 0) await spent(team, earlier);
+      const before = await sessionState(team, sessionId);
+      const rowsBefore = await ledger(team);
+      const fake = fakeOpenRouter(() => verdict([]));
 
-    const { code, entries } = await runJob(team, sessionId, fake.fetch, {
-      settings: judgeSettings({ OPENROUTER_API_KEY: "" }),
-    });
+      const { code, entries } = await runJob(team, sessionId, fake.fetch, {
+        settings: judgeSettings({ OPENROUTER_API_KEY: "" }),
+      });
 
-    expect(code).toBe(1);
-    expect(fake.calls).toEqual([]);
-    expect(await sessionState(team, sessionId)).toEqual({ ...before, session: unjudged });
-    expect(await findings.list(team)).toEqual([]);
-    expect(entries).toContainEqual(
-      expect.objectContaining({
-        severity: "ERROR",
-        message: expect.stringContaining("OPENROUTER_API_KEY"),
-        variables: ["OPENROUTER_API_KEY"],
-      }),
-    );
-  });
+      expect(code).toBe(1);
+      expect(fake.calls).toEqual([]);
+      expect(await ledger(team)).toEqual(rowsBefore);
+      expect(await sessionState(team, sessionId)).toEqual({ ...before, session: unjudged });
+      expect(await findings.list(team)).toEqual([]);
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          severity: "ERROR",
+          message: expect.stringContaining("OPENROUTER_API_KEY"),
+          variables: ["OPENROUTER_API_KEY"],
+        }),
+      );
+    },
+  );
 });
 
 describe("a Judge run with nothing to judge", () => {

@@ -281,8 +281,8 @@ function readLangfuse(env: Record<string, string | undefined>): LangfuseSettings
  * WARDEN_JUDGE_LOCALHOST, read as `loadConfig` reads it (a bad value, or one on Cloud Run, throws ConfigError), and the
  * LANGFUSE_* variables (`readLangfuse`). An
  * empty value counts as unset, as in `loadConfig`. An unset key isn't refused here: the run refuses it after reading
- * the session, before its model call, so a session with nothing to judge (or one judged by the Team's own model) runs
- * without it.
+ * the session, before it reserves anything for its model call, so a session with nothing to judge (or one judged by
+ * the Team's own model) runs without it.
  */
 export function judgeSettings(env: Record<string, string | undefined>): JudgeSettings {
   return {
