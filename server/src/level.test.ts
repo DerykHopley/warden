@@ -1,5 +1,6 @@
-// The Audit-ready fact the Overview works out from Vouch's answer in hand (spec #341, slice 4, story 9), by the rule
-// Vouch's `isAuditReady` reads from its switches and reviews. Pure: no database, no clock.
+// The Team's Level from its facts (spec #225, story 12: Standard from the hook and the Judge), and the Audit-ready
+// fact the Overview works out from Vouch's answer in hand (spec #341, slice 4, story 9), by the rule Vouch's
+// `isAuditReady` reads from its switches and reviews. Pure: no database, no clock.
 import type {
   AuditAnswer,
   AuditCatalogue,
@@ -8,7 +9,46 @@ import type {
   ReviewState,
 } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { auditReadyOfAnswer } from "./level.ts";
+import { auditReadyOfAnswer, standardFacts, teamLevel } from "./level.ts";
+
+describe("teamLevel", () => {
+  it.each([
+    [false, false, "quick"],
+    [true, false, "quick"],
+    [false, true, "quick"],
+    [true, true, "standard"],
+  ] as const)(
+    "with hookActive %s and sessionsJudged %s, not Audit-ready, gives %s",
+    (hookActive, sessionsJudged, level) => {
+      expect(teamLevel({ auditReady: false, hookActive, sessionsJudged })).toBe(level);
+    },
+  );
+
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])(
+    "gives Audit-ready whenever auditReady, with hookActive %s and sessionsJudged %s",
+    (hookActive, sessionsJudged) => {
+      expect(teamLevel({ auditReady: true, hookActive, sessionsJudged })).toBe("audit_ready");
+    },
+  );
+});
+
+describe("standardFacts", () => {
+  it("reads the hook as the counts say, and the Judge as at least one session judged", () => {
+    expect(standardFacts({ hook_active: true, judged: 0, needs_human_review: 0 })).toEqual({
+      hookActive: true,
+      sessionsJudged: false,
+    });
+    expect(standardFacts({ hook_active: false, judged: 1, needs_human_review: 1 })).toEqual({
+      hookActive: false,
+      sessionsJudged: true,
+    });
+  });
+});
 
 /** ISA2027 as the answer lists it; only its id matters to the Level. */
 const ISA: AuditCatalogue = {

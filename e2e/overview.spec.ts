@@ -90,8 +90,11 @@ test("Elm's Overview answers from ISA2027's Controls as Mary reviews them, and i
   await expect(card(page, "Quick").locator(".journey-state")).toHaveText("Not started");
   await expect(card(page, "Quick")).toContainText("Next: the first Scan");
   await expect(card(page, "Quick")).not.toHaveAttribute("aria-current");
+  // Elm's hook has sent nothing: the Level passed Standard without it, so its card isn't Done either.
   await expect(card(page, "Standard").locator(".journey-state")).toHaveText("Not started");
-  await expect(card(page, "Standard")).toContainText("Warden doesn't check this yet.");
+  await expect(card(page, "Standard")).toContainText(
+    "Next: an Admin turns on the agent hook on Setup",
+  );
 
   // Each overridden to not applicable: no Gap, every Control reviewed.
   await reviewEach({
@@ -108,6 +111,44 @@ test("Elm's Overview answers from ISA2027's Controls as Mary reviews them, and i
   await expect(rows(page).locator(".audit-gap")).toHaveCount(0);
   await expect(card(page, "Standard").locator(".journey-state")).not.toHaveText("Done");
 });
+
+// Spec #225's story 12 (#500). The browser tests run no Judge (it would call a model), so Acme's real answer comes back
+// at Standard with the hook sending and three sessions judged, one needing human review: what the server answers for
+// those rows is overview-api.test.ts's, and every other case of the card is overview.test.ts's.
+for (const width of [390, 1024, 1600]) {
+  test(`at ${width}px, Ada's Overview at Standard shows the Standard card current, full, with its sessions judged, and Quick done (#225 story 12)`, async ({
+    page,
+    signIn,
+  }) => {
+    await signIn(ADA);
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("**/api/overview", async (route) => {
+      const real = (await (await route.fetch()).json()) as Record<string, unknown>;
+      return route.fulfill({
+        json: {
+          ...real,
+          level: "standard",
+          agent_sessions: { hook_active: true, judged: 3, needs_human_review: 1 },
+        },
+      });
+    });
+    await page.goto("/overview");
+
+    const standard = card(page, "Standard");
+    await expect(standard).toHaveAttribute("aria-current", "step");
+    await expect(standard.locator(".journey-state")).toHaveText("Current");
+    await expect(standard.getByRole("progressbar", { name: "Standard" })).toHaveAttribute(
+      "aria-valuenow",
+      "100",
+    );
+    await expect(standard.locator(".journey-note")).toHaveText([
+      "3 sessions judged in 30 days, 1 needs human review",
+    ]);
+    await expect(card(page, "Quick").locator(".journey-state")).toHaveText("Done");
+    await expect(card(page, "Quick")).not.toHaveAttribute("aria-current");
+    await expectNoSidewaysScroll(page);
+  });
+}
 
 for (const width of [390, 1024, 1600]) {
   test(`at ${width}px, Elm's audit section scrolls nothing sideways, its rows ${width < 640 ? "stacked" : "on one line"} (#341 story 8)`, async ({

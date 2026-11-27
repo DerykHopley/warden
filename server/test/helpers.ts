@@ -17,7 +17,13 @@ import {
 } from "@warden/contracts";
 import type { Hono } from "hono";
 import { sql } from "kysely";
-import { createApp, type AppEnv, type AuditReads, type MountRoutes } from "../src/app.ts";
+import {
+  createApp,
+  type AgentSessionReads,
+  type AppEnv,
+  type AuditReads,
+  type MountRoutes,
+} from "../src/app.ts";
 import { createClerkVerifier } from "../src/auth.ts";
 import {
   createFindings,
@@ -31,6 +37,7 @@ import { createMembers, type ClerkOrganizations, type Members } from "../src/mem
 import type { HookTables } from "../src/modules/guard/hook-settings.ts";
 import { guardMoveRule } from "../src/modules/guard/move-rule.ts";
 import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
+import { createSessionActivity } from "../src/modules/guard/session-activity.ts";
 import { createPatchAssessment } from "../src/modules/patch/assessment.ts";
 import { patchMoveRule } from "../src/modules/patch/move-rule.ts";
 import { createProducts } from "../src/modules/patch/products.ts";
@@ -448,6 +455,11 @@ const noCatalogueOn: AuditReads = {
   auditReady: async () => false,
 };
 
+/** Guard's session counts for a test with no database: no hook event and no session judged, so never Standard. */
+const noAgentSessions: AgentSessionReads = {
+  activity: async () => ({ hook_active: false, judged: 0, needs_human_review: 0 }),
+};
+
 /**
  * Vouch as the start-up file wires it, on `withTeam`: its routes, and the app's Vouch reads from the same stores and
  * VDA ISA 2027.1, for `testApp`'s `moduleRoutes` and `audit`.
@@ -495,6 +507,8 @@ export function testApp(options: {
   assetChecks?: AssetChecks;
   /** Vouch's reads for the Overview and the Level; by default no Catalogue on and not Audit-ready, so Quick. */
   audit?: AuditReads;
+  /** Guard's session counts; by default the real ones on `withTeam`, or none (never Standard) without it. */
+  agentSessions?: AgentSessionReads;
 }) {
   const lines: string[] = [];
   const logger = createLogger((line) => lines.push(line));
@@ -524,6 +538,11 @@ export function testApp(options: {
       moduleRoutes: options.moduleRoutes ?? [],
       assetChecks: options.assetChecks ?? {},
       audit: options.audit ?? noCatalogueOn,
+      agentSessions:
+        options.agentSessions ??
+        (options.withTeam
+          ? createSessionActivity({ withTeam: options.withTeam })
+          : noAgentSessions),
       behindCloudRun: true,
       checkHealth: options.checkHealth ?? (async () => healthy),
       frontendApiHost: FRONTEND_API_HOST,

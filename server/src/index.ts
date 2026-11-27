@@ -24,6 +24,7 @@ import { createJudgeModels } from "./modules/guard/judge-models.ts";
 import { createPackageRegistry } from "./modules/guard/package-registry.ts";
 import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
+import { createSessionActivity } from "./modules/guard/session-activity.ts";
 import { writeGrantRoutes } from "./modules/guard/write-grant-routes.ts";
 import { createWriteGrants } from "./modules/guard/write-grants.ts";
 import { createPatchAssessment } from "./modules/patch/assessment.ts";
@@ -193,6 +194,8 @@ const appDeps: AppDeps = {
   ],
   // Vouch's answer to "Are we ready for the audit?" and the Audit-ready fact, from the same stores as its routes.
   audit: createAuditReads(vouch),
+  // Guard's counts of the hook's and the Judge's activity, which the Overview and the Level read.
+  agentSessions: createSessionActivity({ withTeam }),
   startScanJob,
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),

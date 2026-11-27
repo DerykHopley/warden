@@ -35,6 +35,7 @@ const overview = (fields: Partial<OverviewBody> = {}): OverviewBody => ({
   last_scan_at: SCANNED,
   has_findings: true,
   period_days: 30,
+  agent_sessions: { hook_active: false, judged: 0, needs_human_review: 0 },
   open_at_start: 0,
   open_now: 7,
   fix_rate: { fixed: 1, of: 11 },
@@ -767,7 +768,7 @@ describe("the journey with a Catalogue on (spec #341, story 9)", () => {
     const audit = isaOn({ waiting: 3, controls: [reviewedRow("1.3.3"), auditRow("1.3.4")] });
     open({ audit });
     await screen.findByRole("list", { name: "The journey" });
-    const [note] = journeyCards("quick", SCANNED, audit)[2]!.notes;
+    const [note] = journeyCards("quick", SCANNED, audit, overview())[2]!.notes;
     expect(cardOf("Audit-ready").getByText(note!)).toHaveClass("journey-note");
   });
 });

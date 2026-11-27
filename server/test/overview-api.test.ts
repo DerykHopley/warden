@@ -18,13 +18,23 @@ import {
 } from "@warden/contracts";
 import type { Hono } from "hono";
 import type { CryptoKey } from "jose";
+import { sql } from "kysely";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import type { AppEnv, AuditReads } from "../src/app.ts";
+import { judgeSettings } from "../src/config.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
+import { createLogger } from "../src/log.ts";
+import {
+  createAgentSessions,
+  type AgentSessionTables,
+} from "../src/modules/guard/agent-sessions.ts";
 import { createRepoAssets, type RepoAssets } from "../src/modules/guard/repo-assets.ts";
+import { runJudgeJob } from "../src/scan-job.ts";
+import { judge } from "../src/wiring.ts";
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { poolAs } from "./databases.ts";
+import { completion, fakeOpenRouter, verdict } from "./fake-openrouter.ts";
 import {
   activeOrganization,
   ADMIN,
@@ -130,6 +140,7 @@ describe("GET /api/overview", () => {
       team,
       level: "quick",
       audit: NO_CATALOGUE,
+      agent_sessions: { hook_active: false, judged: 0, needs_human_review: 0 },
       last_scan_at: "2026-11-24T09:00:00Z",
       has_findings: true,
       period_days: 30,
@@ -527,6 +538,143 @@ describe("GET /api/overview: Are we ready for the audit?", () => {
     expect(answers[1]).toEqual(answers[0]);
     expect(answers[2]).toEqual(answers[0]);
   });
+});
+
+// The hook's and the Judge's activity, and Standard (spec #225, slice 8b, story 12). Events are stored as the hook
+// endpoint stores them, sessions judged through `runJudgeJob` with a fake model, and times moved back in the database,
+// as the days passing would.
+
+const silentLog = createLogger(() => {});
+
+/** Stores one event for the session, as the hook endpoint does after its checks. */
+const storeEvent = (team: string, sessionId: string, name: string) =>
+  createAgentSessions({ withTeam }).store(team, {
+    sessionId,
+    name,
+    tool: null,
+    fields: { hook_event_name: name },
+    developer: null,
+    ended: name === "SessionEnd",
+    refusedEvents: 0,
+  });
+
+/**
+ * A session the hook sent today, ended, then judged by one Judge run with a fake model: a clean verdict for `clean`,
+ * or a refusal for `needs_human_review`, which leaves the session so.
+ */
+async function judgedSession(team: string, outcome: "clean" | "needs_human_review" = "clean") {
+  const sessionId = `sess-${randomUUID()}`;
+  await storeEvent(team, sessionId, "UserPromptSubmit");
+  await storeEvent(team, sessionId, "SessionEnd");
+  const model = fakeOpenRouter(() =>
+    outcome === "clean" ? verdict([]) : completion(null, "I can't help with that."),
+  );
+  const code = await runJudgeJob({
+    team,
+    sessionId,
+    judge: judge({
+      withTeam,
+      settings: judgeSettings({ OPENROUTER_API_KEY: `sk-or-v1-${randomUUID()}` }),
+      fetch: model.fetch,
+      logger: silentLog,
+    }),
+    logger: silentLog,
+  });
+  expect(code).toBe(0);
+  return sessionId;
+}
+
+/** Moves the session's `column` back `days` days. */
+const moveBack = (
+  team: string,
+  sessionId: string,
+  column: "judged_at" | "last_event_at",
+  days: number,
+) =>
+  withTeam(team, (tx) =>
+    tx
+      .$extendTables<AgentSessionTables>()
+      .updateTable("agent_sessions")
+      .set({ [column]: sql<Date>`now() - make_interval(days => ${days})` })
+      .where("session_id", "=", sessionId)
+      .execute(),
+  );
+
+/** The Team's Agent sessions and events, as the Team reads them. */
+const agentRows = (team: string) =>
+  withTeam(team, async (tx) => {
+    const db = tx.$extendTables<AgentSessionTables>();
+    return {
+      sessions: await db.selectFrom("agent_sessions").select(["outcome", "judged_at"]).execute(),
+      events: await db.selectFrom("agent_events").select("seq").execute(),
+    };
+  });
+
+describe("GET /api/overview: the agent hook and the Judge (story 12)", () => {
+  it("reads Standard with the hook sending today and 3 sessions judged in the period, 1 needing human review; one judged 31 days ago isn't counted", async () => {
+    const team = await vouchTeam();
+    await judgedSession(team);
+    await judgedSession(team, "needs_human_review");
+    await judgedSession(team);
+    const old = await judgedSession(team, "needs_human_review");
+    await moveBack(team, old, "judged_at", 31);
+
+    const { body } = await overviewOf(team);
+
+    expect(body.level).toBe("standard");
+    expect(body.agent_sessions).toEqual({ hook_active: true, judged: 3, needs_human_review: 1 });
+    expect(await meLevel(team)).toBe("standard");
+  }, 30_000);
+
+  it("reads the hook as active from its sessions, though the Judge dropped every event it read", async () => {
+    const team = await vouchTeam();
+    await judgedSession(team);
+
+    const rows = await agentRows(team);
+    expect(rows.events).toEqual([]);
+    expect(rows.sessions).toEqual([{ outcome: "clean", judged_at: expect.any(Date) }]);
+
+    const { body } = await overviewOf(team);
+    expect(body.agent_sessions).toEqual({ hook_active: true, judged: 1, needs_human_review: 0 });
+    expect(body.level).toBe("standard");
+  }, 30_000);
+
+  it("reads the hook as not active, and Quick, when its last event was 31 days ago, though a session was judged in the period", async () => {
+    const team = await vouchTeam();
+    const sessionId = await judgedSession(team);
+    await moveBack(team, sessionId, "last_event_at", 31);
+
+    const { body } = await overviewOf(team);
+
+    expect(body.agent_sessions).toEqual({ hook_active: false, judged: 1, needs_human_review: 0 });
+    expect(body.level).toBe("quick");
+    expect(await meLevel(team)).toBe("quick");
+  }, 30_000);
+
+  it("reads Quick with the hook sending and no session judged", async () => {
+    const team = await vouchTeam();
+    await storeEvent(team, `sess-${randomUUID()}`, "UserPromptSubmit");
+
+    const { body } = await overviewOf(team);
+
+    expect(body.agent_sessions).toEqual({ hook_active: true, judged: 0, needs_human_review: 0 });
+    expect(body.level).toBe("quick");
+    expect(await meLevel(team)).toBe("quick");
+  });
+
+  it("never counts another Team's sessions in a Team's counts or Level", async () => {
+    const teamA = await vouchTeam();
+    const teamB = await vouchTeam();
+    await judgedSession(teamB);
+    await judgedSession(teamB, "needs_human_review");
+
+    const { body } = await overviewOf(teamA);
+
+    expect(body.agent_sessions).toEqual({ hook_active: false, judged: 0, needs_human_review: 0 });
+    expect(body.level).toBe("quick");
+    expect(await meLevel(teamA)).toBe("quick");
+    expect((await overviewOf(teamB)).body.level).toBe("standard");
+  }, 30_000);
 });
 
 describe("a Vouch read that throws", () => {
