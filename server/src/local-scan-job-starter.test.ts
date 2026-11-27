@@ -1,6 +1,7 @@
 // The local starter, over a fake spawn: it runs scan-job.ts with node, handing it the Scan's id and Team and the
 // server's own PG* variables, HOME and Node's options, and nothing else from the server's environment. The Judge
-// starter hands on the same, with the session's id in place of the Scan's, and the Judge's key and model.
+// starter hands on the same, with the session's id in place of the Scan's, and the Judge's key, model and localhost
+// setting.
 import { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -121,7 +122,7 @@ describe("localScanJobStarter", () => {
     );
   });
 
-  it("hands on neither the Judge's key nor a session id, though the server has the key", async () => {
+  it("hands on neither the Judge's variables nor a session id, though the server has them", async () => {
     const fake = fakeSpawn();
     const { start } = starter(fake.spawn, { ...SERVER_ENV, ...JUDGE_ENV });
 
@@ -131,14 +132,16 @@ describe("localScanJobStarter", () => {
 
     const env = fake.calls[0]!.env;
     expect(env).not.toHaveProperty("OPENROUTER_API_KEY");
+    expect(env).not.toHaveProperty("WARDEN_JUDGE_LOCALHOST");
     expect(env).not.toHaveProperty("WARDEN_SESSION_ID");
   });
 });
 
-/** The Judge's two variables, as the server's environment holds them locally. */
+/** The Judge's three variables, as the server's environment holds them locally. */
 const JUDGE_ENV = {
   OPENROUTER_API_KEY: "sk-or-v1-the-judge-key",
   WARDEN_JUDGE_MODEL: "anthropic/claude-haiku-5.5",
+  WARDEN_JUDGE_LOCALHOST: "1",
 };
 
 function judgeStarter(spawn: Spawn, env: NodeJS.ProcessEnv) {
@@ -154,7 +157,7 @@ function judgeStarter(spawn: Spawn, env: NodeJS.ProcessEnv) {
 const SESSION = { sessionId: "sess-1", team: "org_a" };
 
 describe("localJudgeJobStarter (#444)", () => {
-  it("runs scan-job.ts with the session's id and Team, the Judge's two variables, and the Scan Job's own", async () => {
+  it("runs scan-job.ts with the session's id and Team, the Judge's three variables, and the Scan Job's own", async () => {
     const fake = fakeSpawn();
     const { start } = judgeStarter(fake.spawn, {
       ...SERVER_ENV,
@@ -202,6 +205,7 @@ describe("localJudgeJobStarter (#444)", () => {
     const env = fake.calls[0]!.env;
     expect(env).not.toHaveProperty("OPENROUTER_API_KEY");
     expect(env).not.toHaveProperty("WARDEN_JUDGE_MODEL");
+    expect(env).not.toHaveProperty("WARDEN_JUDGE_LOCALHOST");
   });
 
   it("logs the run's exit with the Team and exit code, never the session id", async () => {

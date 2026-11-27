@@ -45,6 +45,18 @@ describe("findUnprotectedTables", () => {
     expect(await findUnprotectedTables(pool)).toEqual([]);
   }, 30_000);
 
+  it("counts the Judge models table (#461) among the protected ones: there, with row-level security forced", async () => {
+    const { pool } = await migratedDatabase();
+
+    const { rows } = await pool.query<{ enabled: boolean; forced: boolean }>(`
+      select relrowsecurity as enabled, relforcerowsecurity as forced from pg_class
+       where relname = 'judge_models' and relkind = 'r'
+    `);
+
+    expect(rows).toEqual([{ enabled: true, forced: true }]);
+    expect(await findUnprotectedTables(pool)).toEqual([]);
+  }, 30_000);
+
   it("names a table whose policies don't keep warden_app to the Team, or that aren't there", async () => {
     const { pool } = await migratedDatabase();
     await pool.query(`

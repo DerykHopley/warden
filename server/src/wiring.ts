@@ -11,7 +11,9 @@ import type { Logger } from "./log.ts";
 import { createAgentSessions } from "./modules/guard/agent-sessions.ts";
 import { createGitHubReader } from "./modules/guard/github-reader.ts";
 import { createJudge, type Judge } from "./modules/guard/judge.ts";
-import { judgeModel } from "./modules/guard/judge-model.ts";
+import { judgeModel, localModel } from "./modules/guard/judge-model.ts";
+import { createJudgeModels } from "./modules/guard/judge-models.ts";
+import type { UrlRule } from "./modules/guard/judge-url.ts";
 import { guardMoveRule } from "./modules/guard/move-rule.ts";
 import { createRepoAssets } from "./modules/guard/repo-assets.ts";
 import type { RepoReader } from "./modules/guard/repo-reader.ts";
@@ -59,23 +61,40 @@ export type { Judge, JudgeRunOutcome } from "./modules/guard/judge.ts";
 
 /**
  * Guard's Judge, which the Scan Job runs for one ended Agent session, built here as the Job may not import Guard (ADR
- * 0005): the Agent sessions and Findings on `withTeam`, and the model on OpenRouter. With no key in `settings`, the
- * run throws ConfigError naming OPENROUTER_API_KEY before any call. Tests hand it a fake `fetch` and a short timeout.
+ * 0005): the Agent sessions and Findings on `withTeam`, and the Team's model: its own (`judge_models`, slice 6a)
+ * through the pinned connection with `settings.allowLocalhost`, else OpenRouter's. On OpenRouter with no key in
+ * `settings`, the run throws ConfigError naming OPENROUTER_API_KEY before any call. Tests hand it a fake `fetch` (for
+ * OpenRouter's call), a stub `resolve` (for the Team's own model's host) and a short timeout.
  */
 export function judge({
   withTeam,
   settings,
   fetch,
+  resolve,
   timeoutMs,
 }: {
   withTeam: WithTeam;
   settings: JudgeSettings;
   fetch?: Fetch;
+  resolve?: UrlRule["resolve"];
   timeoutMs?: number;
 }): Judge {
+  const judgeModels = createJudgeModels({ withTeam });
   return createJudge({
     agentSessions: createAgentSessions({ withTeam }),
     findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
-    model: judgeModel({ ...settings, fetch, timeoutMs }),
+    async modelFor(team) {
+      const own = await judgeModels.read(team);
+      if (own !== undefined) {
+        return localModel({
+          url: own.url,
+          model: own.model,
+          allowLocalhost: settings.allowLocalhost,
+          resolve,
+          timeoutMs,
+        });
+      }
+      return judgeModel({ apiKey: settings.apiKey, model: settings.model, fetch, timeoutMs });
+    },
   });
 }

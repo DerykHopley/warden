@@ -145,7 +145,22 @@ export type Config = {
   githubWrite: GitHubAppSettings | undefined;
   /** The pseudonym key's 32 bytes, which the hook endpoint derives each Team's key from; unset, it answers 503. */
   pseudonymKey: Buffer | undefined;
+  /** WARDEN_JUDGE_LOCALHOST: an Admin may name a local Judge model on localhost (local development only). */
+  judgeLocalhost: boolean;
 };
+
+/**
+ * WARDEN_JUDGE_LOCALHOST, which lets a Team's own Judge model be on `localhost`, `127.0.0.1` or `[::1]`: `1` turns it
+ * on, unset or empty leaves it off, and any other value throws ConfigError naming it. On Cloud Run (K_SERVICE in a
+ * service, CLOUD_RUN_JOB in a Job's container) it throws too, so the live app never runs with it.
+ */
+function readJudgeLocalhost(env: Record<string, string | undefined>): boolean {
+  const value = env.WARDEN_JUDGE_LOCALHOST || undefined;
+  if (value === undefined) return false;
+  const onCloudRun = Boolean(env.K_SERVICE) || Boolean(env.CLOUD_RUN_JOB);
+  if (value !== "1" || onCloudRun) throw new ConfigError(["WARDEN_JUDGE_LOCALHOST"]);
+  return true;
+}
 
 /** A GitHub App's settings: its client id and secret, and the private key it signs its JWTs with. */
 export type GitHubAppSettings = { clientId: string; clientSecret: string; privateKey: string };
@@ -179,6 +194,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   if (behindCloudRun && data.CLERK_AUTHORIZED_PARTIES === undefined) {
     throw new ConfigError(["CLERK_AUTHORIZED_PARTIES"]);
   }
+  const judgeLocalhost = readJudgeLocalhost(present);
   return {
     port: data.PORT,
     behindCloudRun,
@@ -192,6 +208,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     github: github.settings,
     githubWrite: githubWrite.settings,
     pseudonymKey: data.WARDEN_PSEUDONYM_KEY,
+    judgeLocalhost,
   };
 }
 
@@ -229,17 +246,23 @@ export function gitHubReaderSettings(
 /** Claude Haiku 5.5's OpenRouter slug (openrouter.ai/api/v1/models): the Judge's model unless WARDEN_JUDGE_MODEL names one. */
 export const DEFAULT_JUDGE_MODEL = "anthropic/claude-haiku-5.5";
 
-/** The key and model a Judge run calls OpenRouter with. */
-export type JudgeSettings = { apiKey: string | undefined; model: string };
+/**
+ * The key and model a Judge run calls OpenRouter with, and whether a Team's own model may be on localhost
+ * (WARDEN_JUDGE_LOCALHOST).
+ */
+export type JudgeSettings = { apiKey: string | undefined; model: string; allowLocalhost: boolean };
 
 /**
- * The Scan Job's settings for a Judge run: OPENROUTER_API_KEY, and WARDEN_JUDGE_MODEL or `DEFAULT_JUDGE_MODEL`. An
+ * The Scan Job's settings for a Judge run: OPENROUTER_API_KEY, WARDEN_JUDGE_MODEL or `DEFAULT_JUDGE_MODEL`, and
+ * WARDEN_JUDGE_LOCALHOST, read as `loadConfig` reads it (a bad value, or one on Cloud Run, throws ConfigError). An
  * empty value counts as unset, as in `loadConfig`. An unset key isn't refused here: the run refuses it after reading
- * the session, before its model call, so a session with nothing to judge exits 0 without it.
+ * the session, before its model call, so a session with nothing to judge (or one judged by the Team's own model) runs
+ * without it.
  */
 export function judgeSettings(env: Record<string, string | undefined>): JudgeSettings {
   return {
     apiKey: env.OPENROUTER_API_KEY || undefined,
     model: env.WARDEN_JUDGE_MODEL || DEFAULT_JUDGE_MODEL,
+    allowLocalhost: readJudgeLocalhost(env),
   };
 }

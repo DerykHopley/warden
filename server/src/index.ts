@@ -19,6 +19,8 @@ import { createGitHub } from "./modules/guard/github.ts";
 import { hookEventRoutes } from "./modules/guard/hook-event-routes.ts";
 import { hookRoutes } from "./modules/guard/hook-routes.ts";
 import { createHookSettings } from "./modules/guard/hook-settings.ts";
+import { judgeModelRoutes } from "./modules/guard/judge-model-routes.ts";
+import { createJudgeModels } from "./modules/guard/judge-models.ts";
 import { createPackageRegistry } from "./modules/guard/package-registry.ts";
 import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
@@ -164,6 +166,11 @@ const appDeps: AppDeps = {
         : { findings, repoAssets, writeGrants, fixPrs },
     ),
     hookRoutes({ hookSettings }),
+    // The Team's own Judge model; a URL on localhost is accepted only with WARDEN_JUDGE_LOCALHOST (local development).
+    judgeModelRoutes({
+      judgeModels: createJudgeModels({ withTeam }),
+      allowLocalhost: config.judgeLocalhost,
+    }),
     // Without WARDEN_PSEUDONYM_KEY, the hook endpoint answers 503 and stores nothing. A stored SessionEnd starts the
     // Judge run, chosen as the Scan Job's starter is; on Cloud Run without a Job, none starts.
     hookEventRoutes({
