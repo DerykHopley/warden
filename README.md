@@ -1,5 +1,13 @@
 # Warden
 
+Warden is a security and compliance suite for teams that build software with AI coding agents. Its goal: keep that
+software safe, and prove it at an audit. Agents read secrets, run commands and add Dependencies faster than anyone can
+review them. Guard scans a Team's Repos for risky agent configuration and leaked secrets, and its Judge reads Agent
+sessions for risky behaviour. Patch matches each Product's Dependencies against known vulnerabilities. A Scan raises
+Findings, one per problem on one Asset; for risky agent configuration, Warden can open a Fix PR that a person merges.
+Vouch turns Findings into a Verdict for each Control in a Catalogue, such as VDA ISA 2027.1, so a Lead sees the Gaps
+before the audit.
+
 One app: a Hono server on Node 24 that serves the API under `/api` and the built React dashboard from one origin.
 Sign-in is Clerk; the database is Postgres 17 with pgvector.
 
