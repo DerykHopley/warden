@@ -164,6 +164,10 @@ describe("redactEvent: the home folder", () => {
       "[d](https://x.com)~/app",
     ],
     ["a git-bash path", "/c/Users/alice/app", "~/app"],
+    ["a git-bash path in a command", 'cd "/c/Users/alice/app"', 'cd "~/app"'],
+    ["a JSON-escaped git-bash path", "\\/c\\/Users\\/alice\\/app", "~\\/app"],
+    ["a one-letter folder before /home/", "/srv/a/home/alice/x", "/srv/a~/x"],
+    ["a one-letter folder before /Users/", "/opt/b/Users/alice/x", "/opt/b~/x"],
     ["a WSL path", "/mnt/c/Users/alice/app", "~/app"],
     ["a Windows long path", "\\\\?\\C:\\Users\\alice\\app", "~\\app"],
     ["doubled separators after var", "/var//home/alice/x", "~/x"],
@@ -202,17 +206,8 @@ describe("redactEvent: the home folder", () => {
     ).toEqual({ tool_response: { "~/a.ts": [{ path: "~/b" }] } });
   });
 
-  // #435: two keys that mask to the same text both reach the Judge.
-  it("keeps both values of two keys that mask to the same text, under distinct keys", () => {
-    const { tool_response: redacted } = redactEvent({
-      tool_response: { "/home/alice/a": 1, "/home/bob/a": 2 },
-    });
-
-    expect(redacted).toEqual({ "~/a": 1, "~/a (2)": 2 });
-    expect(JSON.stringify(redacted)).not.toMatch(/alice|bob/);
-  });
-
-  it("keeps a key already named like a renamed one apart from it", () => {
+  // #435: keys that mask to the same text all reach the Judge, each under its own key.
+  it("numbers keys that mask to the same text, apart from a key already named like a numbered one", () => {
     expect(
       redactEvent({
         keys: { "/home/alice/a": 1, "/home/bob/a": 2, "~/a (2)": 3, "/Users/c/a": 4 },
@@ -258,6 +253,24 @@ describe("redactEvent: the log redactor's patterns", () => {
   ])("masks %s", (_name, text, masked) => {
     const { prompt } = redactEvent({ prompt: text });
     expect(prompt).toContain(masked);
+  });
+
+  // The home folder's name ends at a URL's ?, # and &, so the query's keys stay for the query pattern to mask.
+  it.each([
+    ["after ?", "https://x.com/home/alice?token=s3cr3tvalue", "https://x.com~?token=***"],
+    [
+      "after ? in a quoted command",
+      "curl 'https://x.com/Users/alice?api_key=s3cr3tvalue&b=2'",
+      "curl 'https://x.com~?api_key=***&b=***'",
+    ],
+    ["after #", "https://x.com/home/alice#top?token=s3cr3tvalue", "https://x.com~#top?token=***"],
+    [
+      "after &",
+      "https://x.com/a?u=/home/alice&token=s3cr3tvalue",
+      "https://x.com/a?u=***&token=***",
+    ],
+  ])("masks a URL's query value %s a home folder in its path", (_name, text, redacted) => {
+    expect(redactEvent({ prompt: text })).toEqual({ prompt: redacted });
   });
 
   it("leaves a string holding no secret and no home folder unchanged", () => {

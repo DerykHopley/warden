@@ -13,22 +13,31 @@ import { maskSecrets } from "./secrets.ts";
  */
 const SEP = String.raw`[/\\]+`;
 
+/** What ends a path segment: whitespace, a quote, a shell operator, and a URL's `?`, `#`, `&` and `=`. */
+const SEGMENT_END = String.raw`\s"'\x60;:,|&<>()\[\]{}=?#`;
+
 /**
- * A user name: one path segment, up to the next separator, whitespace, quote, shell operator or the string's end.
- * None of these can be in a user name on Linux, macOS or Windows, so the name is masked whole.
+ * A user name: one path segment, up to the next separator, a segment's end or the string's end. None of these can be
+ * in a user name on Linux, macOS or Windows, so the name is masked whole, and a URL's query after it (`?token=…`)
+ * stays for the log redactor to mask.
  */
-const NAME = String.raw`[^/\\\s"'\x60;:,|&<>()\[\]{}=]+`;
+const NAME = String.raw`[^/\\${SEGMENT_END}]+`;
+
+/**
+ * Git-bash's `/c` at a path's start (after the string's start or a segment's end, never after a folder, so
+ * `/srv/a/home/<name>` keeps its `/a`), or WSL's `/mnt/c`. The drive letter follows a `/`, so a JSON-escaped `\n`
+ * before a path stays.
+ */
+const DRIVE_FOLDER = String.raw`${SEP}mnt[/\\]*/[a-z]|(?<![^${SEGMENT_END}])[/\\]*/[a-z]`;
 
 /**
  * A home folder, with its user name, in any case (macOS ignores it), wherever it starts, a URL's path included (the
  * person's name is masked there too): `/home/<name>`, `/var/home/<name>` and `/Users/<name>`, also after git-bash's
- * `/c` or WSL's `/mnt/c`, and `<drive>:\Users\<name>`, also after a long path's `\\?\`. Those two drive letters
- * follow a `/`, so a JSON-escaped `\n` before a path stays. A match starts only at a run of separators' first one, or
- * at a drive letter, so a long run is scanned once.
+ * `/c` or WSL's `/mnt/c`, and `<drive>:\Users\<name>`, also after a long path's `\\?\`. A match starts only at a run
+ * of separators' first one, or at a drive letter, so a long run is scanned once.
  */
-const DRIVE_FOLDER = String.raw`[/\\]*/[a-z]`;
 const HOME_FOLDER = new RegExp(
-  String.raw`(?<![/\\])(?:${SEP}var|(?:${SEP}mnt)?${DRIVE_FOLDER})?${SEP}(?:home|users)${SEP}${NAME}` +
+  String.raw`(?<![/\\])(?:${SEP}var|${DRIVE_FOLDER})?${SEP}(?:home|users)${SEP}${NAME}` +
     String.raw`|(?<![a-z0-9])(?:(?<![/\\])${SEP}\?${SEP})?[a-z]:${SEP}users${SEP}${NAME}`,
   "gi",
 );

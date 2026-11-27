@@ -212,11 +212,11 @@ Every other field is dropped. The bounds at Details and Content (#184):
 string value and every object key, at any depth, in this order.
 
 1. **The home folder becomes `~`:** `/home/<name>`, `/var/home/<name>`, `/Users/<name>` (also after git-bash's `/c`
-   or WSL's `/mnt/c`) and `<drive>:\Users\<name>` (also after a long path's `\\?\`), in any case (macOS ignores it),
+   at a path's start, or WSL's `/mnt/c`) and `<drive>:\Users\<name>` (also after a long path's `\\?\`), in any case (macOS ignores it),
    with `/`, `\`, doubled or JSON-escaped separators, wherever the path is in the string: a command, straight after a
    flag (`-I/home/<name>`), deeper in another path, inside or after any URL (`file://`, `vscode://`, `ssh://`, and a
-   web URL's own path, `https://example.com/home/x`, too). `<name>` runs to the next separator, whitespace, quote
-   or shell operator. Claude Code's encoded project folder after `.claude/projects/` that starts with an encoded home
+   web URL's own path, `https://example.com/home/x`, too). `<name>` runs to the next separator, whitespace, quote,
+   shell operator or a URL's `?`, `#`, `&` or `=`, so a query after it is still masked. Claude Code's encoded project folder after `.claude/projects/` that starts with an encoded home
    folder (`-home-`, `-var-home-`, `-Users-`, `C--Users-`, in any case) becomes `~` whole. The developer's name
    elsewhere (a shell prompt, `whoami` output) isn't masked.
 2. **Guard's nine secret types** (`maskSecrets`, over the patterns the secret Rules use) become their mask: the
