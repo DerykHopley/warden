@@ -7,6 +7,7 @@ import type { Finding, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FINDING_GONE } from "../src/decisions.ts";
 import { FindingsPage } from "../src/Findings.tsx";
+import type { PanelContext } from "../src/panel.ts";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { demoFindings, ID, PRODUCT_ID, SHOP_WEB, TEAM } from "./findings-fixture.ts";
 
@@ -40,6 +41,10 @@ function open(
   render(<FindingsPage {...props} />);
   return props;
 }
+
+/** The context the page last gave the fake panel: null once the page has unmounted, undefined before it set one. */
+const lastContext = (panel: ReturnType<typeof open>["panel"]) =>
+  panel.setContext.mock.lastCall?.[0] as PanelContext | null | undefined;
 
 const address = () => location.pathname + location.search;
 const cards = () => within(screen.getByRole("list", { name: "Start here" })).getAllByRole("button");
@@ -482,9 +487,7 @@ describe("a link that names a Finding", () => {
   it("opens it only on the page's load, not again when the list comes back", async () => {
     const { panel } = open(`/findings?finding=${ID.lodash}`);
     await screen.findByRole("table");
-    const context = panel.setContext.mock.lastCall?.[0] as { onFindingChanged: () => void };
-
-    context.onFindingChanged();
+    lastContext(panel)!.onFindingChanged();
     await vi.waitFor(() => expect(callsTo("/api/findings")).toHaveLength(2));
     await screen.findByRole("table");
 
@@ -509,10 +512,8 @@ describe("a Finding the Team no longer has (#452)", () => {
         answer(++asked === 1 ? demoFindings : demoFindings.filter((f) => f.id !== ID.lodash)),
     });
   }
-  const goneFrom = (panel: { setContext: ReturnType<typeof vi.fn> }) =>
-    act(() =>
-      (panel.setContext.mock.lastCall?.[0] as { onFindingGone: () => void }).onFindingGone(),
-    );
+  const goneFrom = (panel: ReturnType<typeof open>["panel"]) =>
+    act(() => lastContext(panel)!.onFindingGone());
 
   it("shows the gone notice and uncovers the panel once, so a floating or full-screen panel doesn't hide it", async () => {
     const { panel } = openThenGone();
@@ -623,8 +624,7 @@ describe("a Product Asset's name", () => {
     const { panel } = open(`/findings?finding=${ID.lodash}`, onProduct, {
       products: () => products(),
     });
-    const productName = () =>
-      (panel.setContext.mock.lastCall?.[0] as { productName: string | null } | null)?.productName;
+    const productName = () => lastContext(panel)?.productName;
     await vi.waitFor(() => expect(productName()).toBe("Shop web"));
 
     await userEvent.click(rowButton(MINIMIST));
