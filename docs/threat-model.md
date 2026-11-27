@@ -107,6 +107,10 @@ flowchart LR
 | TB8 Langfuse | Metadata about Warden's model calls | Metadata only: no input or output | Designed: Guard spec |
 | TB9 CI and the release from `main` | Code and the container image | The merge gate; releases only from `main` | Built: the merge gate (rig) and the fast lane (slice 1a, #4). Built: slice 1b-ii, the release (#24): `release.yml` runs on a push to `main` (or by hand from `main`), calls the full lane first and deploys only when it passes |
 
+Vouch crosses no boundary of its own: it makes no model call (nothing to TB7 or TB8) and no outside call, as its
+Catalogue (VDA ISA 2027.1) ships in the server image; its two tables, `team_catalogues` and `control_reviews`, sit
+behind TB3's row-level security, and the review log is append-only (D6).
+
 ## Who might attack
 
 - **An outside attacker on the public URL** has the URL and anything they can send to it, and wants any Team's
