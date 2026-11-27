@@ -111,7 +111,9 @@ function fileExistsOnDisk(path: string): boolean {
 /**
  * What makes the database the PG* variables name count as hosted, one phrase per signal; empty when it's local. The
  * Cloud SQL Auth Proxy listens on 127.0.0.1, so a password from anywhere pg looks counts too: PGPASSWORD, PGPASSFILE's
- * file, PGSERVICE's entry, or a .pgpass in HOME. When `fileExists` can't tell whether ~/.pgpass is there, it counts.
+ * file, PGSERVICE's entry, or a .pgpass where pg reads it: in HOME, or with HOME unset or empty in the working folder
+ * (pgpass 1.0.5 reads `path.join(env.HOME || './', '.pgpass')`, #476). When `fileExists` can't tell whether that
+ * .pgpass is there, it counts.
  */
 function hostedSignals(
   env: Record<string, string | undefined>,
@@ -124,12 +126,13 @@ function hostedSignals(
   if (env.PGPASSWORD) signals.push("PGPASSWORD is set");
   if (env.PGPASSFILE) signals.push("PGPASSFILE is set");
   if (env.PGSERVICE) signals.push("PGSERVICE is set");
-  if (env.HOME) {
-    try {
-      if (fileExists(join(env.HOME, ".pgpass"))) signals.push("~/.pgpass exists");
-    } catch {
-      signals.push("~/.pgpass couldn't be checked");
-    }
+  const [pgpass, named] = env.HOME
+    ? [join(env.HOME, ".pgpass"), "~/.pgpass"]
+    : [".pgpass", "./.pgpass"];
+  try {
+    if (fileExists(pgpass)) signals.push(`${named} exists`);
+  } catch {
+    signals.push(`${named} couldn't be checked`);
   }
   return signals;
 }
@@ -137,7 +140,7 @@ function hostedSignals(
 /**
  * Why the seed won't run against the database the PG* variables name, or undefined when it may. WARDEN_SEED_DEMO must
  * be set. A hosted database (see `hostedSignals`) needs WARDEN_SEED_DEMO to name it, and is never the live database;
- * the refusal says what made it hosted. `fileExists` is for the ~/.pgpass check, the real file system unless given.
+ * the refusal says what made it hosted. `fileExists` is for the .pgpass check, the real file system unless given.
  */
 export function seedRefusal(
   env: Record<string, string | undefined>,

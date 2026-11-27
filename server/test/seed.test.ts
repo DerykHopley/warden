@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { fingerprint, type Finding, type Product } from "@warden/contracts";
 import {
   DEMO_OBSERVATIONS,
@@ -40,6 +41,7 @@ import {
 import { createWithTeam, type WithTeam } from "../src/with-team.ts";
 import { createPool } from "../src/database.ts";
 import { createLogger } from "../src/log.ts";
+import { runCommand } from "./child-process.ts";
 import { ownDatabase, runInServer } from "./databases.ts";
 import { patchRefresh, seedTeam } from "./helpers.ts";
 
@@ -325,16 +327,48 @@ describe("seedRefusal", () => {
     });
 
     it("takes an empty PGPASSFILE or PGSERVICE, or no HOME, as no password", () => {
-      const asked: string[] = [];
       for (const where of [{ PGPASSFILE: "" }, { PGSERVICE: "" }, { HOME: "" }, {}]) {
+        const asked: string[] = [];
+        const noPgpassAnywhere = (path: string) => {
+          asked.push(path);
+          return false;
+        };
         expect(
           seedRefusal(
             { PGHOST: "127.0.0.1", ...where, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
-            pgpassEverywhere(asked),
+            noPgpassAnywhere,
           ),
         ).toBeUndefined();
+        // None of these sets HOME, so pg would read .pgpass in the working folder: that's where it looks (#476).
+        expect(asked).toEqual([".pgpass"]);
       }
-      expect(asked).toEqual([]);
+    });
+
+    // With HOME unset or empty, pg reads .pgpass in the folder the process runs from (pgpass 1.0.5:
+    // `path.join(env.HOME || './', '.pgpass')`), so a .pgpass there counts as a password too (#476).
+    describe("with no HOME", () => {
+      for (const [name, noHome] of [
+        ["HOME unset", {}],
+        ["HOME empty", { HOME: "" }],
+      ] as const) {
+        it(`${name}: a .pgpass in the working folder needs the database's name and never seeds warden`, () => {
+          const asked: string[] = [];
+          expectHosted(noHome, pgpassEverywhere(asked), /\.\/\.pgpass exists/);
+          expect(new Set(asked)).toEqual(new Set([".pgpass"]));
+        });
+
+        it(`${name}: counts as hosted when it can't tell whether ./.pgpass exists`, () => {
+          const cantTell = () => {
+            throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+          };
+          const refusal = seedRefusal(
+            { PGHOST: "127.0.0.1", ...noHome, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
+            cantTell,
+          );
+          expect(refusal).toMatch(/live database, warden/);
+          expect(refusal).toMatch(/\.\/\.pgpass couldn't be checked/);
+        });
+      }
     });
   });
 });
@@ -1059,6 +1093,34 @@ describe("pnpm seed", () => {
     const other = await runInServer(["node", "src/seed.ts", team], env());
     expect(other.code).toBe(1);
     expect(other.output).toContain("has Findings of its own");
+  });
+
+  it("refuses the live database with HOME unset and a .pgpass in the folder it runs from (#476)", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "warden-seed-cwd-"));
+    try {
+      writeFileSync(join(folder, ".pgpass"), "");
+
+      // Only what the case needs, HOME left out. PGPORT is a port nothing listens on, so a seed that got past the guard
+      // couldn't reach any database.
+      const { code, output } = await runCommand(
+        ["node", fileURLToPath(new URL("../src/seed.ts", import.meta.url)), newTeam()],
+        {
+          PGHOST: "127.0.0.1",
+          PGPORT: "1",
+          PGDATABASE: "warden",
+          WARDEN_SEED_DEMO: "1",
+          HOME: undefined,
+        },
+        { cwd: folder, clean: true },
+      );
+
+      expect(code).toBe(1);
+      expect(output).toContain("demo seed refused");
+      expect(output).toContain("live database, warden");
+      expect(output).toContain("./.pgpass exists");
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 
   it("refuses a database role that can bypass row-level security", async () => {
