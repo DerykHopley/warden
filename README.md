@@ -246,7 +246,7 @@ By default the Judge calls OpenRouter. An Admin can point the Team's Judge at a 
 an OpenAI-compatible base URL and a model name. Then the Judge sends the Team's events to that URL, with no key, and
 sends nothing to OpenRouter. Set it on Setup's "Judge's model" section, signed in as the Team's Admin: type the URL
 and the model name, and Save. "Use OpenRouter" clears it, putting the Team back on OpenRouter. The URL
-must be https, with no user name, query or fragment, at most 2,048 characters once encoded, on a host whose every
+must be https, with no user name, query or fragment, at most 2,048 characters, on a host whose every
 address is public; a refusal says why.
 Each call connects only to the address it checked, and never follows a redirect.
 
