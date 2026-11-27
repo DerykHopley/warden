@@ -82,10 +82,11 @@ test("stories 2 and 3: 1.3.3's card shows its Verdict, reason, credit, and the O
     "Talking about: 1.3.3 · view: Overview",
   );
 
-  // Both Rules covered by the Scan an hour ago, on the one Repo.
-  const rules = shown.locator(".control-rules li");
-  await expect(rules).toHaveCount(2);
-  for (const rule of await rules.all()) await expect(rule).toContainText(", on 1 of 1 Repo");
+  // A line for each of 1.3.3's Rules; their words are ruleEvidenceWords', unit-tested in the dashboard.
+  await expect(shown.locator(".control-rules li code")).toHaveText([
+    "guard/unapproved-ai-tool",
+    "guard/mcp-server-unpinned",
+  ]);
 
   const { id, title } = await firFinding();
   const link = shown

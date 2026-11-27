@@ -1,22 +1,19 @@
 // The Control card (spec #341, slice 7a; docs/design.md: Control detail card): its header with the Catalogue's credit,
 // the Verdict with its review state and reason, the evidence with its Open Findings as links, the reviews, and each
-// answer its read can get. It renders ControlCard alone with spy props, Warden's server faked; the check that no Role
-// gets a review control renders the whole App, Clerk faked. The evidence and review lines' words are tested below the
-// card (vouch.test.ts); selecting a Control on the Overview, in Overview.test.tsx.
+// answer its read can get. It renders ControlCard alone with spy props, Warden's server faked. The reason's, the
+// evidence's and the review lines' words are tested below the card (vouch.test.ts): here the card shows them; selecting
+// a Control on the Overview, in Overview.test.tsx.
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ControlDetail, ControlReview, Role } from "@warden/contracts";
+import type { ControlDetail, ControlReview } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { App } from "../src/App.tsx";
 import { ControlCard } from "../src/ControlCard.tsx";
 import { dayAndTimeWords } from "../src/date-words.ts";
 import type { ClerkUser } from "../src/person-name.ts";
-import { auditRow, controlDetail, ISA, isaOn, overviewBody } from "./audit-fixture.ts";
+import { judgeRunLine, ruleEvidenceWords, verdictReasonLine } from "../src/vouch.ts";
+import { auditRow, controlDetail, ISA } from "./audit-fixture.ts";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
-import { clerk, resetClerk } from "./fake-clerk.tsx";
-import { TEAM } from "./findings-fixture.ts";
-
-vi.mock("@clerk/react", () => import("./fake-clerk.tsx"));
+import { PRODUCT_ID, SHOP_WEB, TEAM } from "./findings-fixture.ts";
 
 beforeEach(() => {
   fetchMock.mockReset();
@@ -42,6 +39,7 @@ function show(fields: Partial<ControlDetail> = {}, routes: Routes = {}) {
       catalogue: ISA,
       control: auditRow("1.3.3", { question: "Is AI tool use approved?" }),
       clear: vi.fn(),
+      refreshRow: vi.fn(),
     },
     team: TEAM,
     getToken: vi.fn(async () => "session-token" as string | null),
@@ -90,15 +88,19 @@ describe("the Verdict (story 2)", () => {
     ).toBeNull();
   });
 
-  it("a reviewed override to not applicable reads Not applicable, Reviewed", async () => {
-    show({
+  it("a reviewed override to not applicable reads Not applicable, Reviewed, its reason saying which Verdict it explains", async () => {
+    const overridden = {
       verdict: "not_evidenced",
       review_state: "reviewed",
       reviewed_verdict: "not_applicable",
-    });
+    } as const;
+    show(overridden);
     const verdict = await section("Verdict");
     expect(verdict.getByText("Not applicable").tagName).toBe("STRONG");
     expect(verdict.getByText("Reviewed")).toBeVisible();
+    expect(verdict.getByText(verdictReasonLine(controlDetail("1.3.3", overridden)))).toHaveClass(
+      "control-reason",
+    );
   });
 
   it("a Control changed since review at partly evidenced reads Partly evidenced, Changed since review and the changed line (story 7)", async () => {
@@ -122,15 +124,16 @@ describe("the evidence (story 3)", () => {
     const evidence = await section("Evidence");
     const rule = evidence.getByText("guard/unapproved-ai-tool");
     expect(rule.tagName).toBe("CODE");
-    expect(rule.parentElement).toHaveTextContent(
-      /^guard\/unapproved-ai-tool: no Scan in the last 30 days, on 0 of 1 Repo$/,
+    const [covered] = controlDetail("1.3.3").evidence.rules;
+    expect(rule.parentElement!.textContent).toBe(
+      `guard/unapproved-ai-tool: ${ruleEvidenceWords(covered!)}`,
     );
   });
 
-  it("a Control with no Rules (5.2.4) shows its Judge Spot line instead", async () => {
+  it("a Control with no Rules (5.2.4) shows its Judge run line instead", async () => {
     show({ evidence: { rules: [], judge_spot_run_at: null, open_findings: [] } });
     const evidence = await section("Evidence");
-    expect(evidence.getByText("No Judge Spot run in the last 30 days.")).toBeVisible();
+    expect(evidence.getByText(judgeRunLine(null))).toBeVisible();
     expect(evidence.queryByText(/^guard\//)).toBeNull();
   });
 
@@ -166,6 +169,32 @@ describe("the evidence (story 3)", () => {
     ]);
     expect(links[0]).toHaveAccessibleName("Cursor is in use High · acme/api");
     expect(links[1]).toHaveAccessibleName("Copilot is in use Medium · acme/web");
+  });
+
+  it("names a Product Asset by its Product's name, as Findings does", async () => {
+    show(
+      {
+        evidence: {
+          ...controlDetail("1.3.3").evidence,
+          open_findings: [
+            {
+              id: "f-cve",
+              rule_id: "patch/known-cve",
+              title: "lodash has a known CVE",
+              severity: "high",
+              asset: { kind: "product", ref: PRODUCT_ID },
+            },
+          ],
+        },
+      },
+      { products: () => json(200, { team: TEAM, products: [SHOP_WEB] }) },
+    );
+    const findings = within(
+      (await section("Evidence")).getByRole("list", { name: "Open Findings" }),
+    );
+    expect(
+      await findings.findByRole("link", { name: "lodash has a known CVE High · Shop web" }),
+    ).toBeVisible();
   });
 
   it("says No Open Findings. with none", async () => {
@@ -320,7 +349,7 @@ describe("the read", () => {
     });
     render(
       <ControlCard
-        focus={{ catalogue: ISA, control: auditRow("1.3.3"), clear: vi.fn() }}
+        focus={{ catalogue: ISA, control: auditRow("1.3.3"), clear: vi.fn(), refreshRow: vi.fn() }}
         team={TEAM}
         getToken={getTokens}
         userId="user_ada"
@@ -336,31 +365,16 @@ describe("the read", () => {
 });
 
 describe("no review control (slice 7b builds the form)", () => {
-  it.each<Role>(["admin", "lead", "member"])(
-    "as %s, the card shows with no Confirm, Override or other control but its ✕",
-    async (role) => {
-      resetClerk();
-      clerk.auth.isSignedIn = true;
-      clerk.auth.sessionId = "sess_1";
-      clerk.auth.orgId = TEAM;
-      clerk.orgNames = { [TEAM]: "Acme" };
-      window.history.replaceState(null, "", "/overview?catalogue=vda-isa-2027.1&control=1.3.3");
-      serve({
-        me: () => json(200, { userId: "user_ada", team: TEAM, role, level: "quick" }),
-        overview: () => json(200, overviewBody(TEAM, { audit: isaOn() })),
-        control: () => answer(),
-      });
-      render(<App />);
-      const panel = within(await screen.findByRole("complementary", { name: "Ask Warden" }));
-      const card = within(panel.getByRole("region", { name: "Question 1.3.3?" }));
-      await card.findByRole("region", { name: "Verdict" });
-      expect(
-        card.getAllByRole("button").map((button) => button.getAttribute("aria-label")),
-      ).toEqual(["Clear the focus"]);
-      expect(card.queryByRole("textbox")).toBeNull();
-      expect(card.queryByRole("radio")).toBeNull();
-      expect(card.queryByRole("combobox")).toBeNull();
-      expect(card.queryByRole("checkbox")).toBeNull();
-    },
-  );
+  // The card takes no Role, so every Role sees this same card.
+  it("shows no Confirm, Override or other control but its ✕", async () => {
+    const { card } = show();
+    await section("Verdict");
+    expect(card.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Clear the focus",
+    ]);
+    expect(card.queryByRole("textbox")).toBeNull();
+    expect(card.queryByRole("radio")).toBeNull();
+    expect(card.queryByRole("combobox")).toBeNull();
+    expect(card.queryByRole("checkbox")).toBeNull();
+  });
 });

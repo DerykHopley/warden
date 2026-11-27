@@ -9,6 +9,7 @@ import {
   type AuditAnswer,
   type AuditCatalogue,
   type AuditControl,
+  type ControlDetail,
   type ReviewedVerdict,
 } from "@warden/contracts";
 import { useCallback } from "react";
@@ -240,6 +241,15 @@ export function focusedControl(
   );
   return catalogue === undefined || row === undefined ? null : { catalogue, control: row };
 }
+
+/** Whether a row says what the Control's read says: the same Verdicts and review state. */
+export const rowAgrees = (
+  row: AuditControl,
+  read: Pick<ControlDetail, "verdict" | "review_state" | "reviewed_verdict">,
+) =>
+  row.verdict === read.verdict &&
+  row.review_state === read.review_state &&
+  row.reviewed_verdict === read.reviewed_verdict;
 
 /**
  * The Verdict a Control's row shows: the reviewed one while the Control is reviewed, and the one worked out now

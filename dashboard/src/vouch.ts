@@ -20,6 +20,7 @@ import {
   type TeamRefusal,
 } from "./api.ts";
 import { dayAndTimeWords } from "./date-words.ts";
+import { shownVerdict } from "./overview.ts";
 import { confirmTeam, type TeamCheckRefused } from "./products.ts";
 
 /** Setup's Catalogues heading's id, the anchor the Overview's Setup pointer lands on (`/setup#setup-catalogues`). */
@@ -189,11 +190,23 @@ export function ruleEvidenceWords(rule: ControlRuleEvidence): string {
   return `${covered}, on ${rule.assets_covered} of ${rule.assets_held} ${rule.assets_held === 1 ? one : many}`;
 }
 
-/** The evidence of a Control a Judge Spot run evidences (5.2.4): the newest run in the last 30 days, or none. */
-export const judgeSpotLine = (runAt: string | null) =>
+/** The evidence of a Control a Judge run evidences (5.2.4): the newest run in the last 30 days, or none. */
+export const judgeRunLine = (runAt: string | null) =>
   runAt === null
-    ? "No Judge Spot run in the last 30 days."
-    : `Last Judge Spot run: ${dayAndTimeWords(runAt)}`;
+    ? "No Judge run in the last 30 days."
+    : `Last Judge run: ${dayAndTimeWords(runAt)}`;
+
+/**
+ * The line under the Verdict: the server's reason, which explains the worked-out Verdict. While a reviewed Verdict
+ * replaces that one (`shownVerdict`), it says which Verdict it explains: "Worked out as Not evidenced: …".
+ */
+export function verdictReasonLine(
+  detail: Pick<ControlDetail, "verdict" | "reason" | "review_state" | "reviewed_verdict">,
+): string {
+  return shownVerdict(detail) === detail.verdict
+    ? detail.reason
+    : `Worked out as ${VOUCH_VERDICT_WORDS[detail.verdict]}: ${detail.reason}`;
+}
 
 /** A review's outcome: "Confirmed: Partly evidenced", or "Overridden to Not applicable, from Not evidenced". */
 export function reviewOutcomeLine(review: ControlReview): string {

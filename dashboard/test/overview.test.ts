@@ -10,11 +10,20 @@ import {
   controlsByCatalogue,
   focusedControl,
   journeyCards,
+  rowAgrees,
   searchWithControl,
   shownVerdict,
   trendLine,
 } from "../src/overview.ts";
-import { auditRow, ISA, isaOn, ISA_REFS, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
+import {
+  auditRow,
+  controlDetail,
+  ISA,
+  isaOn,
+  ISA_REFS,
+  NO_CATALOGUE,
+  reviewedRow,
+} from "./audit-fixture.ts";
 
 const SCANNED = "2026-11-24T09:14:00Z";
 const scannedOn = new Date(SCANNED).toLocaleDateString(undefined, { dateStyle: "medium" });
@@ -259,9 +268,7 @@ describe("searchWithControl", () => {
   });
 
   it("drops only the Catalogue and ref with no Control in focus", () => {
-    expect(searchWithControl("?catalogue=vda-isa-2027.1&tab=x&control=1.3.3", null)).toBe(
-      "?tab=x",
-    );
+    expect(searchWithControl("?catalogue=vda-isa-2027.1&tab=x&control=1.3.3", null)).toBe("?tab=x");
     expect(searchWithControl("?control=1.3.3", null)).toBe("");
   });
 
@@ -295,6 +302,31 @@ describe("focusedControl", () => {
     expect(focusedControl(isaOn({ catalogues: [] }), { catalogue: ISA.id, ref: "1.3.3" })).toBe(
       null,
     );
+  });
+});
+
+describe("rowAgrees", () => {
+  const read = controlDetail("1.3.3", {
+    verdict: "partly_evidenced",
+    review_state: "reviewed",
+    reviewed_verdict: "not_applicable",
+  });
+  const row = auditRow("1.3.3", {
+    verdict: "partly_evidenced",
+    review_state: "reviewed",
+    reviewed_verdict: "not_applicable",
+  });
+
+  it("agrees when the row holds the read's Verdicts and review state", () => {
+    expect(rowAgrees(row, read)).toBe(true);
+  });
+
+  it.each([
+    ["the worked-out Verdict", { verdict: "evidenced" }],
+    ["the review state", { review_state: "changed_since_review" }],
+    ["the reviewed Verdict", { reviewed_verdict: "evidenced" }],
+  ] as const)("disagrees on %s", (_, fields) => {
+    expect(rowAgrees({ ...row, ...fields }, read)).toBe(false);
   });
 });
 

@@ -1,14 +1,15 @@
 // Setup's Catalogue switch (spec #341, slice 5), sent only with a token /api/me says is in the Team Setup was opened
 // in, as a Product save is. What the section shows for each answer is Setup.test.tsx's. Then the Control card's lines
-// (slice 7a): each Rule's evidence, the Judge Spot run's, and a review's outcome.
+// (slice 7a): the reason under the Verdict, each Rule's evidence, the Judge run's, and a review's outcome.
 import type { ControlReview, ControlRuleEvidence } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dayAndTimeWords } from "../src/date-words.ts";
 import {
-  judgeSpotLine,
+  judgeRunLine,
   reviewOutcomeLine,
   ruleEvidenceWords,
   switchCatalogueInTeam,
+  verdictReasonLine,
 } from "../src/vouch.ts";
 import { callsTo, fetchMock, json, serve } from "./fake-api.ts";
 
@@ -120,13 +121,36 @@ describe("ruleEvidenceWords (story 3)", () => {
   });
 });
 
-describe("judgeSpotLine (story 3, 5.2.4)", () => {
-  it("gives the newest Judge Spot run's day and time", () => {
-    expect(judgeSpotLine(COVERED_AT)).toBe(`Last Judge Spot run: ${dayAndTimeWords(COVERED_AT)}`);
+describe("judgeRunLine (story 3, 5.2.4)", () => {
+  it("gives the newest Judge run's day and time", () => {
+    expect(judgeRunLine(COVERED_AT)).toBe(`Last Judge run: ${dayAndTimeWords(COVERED_AT)}`);
   });
 
   it("says none ran in 30 days when none did", () => {
-    expect(judgeSpotLine(null)).toBe("No Judge Spot run in the last 30 days.");
+    expect(judgeRunLine(null)).toBe("No Judge run in the last 30 days.");
+  });
+});
+
+describe("verdictReasonLine (story 2)", () => {
+  const REASON = "No Scan covered it in the last 30 days";
+
+  it.each([
+    ["not reviewed", { review_state: "not_reviewed", reviewed_verdict: null }],
+    ["confirmed", { review_state: "reviewed", reviewed_verdict: "not_evidenced" }],
+    ["changed since review", { review_state: "changed_since_review", reviewed_verdict: null }],
+  ] as const)("is the reason as the server gives it while %s", (_, fields) => {
+    expect(verdictReasonLine({ verdict: "not_evidenced", reason: REASON, ...fields })).toBe(REASON);
+  });
+
+  it("names the worked-out Verdict it explains while a reviewed one replaces it", () => {
+    expect(
+      verdictReasonLine({
+        verdict: "not_evidenced",
+        reason: REASON,
+        review_state: "reviewed",
+        reviewed_verdict: "not_applicable",
+      }),
+    ).toBe(`Worked out as Not evidenced: ${REASON}`);
   });
 });
 

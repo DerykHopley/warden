@@ -1211,8 +1211,9 @@ button[aria-busy="true"],
 }
 
 /* The whole row is one button that opens its Control's card (spec #341, slice 7a), set as text, not as a Button:
-   hover tints it as a secondary Button, and the focused Control is marked as a selected Findings row is, the quiet
-   fill and an accent bar at its start, in shape as well as colour. Under 640px its parts stack: the ref, the question, then the Verdict, the review state and Gap. */
+   hover lifts it to `--surface`, and the focused Control is marked by `--surface` and an accent bar at its start, in
+   shape as well as colour. Not `--chip`, as other rows hover: the Gap pill is `--chip`, and would lose its shape. Under
+   640px its parts stack: the ref, the question, then the Verdict, the review state and Gap. */
 .audit-control-button {
   display: flex;
   flex-direction: column;
@@ -1229,11 +1230,11 @@ button[aria-busy="true"],
 }
 
 .audit-control-button:hover {
-  background: var(--chip);
+  background: var(--surface);
 }
 
 .audit-control-button[aria-current="true"] {
-  background: var(--chip);
+  background: var(--surface);
   box-shadow: inset 4px 0 0 var(--accent);
 }
 

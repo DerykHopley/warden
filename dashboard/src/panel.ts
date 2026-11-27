@@ -116,6 +116,8 @@ export type ControlFocus = {
   control: AuditControl;
   /** Clears the page's focus: the Control card's ✕. */
   clear: () => void;
+  /** Asks the page's answer again: the card's read is newer than the row (`rowAgrees`). */
+  refreshRow: () => void;
 };
 
 /** What a page is talking about: the panel's context line and detail card read it. */

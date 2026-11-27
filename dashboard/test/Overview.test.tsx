@@ -411,6 +411,34 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
     );
   });
 
+  it("when the card's read is newer than the row, the Overview asks again once, and the row shows what the card does", async () => {
+    const reviewed = { verdict: "not_evidenced", review_state: "reviewed" } as const;
+    const answers = [isaOn(), isaOn({ controls: [auditRow("1.3.3", reviewed)] })];
+    window.history.replaceState(null, "", "/overview");
+    serve({
+      me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
+      overview: () => answer({ audit: answers.shift() ?? isaOn() }),
+      control: (_, ref) => json(200, controlDetail(ref, reviewed)),
+    });
+    render(<App />);
+    const row = await rowOf("1.3.3");
+    expect(row.getByText("Not reviewed")).toBeVisible();
+
+    await userEvent.click(row.getByRole("button"));
+    expect(await row.findByText("Reviewed")).toBeVisible();
+    expect(within(cardOf("1.3.3")!).getByText("Reviewed")).toBeVisible();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(callsTo("/api/overview")).toHaveLength(2);
+  });
+
+  it("a read that agrees with the row asks the Overview nothing more", async () => {
+    openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    await screen.findByRole("complementary", { name: "Ask Warden" });
+    expect(await within(cardOf("1.3.3")!).findByText("Reason 1.3.3")).toBeVisible();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(callsTo("/api/overview")).toHaveLength(1);
+  });
+
   it("a read that answers after the focus moved to another Control doesn't show on that Control's card", async () => {
     const late = deferred<Response>();
     openApp("/overview", (_, ref) => (ref === "1.3.3" ? late.promise : readOf(ref)));

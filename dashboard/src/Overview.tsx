@@ -63,9 +63,11 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
     [],
   );
 
-  // The Ask Warden panel talks about the focused Control, its card's ✕ clearing it; with none, about the page.
+  // The Ask Warden panel talks about the focused Control, its card's ✕ clearing it; with none, about the page. A card
+  // whose read is newer than its row asks the answer again, keeping the page on screen while it does.
   const { setContext, open: openPanel } = panel;
   const clearFocus = useCallback(() => setSelected(null), []);
+  const refreshRow = call.refresh;
   useEffect(() => {
     setContext(
       focused === null
@@ -73,7 +75,7 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
         : {
             view: ["Overview"],
             focus: null,
-            control: { ...focused, clear: clearFocus },
+            control: { ...focused, clear: clearFocus, refreshRow },
             clearFocus,
             onFindingChanged: nothingToDo,
             onFindingGone: nothingToDo,
@@ -81,7 +83,7 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
             productName: null,
           },
     );
-  }, [setContext, focused, clearFocus]);
+  }, [setContext, focused, clearFocus, refreshRow]);
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);
 
