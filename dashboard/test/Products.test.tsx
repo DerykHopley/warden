@@ -1483,18 +1483,23 @@ describe("ProductsPage opened at a Product's anchor", () => {
     expect(scrolled).not.toHaveBeenCalled();
   });
 
-  it("doesn't move again when the list is read again", async () => {
-    window.history.replaceState(null, "", "/products#product-prod_search");
-    renderProducts("admin", { deleteProduct: noContent });
-    await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
-
-    await userEvent.click(screen.getByRole("button", { name: "Delete Chat assistant" }));
+  /** Deletes the Product named `name` as an Admin and waits for the list's re-read, focus left on "Add a Product". */
+  async function deleteAndReread(name: string) {
+    await userEvent.click(screen.getByRole("button", { name: `Delete ${name}` }));
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     await vi.waitFor(() =>
       expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus(),
     );
     await vi.waitFor(() => expect(callsTo("/api/products").length).toBeGreaterThanOrEqual(2));
     expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus();
+  }
+
+  it("doesn't move again when the list is read again", async () => {
+    window.history.replaceState(null, "", "/products#product-prod_search");
+    renderProducts("admin", { deleteProduct: noContent });
+    await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
+
+    await deleteAndReread("Chat assistant");
     expect(scrolled).toHaveBeenCalledTimes(1);
   });
 
@@ -1539,29 +1544,21 @@ describe("ProductsPage opened at a Product's anchor", () => {
     await changeAnchor("#product-prod_chat");
     expect(scrolled).toHaveBeenCalledTimes(2);
 
-    await userEvent.click(screen.getByRole("button", { name: "Delete Search" }));
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await vi.waitFor(() => expect(callsTo("/api/products").length).toBeGreaterThanOrEqual(2));
-    await vi.waitFor(() =>
-      expect(screen.getByRole("button", { name: "Add a Product" })).toHaveFocus(),
-    );
+    await deleteAndReread("Search");
     expect(scrolled).toHaveBeenCalledTimes(2);
   });
 
-  it("moves nothing on an anchor change once the page has gone, and lands once when it's opened again", async () => {
+  it("stops listening for anchor changes once the page has gone", async () => {
     window.history.replaceState(null, "", "/products#product-prod_search");
     const { unmount } = renderProducts("member");
     await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
-
     unmount();
-    await changeAnchor("#product-prod_chat");
-    expect(scrolled).toHaveBeenCalledTimes(1);
 
-    // Back on Products, a listener the first page left behind would land a second time on each change.
     renderProducts("member");
-    await vi.waitFor(() => expect(nameOf("Chat assistant")).toHaveFocus());
-    await changeAnchor("#product-prod_search");
-    expect(nameOf("Search")).toHaveFocus();
+    await vi.waitFor(() => expect(nameOf("Search")).toHaveFocus());
+    await changeAnchor("#product-prod_chat");
+    expect(nameOf("Chat assistant")).toHaveFocus();
+    // One landing per page open plus one for the change: a listener the first page left behind would add a fourth.
     expect(scrolled).toHaveBeenCalledTimes(3);
   });
 });
