@@ -106,9 +106,13 @@ runs per Team at a time. `--no-product` after the Team id seeds the demo Finding
 needed, and none of the ISA2027 state (no Repo Asset, Catalogue choice or review): the browser tests seed Acme and
 Bluebird that way.
 
-It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database (a `PGHOST` other than `127.0.0.1`,
-`localhost` or `::1`, or any `PGPASSWORD`), `WARDEN_SEED_DEMO` must be the database's name, and the live database,
-`warden`, is always refused. For an owner preview, through the Cloud SQL Auth Proxy:
+It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database, `WARDEN_SEED_DEMO` must be the database's name,
+and the live database, `warden`, is always refused. A database counts as hosted when `PGHOST` is set to something other
+than `127.0.0.1`, `localhost` or `::1`, or when a password can reach it from anywhere `pg` looks: a `PGPASSWORD`, a
+`PGPASSFILE`, a `PGSERVICE`, or a `.pgpass` in your home folder (the Cloud SQL Auth Proxy listens on `127.0.0.1`, so the
+host alone can't tell). If it can't check whether `~/.pgpass` exists, the database counts as hosted. The refusal says
+which of these made it hosted; with a `~/.pgpass` for any server, the compose database, `warden`, is refused too. For an
+owner preview, through the Cloud SQL Auth Proxy:
 
 ```sh
 cloud-sql-proxy --port 5433 <project-id>:europe-west1:<instance> &

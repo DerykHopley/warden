@@ -3,6 +3,9 @@
 // Scan. Each case uses a Team of its own in the suite's shared database, which holds the CVE snapshot; the cases with
 // no snapshot use a database of their own. Some run the script as its own process.
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fingerprint, type Finding, type Product } from "@warden/contracts";
 import {
   DEMO_OBSERVATIONS,
@@ -214,10 +217,133 @@ describe("seedRefusal", () => {
     ).toMatch(/Set WARDEN_SEED_DEMO/);
   });
 
+  const noPgpass = () => false;
+
   it("takes any value on a local database: 127.0.0.1, localhost or ::1, with no password", () => {
     for (const PGHOST of ["127.0.0.1", "localhost", "::1", undefined]) {
-      expect(seedRefusal({ PGHOST, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" })).toBeUndefined();
+      expect(
+        seedRefusal(
+          { PGHOST, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1", HOME: "/home/dev" },
+          noPgpass,
+        ),
+      ).toBeUndefined();
     }
+  });
+
+  // The Cloud SQL Auth Proxy listens on 127.0.0.1, and pg finds a password in PGPASSFILE's file, PGSERVICE's entry or
+  // ~/.pgpass as well as PGPASSWORD: any of them makes the database count as hosted (#396).
+  describe("on 127.0.0.1 with a password from a file or a service", () => {
+    const pgpassAt =
+      (asked: string[]) =>
+      (path: string): boolean => {
+        asked.push(path);
+        return true;
+      };
+
+    function expectHosted(
+      where: Record<string, string>,
+      fileExists: (path: string) => boolean,
+      signal: RegExp,
+    ) {
+      const env = { PGHOST: "127.0.0.1", ...where };
+      expect(
+        seedRefusal({ ...env, PGDATABASE: "warden_preview", WARDEN_SEED_DEMO: "1" }, fileExists),
+      ).toMatch(/WARDEN_SEED_DEMO must name the database, warden_preview/);
+      expect(
+        seedRefusal(
+          { ...env, PGDATABASE: "warden_preview", WARDEN_SEED_DEMO: "warden_preview" },
+          fileExists,
+        ),
+      ).toBeUndefined();
+      const live = seedRefusal(
+        { ...env, PGDATABASE: "warden", WARDEN_SEED_DEMO: "warden" },
+        fileExists,
+      );
+      expect(live).toMatch(/live database, warden/);
+      expect(live).toMatch(signal);
+    }
+
+    it("with PGPASSFILE set, needs the database's name and never seeds warden", () => {
+      expectHosted({ PGPASSFILE: "/some/file" }, noPgpass, /PGPASSFILE/);
+    });
+
+    it("with PGSERVICE set, needs the database's name and never seeds warden", () => {
+      expectHosted({ PGSERVICE: "warden-proxy" }, noPgpass, /PGSERVICE/);
+    });
+
+    it("with a .pgpass in HOME, needs the database's name and never seeds warden", () => {
+      const asked: string[] = [];
+      expectHosted({ HOME: "/home/dev" }, pgpassAt(asked), /~\/\.pgpass/);
+      expect(new Set(asked)).toEqual(new Set(["/home/dev/.pgpass"]));
+    });
+
+    it("counts as hosted when it can't tell whether ~/.pgpass exists", () => {
+      const cantTell = () => {
+        throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      };
+      const refusal = seedRefusal(
+        { PGHOST: "127.0.0.1", HOME: "/home/dev", PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
+        cantTell,
+      );
+      expect(refusal).toMatch(/live database, warden/);
+      expect(refusal).toMatch(/~\/\.pgpass/);
+    });
+
+    it("names the signal in the refusal that asks for the database's name too", () => {
+      expect(
+        seedRefusal(
+          {
+            PGHOST: "127.0.0.1",
+            PGPASSFILE: "/some/file",
+            PGDATABASE: "warden_preview",
+            WARDEN_SEED_DEMO: "1",
+          },
+          noPgpass,
+        ),
+      ).toMatch(/PGPASSFILE/);
+      expect(
+        seedRefusal(
+          {
+            PGHOST: "127.0.0.1",
+            HOME: "/home/dev",
+            PGDATABASE: "warden_preview",
+            WARDEN_SEED_DEMO: "1",
+          },
+          () => true,
+        ),
+      ).toMatch(/~\/\.pgpass/);
+    });
+
+    it("looks for .pgpass on disk when no fileExists is given", () => {
+      const home = mkdtempSync(join(tmpdir(), "warden-seed-home-"));
+      try {
+        const env = {
+          PGHOST: "127.0.0.1",
+          HOME: home,
+          PGDATABASE: "warden",
+          WARDEN_SEED_DEMO: "1",
+        };
+        expect(seedRefusal(env)).toBeUndefined();
+        writeFileSync(join(home, ".pgpass"), "");
+        expect(seedRefusal(env)).toMatch(/live database, warden .*~\/\.pgpass exists/);
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("takes an empty PGPASSFILE or PGSERVICE, or no HOME, as no password", () => {
+      const asked: string[] = [];
+      const pgpassAnywhere = pgpassAt(asked);
+      for (const where of [{ PGPASSFILE: "" }, { PGSERVICE: "" }, { HOME: "" }, {}]) {
+        expect(
+          seedRefusal(
+            { PGHOST: "127.0.0.1", ...where, PGDATABASE: "warden", WARDEN_SEED_DEMO: "1" },
+            pgpassAnywhere,
+          ),
+        ).toBeUndefined();
+      }
+      expect(asked).toEqual([]);
+    });
   });
 
   it("elsewhere, or with a password (the Cloud SQL Auth Proxy listens locally), needs the database's name", () => {
@@ -852,10 +978,12 @@ describe("the demo seed's ISA2027 state", () => {
 });
 
 describe("pnpm seed", () => {
+  // WARDEN_SEED_DEMO names the database, as a hosted one needs: the process gets the test's HOME, and a ~/.pgpass there
+  // makes the database count as hosted (#396).
   const env = () => ({
     PGUSER: "warden_app",
     PGDATABASE: inject("testDatabase"),
-    WARDEN_SEED_DEMO: "1",
+    WARDEN_SEED_DEMO: inject("testDatabase"),
   });
 
   it("seeds the Team named on the command line as warden_app, and says what it did", async () => {
@@ -1000,7 +1128,7 @@ describe("the demo seed with the CVE snapshot not loaded", () => {
     await seedTeam(own.withTeamAs.warden_app, team, [["user_admin", "admin"]]);
     return team;
   };
-  const ownEnv = () => ({ PGUSER: "warden_app", PGDATABASE: own.name, WARDEN_SEED_DEMO: "1" });
+  const ownEnv = () => ({ PGUSER: "warden_app", PGDATABASE: own.name, WARDEN_SEED_DEMO: own.name });
 
   it("answers no_cve_snapshot and writes no Product or Finding", async () => {
     const team = await ownTeam();
