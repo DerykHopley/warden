@@ -1,43 +1,34 @@
 // Guard's agent-config Rules (Guard spec, story 3): `agentConfigCheck(asset).see(file)` reads a Claude Code settings
 // file's allow rules, `defaultMode` and the commands it runs (hooks, `statusLine`, `apiKeyHelper`), and any other text
 // file for the flag that skips permission checks, and answers at most one Observation per Rule for the file; `end()`
-// answers the whole-repo Rules from the root settings files. The flag and the mode are built here by joining their
-// parts, so this file never holds a whole one for a Guard Scan of Warden's own repo to report.
+// answers the whole-repo Rules from the root settings files. The flag and the mode come joined from their parts
+// (`test/agent-settings.ts`), so this file never holds a whole one for a Guard Scan of Warden's own repo to report.
 import { readdirSync, readFileSync } from "node:fs";
-import { Observation, type Asset } from "@warden/contracts";
+import { Observation } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
+import {
+  BYPASS,
+  FLAG,
+  hooks,
+  join,
+  MODE,
+  repo,
+  see,
+  settings,
+  SKIP,
+} from "../../../test/agent-settings.ts";
 import { lineWith } from "../../../test/text-lines.ts";
 import { agentConfigCheck } from "./agent-config.ts";
 import { packRule } from "./default-pack.ts";
 import type { RepoFile } from "./repo-reader.ts";
-import { ARCHIVE_LIMITS } from "./tarball.ts";
-
-const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
 
 const BLANKET = "guard/blanket-bash-allow";
-const SKIP = "guard/permission-skip";
 
-const join = (...parts: string[]) => parts.join("");
-/** The flag that starts Claude Code with its permission checks off. */
-const FLAG = join("--dangerously", "-skip-permissions");
-const MODE = join("--permission", "-mode");
-const BYPASS = join("bypass", "Permissions");
-
-/** A settings file's text, pretty-printed as Claude Code writes it: each allow entry on a line of its own. */
-const settings = (permissions: Record<string, unknown>, rest: Record<string, unknown> = {}) =>
-  `${JSON.stringify({ $schema: "https://json.schemastore.org/claude-code-settings.json", permissions, ...rest }, null, 2)}\n`;
-
-const see = (path: string, text: string) => agentConfigCheck(repo).see({ path, text });
 const ofRule = (path: string, text: string, rule: string) =>
   see(path, text).filter((observation) => observation.rule_id === rule);
 
 const READ_ENV = "guard/agent-can-read-env";
 const NO_GUARD = "guard/no-runtime-guard";
-
-/** A settings file's `hooks` key: one matcher group under `event`, holding one command hook. */
-const hooks = (event: string, command: string) => ({
-  hooks: { [event]: [{ matcher: "*", hooks: [{ type: "command", command }] }] },
-});
 
 /** A repo's whole-repo Observations: each file seen, each path reported unread, then the end pass. */
 function endOf(files: RepoFile[], unread: string[] = []) {
@@ -954,64 +945,7 @@ describe("guard/permission-skip", () => {
       ]);
     });
 
-    /** A settings file of at most `ARCHIVE_LIMITS.fileBytes` whose one hook is `head`, `unit` repeated, then `tail`. */
-    const filled = (head: string, unit: string, tail: string) => {
-      const base = settings({}, hooks("Stop", head + tail)).length;
-      const units = Math.floor((ARCHIVE_LIMITS.fileBytes - base) / unitBytes(unit));
-      return settings({}, hooks("Stop", head + unit.repeat(units) + tail));
-    };
-    /** `head`, `first` repeated to fill about half of `ARCHIVE_LIMITS.fileBytes`, then `second` to fill the rest. */
-    const halves = (first: string, second: string, head = "") => {
-      const units = Math.floor(ARCHIVE_LIMITS.fileBytes / 2 / unitBytes(first));
-      return filled(head + first.repeat(units), second, "");
-    };
-    /** How many characters one more `unit` adds to a settings file's hook, its JSON escapes included. */
-    const unitBytes = (unit: string) =>
-      settings({}, hooks("Stop", unit)).length - settings({}, hooks("Stop", "")).length;
-
-    // On a laptop, main's parser read each of the first four in 25–55 ms and the fifth in 30–110 ms, where a read per
-    // shell's name took minutes; a parser that scanned again from the start for each run or backquote took seconds to
-    // minutes on the rest. The limit leaves room for a slow CI runner. A row with a kind also checks its Finding names it.
-    it.each<[name: string, text: string, kind?: string]>([
-      ["a wrapper then shells' names", filled("sudo ", "bash ", `claude ${FLAG}`)],
-      ["a wrapper then shells' -c strings", filled("sudo ", `bash "-c" 'x' `, `claude ${FLAG}`)],
-      ["shells after separators", filled("", "bash x;", "")],
-      ["shells' strings opening substitutions", filled("", `bash -c "$(`, "")],
-      ["a shell's string of quotes and escapes", filled("bash -c '' ", `'a' "b\\"" \\x `, "")],
-      ["agent runs after separators", filled("", "claude x;", "")],
-      ["agent runs with the flag after separators", filled("", `claude ${FLAG};`, ""), FLAG],
-      ["(s then backquotes", halves("(", "`")],
-      ["$(s then backquotes", halves("$(", "`")],
-      ["a backquote, (s, then escaped backquotes", halves("(", "\\`", "`")],
-      ["an unclosed backquote then agent runs", filled("`", "claude x;", "")],
-    ])("reads a 1 MiB hook of %s within a second", (_name, text, kind) => {
-      const started = performance.now();
-      const observations = see(path, text);
-
-      expect(performance.now() - started).toBeLessThan(1000);
-      if (kind !== undefined) {
-        expect(observations).toEqual([
-          expect.objectContaining({
-            rule_id: SKIP,
-            evidence: {
-              summary: expect.stringContaining(`skip the agent's permission checks (${kind})`),
-            },
-          }),
-        ]);
-      }
-    });
-
-    it.each([
-      ["an unclosed backquote", filled("`", "claude x;", "")],
-      ["an unclosed (", filled("(", "claude x;", "")],
-      ["a trailing backslash", filled("", "claude x;", "\\")],
-    ])(
-      "gives nothing for a 1 MiB hook of agent runs after %s, and doesn't throw",
-      (_name, text) => {
-        expect(see(path, text)).toEqual([]);
-      },
-    );
-
+    // The 1 MiB rows live with the corpus, in permission-skip-corpus.test.ts.
     it.each([
       ["no word after -c", "bash -c"],
       ["an empty string", "bash -c ''"],
@@ -1314,6 +1248,7 @@ describe("agentConfigCheck", () => {
         .filter((entry) => entry.isFile())
         .map((entry) => `src/modules/guard/${entry.name}`),
       "test/guard-scan-api.test.ts",
+      "test/agent-settings.ts",
     ];
 
     const found = paths.flatMap((path) =>
