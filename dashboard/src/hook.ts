@@ -6,8 +6,9 @@ import {
   HookTokenBody,
   type PrivacyTier,
 } from "@warden/contracts";
-import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
-import { confirmTeam, type TeamCheckRefused } from "./products.ts";
+import { callWarden, parsed, type GetToken, type Refused } from "./api.ts";
+import { refusalOf, type ChangeRefused } from "./change-refused.ts";
+import { confirmTeam } from "./products.ts";
 
 export type HookSettingsResult =
   | { kind: "settings"; settings: HookSettingsBody }
@@ -24,27 +25,6 @@ export async function fetchHookSettings(getToken: GetToken): Promise<HookSetting
   if (res.status === 409) return { kind: "team-not-opened" };
   const body = await parsed(res, HookSettingsBody);
   return body === undefined ? { kind: "not-answering" } : { kind: "settings", settings: body };
-}
-
-/** A change's refusals: nothing was changed. */
-export type ChangeRefused =
-  /** 403: only an Admin changes the hook. */
-  | { kind: "forbidden" }
-  /** Any other refusal, in the server's words when it gave some. */
-  | { kind: "refused"; words: string }
-  | { kind: "team-not-opened" }
-  | Refused
-  | TeamCheckRefused;
-
-/** The refusal `res` is, or undefined when it answered 2xx; `judge-model.ts`'s change reads its refusals the same way. */
-export async function refusalOf(
-  res: Response,
-  unchanged: string,
-): Promise<ChangeRefused | undefined> {
-  if (res.ok) return undefined;
-  if (res.status === 403) return { kind: "forbidden" };
-  if (res.status === 409) return { kind: "team-not-opened" };
-  return { kind: "refused", words: (await serverError(res)) ?? unchanged };
 }
 
 export type IssueResult = { kind: "issued"; issued: HookTokenBody } | ChangeRefused;

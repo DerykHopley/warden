@@ -18,6 +18,7 @@ const SET_AT = "2026-11-27T09:14:00.000Z";
 const URL_SET = "http://localhost:11434/v1";
 const MODEL_SET = "qwen3.8:27b";
 const PATH = "/api/judge/model";
+const FORM = "The Team's own model";
 
 const noModel = () => json(200, { local_model: null });
 const modelOf = (url = URL_SET, model = MODEL_SET) =>
@@ -95,7 +96,7 @@ describe("JudgeModelSection: an Admin", () => {
     expect(useOpenRouter()).toHaveClass("secondary");
   });
 
-  it("saves the URL and model name as typed, shows the answer, then Use OpenRouter sends null and shows the default", async () => {
+  it("saves the URL and model name typed, shows the answer, then Use OpenRouter sends null and shows the default", async () => {
     renderSection("admin", {
       setJudgeModel: (body) =>
         (body as { local_model: unknown }).local_model === null ? noModel() : ownModel(),
@@ -114,6 +115,16 @@ describe("JudgeModelSection: an Admin", () => {
     ]);
   });
 
+  it("trims the spaces a paste leaves around the URL and the model name before it saves them", async () => {
+    renderSection("admin", { setJudgeModel: ownModel });
+    await screen.findByText(DEFAULT);
+
+    await saveTyped(` ${URL_SET} `, `${MODEL_SET} `);
+
+    expect(await screen.findByText(URL_SET)).toBeInTheDocument();
+    expect(sentBodies()).toEqual([{ local_model: { url: URL_SET, model: MODEL_SET } }]);
+  });
+
   it.each([
     [
       "a private address",
@@ -127,7 +138,7 @@ describe("JudgeModelSection: an Admin", () => {
       MODEL_SET,
       "local_model.url: it's over 2048 characters",
     ],
-    ["an empty Model name", "https://models.example.com/v1", "", "local_model.model: too short"],
+    ["an empty Model name", "https://models.example.com/v1", "", "local_model.model: is empty"],
   ])(
     "on a 400 for %s, shows the server's words beside the form, keeps the fields, and leaves the shown setting",
     async (_case, url, model, words) => {
@@ -142,7 +153,8 @@ describe("JudgeModelSection: an Admin", () => {
       const alert = await screen.findByRole("alert");
       expect(alert).toHaveTextContent(words);
       expect(alert).toHaveClass("notice");
-      expect(screen.getByRole("form", { name: "Judge's model" })).toContainElement(alert);
+      // Named apart from its section, "Judge's model", so a screen reader's list of landmarks tells the two apart.
+      expect(screen.getByRole("form", { name: FORM })).toContainElement(alert);
       expect(urlField()).toHaveValue(url);
       expect(modelField()).toHaveValue(model);
       expect(screen.getByText("kept-model")).toBeInTheDocument();
@@ -215,6 +227,25 @@ describe("JudgeModelSection: an Admin", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent(words);
     expect(screen.getByText(DEFAULT)).toBeInTheDocument();
+  });
+
+  it("reads the setting again after a save whose answer was lost, busy still, and shows what the server kept", async () => {
+    const reread = deferred<Response>();
+    let reads = 0;
+    renderSection("admin", {
+      judgeModel: () => (++reads === 1 ? noModel() : reread.promise),
+      setJudgeModel: () => Promise.reject(new TypeError("Failed to fetch")),
+    });
+    await screen.findByText(DEFAULT);
+
+    await saveTyped(URL_SET, MODEL_SET);
+    await vi.waitFor(() => expect(reads).toBe(2));
+    expect(save()).toBeDisabled();
+    reread.resolve(ownModel());
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(NOT_ANSWERING);
+    expect(await screen.findByText(URL_SET)).toBeInTheDocument();
+    expect(save()).toBeEnabled();
   });
 
   it("ends the session when a save answers 401", async () => {

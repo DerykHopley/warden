@@ -4,7 +4,7 @@
 // OpenRouter shows at each width. The section's words, refusals and busy states are JudgeModelSection.test.tsx's.
 import type { Page } from "@playwright/test";
 import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
-import { ADA, expect, test } from "./session.ts";
+import { ACME, ADA, expect, sendAsAdmin, test } from "./session.ts";
 
 const WIDTHS = [390, 1024, 1600] as const;
 const DEFAULT = "The Judge calls OpenRouter (the default).";
@@ -13,16 +13,16 @@ const MODEL_SET = "qwen3.8:27b";
 
 const judgeSection = (page: Page) => page.getByRole("region", { name: "Judge's model" });
 
+// Acme starts on OpenRouter, so a run that failed before Use OpenRouter leaves nothing for the next one to trip on.
+test.beforeEach(() => sendAsAdmin(ACME, "PUT", "/api/judge/model", { local_model: null }));
+
 test("story 10: an Admin saves the Team's own model, which a reload keeps, then Use OpenRouter puts back the default", async ({
   page,
   signIn,
 }) => {
   await signIn(ADA);
   await page.goto("/setup");
-  const headings = page.getByRole("heading", { level: 2 });
-  await expect(headings.last()).toHaveText("Judge's model");
-  const names = await headings.allTextContents();
-  expect(names.indexOf("Judge's model")).toBe(names.indexOf("Agent hook") + 1);
+  // Its place after "Agent hook" is setup.spec.ts's heading list.
   const judge = judgeSection(page);
   await expect(judge.getByText(DEFAULT)).toBeVisible();
 

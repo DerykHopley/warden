@@ -157,6 +157,24 @@ function renderSetup(role: Role, routes: Routes = {}) {
 
 const github = () => within(screen.getByRole("region", { name: "GitHub" }));
 const repos = () => within(screen.getByRole("region", { name: "Repos" }));
+const grantWrite = () => within(screen.getByRole("region", { name: "Grant write access" }));
+
+/**
+ * What each asking section but the Catalogues shows once its call has answered, as `SETUP_ROUTES` answers it: the
+ * landing tests wait on each but the one they hold.
+ */
+const ANSWERED_BY = {
+  githubApp: () => github().findByRole("link", { name: "Install the GitHub app" }),
+  writeApp: () => grantWrite().findByRole("link", { name: "Install the write app" }),
+  writeGrant: () => grantWrite().findByText("No write access granted."),
+  repos: () => repos().findByText("No repos linked yet."),
+  hook: () =>
+    within(screen.getByRole("region", { name: "Agent hook" })).findByText("No hook token yet."),
+  judgeModel: () =>
+    within(screen.getByRole("region", { name: "Judge's model" })).findByText(
+      "The Judge calls OpenRouter (the default).",
+    ),
+};
 
 describe("SetupPage", () => {
   it("shows an Admin the install link to the App's page on GitHub", async () => {
@@ -1221,28 +1239,12 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
       );
     });
 
-    const write = () => within(screen.getByRole("region", { name: "Grant write access" }));
-    /** What each other asking section shows once its call has answered, as `SETUP_ROUTES` answers it. */
-    const ANSWERED_BY = {
-      githubApp: () => github().findByRole("link", { name: "Install the GitHub app" }),
-      writeApp: () => write().findByRole("link", { name: "Install the write app" }),
-      writeGrant: () => write().findByText("No write access granted."),
-      repos: () => repos().findByText("No repos linked yet."),
-      hook: () =>
-        within(screen.getByRole("region", { name: "Agent hook" })).findByText("No hook token yet."),
-      judgeModel: () =>
-        within(screen.getByRole("region", { name: "Judge's model" })).findByText(
-          "The Judge calls OpenRouter (the default).",
-        ),
-    };
-
     it.each([
       ["the GitHub app", "githubApp", "/api/github/app"],
       ["the write app", "writeApp", "/api/github/write-app"],
       ["the write grants", "writeGrant", "/api/github/write-grant"],
       ["the Repos", "repos", "/api/repos"],
       ["the agent hook", "hook", "/api/hook"],
-      ["the Judge's model", "judgeModel", "/api/judge/model"],
     ] as const)(
       "waits for %s, answering after the list, so the heading isn't pushed away",
       async (_section, route, path) => {
@@ -1272,31 +1274,31 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
       await shown();
       expect(scrolled).not.toHaveBeenCalled();
     });
+  });
+});
 
-    it("brings the Judge's model heading into view at #setup-judge-model once every section has answered (#464)", async () => {
-      window.history.replaceState(null, "", "/setup#setup-judge-model");
+describe("SetupPage: Judge's model (spec #225, slice 6b)", () => {
+  // jsdom lays nothing out, so it has no scrollIntoView: each test gives Element one, and records what it was called on.
+  const scrolled = vi.fn<(this: Element, options?: ScrollIntoViewOptions) => void>();
+  beforeEach(() => {
+    scrolled.mockReset();
+    Element.prototype.scrollIntoView = scrolled;
+  });
+  afterEach(() => {
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
+
+  it.each([
+    ["#setup-judge-model", "Judge's model"],
+    ["#setup-repos", "Repos"],
+  ] as const)(
+    "opened at %s, brings the %s heading into view only once the Judge's model has answered too (#464)",
+    async (anchor, heading) => {
+      window.history.replaceState(null, "", `/setup${anchor}`);
       const late = deferred<Response>();
       renderSetup("admin", { judgeModel: () => late.promise });
 
-      await shown();
-      for (const [other, answered] of Object.entries(ANSWERED_BY)) {
-        if (other !== "judgeModel") await answered();
-      }
-      expect(scrolled).not.toHaveBeenCalled();
-      late.resolve(SETUP_ROUTES.judgeModel());
-
-      await vi.waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
-      expect(scrolled.mock.contexts[0]).toBe(
-        screen.getByRole("heading", { level: 2, name: "Judge's model" }),
-      );
-    });
-
-    it("lands on Repos at #setup-repos only once the Judge's model has answered too (#464)", async () => {
-      window.history.replaceState(null, "", "/setup#setup-repos");
-      const late = deferred<Response>();
-      renderSetup("admin", { judgeModel: () => late.promise });
-
-      await shown();
+      await within(screen.getByRole("region", { name: "Catalogues" })).findByRole("listitem");
       for (const [other, answered] of Object.entries(ANSWERED_BY)) {
         if (other !== "judgeModel") await answered();
       }
@@ -1306,10 +1308,10 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
 
       await vi.waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
       expect(scrolled.mock.contexts[0]).toBe(
-        screen.getByRole("heading", { level: 2, name: "Repos" }),
+        screen.getByRole("heading", { level: 2, name: heading }),
       );
-    });
-  });
+    },
+  );
 });
 
 describe("SetupPage: Agent hook (story 7)", () => {

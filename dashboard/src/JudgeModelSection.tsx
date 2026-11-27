@@ -3,34 +3,14 @@
 // server checks the URL against its URL rule and says why it refuses one; the section shows those words as they come.
 import { type JudgeModelChange } from "@warden/contracts";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { NOT_ANSWERING, TEAM_NOT_OPENED, tryAgainIn } from "./api.ts";
+import { refusalWords } from "./change-refused.ts";
 import { dayAndTimeWords } from "./date-words.ts";
-import { type ChangeRefused } from "./hook.ts";
 import { fetchJudgeModel, setJudgeModel, type JudgeModelResult } from "./judge-model.ts";
 import { useReportAnswered, type SectionProps } from "./setup-section.ts";
 import { CallRefused, TeamRefused, useWardenCall } from "./warden-call.tsx";
 
 const ADMIN_SETS = "An Admin sets the Judge's model.";
 const ONLY_ADMIN = "Only an Admin sets the Judge's model.";
-
-/** A refused change in words, or null for a session that ended (the shell signs out), as the agent hook's are. */
-function refusalWords(result: ChangeRefused): string | null {
-  switch (result.kind) {
-    case "forbidden":
-      return ONLY_ADMIN;
-    case "refused":
-      return result.words;
-    case "team-not-opened":
-      return TEAM_NOT_OPENED;
-    case "too-many-attempts":
-    case "too-many-sign-ins":
-      return tryAgainIn(result.retryAfter);
-    case "not-answering":
-      return NOT_ANSWERING;
-    case "session-ended":
-      return null;
-  }
-}
 
 type JudgeModelSectionProps = SectionProps & {
   /** Setup's one ask for the Role, which the other sections' 403s share as the page opens. */
@@ -84,6 +64,12 @@ function JudgeModelSetting({
     setChanging(what);
     setRefusal(null);
     const result = await setJudgeModel(getToken, me.team, localModel);
+    if (result.kind !== "set" && result.kind !== "session-ended") {
+      // Another Admin may have changed it since it was read, or this PUT may have landed with its answer lost: read it
+      // again, busy still, so the shown setting is the server's, as the agent hook's rotation does.
+      const reread = await fetchJudgeModel(getToken);
+      if (reread.kind === "model") setResult(() => reread);
+    }
     changeCall.current = false;
     setChanging(null);
     if (result.kind === "set") {
@@ -92,15 +78,16 @@ function JudgeModelSetting({
       return;
     }
     if (result.kind === "forbidden") refreshMe();
-    const words = refusalWords(result);
+    const words = refusalWords(result, ONLY_ADMIN);
     if (words === null) return onSessionEnded();
     setRefusal(words);
   }
 
   function onSave(event: FormEvent) {
     event.preventDefault();
-    // Sent as typed: the server's URL rule and model-name check say what's wrong, in their own words.
-    void change("save", { url, model });
+    // Trimmed, as a paste can leave a space that the server would keep and every Judge call would then fail on; the
+    // server's URL rule and model-name check say what else is wrong, in their own words.
+    void change("save", { url: url.trim(), model: model.trim() });
   }
 
   if (call.result === "loading") {
@@ -135,7 +122,7 @@ function JudgeModelSetting({
             </dd>
           </dl>
           <p className="muted">Set {dayAndTimeWords(own.set_at)}</p>
-          <div className="hook-actions">
+          <div className="judge-model-actions">
             <button
               type="button"
               className="secondary"
@@ -148,7 +135,8 @@ function JudgeModelSetting({
           </div>
         </>
       )}
-      <form className="judge-model-form" aria-label="Judge's model" onSubmit={onSave}>
+      {/* Named apart from its section, so a screen reader's landmarks tell the two apart. */}
+      <form className="judge-model-form" aria-label="The Team's own model" onSubmit={onSave}>
         <label className="field">
           <span className="field-label">URL</span>
           <input

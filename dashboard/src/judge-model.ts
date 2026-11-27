@@ -1,9 +1,9 @@
 // The Judge's model calls (spec #225, slice 6b, story 10): an Admin reads the Team's own Judge model, sets it, or clears
 // it to put the Team back on OpenRouter. Both routes are Admin-only, so a 403 means the Role changed since /api/me
-// answered. A change's refusals read as the agent hook's do (`hook.ts`).
+// answered. A change's refusals read as the agent hook's do (`change-refused.ts`).
 import { JudgeModelBody, type JudgeModelChange } from "@warden/contracts";
 import { callWarden, parsed, type GetToken, type Refused } from "./api.ts";
-import { refusalOf, type ChangeRefused } from "./hook.ts";
+import { refusalOf, type ChangeRefused } from "./change-refused.ts";
 import { confirmTeam } from "./products.ts";
 
 /** Setup's anchor for the Judge's model section. */

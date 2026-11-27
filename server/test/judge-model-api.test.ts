@@ -161,25 +161,32 @@ describe("PUT and GET /api/judge/model", () => {
     expect(await storedRows(team)).toEqual([]);
   });
 
+  // The model name's refusals in plain words, as Setup shows them (#464), not the schema library's own.
   it.each([
-    ["an empty model name", { local_model: { url: HOSTED.url, model: "" } }],
+    [
+      "an empty model name",
+      { local_model: { url: HOSTED.url, model: "" } },
+      "local_model.model: is empty",
+    ],
     [
       "a model name over 200 characters",
       { local_model: { url: HOSTED.url, model: "m".repeat(201) } },
+      "local_model.model: is over 200 characters",
     ],
     [
       "a model name holding a control character",
       { local_model: { url: HOSTED.url, model: "qwen\u0007" } },
+      "local_model.model: holds a control character",
     ],
-    ["a body that isn't JSON", "{not json"],
-  ])("refuses %s with 400 and stores nothing", async (_case, body) => {
+    ["a body that isn't JSON", "{not json", expect.any(String)],
+  ])("refuses %s with 400 and stores nothing", async (_case, body, error) => {
     const team = await teamOfThree();
     const { app } = judgeApp();
 
     const res = await change(app, team, body);
 
     expect(res.status).toBe(400);
-    expect(res.body).toEqual({ error: expect.any(String) });
+    expect(res.body).toEqual({ error });
     expect(await storedRows(team)).toEqual([]);
   });
 
