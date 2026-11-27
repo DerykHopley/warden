@@ -83,7 +83,8 @@ describe("JudgeModelSection: an Admin", () => {
     expect(modelField()).toHaveValue("");
     expect(save()).toHaveClass("primary");
     expect(screen.queryByRole("button", { name: "Use OpenRouter" })).toBeNull();
-    expect(onAnswered).toHaveBeenCalledWith("judge-model");
+    // onAnswered runs in a passive effect, which React may flush after the DOM poll above sees the text.
+    await vi.waitFor(() => expect(onAnswered).toHaveBeenCalledWith("judge-model"));
   });
 
   it("shows the Team's own model's URL, model name and when it was set, with Use OpenRouter", async () => {
