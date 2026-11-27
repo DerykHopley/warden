@@ -468,6 +468,15 @@ describe("guard/permission-skip on a 1 MiB hook", () => {
   it.each<[name: string, text: string, kind?: string]>([
     ["a wrapper then shells' names", filled("sudo ", "bash ", `claude ${FLAG}`)],
     ["a wrapper then shells' -c strings", filled("sudo ", `bash "-c" 'x' `, `claude ${FLAG}`)],
+    ["a wrapper then shells' names as -o values", filled("sudo ", "bash -o ", `claude ${FLAG}`)],
+    [
+      "a wrapper then shells' names as -o values, then scripts",
+      filled("sudo ", "bash -o bash x ", ""),
+    ],
+    [
+      "a wrapper, shells' names as -o values, then options and a script",
+      filled(`sudo ${"bash -o ".repeat(65_536)}`, "-o x ", "y"),
+    ],
     ["shells after separators", filled("", "bash x;", "")],
     ["shells' strings opening substitutions", filled("", `bash -c "$(`, "")],
     ["a shell's string of quotes and escapes", filled("bash -c '' ", `'a' "b\\"" \\x `, "")],
