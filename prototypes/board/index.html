@@ -1846,6 +1846,230 @@
           display: none;
         }
       }
+      /* E, Warden: pinned Findings overview and Waiting on a Lead, above the feed. */
+      .e-pinned {
+        flex: none;
+        background: var(--surface);
+        border-bottom: 2px solid var(--line);
+      }
+      .e-pin + .e-pin {
+        border-top: 1px solid var(--line);
+      }
+      .e-pin > button.ph {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border: 0;
+        background: none;
+        padding: 10px 22px;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+      }
+      .e-pin > button.ph h2 {
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .e-pin > button.ph .sum {
+        color: var(--muted);
+        font-size: 13.5px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .e-pin > button.ph .chev {
+        margin-left: auto;
+        white-space: nowrap;
+        flex: none;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .e-pin .pb {
+        padding: 0 22px 12px;
+      }
+      .e-pin.wait .pb {
+        max-height: 34vh;
+        overflow: auto;
+      }
+      .e-ov {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13.5px;
+      }
+      .e-ov th,
+      .e-ov td {
+        border: 1px solid var(--line);
+        padding: 6px 10px;
+        text-align: right;
+        white-space: nowrap;
+      }
+      .e-ov th:first-child,
+      .e-ov td:first-child {
+        text-align: left;
+      }
+      .e-ov thead th {
+        font-size: 12px;
+        color: var(--muted);
+        font-weight: 700;
+        background: var(--bg);
+      }
+      .e-ov thead th.critical {
+        color: var(--sev-crit);
+        box-shadow: inset 0 3px 0 var(--sev-crit);
+      }
+      .e-ov thead th.high {
+        color: var(--sev-high);
+        box-shadow: inset 0 3px 0 var(--sev-high);
+      }
+      .e-ov thead th.medium {
+        color: var(--sev-med);
+        box-shadow: inset 0 3px 0 var(--sev-med);
+      }
+      .e-ov thead th.low {
+        color: var(--sev-low);
+        box-shadow: inset 0 3px 0 var(--sev-low);
+      }
+      .e-ov thead th.w {
+        color: var(--st-wait);
+      }
+      .e-ov thead th.f {
+        color: var(--st-fixed);
+      }
+      .e-ov tbody tr.ag {
+        cursor: pointer;
+        box-shadow: inset 4px 0 0 var(--ag);
+      }
+      .e-ov tbody tr.ag:hover {
+        background: var(--bg);
+      }
+      .e-ov td.nm {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        padding-left: 14px;
+      }
+      .e-ov tr.tot td {
+        font-weight: 700;
+        background: var(--bg);
+      }
+      .e-ov td.zero {
+        color: var(--muted);
+      }
+      .e-ov td.chg {
+        animation: e-chg 2.4s ease-out;
+      }
+      @keyframes e-chg {
+        0% {
+          background: var(--tint-med);
+          outline: 2px solid var(--st-wait);
+        }
+        100% {
+          background: transparent;
+          outline-color: transparent;
+        }
+      }
+      .e-pin .upd {
+        color: var(--muted);
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .e-wl {
+        display: flex;
+        flex-direction: column;
+      }
+      .e-wl button {
+        display: grid;
+        grid-template-columns: 22px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--ag);
+        background: var(--surface);
+        padding: 7px 10px;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+      }
+      .e-wl button + button {
+        border-top: 0;
+      }
+      .e-wl button:hover {
+        background: var(--bg);
+      }
+      .e-wl .t {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 14px;
+      }
+      .e-wl .t .st {
+        margin-right: 8px;
+        font-size: 12.5px;
+      }
+      .e-wl .go {
+        color: var(--muted);
+        font-size: 12.5px;
+        white-space: nowrap;
+      }
+      .e-ov .av2.sm,
+      .e-wl .av2.sm {
+        width: 20px;
+        height: 20px;
+      }
+      .e-ov .av2.sm::before,
+      .e-ov .av2.sm::after,
+      .e-wl .av2.sm::before,
+      .e-wl .av2.sm::after {
+        width: 4px;
+        height: 4px;
+      }
+      .e-ov th,
+      .e-ov td {
+        padding: 4px 10px;
+      }
+      .e-wl button {
+        padding: 4px 10px;
+      }
+      .e-pin > button.ph {
+        padding-top: 8px;
+        padding-bottom: 8px;
+      }
+      .e-pin .upd {
+        margin-top: 4px;
+      }
+      @media (max-width: 899px) {
+        .e-pin > button.ph {
+          padding: 9px 16px;
+          min-height: 44px;
+        }
+        .e-pin .pb {
+          padding: 0 16px 10px;
+        }
+        .e-pin.wait .pb {
+          max-height: 30vh;
+        }
+        .e-ov .hide-s {
+          display: none;
+        }
+        .e-ov th,
+        .e-ov td {
+          padding: 6px 7px;
+        }
+        .e-wl button {
+          grid-template-columns: 22px minmax(0, 1fr);
+        }
+        .e-wl .go {
+          display: none;
+        }
+        .e-wl .t {
+          white-space: normal;
+        }
+      }
     </style>
   </head>
   <body>
@@ -2162,6 +2386,11 @@
         theme: q.get("theme") || "",
         agent: q.get("agent") || "warden",
         esel: null,
+        // Pinned sections in Warden: open on desktop, folded to one line on a phone.
+        ePin: {
+          ov: !matchMedia("(max-width: 899px)").matches,
+          wait: !matchMedia("(max-width: 899px)").matches,
+        },
         eref: null,
       };
       const VARIANTS = { A: "Board", B: "Lanes", C: "Desk", D: "Joined lanes", E: "Module agents" };
@@ -2895,9 +3124,11 @@
           ${eLogMsgs("vouch")}
           ${msg("vouch", "now", `Are we ready for the audit? ${C.filter((c) => c.gap).length || waiting.length ? `Not yet: ${[C.filter((c) => c.gap).length && `${C.filter((c) => c.gap).length} Gaps`, waiting.length && `${waiting.length} Control${waiting.length > 1 ? "s" : ""} waiting for review`].filter(Boolean).join(", ")}.` : "Yes: every Control is reviewed, with no Gaps."}`)}`;
       }
-      function eWardenFeed() {
-        const open = F.filter((f) => f.status === "open");
-        const waitList = [
+      // Warden's pinned sections: derived from F, C and STEPS on every render, so acting in
+      // Guard's or Patch's feed changes them with no reload.
+      let ePrevCounts = null;
+      function eWaitList() {
+        return [
           ...F.filter((f) => f.proposal || f.unconfirmed).map((f) => ({
             a: f.mod,
             ref: f.id,
@@ -2917,25 +3148,60 @@
             k: "Setup, for an Admin",
           })),
         ];
-        const card = (a, line) =>
-          `<button class="ag-${a}" data-agent="${a}"><b>${eAvatar(a, "sm")}${AGENTS[a].name}${eWait(a) ? `<span class="wbadge">${eWait(a)} waiting</span>` : ""}</b><span class="muted" style="font-size:13px">${line}</span></button>`;
+      }
+      function eCounts(list) {
+        const open = list.filter((f) => f.status === "open" && !f.proposal && !f.unconfirmed);
+        const c = { open: open.length };
+        for (const k of ["critical", "high", "medium", "low"])
+          c[k] = open.filter((f) => f.sev === k).length;
+        c.pr = list.filter((f) => f.fix === "open" && f.status === "open").length;
+        c.wait = list.filter((f) => f.proposal || f.unconfirmed).length;
+        c.fixed = list.filter((f) => f.status === "fixed").length;
+        return c;
+      }
+      function eWardenPinned() {
+        const rows = {
+          guard: eCounts(F.filter((f) => f.mod === "guard")),
+          patch: eCounts(F.filter((f) => f.mod === "patch")),
+          all: eCounts(F),
+        };
+        const cols = [
+          ["open", "Open", ""],
+          ["critical", "Critical", "critical"],
+          ["high", "High", "high hide-s"],
+          ["medium", "Medium", "medium hide-s"],
+          ["low", "Low", "low hide-s"],
+          ["pr", "Fix PR open", "hide-s"],
+          ["wait", "Waiting", "w"],
+          ["fixed", "Fixed", "f"],
+        ];
+        const prev = ePrevCounts;
+        ePrevCounts = JSON.parse(JSON.stringify(rows));
+        const cell = (r, k, cls) => {
+          const v = rows[r][k];
+          const chg = prev && prev[r][k] !== v ? " chg" : "";
+          return `<td class="${cls.replace(/critical|high|medium|low|\bw\b|\bf\b/g, "")}${v ? "" : " zero"}${chg}">${v}</td>`;
+        };
+        const tr = (r) =>
+          r === "all"
+            ? `<tr class="tot"><td>All modules</td>${cols.map(([k, , c]) => cell(r, k, c)).join("")}</tr>`
+            : `<tr class="ag ag-${r}" data-agent="${r}" tabindex="0" title="Open ${AGENTS[r].name}'s feed"><td class="nm">${eAvatar(r, "sm")}${AGENTS[r].name}</td>${cols.map(([k, , c]) => cell(r, k, c)).join("")}</tr>`;
+        const wl = eWaitList();
+        const a = rows.all;
+        const head = (key, title, sum, cls) =>
+          `<button class="ph" data-epin="${key}" aria-expanded="${S.ePin[key]}"><h2>${title}</h2><span class="sum">${sum}</span><span class="chev" aria-hidden="true">${S.ePin[key] ? "▲ Hide" : "▼ Show"}</span></button>`;
+        return `<div class="e-pinned">
+          <section class="e-pin ov">${head("ov", "Findings", `${a.open} open · ${a.critical} Critical · ${a.wait} waiting · ${a.fixed} Fixed`)}
+            ${S.ePin.ov ? `<div class="pb"><table class="e-ov"><thead><tr><th>Module</th>${cols.map(([, w, c]) => `<th class="${c}">${w}</th>`).join("")}</tr></thead><tbody>${tr("guard")}${tr("patch")}${tr("all")}</tbody></table><div class="upd">Live: counts change as Guard and Patch act. Vouch's Controls are in its feed.</div></div>` : ""}</section>
+          <section class="e-pin wait">${head("wait", "Waiting on a Lead", wl.length ? `${wl.length} ${wl.length === 1 ? "thing" : "things"}` : "Nothing waits")}
+            ${S.ePin.wait ? `<div class="pb">${wl.length ? `<div class="e-wl">${wl.map((w) => `<button class="ag-${w.a}" data-agent="${w.a === "warden" ? "setup" : w.a}" data-eref="${w.ref}">${eAvatar(w.a, "sm")}<span class="t"><span class="st wait">${ICON.wait}${esc(w.k)}</span>${esc(w.t)}</span><span class="go">in ${w.a === "warden" ? "Setup" : AGENTS[w.a].name} →</span></button>`).join("")}</div>` : `<div class="muted" style="font-size:13.5px">Every decision is made.</div>`}</div>` : ""}</section>
+        </div>`;
+      }
+      function eWardenFeed() {
         return `<div class="e-day">Today, Nov 27</div>
-          ${msg(
-            "warden",
-            "9:20 AM",
-            `Here's where Elm stands. <b>${open.length} open Findings</b>, ${open.filter((f) => f.sev === "critical").length} Critical. Level: Quick.
-            <div class="e-sum">${card("guard", eLast("guard"))}${card("patch", eLast("patch"))}${card("vouch", eLast("vouch"))}</div>`,
-          )}
-          ${msg(
-            "warden",
-            "9:20 AM",
-            waitList.length
-              ? `<b>${waitList.length} things wait on a Lead.</b> Each one sits in its module's feed, with its buttons:
-            ${waitList.map((w) => `<div class="e-item ag-${w.a}" data-agent="${w.a === "warden" ? "setup" : w.a}" data-eref="${w.ref}" tabindex="0" style="border-left:4px solid var(--ag)"><div class="meta"><span class="st wait">${ICON.wait}${esc(w.k)}</span><span class="muted" style="margin-left:auto;font-size:12.5px">in ${w.a === "warden" ? "Setup" : AGENTS[w.a].name} →</span></div><div class="t">${esc(w.t)}</div></div>`).join("")}`
-              : "Nothing waits on a Lead. Every decision is made.",
-            waitList.length ? "wait" : "",
-          )}
-          ${msg("warden", "9:21 AM", `The most urgent fix: <b>${esc(F[0].title)}</b> (Critical, Guard). Guard can open a Fix PR for it, in its feed.`)}`;
+          ${msg("warden", "9:20 AM", `Morning. The Findings and what waits on a Lead are pinned above; they change as Guard, Patch and Vouch act.`)}
+          ${msg("warden", "9:21 AM", `The most urgent fix: <b>${esc(F[0].title)}</b> (Critical, Guard). Guard can open a Fix PR for it, in its feed.`)}
+          ${eLogMsgs("warden")}`;
       }
       function eQuick(a) {
         const items = {
@@ -2985,6 +3251,7 @@
           <nav class="e-mobtabs" aria-label="Agents">${AG_ORDER.map((x) => `<button class="ag-${x} ${a === x ? "sel" : ""}" data-agent="${x}">${eAvatar(x, "sm")}${AGENTS[x].name}${eWait(x) ? `<span class="wbadge">${eWait(x)}</span>` : ""}</button>`).join("")}</nav>
           <main class="e-main ag-${a}"><header class="e-head">${eAvatar(a)}<div><h1>${AGENTS[a].name}</h1><div class="sub">${AGENTS[a].role}</div></div><span style="flex:1"></span>${eWait(a) ? `<span class="wbadge">${eWait(a)} waiting on a Lead</span>` : ""}</header>
             <div class="e-quickrow ag-${a}">${eQuick(a)}</div>
+            ${a === "warden" ? eWardenPinned() : ""}
             <div class="e-feed" id="efeed">${feed}</div>
             <div class="e-composer"><div class="ctx"><span class="mock">MOCK</span><span class="why">Not connected: there is no chat with a model in this prototype.</span></div><div class="box"><input aria-label="Message ${AGENTS[a].name} (mock)" placeholder="Message ${AGENTS[a].name}… (mock)"><button class="btn primary" data-emock>Send</button></div></div></main>
           <aside class="e-quick ag-${a}" aria-label="Quick actions"><h2>Quick actions</h2>${eQuick(a)}<h2>${AGENTS[a].name}</h2><div class="facts">${facts}</div></aside>
@@ -3006,9 +3273,13 @@
       document.addEventListener("click", (e) => {
         if (S.variant !== "E") return;
         const t = e.target.closest(
-          "[data-agent],[data-esel],[data-equick],[data-eoverride],[data-emock]",
+          "[data-epin],[data-agent],[data-esel],[data-equick],[data-eoverride],[data-emock]",
         );
         if (!t) return;
+        if (t.dataset.epin) {
+          S.ePin[t.dataset.epin] = !S.ePin[t.dataset.epin];
+          return render();
+        }
         if (t.dataset.agent) {
           if (t.dataset.agent === "setup") {
             S.variant = "D";
