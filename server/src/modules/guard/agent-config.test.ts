@@ -961,6 +961,22 @@ describe("guard/permission-skip", () => {
       expect(skips(command)).toEqual(onePlaceIn(command));
     });
 
+    // After a wrapper, a shell's or the agent's name as `-o`'s value starts a run of its own, before the -c string. A
+    // shell named there is one of the first shell's words, so its string counts once.
+    it.each([
+      `sudo bash -o bash -c 'claude ${FLAG}'`,
+      `sudo bash -e -o bash -c 'claude ${FLAG}'`,
+      `sudo bash -c -o bash 'claude ${FLAG}'`,
+      `sudo bash -c -o sh 'claude ${FLAG}'`,
+      `sudo bash -c -o claude 'claude ${FLAG}'`,
+      `env bash -c -o zsh 'claude ${FLAG}'`,
+      `nohup bash -c -o bash 'claude ${FLAG}'`,
+      `bash -c x; sudo bash -c -o bash 'claude ${FLAG}'`,
+      `env \` \` bash -c -o bash "bash -c \\"claude ${FLAG}\\""`,
+    ])("reads a wrapped shell's -c string past a name as its -o value: %s", (command) => {
+      expect(skips(command)).toEqual(onePlaceIn(command));
+    });
+
     // The limit is per command and per nesting: a command after `;` starts with the whole of it.
     it("reads a fifth shell's string in a command of its own", () => {
       const fiveCommands = (fifth: string) =>
