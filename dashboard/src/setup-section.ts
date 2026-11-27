@@ -4,7 +4,8 @@ import { useEffect } from "react";
 import type { PageProps } from "./App.tsx";
 
 /** A Setup section that asks Warden's server something before it shows, its waiting line in its place until then. */
-export type AskingSection = "github" | "write" | "grants" | "repos" | "catalogues" | "hook";
+export type AskingSection =
+  "github" | "write" | "grants" | "repos" | "catalogues" | "hook" | "judge-model";
 /** Tells Setup a section's call has answered, so its waiting line is gone. */
 export type OnAnswered = (section: AskingSection) => void;
 export type SectionProps = PageProps & { onAnswered: OnAnswered };

@@ -140,6 +140,7 @@ const SETUP_ROUTES = {
   writeGrant: noGrants,
   catalogues: cataloguesOf(CATALOGUE),
   hook: noHookToken,
+  judgeModel: () => json(200, { local_model: null }),
 } satisfies Routes;
 
 function renderSetup(role: Role, routes: Routes = {}) {
@@ -293,6 +294,7 @@ describe("SetupPage: Grant write access (#224, story 5)", () => {
       "Repos",
       "Catalogues",
       "Agent hook",
+      "Judge's model",
     ]);
     expect(write().getByText("Asking Warden's server about the write app…")).toBeInTheDocument();
     expect(await write().findByRole("link", { name: "Install the write app" })).toHaveAttribute(
@@ -1228,6 +1230,10 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
       repos: () => repos().findByText("No repos linked yet."),
       hook: () =>
         within(screen.getByRole("region", { name: "Agent hook" })).findByText("No hook token yet."),
+      judgeModel: () =>
+        within(screen.getByRole("region", { name: "Judge's model" })).findByText(
+          "The Judge calls OpenRouter (the default).",
+        ),
     };
 
     it.each([
@@ -1236,6 +1242,7 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
       ["the write grants", "writeGrant", "/api/github/write-grant"],
       ["the Repos", "repos", "/api/repos"],
       ["the agent hook", "hook", "/api/hook"],
+      ["the Judge's model", "judgeModel", "/api/judge/model"],
     ] as const)(
       "waits for %s, answering after the list, so the heading isn't pushed away",
       async (_section, route, path) => {
@@ -1264,6 +1271,43 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
 
       await shown();
       expect(scrolled).not.toHaveBeenCalled();
+    });
+
+    it("brings the Judge's model heading into view at #setup-judge-model once every section has answered (#464)", async () => {
+      window.history.replaceState(null, "", "/setup#setup-judge-model");
+      const late = deferred<Response>();
+      renderSetup("admin", { judgeModel: () => late.promise });
+
+      await shown();
+      for (const [other, answered] of Object.entries(ANSWERED_BY)) {
+        if (other !== "judgeModel") await answered();
+      }
+      expect(scrolled).not.toHaveBeenCalled();
+      late.resolve(SETUP_ROUTES.judgeModel());
+
+      await vi.waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
+      expect(scrolled.mock.contexts[0]).toBe(
+        screen.getByRole("heading", { level: 2, name: "Judge's model" }),
+      );
+    });
+
+    it("lands on Repos at #setup-repos only once the Judge's model has answered too (#464)", async () => {
+      window.history.replaceState(null, "", "/setup#setup-repos");
+      const late = deferred<Response>();
+      renderSetup("admin", { judgeModel: () => late.promise });
+
+      await shown();
+      for (const [other, answered] of Object.entries(ANSWERED_BY)) {
+        if (other !== "judgeModel") await answered();
+      }
+      expect(callsTo("/api/judge/model")).toHaveLength(1);
+      expect(scrolled).not.toHaveBeenCalled();
+      late.resolve(SETUP_ROUTES.judgeModel());
+
+      await vi.waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
+      expect(scrolled.mock.contexts[0]).toBe(
+        screen.getByRole("heading", { level: 2, name: "Repos" }),
+      );
     });
   });
 });

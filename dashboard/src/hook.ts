@@ -36,8 +36,11 @@ export type ChangeRefused =
   | Refused
   | TeamCheckRefused;
 
-/** The refusal `res` is, or undefined when it answered 2xx. */
-async function refusalOf(res: Response, unchanged: string): Promise<ChangeRefused | undefined> {
+/** The refusal `res` is, or undefined when it answered 2xx; `judge-model.ts`'s change reads its refusals the same way. */
+export async function refusalOf(
+  res: Response,
+  unchanged: string,
+): Promise<ChangeRefused | undefined> {
   if (res.ok) return undefined;
   if (res.status === 403) return { kind: "forbidden" };
   if (res.status === 409) return { kind: "team-not-opened" };
