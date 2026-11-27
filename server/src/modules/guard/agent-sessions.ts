@@ -58,8 +58,11 @@ export type StoredEvent = {
 
 /** One stored event as the Judge reads it. */
 export type ReadAgentEvent = {
-  /** Its place in the Team's events (a bigint, as text): what `markJudged` drops it by. */
-  seq: string;
+  /**
+   * Its stored row's place in the Team's events (a bigint, as text): what `markJudged` drops it by. Not the masked
+   * event's `seq`, which is its 0-based place among the events one run read.
+   */
+  rowSeq: string;
   receivedAt: Date;
   name: string;
   tool: string | null;
@@ -68,6 +71,12 @@ export type ReadAgentEvent = {
 
 /** What the Judge found in a session: one Finding or more, none, or an answer a person must read. */
 export type SessionOutcome = "flagged" | "clean" | "needs_human_review";
+
+/**
+ * The outcomes, lowest first. A session's outcome never moves down: a later run over its late events can't make a
+ * flagged session clean while the first run's Finding stands, nor wipe a review a person still has to do.
+ */
+export const OUTCOME_ORDER: readonly SessionOutcome[] = ["clean", "needs_human_review", "flagged"];
 
 export interface AgentSessions {
   /**
@@ -81,14 +90,15 @@ export interface AgentSessions {
    */
   readEnded(team: string, sessionId: string): Promise<ReadAgentEvent[] | undefined>;
   /**
-   * In one transaction, marks the session judged now with `outcome`, and drops exactly the events `seqs` names: the
-   * ones the Judge read. An event stored after the read stays, for its own run.
+   * In one transaction, marks the session judged now, and drops exactly the events `rowSeqs` names: the ones the Judge
+   * read. An event stored after the read stays, for its own run. The session's outcome becomes the higher in
+   * OUTCOME_ORDER of the one it held and `outcome`, and is what this answers.
    */
   markJudged(
     team: string,
     sessionId: string,
-    judged: { outcome: SessionOutcome; seqs: readonly string[] },
-  ): Promise<void>;
+    judged: { outcome: SessionOutcome; rowSeqs: readonly string[] },
+  ): Promise<SessionOutcome>;
 }
 
 export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): AgentSessions {
@@ -149,7 +159,7 @@ export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): Agent
           .execute();
         if (rows.length === 0) return undefined;
         return rows.map((row) => ({
-          seq: String(row.seq),
+          rowSeq: String(row.seq),
           receivedAt: row.received_at,
           name: row.name,
           tool: row.tool,
@@ -158,20 +168,31 @@ export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): Agent
       });
     },
 
-    markJudged(team, sessionId, { outcome, seqs }) {
+    markJudged(team, sessionId, { outcome, rowSeqs }) {
       return withTeam(team, async (tx) => {
         const db = tx.$extendTables<AgentSessionTables>();
-        await db
+        // Compared in the update itself: of two marks at once, the second waits on the row's lock, then compares with
+        // the outcome the first wrote.
+        const order = sql`${[...OUTCOME_ORDER]}::text[]`;
+        const marked = await db
           .updateTable("agent_sessions")
-          .set({ judged_at: sql<Date>`now()`, outcome })
+          .set({
+            judged_at: sql<Date>`now()`,
+            outcome: sql<string>`case
+              when coalesce(array_position(${order}, agent_sessions.outcome), 0)
+                >= array_position(${order}, ${outcome}::text)
+              then agent_sessions.outcome else ${outcome}::text end`,
+          })
           .where("session_id", "=", sessionId)
-          .execute();
+          .returning("outcome")
+          .executeTakeFirst();
         // One array parameter, however many events the run read.
         await db
           .deleteFrom("agent_events")
           .where("session_id", "=", sessionId)
-          .where(sql<boolean>`seq = any(${[...seqs]}::bigint[])`)
+          .where(sql<boolean>`seq = any(${[...rowSeqs]}::bigint[])`)
           .execute();
+        return (marked?.outcome as SessionOutcome | null | undefined) ?? outcome;
       });
     },
   };

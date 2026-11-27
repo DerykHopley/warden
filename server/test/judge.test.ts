@@ -4,13 +4,14 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { afterAll, beforeAll, describe, expect, inject, it } from "vitest";
-import { judgeSettings } from "../src/config.ts";
+import { judgeSettings, type JudgeSettings } from "../src/config.ts";
 import { createFindings, type Findings } from "../src/findings/index.ts";
 import { createLogger } from "../src/log.ts";
 import {
   createAgentSessions,
   type AgentSessions,
   type AgentSessionTables,
+  type SessionOutcome,
 } from "../src/modules/guard/agent-sessions.ts";
 import { createJudge } from "../src/modules/guard/judge.ts";
 import { openRouterModel } from "../src/modules/guard/judge-model.ts";
@@ -97,7 +98,7 @@ async function runJob(
   team: string,
   sessionId: string,
   fetch: ReturnType<typeof fakeOpenRouter>["fetch"],
-  options: { settings?: typeof settings; timeoutMs?: number } = {},
+  options: { settings?: JudgeSettings; timeoutMs?: number } = {},
 ) {
   const lines: string[] = [];
   const code = await runJudgeJob({
@@ -199,6 +200,81 @@ describe("a Judge run", () => {
     });
     expect(fake.calls).toHaveLength(2);
   });
+
+  it("marks the session flagged when its retry's answer lists no Rule but its first report already opened a Finding", async () => {
+    const { team, sessionId } = await teamWithSession();
+    const answers = [
+      verdict([{ rule_id: AGENT_SENDS_SECRETS, summary: "Sent the key", event_seqs: [1] }]),
+      verdict([]),
+    ];
+    const fake = fakeOpenRouter(() => answers.shift());
+    let failMark = true;
+    const failingOnce: AgentSessions = {
+      ...sessions,
+      markJudged: (...args) => {
+        if (failMark) {
+          failMark = false;
+          return Promise.reject(new Error("the database went away"));
+        }
+        return sessions.markJudged(...args);
+      },
+    };
+    const run = () =>
+      createJudge({
+        agentSessions: failingOnce,
+        findings,
+        model: openRouterModel({ apiKey: KEY, model: settings.model, fetch: fake.fetch }),
+      }).run(team, sessionId);
+
+    await expect(run()).rejects.toThrow("the database went away");
+    await expect(run()).resolves.toMatchObject({ kind: "judged", outcome: "flagged", opened: 0 });
+
+    expect((await sessionState(team, sessionId)).session).toEqual({
+      judged_at: expect.any(Date),
+      outcome: "flagged",
+    });
+    expect((await findings.list(team)).map((f) => [f.rule_id, f.status])).toEqual([
+      [AGENT_SENDS_SECRETS, "open"],
+    ]);
+  });
+
+  /** An answer that gives each outcome, citing event 0, which every run reads. */
+  const answerFor: Record<SessionOutcome, () => unknown> = {
+    flagged: () =>
+      verdict([{ rule_id: AGENT_READS_SECRETS, summary: "Read .env", event_seqs: [0] }]),
+    needs_human_review: () => completion(null, "I can't help with that."),
+    clean: () => verdict([]),
+  };
+
+  it.each<[SessionOutcome, SessionOutcome, SessionOutcome]>([
+    ["flagged", "clean", "flagged"],
+    ["flagged", "needs_human_review", "flagged"],
+    ["needs_human_review", "clean", "needs_human_review"],
+    ["clean", "needs_human_review", "needs_human_review"],
+    ["clean", "flagged", "flagged"],
+  ])(
+    "a %s session whose late events a later run judges %s ends %s: an outcome never moves down",
+    async (first, second, expected) => {
+      const { team, sessionId } = await teamWithSession();
+      await runJob(team, sessionId, fakeOpenRouter(answerFor[first]).fetch);
+      await store(team, sessionId, "PostToolUse", { tool_name: "Read" });
+
+      const { code, entries } = await runJob(
+        team,
+        sessionId,
+        fakeOpenRouter(answerFor[second]).fetch,
+      );
+
+      expect(code).toBe(0);
+      expect(await sessionState(team, sessionId)).toEqual({
+        session: { judged_at: expect.any(Date), outcome: expected },
+        events: [],
+      });
+      expect(entries).toContainEqual(
+        expect.objectContaining({ team, outcome: expected, eventsRead: 1 }),
+      );
+    },
+  );
 
   it.each<[string, (call: FakeCall) => unknown]>([
     ["a refusal", () => completion(null, "I can't help with that.")],

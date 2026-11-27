@@ -7,7 +7,7 @@ import { JUDGE_RULES } from "./judge-rules.ts";
 const AT = new Date("2026-11-27T10:00:00.000Z");
 
 const stored = (overrides: Partial<ReadAgentEvent> = {}): ReadAgentEvent => ({
-  seq: "41",
+  rowSeq: "41",
   receivedAt: AT,
   name: "PreToolUse",
   tool: "Bash",
@@ -23,7 +23,7 @@ describe("maskEvents", () => {
   it("gives each event its 0-based place, its time, name and tool, and its fields but the name and tool as compact JSON", () => {
     const masked = maskEvents([
       stored(),
-      stored({ seq: "57", name: "SessionEnd", tool: null, fields: { reason: "exit" } }),
+      stored({ rowSeq: "57", name: "SessionEnd", tool: null, fields: { reason: "exit" } }),
     ]);
 
     expect(masked).toEqual([
