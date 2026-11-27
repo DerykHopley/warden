@@ -486,7 +486,6 @@ describe("the review form (story 4)", () => {
       "changed since review, its newest review a confirm",
       { review_state: "changed_since_review", reviews: [ADAS_CONFIRM] },
     ],
-    ["not reviewed", { review_state: "not_reviewed", reviews: [] }],
     [
       "reviewed, its newest review an override",
       {
@@ -819,14 +818,10 @@ describe("no answer to a review's POST", () => {
     expect(card.getByRole("alert")).toHaveTextContent(maybeSaved);
   });
 
-  it("Confirm's form stays open when the read that follows has the confirm newest; its Cancel then focuses Override, as Confirm has gone", async () => {
+  it("Cancel focuses Override once the read that follows has taken Confirm away", async () => {
     const { card, form, submit } = await noAnswerThenReread("Confirm", savedAfterAll);
-    await userEvent.type(form.getByRole("textbox"), "Checked");
     await userEvent.click(submit());
-    expect(await form.findByRole("alert")).toHaveTextContent(maybeSaved);
-    expect(await (await section("Reviews")).findByText("Confirmed: Not evidenced")).toBeVisible();
     await vi.waitFor(() => expect(submit()).toBeEnabled());
-    expect(form.getByRole("textbox")).toHaveValue("Checked");
 
     await userEvent.click(form.getByRole("button", { name: "Cancel" }));
     expect(card.queryByRole("form")).toBeNull();

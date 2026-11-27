@@ -3,8 +3,9 @@
 // Verdict, evidence and reviews once GET /api/vouch/catalogues/:id/controls/:ref answers, a Product Asset named from
 // GET /api/products, as on Findings. A read newer than the row asks the Overview to read it again. Under Reviews, a Lead
 // or an Admin confirms or overrides the Verdict (POST .../reviews), one review per submit, with no Confirm while the
-// newest review of a reviewed Control is already one; a Member reads who reviews it. Every string from the server is shown as text. The panel keys it by Catalogue and ref, so a new Control asks
-// again, and the earlier ask's answer, or a review's, shows on no card.
+// newest review of a reviewed Control is already one; a Member reads who reviews it. Every string from the server is
+// shown as text. The panel keys it by Catalogue and ref, so a new Control asks again, and the earlier ask's answer, or
+// a review's, shows on no card.
 import {
   atLeast,
   FINDINGS_VIEW_DEFAULTS,
