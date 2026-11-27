@@ -33,6 +33,15 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    The JWT key is the JWKS Public Key (PEM) on the Clerk Dashboard's API keys page; with it, the server checks
    session tokens without calling Clerk.
 
+   Then make the agent hook's pseudonym key (once), piped straight into the keyring, so it's never shown:
+
+   ```sh
+   openssl rand -hex 32 | secret-tool store --label "Warden pseudonym key (local)" service warden-pseudonym-key
+   ```
+
+   This local key is apart from the live and preview ones, which `scripts/gcp-setup.sh` makes in Secret Manager
+   ("Setting up Google Cloud"). It's optional: without it the server runs, and only the hook endpoint answers 503.
+
 2. `direnv allow`: the committed `.envrc` loads the keys from the keyring and points the `PG*` variables at the
    compose database. `.env.example` lists every variable Warden reads.
 3. `docker compose up -d --wait`: Postgres 17 with pgvector on `127.0.0.1:54329`, trust auth (no password).
@@ -206,6 +215,10 @@ Guard records each developer's Claude Code sessions through a hook that Claude C
 every laptop. An Admin sets it up from Setup's "Agent hook" section; a Lead or a Member sees "An Admin turns on the
 agent hook."
 
+The hook needs Warden's pseudonym key (`WARDEN_PSEUDONYM_KEY`): without it, the hook endpoint answers 503 ("The hook
+isn't set up here") and stores nothing. Locally it's in the keyring ("Local setup", step 1); the live service and the
+owner previews each read their own from Secret Manager ("Setting up Google Cloud").
+
 1. **Issue the token, and copy it at once.** Choose **Issue a hook token**. Setup shows the token this once, with
    **Copy token**: Warden keeps only its hash, so after a reload it's gone, and the only way to a new one is to rotate.
 2. **Pick the Privacy tier.** Metadata sends tool names and outcomes; Details (the default) adds commands, file paths
@@ -373,7 +386,7 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 | Artifact Registry | the Docker repositories `warden` (releases) and `warden-preview` (owner previews), in `europe-west1` |
 | Cloud SQL | the databases `warden` and `warden_preview`; daily backups, 7 kept; point-in-time recovery with 6 days of logs (Cloud SQL's docs ask for fewer log days than backups); no authorized networks, connectors required, and encrypted connections only (`--ssl-mode=ENCRYPTED_ONLY`) |
 | Logging | the `_Default` log bucket keeps 30 days; Data Access audit logs (`DATA_READ`) for Secret Manager only, so each read of a secret is recorded |
-| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-admin-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all eleven secrets' replication, and the write app's two when they exist |
+| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-admin-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, and the agent hook's pseudonym keys `warden-pseudonym-key` (the live service's) and `warden-preview-pseudonym-key` (the owner previews' own), each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. A secret that exists is left alone. The pseudonym keys are never rotated: a new key gives every developer a new pseudonym, so their earlier sessions no longer match. It then prints all thirteen secrets' replication, and the write app's two when they exist |
 | Database roles | run from your machine, as `postgres`, through the Cloud SQL Auth Proxy on a free local port: `server/src/roles.ts` makes the live roles (`warden_migrate`, `warden_app`, `warden_admin`) on `warden`, with their three passwords, then the preview roles (`warden_preview_migrate`, `warden_preview_app`, `warden_preview_admin`) on `warden_preview`, with the app and migrate passwords only: no preview Job runs as it, so `warden_preview_admin` can't log in. Each database lets only its own set connect. The passwords go from Secret Manager into that one process's environment only; the proxy is stopped when the script ends, also on failure. No service account reads the `postgres` password, so **rerun the script after a change to `createRoles`** |
 | Service accounts | none has a key. See the table below |
 | Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches. The provider maps each token to its repository id and branch kind (`attribute.deploy`, such as `<repo-id>:main`): only this repository's `main` tokens may act as `warden-deploy`, and only its `preview/*` tokens as `warden-preview-deploy`, so a token from another repository can never match, even through another provider in the pool |
@@ -385,12 +398,12 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 
 | Account | Used by | May |
 |---|---|---|
-| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (it and `warden-preview-run` are the only accounts that read the GitHub app's client secret, which signs people in); when they exist, `warden-github-write-app-client-secret` and `warden-github-write-app-private-key`, for Fix PRs; start `warden-scan` with an override (`roles/run.jobsExecutorWithOverrides` on that Job only) |
+| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (it and `warden-preview-run` are the only accounts that read the GitHub app's client secret, which signs people in); `warden-pseudonym-key`, the only account that reads it; when they exist, `warden-github-write-app-client-secret` and `warden-github-write-app-private-key`, for Fix PRs; start `warden-scan` with an override (`roles/run.jobsExecutorWithOverrides` on that Job only) |
 | `warden-migrate` | the live migration job | Cloud SQL client; read `warden-db-app-password` and `warden-db-migrate-password`. Not the `postgres` password |
 | `warden-daily` | the daily expiry Job `warden-daily-expiry` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-db-admin-password`. The only account that reads the admin password, so the server can't list Teams |
 | `warden-scan` | the Scan Job `warden-scan` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-github-app-private-key`, to read the Team's repos as the GitHub app. Never the admin password: it works inside one Team and lists none. Never the GitHub app's client secret, so it can't sign anyone in to GitHub |
 | `warden-deploy` | GitHub Actions on `main` | Cloud Run developer on the project; writer on the `warden` repository; act as `warden-run`, `warden-migrate`, `warden-daily` and `warden-scan`. Reads no secret |
-| `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (as `warden-run` does: previews share the live read-only GitHub app); when they exist, the write app's `warden-github-write-app-client-secret` and `warden-github-write-app-private-key` (previews share the live write app too); start `warden-scan-preview` with an override (on that Job only) |
+| `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (as `warden-run` does: previews share the live read-only GitHub app); `warden-preview-pseudonym-key`, the only account that reads it (never the live key, so a preview's pseudonyms can't be matched against live ones); when they exist, the write app's `warden-github-write-app-client-secret` and `warden-github-write-app-private-key` (previews share the live write app too); start `warden-scan-preview` with an override (on that Job only) |
 | `warden-preview-migrate` | the `warden-migrate-preview` job | Cloud SQL client; read `warden-db-preview-migrate-password` only |
 | `warden-preview-scan` | the preview Scan Job `warden-scan-preview` (the setup script makes it; each preview updates its image) | Cloud SQL client; read `warden-db-preview-app-password` and `warden-github-app-private-key`. Never a live password, the admin password or the GitHub app's client secret |
 | `warden-preview-deploy` | GitHub Actions on `preview/*` | Cloud Run developer on the `warden-preview` service and the `warden-migrate-preview` and `warden-scan-preview` jobs only, never the project; writer on the `warden-preview` repository only; act as `warden-preview-run`, `warden-preview-migrate` and `warden-preview-scan` only. Reads no secret |
@@ -520,7 +533,9 @@ replace the preview.
    afresh, so none carries over from an earlier revision. Its `WARDEN_SCAN_JOB` names
    `projects/<project-id>/locations/europe-west1/jobs/warden-scan-preview`, which "Scan now" and a GitHub link start,
    and it gets the read-only GitHub app's settings as a release does: `GITHUB_APP_CLIENT_ID` from the repository
-   variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned. When the optional
+   variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned. It always gets the agent
+   hook's `WARDEN_PSEUDONYM_KEY` from the previews' own `warden-preview-pseudonym-key`, pinned, never the live key; with
+   that secret missing, Cloud Run refuses the revision and the run fails. When the optional
    repository variable `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` is set, it also gets the write app's, which switch Fix PRs
    on: `GITHUB_WRITE_APP_CLIENT_ID` from it, and the secrets `GITHUB_WRITE_APP_CLIENT_SECRET` and
    `GITHUB_WRITE_APP_PRIVATE_KEY`, pinned (previews share the live write app). Unset or empty, it gets none of the
@@ -564,7 +579,8 @@ read into `warden_preview` only.
 **Secrets are pinned.** The revision and the jobs read their passwords and keys from Secret Manager by version
 number, never `latest`. The numbers live in `secret_version` in `scripts/lib/cloud-run.sh`. To move one: add the
 new version (`gcloud secrets versions add <secret> --data-file=-`), change its number there in a PR, merge it, then
-push a preview. Disable the old version only after no running revision reads it.
+push a preview. Disable the old version only after no running revision reads it. The two pseudonym keys never move:
+a new key gives every developer a new pseudonym.
 
 **Logs:** the workflow run on GitHub (Actions, "Preview"); the migration job's and the Scan Job's executions
 (`gcloud run jobs executions list --job warden-migrate-preview --region europe-west1`, and the same for
@@ -607,7 +623,8 @@ PRs on (step 4); unset or empty, the release runs with Fix PRs off.
    installation starts it too, for the first Scan of the linked repos, and uses one of the Team's hourly Scans; the
    link answers once the Job has started, which can take up to about 20 seconds. It also gets the GitHub app's
    settings: `GITHUB_APP_CLIENT_ID` from the repository variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and
-   `GITHUB_APP_PRIVATE_KEY`, pinned. With the optional repository variable `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` set, it also
+   `GITHUB_APP_PRIVATE_KEY`, pinned, and the agent hook's `WARDEN_PSEUDONYM_KEY` from `warden-pseudonym-key`, pinned,
+   always. With the optional repository variable `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` set, it also
    gets the write app's, for Fix PRs: `GITHUB_WRITE_APP_CLIENT_ID` from it, and the secrets
    `GITHUB_WRITE_APP_CLIENT_SECRET` and `GITHUB_WRITE_APP_PRIVATE_KEY`, pinned; without it, none of the three. A
    preview's revision gets the same, naming `warden-scan-preview` instead (see "Owner previews"). A revision with no Scan Job starts no Scan when an installation is linked.
@@ -656,8 +673,8 @@ traffic meanwhile, it stops with traffic unchanged, and you dispatch it again if
 starts after a rollback moved the traffic releases forward from it, as any merge to `main` does.
 
 Secrets are pinned as for previews: see "Secrets are pinned" in "Owner previews" above. The live service reads
-`warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and
-`warden-github-app-private-key`, and the write app's `warden-github-write-app-client-secret` and
+`warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret`,
+`warden-github-app-private-key` and `warden-pseudonym-key`, and the write app's `warden-github-write-app-client-secret` and
 `warden-github-write-app-private-key` when `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` is set; the migration job
 `warden-db-migrate-password`; the daily Job `warden-db-app-password` and `warden-db-admin-password`; the Scan Job
 `warden-db-app-password` and `warden-github-app-private-key`, never the client secret nor either of the write

@@ -19,7 +19,8 @@ readonly SCAN_JOB=warden-scan
 readonly SCAN_ACCOUNT=warden-scan
 
 # Secret Manager versions the deploys read, one per secret: the only place a version number lives. gcp-setup.sh makes
-# each generated password as version 1; check a hand-made secret's with `gcloud secrets versions list <secret>`.
+# each generated password and pseudonym key as version 1 (a key never gets a second: #185); check a hand-made secret's
+# with `gcloud secrets versions list <secret>`.
 secret_version() {
   case $1 in
     warden-db-app-password) echo 1 ;;
@@ -33,6 +34,8 @@ secret_version() {
     warden-github-app-private-key) echo 1 ;;
     warden-github-write-app-client-secret) echo 1 ;;
     warden-github-write-app-private-key) echo 1 ;;
+    warden-pseudonym-key) echo 1 ;;
+    warden-preview-pseudonym-key) echo 1 ;;
     *)
       echo "$PROGRAM: no pinned version for the secret $1" >&2
       exit 1
