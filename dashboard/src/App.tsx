@@ -203,7 +203,7 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
     setContextTeam(team);
     setPageContext(null);
   }
-  const { openFloating } = panelState;
+  const { openFloating, uncover } = panelState;
 
   // The floating panel starts below the header, so the header's controls stay reachable while it floats.
   const headerRef = useRef<HTMLElement>(null);
@@ -219,8 +219,8 @@ function AppShell(props: { onSessionEnded: () => void; onSignOut: () => void }) 
     headerHeight === null ? undefined : { "--header-height": `${headerHeight}px` }
   ) as CSSProperties | undefined;
   const pagePanel = useMemo<PagePanel>(
-    () => ({ setContext: setPageContext, open: openFloating }),
-    [openFloating],
+    () => ({ setContext: setPageContext, open: openFloating, uncover }),
+    [openFloating, uncover],
   );
   const showsPage = signedIn !== null && !noTeam && page !== undefined;
   const panelContext = pageContext ?? {

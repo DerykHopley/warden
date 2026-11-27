@@ -99,7 +99,7 @@ export function ControlCard(props: {
   const { result, setResult, refresh } = useWardenCall(call, props.onSessionEnded);
   // A read newer than the Overview's row asks for the row again, once per read, so the two say the same. A review's
   // answer asks for the row itself, so the read it brings (its 201's, or the one asked after no answer) asks nothing.
-  const { refreshRow } = focus;
+  const { refreshRow, onReviewed } = focus;
   const compared = useRef<ControlResult | null>(null);
   const rowAskedFor = useRef(false);
   useEffect(() => {
@@ -188,7 +188,8 @@ export function ControlCard(props: {
   /**
    * One review per submit: sent once /api/me confirms the Team the card was opened in. Its answer may land after the
    * card has gone (✕, or another Control focused): the card's own state is then dropped with it, and only the row of
-   * the focus it was sent from is asked for again.
+   * the focus it was sent from is asked for again. A stored review tells that focus its Done words, which the page says
+   * if the Control then leaves its answer.
    */
   async function send(body: ReviewBody) {
     if (sendingNow.current) return;
@@ -200,14 +201,17 @@ export function ControlCard(props: {
     sendingNow.current = false;
     setSending(false);
     switch (answer.kind) {
-      case "reviewed":
+      case "reviewed": {
+        const done = reviewDoneWords(body);
         rowAskedFor.current = true;
         setResult(() => ({ kind: "control", detail: answer.detail }));
         setForm(null);
-        setLine({ kind: "done", text: reviewDoneWords(body) });
+        setLine({ kind: "done", text: done });
         focusNext.current = "line";
+        onReviewed(done);
         refreshRow();
         return;
+      }
       case "maybe-saved":
         refused(MAYBE_REVIEWED);
         rowAskedFor.current = true;

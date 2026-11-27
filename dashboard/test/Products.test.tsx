@@ -66,7 +66,7 @@ function renderProducts(role: Role, routes: Routes = {}) {
     me: { userId: "user_1", team: "org_a", role, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
-    panel: { setContext: vi.fn(), open: vi.fn() },
+    panel: { setContext: vi.fn(), open: vi.fn(), uncover: vi.fn() },
   };
   const page = render(<ProductsPage {...props} />);
   const rerender = (me: { team?: string; role?: Role }, getToken = props.getToken) =>
