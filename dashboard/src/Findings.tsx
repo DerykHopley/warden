@@ -206,7 +206,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
           {findings.length === 0 ? (
             <NoFindingsLine getToken={getToken} role={me.role} onSessionEnded={onSessionEnded} />
           ) : (
-            <ScanLine role={me.role} />
+            <FindingsScanLine getToken={getToken} role={me.role} onSessionEnded={onSessionEnded} />
           )}
           <TopFive
             findings={topFive(findings)}
@@ -261,15 +261,16 @@ function LevelLine({ level }: { level: Level }) {
   );
 }
 
+/** A line under the summary that reads the Team's repos. */
+type ReposLineProps = Pick<PageProps, "getToken" | "onSessionEnded"> & { role: Role | null };
+
 /**
  * With no Findings, the line under the summary that says how the first Findings come. While the Team has no linked
  * repos, an Admin gets the link to connect GitHub on Setup, and a Lead or Member is told who connects it; with linked
  * repos, it's the Scan now line. Nothing while the repos are asked for, or when they can't be read: the line is a
  * pointer, and the summary already says there are no Findings.
  */
-function NoFindingsLine(
-  props: Pick<PageProps, "getToken" | "onSessionEnded"> & { role: Role | null },
-) {
+function NoFindingsLine(props: ReposLineProps) {
   const { getToken } = props;
   const ask = useCallback(() => fetchRepos(getToken), [getToken]);
   const repos = useWardenCall<ReposResult>(ask, props.onSessionEnded);
@@ -283,6 +284,26 @@ function NoFindingsLine(
       Connect GitHub on <a href="/setup">Setup</a> to run the first Scan.
     </p>
   );
+}
+
+/**
+ * With Findings, the Scan now line, by the same rule as with none (#349): only once the Team's repos answer with at least
+ * one linked repo, since Setup has nothing to Scan without one. Nothing while they're asked for, or when they can't be
+ * read. A Member starts no Scan, so the repos aren't asked for.
+ */
+function FindingsScanLine(props: ReposLineProps) {
+  if (!startsScans(props.role)) return null;
+  return <ScanLineOnceLinked {...props} />;
+}
+
+/** Its own component, so the repos are asked for only once the Role is known to start Scans. */
+function ScanLineOnceLinked(props: ReposLineProps) {
+  const { getToken } = props;
+  const ask = useCallback(() => fetchRepos(getToken), [getToken]);
+  const repos = useWardenCall<ReposResult>(ask, props.onSessionEnded);
+  if (repos.result === "loading" || repos.result.kind !== "repos") return null;
+  if (repos.result.repos.length === 0) return null;
+  return <ScanLine role={props.role} />;
 }
 
 /**
