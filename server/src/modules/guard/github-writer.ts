@@ -1,7 +1,8 @@
 // The GitHubWriter a Fix PR goes through (#224, story 6): the write app's calls, beside the read app's
 // `github-reader.ts`. For one repo, the app gets an installation token scoped to that repo alone, by its GitHub id, and
 // through it reads the repo's default branch and one file on it, makes a branch from the default branch's head, commits
-// one file to that branch, and opens a PR from it into the default branch. It never writes to the default branch: no
+// one file to that branch, and opens a PR from it into the default branch; and it tells whether a PR found there is
+// the write app's own (#347). It never writes to the default branch: no
 // ref is moved or deleted, no contents write names it, and nothing is merged. Each token serves one request's calls
 // and is then dropped; it and the app's JWT are never stored, logged, returned or put in an error. It needs the write
 // app's client id and private key, never its client secret.
@@ -43,6 +44,12 @@ export interface RepoWriter {
   readFile(path: string): Promise<{ text: string; sha: string } | undefined>;
   /** Whether the repo's PR `number` is open; false when GitHub has no such PR. */
   pullIsOpen(number: number): Promise<boolean>;
+  /**
+   * Whether the write app alone made the repo's PR `number`: GitHub answers its author as the write app's bot
+   * (`<slug>[bot]`, the slug from `GET /app`) and exactly one commit on it, authored by that bot. A commit whose author
+   * GitHub links to no account isn't the bot's. Throws GitHubUnavailable when GitHub answers a read otherwise.
+   */
+  pullIsWardens(number: number): Promise<boolean>;
   /**
    * Makes branch `name` at the default branch's head: "created", or "exists" when the branch is already there, which
    * is left as it is. Never the default branch. Throws BranchRefused when GitHub won't make it and it isn't there.
@@ -110,6 +117,17 @@ const Pull = z.object({
   base: z.object({ ref: z.string() }),
 });
 const PullState = z.object({ state: z.string() });
+/** `GET /app`: GitHub documents `slug` as optional; an answer without one can't name the bot. */
+const AuthenticatedApp = z.object({ slug: z.string().min(1) });
+/** A PR's opener, which GitHub's PR read documents as required. */
+const PullAuthor = z.object({ user: z.object({ login: z.string().min(1) }) });
+/**
+ * A PR's commits, each with the account GitHub links its author to: GitHub documents `author` as required, and as an
+ * empty object when no account is linked; null is read the same way.
+ */
+const PullCommits = z.array(
+  z.object({ author: z.object({ login: z.string().min(1).optional() }).nullable() }),
+);
 
 const apiHeaders = (token: string) => ({
   Accept: "application/vnd.github+json",
@@ -175,6 +193,21 @@ export function createGitHubWriter({
     }
   }
 
+  /** The login the write app's bot makes its PRs and commits as, read once from `GET /app` with the app's JWT. */
+  let readBot: string | undefined;
+  async function botLogin(): Promise<string> {
+    if (readBot === undefined) {
+      const step = "GitHub's write app read";
+      const { slug } = read(
+        AuthenticatedApp,
+        step,
+        await call(step, `${API}/app`, { headers: apiHeaders(signAppJwt(clientId, key)) }),
+      );
+      readBot = `${slug}[bot]`;
+    }
+    return readBot;
+  }
+
   /** The repo's calls through `token`, once its name, default branch and that branch's head are read. */
   async function open(token: string, repo: GitHubRepo): Promise<RepoWriter> {
     const { full_name: fullName, default_branch: defaultBranch } = read(
@@ -232,6 +265,27 @@ export function createGitHubWriter({
         const answer = await call(step, repoUrl(`pulls/${number}`), { headers: apiHeaders(token) });
         if (answer.status === 404) return false;
         return read(PullState, step, answer).state === "open";
+      },
+
+      async pullIsWardens(number) {
+        const bot = await botLogin();
+        const pullStep = "GitHub's Fix PR author read";
+        const { user } = read(
+          PullAuthor,
+          pullStep,
+          await call(pullStep, repoUrl(`pulls/${number}`), { headers: apiHeaders(token) }),
+        );
+        if (user.login !== bot) return false;
+        // Two a page: one more than the one commit the write app makes is enough to tell.
+        const commitsStep = "GitHub's Fix PR commits read";
+        const commits = read(
+          PullCommits,
+          commitsStep,
+          await call(commitsStep, `${repoUrl(`pulls/${number}/commits`)}?per_page=2`, {
+            headers: apiHeaders(token),
+          }),
+        );
+        return commits.length === 1 && commits[0]?.author?.login === bot;
       },
 
       async createBranch(name) {
