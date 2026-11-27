@@ -69,7 +69,7 @@ function props(role: Role) {
     me: { userId: "user_1", team: "org_a", role, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
-    panel: { setContext: vi.fn(), open: vi.fn() },
+    panel: { setContext: vi.fn(), open: vi.fn(), uncover: vi.fn() },
   };
 }
 

@@ -206,6 +206,10 @@ export function controlInAddress(search: string): ControlInAddress {
   return catalogue && ref ? { catalogue, ref } : null;
 }
 
+/** Whether `control` names the Control `other` is: the same Catalogue and ref (a row is one). */
+export const namesControl = (control: ControlInAddress, other: NonNullable<ControlInAddress>) =>
+  control?.catalogue === other.catalogue && control.ref === other.ref;
+
 /**
  * The address's query with `control` in focus (`?catalogue=vda-isa-2027.1&control=1.3.3`), or with none: only those
  * two params change, the others stay as they are, and a query that already says so comes back unchanged.
@@ -216,7 +220,7 @@ export function searchWithControl(search: string, control: ControlInAddress): st
   const unchanged =
     control === null
       ? !query.has("catalogue") && !query.has("control")
-      : current?.catalogue === control.catalogue && current.ref === control.ref;
+      : namesControl(current, control);
   if (unchanged) return search;
   if (control === null) {
     query.delete("catalogue");
@@ -236,10 +240,34 @@ export function focusedControl(
 ): { catalogue: AuditCatalogue; control: AuditControl } | null {
   if (control === null) return null;
   const catalogue = audit.catalogues.find(({ id }) => id === control.catalogue);
-  const row = audit.controls.find(
-    (row) => row.catalogue === control.catalogue && row.ref === control.ref,
-  );
+  const row = audit.controls.find((row) => namesControl(control, row));
   return catalogue === undefined || row === undefined ? null : { catalogue, control: row };
+}
+
+/** A focused Control as the answer held it: its Catalogue and its row. */
+export type FocusedControl = NonNullable<ReturnType<typeof focusedControl>>;
+
+/**
+ * The Overview's notice when an answer asked for again no longer holds the focused Control `gone` (#395), naming it by
+ * its ref: with `done`, the Done words of a review the card stored, that it's stored; then why the Overview no longer
+ * shows it, naming its Catalogue when `audit` no longer lists that.
+ */
+export function controlGoneNotice(
+  gone: FocusedControl,
+  audit: AuditAnswer,
+  done: string | null,
+): string {
+  const { ref } = gone.control;
+  const off = audit.catalogues.every(({ id }) => id !== gone.catalogue.id);
+  const name = gone.catalogue.name;
+  if (done !== null) {
+    return off
+      ? `${done} Your review of ${ref} is stored, but ${name} is off now, so the Overview doesn't show it.`
+      : `${done} Your review of ${ref} is stored, but the Overview no longer shows it.`;
+  }
+  return off
+    ? `${ref} is no longer on the Overview: ${name} is off now.`
+    : `${ref} is no longer on the Overview.`;
 }
 
 /** Whether a row says what the Control's read says: the same Verdicts and review state. */
