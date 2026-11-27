@@ -6,7 +6,7 @@
 // failures are Setup.test.tsx's.
 import { randomUUID } from "node:crypto";
 import type { APIRequestContext, Locator, Page } from "@playwright/test";
-import { HOOK_TOKEN_PLACEHOLDER } from "@warden/contracts";
+import { HOOK_TOKEN_PLACEHOLDER, PrivacyTier } from "@warden/contracts";
 import { HOOK_EVENTS_PATH } from "../server/src/modules/guard/managed-settings.ts";
 import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
 import { ADA, BARBARA, expect, GINKGO, seededHookTokens, test } from "./session.ts";
@@ -137,5 +137,43 @@ for (const width of WIDTHS) {
     await hook.getByRole("button", { name: "Rotate again" }).click();
     await expect(hook.locator("code.hook-token-value")).toBeVisible();
     await measure();
+  });
+}
+
+/**
+ * How much of `select`'s selected option the closed picker cuts off, in pixels (0: none). A select's scrollWidth
+ * doesn't grow with its text, so the browser measures it: a copy holding only that option, free of every width rule,
+ * sits beside it, and is as wide as the select must be to show the option whole.
+ */
+const clippedBy = (select: Locator) =>
+  select.evaluate((picker: HTMLSelectElement) => {
+    const copy = picker.cloneNode(false) as HTMLSelectElement;
+    copy.removeAttribute("id");
+    copy.append(picker.selectedOptions[0]!.cloneNode(true));
+    copy.style.cssText = "position: absolute; visibility: hidden; width: auto; max-width: none;";
+    picker.after(copy);
+    const needs = copy.getBoundingClientRect().width;
+    copy.remove();
+    return Math.max(0, Math.ceil(needs - picker.getBoundingClientRect().width));
+  });
+
+// A closed select shows its selected option on one line, which can't wrap: at 390px each tier's option fits inside the
+// picker (#422).
+for (const tier of PrivacyTier.options) {
+  test(`at 390px with the ${tier} tier picked, the closed Privacy tier picker shows its whole option`, async ({
+    page,
+    signIn,
+  }) => {
+    await signIn(ADA);
+    await page.route("**/api/hook", async (route) => {
+      const real = (await (await route.fetch()).json()) as Record<string, unknown>;
+      return route.fulfill({ json: { ...real, privacy_tier: tier } });
+    });
+    await page.setViewportSize({ width: 390, height: 900 });
+    await page.goto("/setup");
+    const picker = hookSection(page).getByRole("combobox", { name: "Privacy tier" });
+    await expect(picker).toHaveValue(tier);
+    await expectNoSidewaysScroll(page);
+    expect(await clippedBy(picker)).toBe(0);
   });
 }

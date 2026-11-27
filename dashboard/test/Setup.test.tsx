@@ -1319,15 +1319,24 @@ describe("SetupPage: Agent hook (story 7)", () => {
     expect(await hook().findByText("No hook token yet.")).toBeInTheDocument();
     expect(hook().getByRole("button", { name: "Issue a hook token" })).toHaveClass("primary");
     expect(picker()).toHaveValue("details");
+    // The options are the tiers' names, short enough for a phone's closed picker (#422); what each sends is listed
+    // under it, and describes the picker.
     expect(
       within(picker())
         .getAllByRole("option")
         .map((option) => option.textContent),
-    ).toEqual([
+    ).toEqual(["Metadata", "Details", "Content"]);
+    const tierWords = [
       "Metadata: tool names and outcomes",
       "Details: adds commands, file paths and URLs",
       "Content: adds tool output and prompts",
-    ]);
+    ];
+    expect(
+      within(hook().getByRole("list", { name: "What each Privacy tier sends" }))
+        .getAllByRole("listitem")
+        .map((item) => item.textContent),
+    ).toEqual(tierWords);
+    expect(picker()).toHaveAccessibleDescription(tierWords.join(" "));
     expect(
       hook().getByText("Moving to or from Content changes the block: paste it again."),
     ).toBeInTheDocument();
