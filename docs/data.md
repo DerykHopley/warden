@@ -50,7 +50,7 @@ Where this document and an ADR disagree, the ADR wins.
 | The developer's laptop | Claude Code's managed hook settings: Warden's URL, the Team's hook token, which events the hook sends, and the developer's `$USER` in the `X-Warden-Developer` header. Where a laptop runs safeagents, its `scrub` cleans events before they leave | Team (the settings); the developer (the events) | The developer's laptop | While the Admin keeps the managed settings in place | The Admin removes the managed settings; a rotated token stops working after 24 hours | Built: the managed settings, which an Admin reads from `GET /api/hook` and pastes in (Guard spec slice 9a-ii, #154). Built: the events endpoint they post to, `POST /api/hook/events` (#183). Designed: safeagents' `scrub` |
 | The person's browser: `localStorage` | One key, `warden.askWardenPanel`: the Ask Warden panel's mode (closed, floating or pinned) and its pinned width, as the person last chose them. Nothing about a Team, a Finding or a chat | The person | The browser they open Warden in, for Warden's origin | Until the browser's site data is cleared | The person clears the site's data in their browser; Warden never sends it to the server or anywhere else | Built: slice 9b (#49) |
 | The person's browser: `sessionStorage` | One key, `warden.githubSignIn`: one GitHub sign-in attempt (the PKCE verifier, the `state`, and the installation id), kept between leaving for GitHub and coming back. Only the verifier goes to Warden, with GitHub's code and the installation id, to link the installation; the `state` stays in the browser | The person | The tab they started the sign-in in, for Warden's origin | Until the callback page reads it, or the tab closes. Put back once when the session had ended before the code reached Warden, so the link can finish after signing in again | Read and removed by the callback page; closing the tab | Built: connecting GitHub from Setup (Guard spec, #174) |
-| The local keyring (development only) | Development copies of keys, read by a committed `.envrc`: Clerk's keys, and the read-only GitHub App's client id, client secret and private key (services `warden-github-app-client-id`, `warden-github-app-client-secret` and `warden-github-app-private-key`), and the write GitHub App's (services `warden-github-write-app-client-id`, `warden-github-write-app-client-secret` and `warden-github-write-app-private-key`); OpenRouter and others later | The person developing Warden | The developer's own system keyring | While the developer needs them | `secret-tool clear service <name>` | Built: slice 1a (#4: `.envrc` and `.env.example`); the GitHub App's three (Guard spec slice 2b-i, #131); the write GitHub App's three (#294) |
+| The local keyring (development only) | Development copies of keys, read by a committed `.envrc`: Clerk's keys, and the read-only GitHub App's client id, client secret and private key (services `warden-github-app-client-id`, `warden-github-app-client-secret` and `warden-github-app-private-key`), and the write GitHub App's (services `warden-github-write-app-client-id`, `warden-github-write-app-client-secret` and `warden-github-write-app-private-key`), and the agent hook's own local pseudonym key (service `warden-pseudonym-key`, loaded as `WARDEN_PSEUDONYM_KEY`, a random value the developer makes once, never the live or preview key); OpenRouter and others later | The person developing Warden | The developer's own system keyring | While the developer needs them | `secret-tool clear service <name>` | Built: slice 1a (#4: `.envrc` and `.env.example`); the GitHub App's three (Guard spec slice 2b-i, #131); the write GitHub App's three (#294); the pseudonym key (#185) |
 
 Warden itself sends no product telemetry anywhere.
 
@@ -211,11 +211,12 @@ Every other field is dropped. The bounds at Details and Content (#184):
 **Redaction on arrival (built, #184).** What the tier keeps is redacted before it's stored, at every tier: every
 string value and every object key, at any depth, in this order.
 
-1. **The home folder becomes `~`:** `/home/<name>`, `/var/home/<name>`, `/Users/<name>` and `<drive>:\Users\<name>`,
-   in any case (macOS ignores it), with `/`, `\`, doubled or JSON-escaped separators, wherever the path is in the
-   string: a command, straight after a flag (`-I/home/<name>`), deeper in another path, a `file://` URL. A web URL's
-   own path (`https://example.com/home/x`) is left as it is. `<name>` runs to the next separator, whitespace, quote
-   or shell operator. Claude Code's encoded project folder after `.claude/projects/` that starts with an encoded home
+1. **The home folder becomes `~`:** `/home/<name>`, `/var/home/<name>`, `/Users/<name>` (also after git-bash's `/c`
+   at a path's start, or WSL's `/mnt/c`) and `<drive>:\Users\<name>` (also after a long path's `\\?\`), in any case (macOS ignores it),
+   with `/`, `\`, doubled or JSON-escaped separators, wherever the path is in the string: a command, straight after a
+   flag (`-I/home/<name>`), deeper in another path, inside or after any URL (`file://`, `vscode://`, `ssh://`, and a
+   web URL's own path, `https://example.com/home/x`, too). `<name>` runs to the next separator, whitespace, quote,
+   shell operator or a URL's `?`, `#`, `&` or `=`, so a query after it is still masked. Claude Code's encoded project folder after `.claude/projects/` that starts with an encoded home
    folder (`-home-`, `-var-home-`, `-Users-`, `C--Users-`, in any case) becomes `~` whole. The developer's name
    elsewhere (a shell prompt, `whoami` output) isn't masked.
 2. **Guard's nine secret types** (`maskSecrets`, over the patterns the secret Rules use) become their mask: the
@@ -223,6 +224,9 @@ string value and every object key, at any depth, in this order.
    through its matching `END` line, or to the string's end.
 3. **The log redactor's patterns:** Bearer tokens, JWTs, `sk_test_` keys, a Postgres URL's password and URL query
    values.
+
+Two keys of one object that redact to the same text are both kept, the later one numbered (`~/a`, `~/a (2)`), so no
+value is lost.
 
 Claude Code's hook sends every field of each event it's set for: a tool event always carries the tool's input
 (its command, path or URL), and its result carries the tool's output. So the tier is kept in two places: the

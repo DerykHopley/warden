@@ -13,29 +13,34 @@ import { maskSecrets } from "./secrets.ts";
  */
 const SEP = String.raw`[/\\]+`;
 
-/**
- * A user name: one path segment, up to the next separator, whitespace, quote, shell operator or the string's end.
- * None of these can be in a user name on Linux, macOS or Windows, so the name is masked whole.
- */
-const NAME = String.raw`[^/\\\s"'\x60;:,|&<>()\[\]{}=]+`;
+/** What ends a path segment: whitespace, a quote, a shell operator, and a URL's `?`, `#`, `&` and `=`. */
+const SEGMENT_END = String.raw`\s"'\x60;:,|&<>()\[\]{}=?#`;
 
 /**
- * A URL from its scheme through its path: `scheme://host` (or `scheme:\/\/host`, JSON-escaped), then anything up to
- * whitespace, a quote or a shell operator. A home folder in it is part of the URL's path, not the person's machine,
- * so it's left as it is. A `file:///home/<name>` has no host, so it isn't one. It starts only where a word starts,
- * so a long word is scanned once.
+ * A user name: one path segment, up to the next separator, a segment's end or the string's end. None of these can be
+ * in a user name on Linux, macOS or Windows, so the name is masked whole, and a URL's query after it (`?token=…`)
+ * stays for the log redactor to mask.
  */
-const WEB_URL = String.raw`(?<![\w+.-])[a-z][\w+.-]*:(?://|\\/\\/)[^/\\\s"'\x60<>;|&]+[^\s"'\x60<>;|&]*`;
+const NAME = String.raw`[^/\\${SEGMENT_END}]+`;
 
 /**
- * A home folder, with its user name, in any case (macOS ignores it): `/home/<name>`, `/var/home/<name>` and
- * `/Users/<name>`, wherever it starts, and `<drive>:\Users\<name>`. A match starts only at a run of separators'
- * first one, so a long run is scanned once.
+ * Git-bash's `/c` at a path's start (after the string's start or a segment's end, never after a folder, so
+ * `/srv/a/home/<name>` keeps its `/a`), or WSL's `/mnt/c`. The drive letter follows a `/`, so a JSON-escaped `\n`
+ * before a path stays.
  */
-const HOME = String.raw`(?<![/\\])(?:${SEP}var)?${SEP}(?:home|users)${SEP}${NAME}|(?<![a-z0-9])[a-z]:${SEP}users${SEP}${NAME}`;
+const DRIVE_FOLDER = String.raw`${SEP}mnt[/\\]*/[a-z]|(?<![^${SEGMENT_END}])[/\\]*/[a-z]`;
 
-/** A URL (group 1, kept) or a home folder (masked), whichever starts first, so no home folder inside a URL matches. */
-const HOME_FOLDER = new RegExp(String.raw`(${WEB_URL})|${HOME}`, "gi");
+/**
+ * A home folder, with its user name, in any case (macOS ignores it), wherever it starts, a URL's path included (the
+ * person's name is masked there too): `/home/<name>`, `/var/home/<name>` and `/Users/<name>`, also after git-bash's
+ * `/c` or WSL's `/mnt/c`, and `<drive>:\Users\<name>`, also after a long path's `\\?\`. A match starts only at a run
+ * of separators' first one, or at a drive letter, so a long run is scanned once.
+ */
+const HOME_FOLDER = new RegExp(
+  String.raw`(?<![/\\])(?:${SEP}var|${DRIVE_FOLDER})?${SEP}(?:home|users)${SEP}${NAME}` +
+    String.raw`|(?<![a-z0-9])(?:(?<![/\\])${SEP}\?${SEP})?[a-z]:${SEP}users${SEP}${NAME}`,
+  "gi",
+);
 
 /**
  * Claude Code's encoded project folder (the one right after `.claude/projects/`) when it starts with an encoded
@@ -48,20 +53,39 @@ const ENCODED_PROJECT = new RegExp(
 
 /** `text` redacted: the home folder becomes `~`, then Guard's secrets are masked, then the log redactor's patterns. */
 function redactText(text: string): string {
-  const homeless = text
-    .replace(HOME_FOLDER, (_match, url: string | undefined) => url ?? "~")
-    .replace(ENCODED_PROJECT, "$1~");
+  const homeless = text.replace(HOME_FOLDER, "~").replace(ENCODED_PROJECT, "$1~");
   return redactString(maskSecrets(homeless));
+}
+
+/**
+ * `value`'s keys redacted, each kept apart: a key that redacts to one already taken (`/home/alice/a` and
+ * `/home/bob/a` both become `~/a`) is numbered, `~/a (2)`, then `~/a (3)`, so no value is lost (#435). Each text's
+ * next number is remembered, so many keys masking alike are numbered in one pass.
+ */
+function distinctKeys(keys: string[]): string[] {
+  const taken = new Set<string>();
+  const nextNumber = new Map<string, number>();
+  return keys.map((key) => {
+    let distinct = redactText(key);
+    if (taken.has(distinct)) {
+      let n = nextNumber.get(distinct) ?? 2;
+      while (taken.has(`${distinct} (${n})`)) n++;
+      nextNumber.set(distinct, n + 1);
+      distinct = `${distinct} (${n})`;
+    }
+    taken.add(distinct);
+    return distinct;
+  });
 }
 
 function redactValue(value: JsonValue): JsonValue {
   if (typeof value === "string") return redactText(value);
   if (value === null || typeof value !== "object") return value;
   if (Array.isArray(value)) return value.map(redactValue);
+  const entries = Object.entries(value);
+  const keys = distinctKeys(entries.map(([key]) => key));
   // `Object.fromEntries` keeps a `__proto__` key an ordinary key, so the copy's prototype is always Object.prototype.
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [redactText(key), redactValue(item)]),
-  );
+  return Object.fromEntries(entries.map(([, item], i) => [keys[i], redactValue(item)]));
 }
 
 /**

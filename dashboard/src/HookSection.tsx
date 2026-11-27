@@ -142,6 +142,8 @@ function HookSettings({
 
   const pickerId = useId();
   const tierWordsId = useId();
+  /** The id of `tier`'s line in the list under the picker. */
+  const tierLineId = (tier: PrivacyTier) => `${tierWordsId}-${tier}`;
   const blockHeadingId = useId();
   const questionId = useId();
 
@@ -349,7 +351,8 @@ function HookSettings({
           // Still while the confirm is open too, so its words and Rotate's state can't change under it.
           disabled={changing || confirmOpen}
           aria-busy={pendingTier !== null}
-          aria-describedby={tierWordsId}
+          // The three lines, not the list: a browser reads a described list by its label, not its lines (#436).
+          aria-describedby={PrivacyTier.options.map(tierLineId).join(" ")}
           onChange={(event) => void changeTier(PrivacyTier.parse(event.target.value))}
         >
           {PrivacyTier.options.map((tier) => (
@@ -358,13 +361,11 @@ function HookSettings({
             </option>
           ))}
         </select>
-        <ul
-          id={tierWordsId}
-          className="hook-tier-words muted"
-          aria-label="What each Privacy tier sends"
-        >
+        <ul className="hook-tier-words muted" aria-label="What each Privacy tier sends">
           {PrivacyTier.options.map((tier) => (
-            <li key={tier}>{TIER_WORDS[tier]}</li>
+            <li key={tier} id={tierLineId(tier)}>
+              {TIER_WORDS[tier]}
+            </li>
           ))}
         </ul>
         <p className="muted">Moving to or from Content changes the block: paste it again.</p>

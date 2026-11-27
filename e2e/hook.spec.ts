@@ -157,6 +157,20 @@ const clippedBy = (select: Locator) =>
     return Math.max(0, Math.ceil(needs - picker.getBoundingClientRect().width));
   });
 
+// A screen reader hears the three tier lines as the picker's description, computed as a browser does (#436).
+test("the Privacy tier picker's accessible description is what each tier sends", async ({
+  page,
+  signIn,
+}) => {
+  await signIn(ADA);
+  await page.goto("/setup");
+  await expect(
+    hookSection(page).getByRole("combobox", { name: "Privacy tier" }),
+  ).toHaveAccessibleDescription(
+    "Metadata: tool names and outcomes Details: adds commands, file paths and URLs Content: adds tool output and prompts",
+  );
+});
+
 // A closed select shows its selected option on one line, which can't wrap: at 390px each tier's option fits inside the
 // picker (#422).
 for (const tier of PrivacyTier.options) {
