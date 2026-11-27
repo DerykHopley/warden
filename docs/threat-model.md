@@ -152,7 +152,7 @@ settled on ticket #5.
 | H8 | Secrets or personal data stored from event content | I | Anyone with database access; the operator | Secrets, prompts or names kept | Redacted on arrival, at every Privacy tier, including the home folder name in `cwd`, `transcript_path`, and every path in the tool input and tool output. Fields above the Team's Privacy tier are dropped before anything is stored | Guard spec | Built: `filterToTier` keeps each tier's allow-list and drops every other field; `redactEvent` turns the home folder into `~`, masks Guard's nine secret types (a private key as a whole block) and applies the log redactor's patterns in every string and key, at every tier, before `agent_events` is written (#184) | ADR 0007, SD redaction on output |
 | H9 | Events kept longer than needed | I | Anyone who reaches the database later | More data to leak | Judge, then drop: events kept only until judged and at most 7 days; a daily job deletes the rest (`data.md`) | Guard spec | Designed | ADR 0007, SD retention |
 | H10 | A developer forges or floods their own Team's events, or sends another developer's identifier | S, R | A developer in the Team | False or hidden sessions in their own Team | Accepted residual risk: it costs the Team's own budget, the limits in H6 cap it, and it shows in the session records | Guard spec | Designed | ADR 0007 |
-| H11 | A developer switches the hook off | R | A developer in the Team | Sessions go unseen | The hook is set in managed settings, which outrank a developer's own settings. A developer with admin rights on their laptop can still remove them: an accepted residual risk | Guard spec | Designed | ADR 0007 |
+| H11 | A developer switches the hook off | R | A developer in the Team | Sessions go unseen | The hook is set in managed settings, which outrank a developer's own settings. A developer with admin rights on their laptop can still remove them: an accepted residual risk | Guard spec; the block: #415; checked: #416 | Built, and checked (#416, Claude Code 2.1.332 on Linux, in a container): with the block in `/etc/claude-code/managed-settings.json`, owned by root, an account without admin rights couldn't stop it. Every session still stored its events after `disableAllHooks: true` in `~/.claude/settings.json`, in a project's `.claude/settings.json` and in `.claude/settings.local.json`; empty `hooks` in those files; a `--settings` file; `--bare`; `--setting-sources ""`; and `allowedHttpHookUrls` or `httpHookAllowedEnvVars` in user settings. `/hooks` is read-only and doesn't list managed hooks, so it can't remove them. The control: the same block in the developer's own settings stopped at each of those switches | ADR 0007 |
 
 ### GitHub app (designed, Guard spec)
 
@@ -356,5 +356,7 @@ Every default in `docs/secure-defaults.md`, and the row that carries it.
 8. **Closed: recovery logs keep 6 days beside 7 backups** (#16). Cloud SQL requires the log setting to be less than
    the backup count, so the setup script sets 6 days of recovery logs beside 7 backups, and the bounds in `data.md`
    hold.
-9. **Whether a managed hook resists a developer without admin rights** (Guard spec): checked on a real laptop,
-   since ADR 0007 relies on it.
+9. **Closed: a managed hook resists a developer without admin rights** (Guard spec; #416). Checked in a rootless
+   container with Claude Code 2.1.332: with the block as the managed settings file, none of a non-admin account's
+   own settings, flags or the `/hooks` menu stopped a session's events reaching Warden (H11 lists each try). Only an
+   admin, who can edit the managed file, can remove it, which stays an accepted risk.
