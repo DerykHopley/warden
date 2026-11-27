@@ -10,7 +10,6 @@ import { lineWith } from "../../../test/text-lines.ts";
 import { agentConfigCheck } from "./agent-config.ts";
 import { packRule } from "./default-pack.ts";
 import type { RepoFile } from "./repo-reader.ts";
-import { ARCHIVE_LIMITS } from "./tarball.ts";
 
 const repo: Asset = { kind: "repo", ref: "https://github.com/example/app" };
 
@@ -954,64 +953,7 @@ describe("guard/permission-skip", () => {
       ]);
     });
 
-    /** A settings file of at most `ARCHIVE_LIMITS.fileBytes` whose one hook is `head`, `unit` repeated, then `tail`. */
-    const filled = (head: string, unit: string, tail: string) => {
-      const base = settings({}, hooks("Stop", head + tail)).length;
-      const units = Math.floor((ARCHIVE_LIMITS.fileBytes - base) / unitBytes(unit));
-      return settings({}, hooks("Stop", head + unit.repeat(units) + tail));
-    };
-    /** `head`, `first` repeated to fill about half of `ARCHIVE_LIMITS.fileBytes`, then `second` to fill the rest. */
-    const halves = (first: string, second: string, head = "") => {
-      const units = Math.floor(ARCHIVE_LIMITS.fileBytes / 2 / unitBytes(first));
-      return filled(head + first.repeat(units), second, "");
-    };
-    /** How many characters one more `unit` adds to a settings file's hook, its JSON escapes included. */
-    const unitBytes = (unit: string) =>
-      settings({}, hooks("Stop", unit)).length - settings({}, hooks("Stop", "")).length;
-
-    // On a laptop, main's parser read each of the first four in 25–55 ms and the fifth in 30–110 ms, where a read per
-    // shell's name took minutes; a parser that scanned again from the start for each run or backquote took seconds to
-    // minutes on the rest. The limit leaves room for a slow CI runner. A row with a kind also checks its Finding names it.
-    it.each<[name: string, text: string, kind?: string]>([
-      ["a wrapper then shells' names", filled("sudo ", "bash ", `claude ${FLAG}`)],
-      ["a wrapper then shells' -c strings", filled("sudo ", `bash "-c" 'x' `, `claude ${FLAG}`)],
-      ["shells after separators", filled("", "bash x;", "")],
-      ["shells' strings opening substitutions", filled("", `bash -c "$(`, "")],
-      ["a shell's string of quotes and escapes", filled("bash -c '' ", `'a' "b\\"" \\x `, "")],
-      ["agent runs after separators", filled("", "claude x;", "")],
-      ["agent runs with the flag after separators", filled("", `claude ${FLAG};`, ""), FLAG],
-      ["(s then backquotes", halves("(", "`")],
-      ["$(s then backquotes", halves("$(", "`")],
-      ["a backquote, (s, then escaped backquotes", halves("(", "\\`", "`")],
-      ["an unclosed backquote then agent runs", filled("`", "claude x;", "")],
-    ])("reads a 1 MiB hook of %s within a second", (_name, text, kind) => {
-      const started = performance.now();
-      const observations = see(path, text);
-
-      expect(performance.now() - started).toBeLessThan(1000);
-      if (kind !== undefined) {
-        expect(observations).toEqual([
-          expect.objectContaining({
-            rule_id: SKIP,
-            evidence: {
-              summary: expect.stringContaining(`skip the agent's permission checks (${kind})`),
-            },
-          }),
-        ]);
-      }
-    });
-
-    it.each([
-      ["an unclosed backquote", filled("`", "claude x;", "")],
-      ["an unclosed (", filled("(", "claude x;", "")],
-      ["a trailing backslash", filled("", "claude x;", "\\")],
-    ])(
-      "gives nothing for a 1 MiB hook of agent runs after %s, and doesn't throw",
-      (_name, text) => {
-        expect(see(path, text)).toEqual([]);
-      },
-    );
-
+    // The 1 MiB rows live with the corpus, in permission-skip-corpus.test.ts.
     it.each([
       ["no word after -c", "bash -c"],
       ["an empty string", "bash -c ''"],
