@@ -2,14 +2,18 @@
 // posts, with the Team's hook token, and stores what the Team's Privacy tier keeps of it, redacted (#184), under the
 // developer's pseudonym. Mounted by the app through `moduleRoutes` (ADR 0005), with no session sign-in: the hook token is the only
 // credential, and the Team comes from it alone, never from the body or another header (story 15, threat H2).
-// Nothing here logs (threat H7): the app's request line is the only line, and it holds no body, token or developer.
+// A stored SessionEnd starts the Judge run for its session (story 9, #444).
+// The endpoint writes one line of its own (threat H7): a Judge run that couldn't be started, with the Team and the
+// error only. Otherwise the app's request line is the only line, and no line holds a body, token, developer or
+// session id.
 import type { Context } from "hono";
 import { z } from "zod";
 import type { AppEnv, MountRoutes } from "../../app.ts";
 import { createAttemptLimit } from "../../attempt-limit.ts";
 import { setNewest } from "../../capped-map.ts";
+import type { Logger } from "../../log.ts";
 import { refusedBody } from "../../refused-body.ts";
-import { SESSION_ID_PATTERN, SESSION_ID_RULE } from "../../scans.ts";
+import { type JudgeJobStarter, SESSION_ID_PATTERN, SESSION_ID_RULE } from "../../scans.ts";
 import { clientAddress, createSignInLimit } from "../../sign-in-limit.ts";
 import type { AgentSessions } from "./agent-sessions.ts";
 import type { HookSettings } from "./hook-settings.ts";
@@ -112,6 +116,8 @@ export function hookEventRoutes({
   agentSessions,
   pseudonymKey,
   behindCloudRun,
+  startJudgeJob,
+  logger,
   now = Date.now,
 }: {
   hookSettings: HookSettings;
@@ -119,6 +125,10 @@ export function hookEventRoutes({
   /** The Warden pseudonym key (`WARDEN_PSEUDONYM_KEY`); without it the endpoint answers 503. */
   pseudonymKey?: Buffer;
   behindCloudRun: boolean;
+  /** Starts the Judge run for a stored SessionEnd; without it, a SessionEnd is stored and starts nothing. */
+  startJudgeJob?: JudgeJobStarter;
+  /** Where a Judge run that couldn't be started is written: the endpoint's one line of its own. */
+  logger: Logger;
   /** The limits' clock, in milliseconds: a test moves it. */
   now?: () => number;
 }): MountRoutes {
@@ -199,6 +209,19 @@ export function hookEventRoutes({
         // Not stored, so the refusals wait for the session's next event.
         if (refusedEvents > 0) refused.add(team, sessionId, refusedEvents);
         throw thrown;
+      }
+      if (name === "SessionEnd" && startJudgeJob !== undefined) {
+        // Awaited, not fired and forgotten: Cloud Run may throttle the instance's CPU once the answer is sent.
+        try {
+          await startJudgeJob({ sessionId, team });
+        } catch (error) {
+          // The event is stored, so the answer stays 204 and the sweep picks the session up. The endpoint's one line
+          // of its own: the Team and the error, never the session id, the body or the developer (threat H7).
+          logger.warn("The Judge run couldn't be started for an ended Agent session", {
+            team,
+            error,
+          });
+        }
       }
       return c.body(null, 204);
     });

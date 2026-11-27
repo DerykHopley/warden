@@ -85,6 +85,7 @@ it("opens one Open High Finding on the Agent session for a key sent to a pastebi
         agentSessions: createAgentSessions({ withTeam }),
         pseudonymKey: Buffer.alloc(32, 7),
         behindCloudRun: true,
+        logger: createLogger(() => {}),
       }),
     ],
   });

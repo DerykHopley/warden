@@ -80,6 +80,12 @@ export type AssetChecks = Partial<Record<Module, AssetCheck>>;
  */
 export type ScanJobStarter = (input: { scanId: string; team: string }) => Promise<void>;
 
+/**
+ * Starts the Scan Job as a Judge run for one ended Agent session, handing it only the session's id and Team (#444):
+ * the run reads the session's events from the database. Resolves once the Job is started, not when it ends.
+ */
+export type JudgeJobStarter = (input: { sessionId: string; team: string }) => Promise<void>;
+
 /** The variables the Scan Job takes its Scan from (ADR 0009): an execution's only override, a child's only own two. */
 export const SCAN_ID_VARIABLE = "WARDEN_SCAN_ID";
 export const TEAM_VARIABLE = "WARDEN_TEAM";

@@ -1,9 +1,10 @@
 // The Cloud Run starter, over a fake fetch: a token from the metadata server, then one jobs.run whose only override is
 // the Scan's id and Team. Each failure rejects, naming the step and the status, and never the token. A jobs.run that
-// times out or never answers rejects as unknown: Google may have started the execution.
+// times out or never answers rejects as unknown: Google may have started the execution. The Judge starter runs the
+// same Job with only the session's id and Team.
 import { describe, expect, it } from "vitest";
 import { rejection } from "../test/helpers.ts";
-import { cloudRunScanJobStarter } from "./cloud-run-scan-job-starter.ts";
+import { cloudRunJudgeJobStarter, cloudRunScanJobStarter } from "./cloud-run-scan-job-starter.ts";
 import type { Fetch } from "./http-call.ts";
 import { createLogger } from "./log.ts";
 import { ScanJobStartUnknown } from "./scans.ts";
@@ -216,4 +217,53 @@ describe("cloudRunScanJobStarter", () => {
       expect(error.message).not.toContain(TOKEN);
     },
   );
+});
+
+const SESSION = { sessionId: "sess-1", team: "org_a" };
+
+/** The Judge starter over `fake`, with its log lines. */
+function judgeStarter(fake: { fetch: Fetch }) {
+  const lines: string[] = [];
+  const start = cloudRunJudgeJobStarter({
+    job: JOB,
+    fetch: fake.fetch,
+    logger: createLogger((line) => lines.push(line)),
+  });
+  return { start, lines };
+}
+
+describe("cloudRunJudgeJobStarter (#444)", () => {
+  it("runs the same Job with only the session's id and Team as overrides, and no key", async () => {
+    const fake = fakeFetch();
+    const { start } = judgeStarter(fake);
+
+    await start(SESSION);
+
+    expect(fake.calls.map(({ url }) => url)).toEqual([TOKEN_URL, RUN_URL]);
+    const runCall = fake.calls[1]!;
+    expect(new Headers(runCall.init.headers).get("Authorization")).toBe(`Bearer ${TOKEN}`);
+    expect(JSON.parse(runCall.init.body as string)).toEqual({
+      overrides: {
+        containerOverrides: [
+          {
+            env: [
+              { name: "WARDEN_SESSION_ID", value: "sess-1" },
+              { name: "WARDEN_TEAM", value: "org_a" },
+            ],
+          },
+        ],
+      },
+    });
+  });
+
+  it("logs the Team and the operation jobs.run answered, never the session id", async () => {
+    const { start, lines } = judgeStarter(fakeFetch());
+
+    await start(SESSION);
+
+    expect(lines.map((line) => JSON.parse(line) as Record<string, unknown>)).toEqual([
+      expect.objectContaining({ severity: "INFO", team: "org_a", operation: OPERATION }),
+    ]);
+    for (const line of lines) expect(line).not.toContain(SESSION.sessionId);
+  });
 });
