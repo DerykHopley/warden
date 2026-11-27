@@ -522,7 +522,9 @@ function readWord(
   }
   if (!at.command) {
     const run = at.wrapped ? runOf(word, end) : undefined;
-    return run !== undefined ? [run, AFTER_COMMAND] : [undefined, at];
+    // A wrapper's search for its command word goes on past a shell's: that word may be an option's value (`sudo -u
+    // bash claude …`), and its run then reads no `-c` string.
+    return [run, run !== undefined && !run.shell ? AFTER_COMMAND : at];
   }
   const option = at.timeOptions.indexOf(word);
   if (option >= 0) return [undefined, { ...at, timeOptions: at.timeOptions.slice(option + 1) }];
@@ -565,15 +567,15 @@ function readWord(
  * line continuation joins the words either side. A word runs the agent or a shell when it is the command word (the
  * first of a command, past `NAME=value`, a redirect and reserved words such as `then` or `!`, and `time`'s `-p` and
  * `--`), the `time` program's command word (past its options and their values), or any later word after a wrapper
- * (`env`, `sudo`, `npx`, …). A word is a reserved word only before any assignment or redirect in its command; after
- * one, it is the command word, and `time` is the `time` program, as it is by path (`/usr/bin/time`). After the
- * reserved word `coproc`, a compound command is read as it is anywhere; any other word is its command word, unless a
- * compound command follows that word, which makes it the coprocess's name. An unescaped `#` at a word's start hides
- * the rest of its line. Each `(` and backquote starts a command, and its close restores where the word before it
- * stood; inside backquotes, an escaped backquote opens or closes a nested one. A backquote, `$(`, `<(` or `>(` inside
- * a word (`x=$(foo)bar`) doesn't end the word: it goes on after the close. After a `)` that closes nothing (a `case`
- * pattern's) or one whose `(` came after a command's word (a `case` pattern's `(a)`, a function's `()`), a command
- * starts; so it does after `function` and the name that follows it.
+ * (`env`, `sudo`, `npx`, …), up to the agent's word, past a shell's. A word is a reserved word only before any
+ * assignment or redirect in its command; after one, it is the command word, and `time` is the `time` program, as it is
+ * by path (`/usr/bin/time`). After the reserved word `coproc`, a compound command is read as it is anywhere; any other
+ * word is its command word, unless a compound command follows that word, which makes it the coprocess's name. An
+ * unescaped `#` at a word's start hides the rest of its line. Each `(` and backquote starts a command, and its close
+ * restores where the word before it stood; inside backquotes, an escaped backquote opens or closes a nested one. A
+ * backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the word: it goes on after the close. After
+ * a `)` that closes nothing (a `case` pattern's) or one whose `(` came after a command's word (a `case` pattern's
+ * `(a)`, a function's `()`), a command starts; so it does after `function` and the name that follows it.
  */
 function runStarts(masked: string): RunStart[] {
   const starts: RunStart[] = [];

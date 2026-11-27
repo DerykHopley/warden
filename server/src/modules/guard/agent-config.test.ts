@@ -851,6 +851,48 @@ describe("guard/permission-skip", () => {
       expect(skips(command)).toEqual(onePlaceIn(command));
     });
 
+    const SHELLS = ["sh", "bash", "zsh", "dash"];
+
+    // A shell's name as a wrapper option's value doesn't end the wrapper's search: the agent word after it is the run.
+    it.each(
+      SHELLS.flatMap((shell) => [
+        `env -C /bin/${shell} claude ${FLAG}`,
+        `exec -a ${shell} claude ${FLAG}`,
+        `sudo -u ${shell} claude ${FLAG}`,
+        `xargs -I ${shell} claude ${FLAG}`,
+        `npx -p ${shell} claude ${FLAG}`,
+        `bunx -p ${shell} claude ${FLAG}`,
+        `pnpm -C /bin/${shell} claude ${FLAG}`,
+        `yarn --cwd /bin/${shell} claude ${FLAG}`,
+      ]),
+    )(
+      "reports a run of the agent after a shell's name as a wrapper option's value: %s",
+      (command) => {
+        expect(skips(command)).toEqual(onePlaceIn(command));
+      },
+    );
+
+    it("reads a wrapped shell's -c string after a shell's name as a wrapper option's value", () => {
+      const command = `sudo -u sh bash -c 'claude ${FLAG}'`;
+
+      expect(skips(command)).toEqual(onePlaceIn(command));
+    });
+
+    // A wrapped shell running a script named `claude` is reported, as an agent word after a wrapper always is.
+    it.each(
+      SHELLS.flatMap((shell) => [
+        `env ${shell} claude ${FLAG}`,
+        `sudo ${shell} claude ${FLAG}`,
+        `sudo ${shell} -c x claude ${FLAG}`,
+        `command ${shell} claude ${FLAG}`,
+        `nohup ${shell} claude ${FLAG}`,
+        `nice -n 10 ${shell} claude ${FLAG}`,
+        `timeout 60 ${shell} claude ${FLAG}`,
+      ]),
+    )("reports an agent word after a wrapped shell: %s", (command) => {
+      expect(skips(command)).toEqual(onePlaceIn(command));
+    });
+
     it("counts a run in a shell's -c string and one among its arguments as a place each", () => {
       const command = `bash -c 'claude ${FLAG}' $(claude ${FLAG})`;
       const line = lineWith(settings({}, hooks("Stop", command)), '"command":');
