@@ -1,0 +1,2091 @@
+<!doctype html>
+<!--
+  PROTOTYPE, throwaway. Branch prototype/job-board-design, never main.
+  Question: does a "board" layout like Vercel Board's acme-db inspector (a rail of places, a dense status list,
+  a detail pane with its one decision on top and the conversation under it) suit Warden, with a little more colour,
+  on a phone, a laptop and a wide desktop window?
+  Three variants on one page, switched with ?variant=A|B|C (or the bar at the bottom, or ← →):
+    A Board  - three panes: rail · list with status tabs · detail + Ask Warden
+    B Lanes  - the same rail, the list split into status lanes (columns)
+    C Desk   - no rail: a "Waiting on you" strip of every decision across modules, then list + detail
+  Pages: ?page=findings|overview|setup. Data: the demo seed's Findings and VDA ISA 2027.1 Controls, in memory only.
+  Run: pnpm prototype:board  (serves this folder on http://127.0.0.1:5181)
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Warden board prototype</title>
+    <style>
+      :root {
+        /* Kept from docs/design.md (E) */
+        --bg: #f7f5f0;
+        --surface: #fffefb;
+        --fg: #26241f;
+        --muted: #69655c;
+        --line: #e6e1d6;
+        --chip: #f0ebe1;
+        --accent: #36569a;
+        --accent-fg: #fff;
+        --focus-bg: #eef2f8;
+        --focus-line: #cdd8ea;
+        --ok: #2f7a4b;
+        --font-head: "Iowan Old Style", "Charter", "Georgia", serif;
+        --font-body: "Inter", "Segoe UI", system-ui, sans-serif;
+        --font-mono: "JetBrains Mono", ui-monospace, monospace;
+        --radius: 10px;
+        --shadow: 0 1px 2px rgba(60, 50, 30, 0.06), 0 4px 14px rgba(60, 50, 30, 0.05);
+        /* Changed: severities carry more colour (Medium is blue, Low is olive, not two greys) */
+        --sev-crit: #a3241c;
+        --tint-crit: #fbe0dc;
+        --sev-high: #9a4a06;
+        --tint-high: #fde9d2;
+        --sev-med: #24618f;
+        --tint-med: #e0ecf7;
+        --sev-low: #4f6527;
+        --tint-low: #e9f0dc;
+        /* New: one hue per module, for its dot, chip and row stripe */
+        --mod-guard: #1f7471;
+        --tint-guard: #dcefed;
+        --mod-patch: #6243a0;
+        --tint-patch: #ebe4f6;
+        --mod-vouch: #95600b;
+        --tint-vouch: #f7ead2;
+        /* New: one hue per Status / review state, always with its word and icon */
+        --st-open: #36569a;
+        --st-wait: #9a5c00;
+        --tint-wait: #fcefd6;
+        --st-fixed: #2f7a4b;
+        --tint-fixed: #def0e3;
+        --st-accepted: #5a4f9c;
+        --st-fp: #69655c;
+        /* New: the rail and the page header band */
+        --rail: #efe9dc;
+        --rail-hover: #e6dfcf;
+        --band: linear-gradient(90deg, #e9eef8 0%, #f3eef8 45%, #f7f1e6 100%);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #1d1c1a;
+          --surface: #262421;
+          --fg: #ece7dc;
+          --muted: #a6a093;
+          --line: #3a3732;
+          --chip: #302d29;
+          --accent: #a3b9e6;
+          --accent-fg: #1d1c1a;
+          --focus-bg: #252b36;
+          --focus-line: #38465c;
+          --ok: #8fc19c;
+          --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 4px 14px rgba(0, 0, 0, 0.18);
+          --sev-crit: #f0a097;
+          --tint-crit: #43231f;
+          --sev-high: #f0b878;
+          --tint-high: #40301c;
+          --sev-med: #9cc6ec;
+          --tint-med: #1f3042;
+          --sev-low: #b9d38b;
+          --tint-low: #2a3420;
+          --mod-guard: #7fd0c9;
+          --tint-guard: #1c3634;
+          --mod-patch: #c4adf0;
+          --tint-patch: #2f2642;
+          --mod-vouch: #e8bd6f;
+          --tint-vouch: #3b2e18;
+          --st-open: #a3b9e6;
+          --st-wait: #ecbd63;
+          --tint-wait: #3d301a;
+          --st-fixed: #8fc19c;
+          --tint-fixed: #1f3426;
+          --st-accepted: #b9b0ef;
+          --st-fp: #a6a093;
+          --rail: #222120;
+          --rail-hover: #2d2b28;
+          --band: linear-gradient(90deg, #232a38 0%, #2a2535 45%, #2d2820 100%);
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #1d1c1a;
+        --surface: #262421;
+        --fg: #ece7dc;
+        --muted: #a6a093;
+        --line: #3a3732;
+        --chip: #302d29;
+        --accent: #a3b9e6;
+        --accent-fg: #1d1c1a;
+        --focus-bg: #252b36;
+        --focus-line: #38465c;
+        --ok: #8fc19c;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.25), 0 4px 14px rgba(0, 0, 0, 0.18);
+        --sev-crit: #f0a097;
+        --tint-crit: #43231f;
+        --sev-high: #f0b878;
+        --tint-high: #40301c;
+        --sev-med: #9cc6ec;
+        --tint-med: #1f3042;
+        --sev-low: #b9d38b;
+        --tint-low: #2a3420;
+        --mod-guard: #7fd0c9;
+        --tint-guard: #1c3634;
+        --mod-patch: #c4adf0;
+        --tint-patch: #2f2642;
+        --mod-vouch: #e8bd6f;
+        --tint-vouch: #3b2e18;
+        --st-open: #a3b9e6;
+        --st-wait: #ecbd63;
+        --tint-wait: #3d301a;
+        --st-fixed: #8fc19c;
+        --tint-fixed: #1f3426;
+        --st-accepted: #b9b0ef;
+        --st-fp: #a6a093;
+        --rail: #222120;
+        --rail-hover: #2d2b28;
+        --band: linear-gradient(90deg, #232a38 0%, #2a2535 45%, #2d2820 100%);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font: 15px/1.45 var(--font-body);
+      }
+      button,
+      input,
+      textarea,
+      select {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      :focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+      .mono {
+        font-family: var(--font-mono);
+        font-size: 12.5px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      h1,
+      h2,
+      h3 {
+        font-family: var(--font-head);
+        font-weight: 600;
+        margin: 0;
+      }
+
+      /* ---------- shell ---------- */
+      .app {
+        display: grid;
+        height: 100vh;
+        grid-template-columns: 232px minmax(0, 1fr) minmax(380px, 30vw);
+      }
+      .app.no-rail {
+        grid-template-columns: minmax(0, 1fr) minmax(380px, 30vw);
+        grid-template-rows: auto minmax(0, 1fr);
+      }
+      .app.no-detail {
+        grid-template-columns: 232px minmax(0, 1fr);
+      }
+      .app.no-rail.no-detail {
+        grid-template-columns: minmax(0, 1fr);
+      }
+      .rail {
+        background: var(--rail);
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .brand {
+        padding: 16px 16px 10px;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .brand b {
+        font-family: var(--font-head);
+        font-size: 20px;
+      }
+      .team {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 12px 10px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+      }
+      .team .who {
+        flex: 1;
+        min-width: 0;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 1px 9px;
+        border-radius: 999px;
+        font-size: 12.5px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .pill.role {
+        background: var(--chip);
+        color: var(--fg);
+        font-weight: 500;
+      }
+      .rail nav {
+        overflow: auto;
+        padding: 0 8px 12px;
+        flex: 1;
+      }
+      .rail .sect {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        padding: 14px 10px 6px;
+      }
+      .rail a {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 40px;
+        padding: 0 10px;
+        border-radius: 8px;
+        color: var(--fg);
+        text-decoration: none;
+      }
+      .rail a:hover {
+        background: var(--rail-hover);
+      }
+      .rail a.current {
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        font-weight: 600;
+      }
+      .rail a .count {
+        margin-left: auto;
+        font-size: 12.5px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .rail a .count.wait {
+        color: var(--st-wait);
+        font-weight: 700;
+      }
+      .dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 3px;
+        flex: none;
+      }
+      .dot.guard {
+        background: var(--mod-guard);
+      }
+      .dot.patch {
+        background: var(--mod-patch);
+      }
+      .dot.vouch {
+        background: var(--mod-vouch);
+      }
+      .rail .foot {
+        border-top: 1px solid var(--line);
+        padding: 10px 16px 14px;
+        font-size: 13px;
+        color: var(--muted);
+      }
+      .live {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12.5px;
+        color: var(--muted);
+      }
+      .live::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--st-fixed);
+      }
+
+      .main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+      }
+      .band {
+        background: var(--band);
+        border-bottom: 1px solid var(--line);
+        padding: 18px 24px 0;
+      }
+      .band .row1 {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+      .band h1 {
+        font-size: 26px;
+      }
+      .band .sub {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .band .spacer {
+        flex: 1;
+      }
+      .summary {
+        margin: 6px 0 12px;
+        font-family: var(--font-head);
+        font-size: 17px;
+      }
+      .tabs {
+        display: flex;
+        gap: 2px;
+        overflow-x: auto;
+        scrollbar-width: none;
+      }
+      .tab {
+        border: 0;
+        background: none;
+        padding: 10px 12px;
+        min-height: 44px;
+        border-bottom: 2px solid transparent;
+        color: var(--muted);
+        white-space: nowrap;
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .tab:hover {
+        color: var(--fg);
+      }
+      .tab.sel {
+        color: var(--fg);
+        border-bottom-color: var(--accent);
+        font-weight: 600;
+      }
+      .tab .n {
+        font-size: 12px;
+        padding: 0 7px;
+        border-radius: 999px;
+        background: var(--surface);
+        color: var(--muted);
+      }
+      .tab .n.wait {
+        background: var(--tint-wait);
+        color: var(--st-wait);
+        font-weight: 700;
+      }
+      .filters {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        padding: 10px 24px;
+        border-bottom: 1px solid var(--line);
+        align-items: center;
+      }
+      .chipbtn {
+        border: 1px solid var(--line);
+        background: var(--surface);
+        border-radius: 999px;
+        padding: 4px 12px;
+        min-height: 34px;
+        font-size: 13.5px;
+        display: inline-flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .chipbtn.sel {
+        border-color: var(--accent);
+        background: var(--focus-bg);
+        font-weight: 600;
+      }
+      .viewpath {
+        margin-left: auto;
+        color: var(--muted);
+      }
+      .scroll {
+        overflow: auto;
+        flex: 1;
+        min-height: 0;
+      }
+      .list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      /* list rows (A, C) */
+      .row {
+        display: grid;
+        grid-template-columns: 158px minmax(0, 1fr) auto;
+        gap: 4px 14px;
+        align-items: start;
+        padding: 12px 24px 12px 20px;
+        border-bottom: 1px solid var(--line);
+        border-left: 4px solid transparent;
+        cursor: pointer;
+        background: var(--surface);
+      }
+      .row:hover {
+        background: var(--focus-bg);
+      }
+      .row.sel {
+        background: var(--focus-bg);
+        border-left-color: var(--accent);
+      }
+      .row.guard {
+        box-shadow: inset 3px 0 0 var(--mod-guard);
+      }
+      .row.patch {
+        box-shadow: inset 3px 0 0 var(--mod-patch);
+      }
+      .row.vouch {
+        box-shadow: inset 3px 0 0 var(--mod-vouch);
+      }
+      .row .title {
+        font-weight: 600;
+      }
+      .row .meta {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+        margin-top: 4px;
+      }
+      .row .line {
+        color: var(--muted);
+        font-size: 13.5px;
+        margin-top: 3px;
+        overflow-wrap: anywhere;
+      }
+      .row .right {
+        text-align: right;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-end;
+      }
+      .age {
+        font-size: 12.5px;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+      .tag {
+        display: inline-block;
+        padding: 1px 8px;
+        border-radius: 6px;
+        font-size: 12px;
+        border: 1px solid var(--line);
+        background: var(--chip);
+        overflow-wrap: anywhere;
+      }
+      .tag.guard {
+        background: var(--tint-guard);
+        color: var(--mod-guard);
+        border-color: transparent;
+        font-weight: 600;
+      }
+      .tag.patch {
+        background: var(--tint-patch);
+        color: var(--mod-patch);
+        border-color: transparent;
+        font-weight: 600;
+      }
+      .tag.vouch {
+        background: var(--tint-vouch);
+        color: var(--mod-vouch);
+        border-color: transparent;
+        font-weight: 600;
+      }
+      .sev {
+        padding: 2px 10px;
+        border-radius: 999px;
+        font-size: 12.5px;
+        font-weight: 700;
+      }
+      .sev.critical {
+        color: var(--sev-crit);
+        background: var(--tint-crit);
+      }
+      .sev.high {
+        color: var(--sev-high);
+        background: var(--tint-high);
+      }
+      .sev.medium {
+        color: var(--sev-med);
+        background: var(--tint-med);
+      }
+      .sev.low {
+        color: var(--sev-low);
+        background: var(--tint-low);
+      }
+      .st {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13.5px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .st svg {
+        width: 15px;
+        height: 15px;
+        flex: none;
+      }
+      .st.open {
+        color: var(--st-open);
+      }
+      .st.wait {
+        color: var(--st-wait);
+      }
+      .st.fixed,
+      .st.evidenced {
+        color: var(--st-fixed);
+      }
+      .st.accepted {
+        color: var(--st-accepted);
+      }
+      .st.fp,
+      .st.na {
+        color: var(--st-fp);
+      }
+      .st.gap {
+        color: var(--sev-crit);
+      }
+      .st.partly {
+        color: var(--sev-high);
+      }
+      .empty {
+        padding: 40px 24px;
+        color: var(--muted);
+      }
+
+      /* lanes (B) */
+      .lanes {
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: minmax(230px, 1fr);
+        gap: 14px;
+        padding: 16px 20px 24px;
+        overflow-x: auto;
+        flex: 1;
+        min-height: 0;
+        align-items: start;
+      }
+      .lane {
+        background: var(--chip);
+        border-radius: 14px;
+        padding: 10px;
+        min-height: 120px;
+        max-height: 100%;
+        overflow: auto;
+      }
+      .lane h3 {
+        font-family: var(--font-body);
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        padding: 4px 6px 10px;
+      }
+      .lane h3 .n {
+        margin-left: auto;
+        color: var(--muted);
+        font-weight: 500;
+      }
+      .card {
+        background: var(--surface);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 10px 12px;
+        margin-bottom: 8px;
+        border: 1px solid transparent;
+        border-top: 3px solid var(--line);
+        cursor: pointer;
+      }
+      .card.guard {
+        border-top-color: var(--mod-guard);
+      }
+      .card.patch {
+        border-top-color: var(--mod-patch);
+      }
+      .card.vouch {
+        border-top-color: var(--mod-vouch);
+      }
+      .card.sel {
+        border-color: var(--accent);
+        border-top-width: 3px;
+      }
+      .card .title {
+        font-weight: 600;
+        margin: 6px 0 4px;
+      }
+      .card .meta {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      /* desk strip (C) */
+      .topbar {
+        grid-column: 1 / -1;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        padding: 10px 24px;
+        border-bottom: 1px solid var(--line);
+        background: var(--surface);
+        flex-wrap: wrap;
+      }
+      .topbar b {
+        font-family: var(--font-head);
+        font-size: 20px;
+      }
+      .topbar nav {
+        display: flex;
+        gap: 4px;
+        flex-wrap: wrap;
+      }
+      .topbar nav a {
+        padding: 8px 12px;
+        min-height: 40px;
+        border-radius: 8px;
+        text-decoration: none;
+        color: var(--fg);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .topbar nav a.current {
+        background: var(--focus-bg);
+        color: var(--accent);
+        font-weight: 700;
+      }
+      .desk {
+        padding: 14px 24px 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--band);
+      }
+      .desk h2 {
+        font-size: 18px;
+        margin-bottom: 10px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .desk .cards {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+        gap: 10px;
+      }
+      .ask {
+        background: var(--surface);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 10px 12px;
+        border-left: 4px solid var(--st-wait);
+        cursor: pointer;
+      }
+      .ask .k {
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--st-wait);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .ask .t {
+        font-weight: 600;
+        margin: 4px 0 8px;
+      }
+      .ask .acts {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+
+      /* ---------- detail pane ---------- */
+      .detail {
+        border-left: 1px solid var(--line);
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+      }
+      .dhead {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-bottom: 1px solid var(--line);
+        min-height: 52px;
+      }
+      .dhead .where {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .iconbtn {
+        border: 0;
+        background: none;
+        min-width: 44px;
+        min-height: 44px;
+        border-radius: 8px;
+        display: inline-grid;
+        place-items: center;
+        color: var(--muted);
+      }
+      .iconbtn:hover {
+        background: var(--chip);
+        color: var(--fg);
+      }
+      .dscroll {
+        overflow: auto;
+        flex: 1;
+        min-height: 0;
+      }
+      .dcard {
+        padding: 14px 18px 16px;
+        background: var(--focus-bg);
+        border-bottom: 1px solid var(--focus-line);
+      }
+      .dcard .ids {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+        color: var(--muted);
+      }
+      .dcard h2 {
+        font-size: 19px;
+        margin: 6px 0 8px;
+        line-height: 1.3;
+      }
+      .statehead {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      dl.kv {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 6px 12px;
+        margin: 0 0 6px;
+        font-size: 14px;
+      }
+      dl.kv dt {
+        color: var(--muted);
+      }
+      dl.kv dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .decision {
+        margin: 12px 0 0;
+        border-radius: var(--radius);
+        padding: 12px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+      }
+      .decision.wait {
+        border-color: var(--st-wait);
+        background: var(--tint-wait);
+      }
+      .decision.done {
+        border-color: var(--st-fixed);
+        background: var(--tint-fixed);
+      }
+      .decision h4 {
+        margin: 0 0 6px;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .decision p {
+        margin: 0 0 10px;
+      }
+      .acts {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .btn {
+        min-height: 44px;
+        padding: 0 16px;
+        border-radius: var(--radius);
+        border: 1px solid var(--line);
+        background: var(--surface);
+        font-weight: 600;
+      }
+      .btn:hover {
+        background: var(--chip);
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--accent-fg);
+        border-color: var(--accent);
+      }
+      .btn.primary:hover {
+        filter: brightness(1.08);
+      }
+      .btn.small {
+        min-height: 36px;
+        padding: 0 12px;
+        font-size: 13.5px;
+      }
+      .btn[aria-busy="true"] {
+        opacity: 0.7;
+        cursor: progress;
+      }
+      .form {
+        display: grid;
+        gap: 8px;
+        margin-top: 8px;
+      }
+      .form textarea,
+      .form select,
+      .form input {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        background: var(--surface);
+      }
+      .sectionh {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--muted);
+        margin: 14px 0 6px;
+      }
+      .thread {
+        padding: 10px 18px 16px;
+        display: grid;
+        gap: 12px;
+      }
+      .msg {
+        display: grid;
+        grid-template-columns: 30px minmax(0, 1fr);
+        gap: 10px;
+      }
+      .av {
+        width: 30px;
+        height: 30px;
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        font-size: 13px;
+        background: var(--chip);
+      }
+      .av.w {
+        background: var(--accent);
+        color: var(--accent-fg);
+        font-family: var(--font-head);
+      }
+      .msg .who {
+        font-weight: 700;
+        font-size: 13.5px;
+      }
+      .msg .who span {
+        font-weight: 400;
+        color: var(--muted);
+        margin-left: 6px;
+      }
+      .kind {
+        font-size: 11.5px;
+        font-weight: 700;
+        padding: 0 6px;
+        border-radius: 5px;
+        margin-right: 4px;
+        text-transform: lowercase;
+      }
+      .kind.proposal {
+        background: var(--tint-wait);
+        color: var(--st-wait);
+      }
+      .kind.decision {
+        background: var(--tint-fixed);
+        color: var(--st-fixed);
+      }
+      .kind.risk {
+        background: var(--tint-crit);
+        color: var(--sev-crit);
+      }
+      .kind.fix {
+        background: var(--tint-guard);
+        color: var(--mod-guard);
+      }
+      .composer {
+        border-top: 1px solid var(--line);
+        padding: 10px 14px 14px;
+      }
+      .ctx {
+        font-size: 12.5px;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .composer .box {
+        display: flex;
+        gap: 8px;
+      }
+      .composer input {
+        flex: 1;
+        min-height: 44px;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 0 12px;
+        background: var(--bg);
+      }
+
+      /* setup steps */
+      .steps {
+        list-style: none;
+        margin: 0;
+        padding: 16px 24px;
+        display: grid;
+        gap: 10px;
+        max-width: 980px;
+      }
+      .step {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 14px 16px;
+        display: grid;
+        grid-template-columns: 34px minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: start;
+        cursor: pointer;
+        box-shadow: var(--shadow);
+      }
+      .step.sel {
+        border-color: var(--accent);
+      }
+      .step .num {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        background: var(--chip);
+      }
+      .step.done .num {
+        background: var(--tint-fixed);
+        color: var(--st-fixed);
+      }
+      .step.wait .num {
+        background: var(--tint-wait);
+        color: var(--st-wait);
+      }
+      .step h3 {
+        font-family: var(--font-body);
+        font-size: 15.5px;
+      }
+
+      /* prototype switcher: obviously not part of the design */
+      .switcher {
+        position: fixed;
+        left: 50%;
+        bottom: 14px;
+        transform: translateX(-50%);
+        z-index: 50;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        background: #111;
+        color: #fff;
+        border-radius: 999px;
+        padding: 4px;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+        font:
+          13px/1 system-ui,
+          sans-serif;
+      }
+      .switcher button {
+        background: none;
+        border: 0;
+        color: #fff;
+        min-width: 36px;
+        min-height: 36px;
+        border-radius: 999px;
+      }
+      .switcher button:hover {
+        background: #333;
+      }
+      .switcher .lbl {
+        padding: 0 8px;
+        white-space: nowrap;
+      }
+      .switcher .theme {
+        font-size: 12px;
+        padding: 0 10px;
+      }
+      .mob-only {
+        display: none;
+      }
+
+      /* ---------- widths ---------- */
+      /* 900-1279: the detail pane floats over the list, as the current panel does at 640-1100 */
+      @media (max-width: 1279px) {
+        .app,
+        .app.no-detail {
+          grid-template-columns: 200px minmax(0, 1fr);
+        }
+        .app.no-rail,
+        .app.no-rail.no-detail {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .detail {
+          position: fixed;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          width: min(440px, 92vw);
+          z-index: 20;
+          box-shadow: -8px 0 30px rgba(0, 0, 0, 0.18);
+        }
+        .row {
+          grid-template-columns: 150px minmax(0, 1fr) auto;
+        }
+      }
+      /* under 900: no rail; a top bar with the pages; the list is the page; detail is full screen */
+      @media (max-width: 899px) {
+        .app,
+        .app.no-detail {
+          grid-template-columns: minmax(0, 1fr);
+          grid-template-rows: auto minmax(0, 1fr);
+        }
+        .rail {
+          display: none;
+        }
+        .mob-only {
+          display: flex;
+        }
+        .mobbar {
+          grid-column: 1 / -1;
+          display: flex;
+          flex-direction: column;
+          background: var(--rail);
+          border-bottom: 1px solid var(--line);
+        }
+        .mobbar .top {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 16px;
+        }
+        .mobbar .top b {
+          font-family: var(--font-head);
+          font-size: 19px;
+        }
+        .mobbar nav {
+          display: flex;
+          gap: 2px;
+          padding: 0 10px 6px;
+          overflow-x: auto;
+          scrollbar-width: none;
+        }
+        .mobbar nav a {
+          flex: none;
+          padding: 0 12px;
+          min-height: 44px;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          text-decoration: none;
+          color: var(--fg);
+          border-radius: 8px;
+        }
+        .mobbar nav a.current {
+          background: var(--surface);
+          font-weight: 700;
+        }
+        .band {
+          padding: 14px 16px 0;
+        }
+        .band h1 {
+          font-size: 22px;
+        }
+        .filters {
+          padding: 8px 16px;
+        }
+        .viewpath {
+          display: none;
+        }
+        .row {
+          grid-template-columns: minmax(0, 1fr) auto;
+          padding: 12px 16px 12px 14px;
+        }
+        .row .stcol {
+          grid-column: 1 / -1;
+        }
+        .row .line,
+        .row .meta .rule {
+          display: none;
+        }
+        .detail {
+          width: 100vw;
+        }
+        .lanes {
+          grid-auto-flow: row;
+          grid-auto-columns: auto;
+          padding: 12px 16px 80px;
+        }
+        .desk {
+          padding: 12px 16px;
+        }
+        .desk .cards {
+          grid-auto-flow: column;
+          grid-auto-columns: 82%;
+          grid-template-columns: none;
+          overflow-x: auto;
+        }
+        .topbar {
+          padding: 8px 16px;
+          gap: 8px;
+        }
+        .steps {
+          padding: 12px 16px 80px;
+        }
+        .step {
+          grid-template-columns: 30px minmax(0, 1fr);
+        }
+        .step .right {
+          grid-column: 2;
+        }
+        .switcher .theme {
+          display: none;
+        }
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .detail.enter {
+          animation: slide 0.15s ease-out;
+        }
+        @keyframes slide {
+          from {
+            transform: translateX(24px);
+            opacity: 0.4;
+          }
+          to {
+            transform: none;
+            opacity: 1;
+          }
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // ---------------- data: the demo seed, in memory ----------------
+      const ICON = {
+        open: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="6"/></svg>',
+        wait: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="6"/><path d="M6.5 5.5v5M9.5 5.5v5"/></svg>',
+        fixed:
+          '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="6"/><path d="m5.3 8.2 1.9 1.9 3.6-3.8"/></svg>',
+        accepted:
+          '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="6"/><path d="M8 4.8V8l2.2 1.4"/></svg>',
+        fp: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="6"/><path d="m5.8 5.8 4.4 4.4M10.2 5.8l-4.4 4.4"/></svg>',
+        moved:
+          '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="2.2 2"><circle cx="8" cy="8" r="6"/></svg>',
+        pr: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="4.5" cy="3.8" r="1.6"/><circle cx="4.5" cy="12.2" r="1.6"/><circle cx="11.5" cy="12.2" r="1.6"/><path d="M4.5 5.4v5.2M11.5 10.6V7a2 2 0 0 0-2-2H7.5m0 0 1.6-1.6M7.5 5l1.6 1.6"/></svg>',
+        x: '<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m4 4 8 8M12 4l-8 8"/></svg>',
+      };
+      const NOW = "Nov 27";
+      const F = [
+        {
+          id: "19b131ca",
+          mod: "guard",
+          rule: "guard/secret-in-repo",
+          sev: "critical",
+          status: "open",
+          title: "A live Stripe secret key is committed",
+          asset: "Repo",
+          ref: "github.com/acme/shop-web",
+          loc: "config/payments.ts:12",
+          ev: "A Stripe live secret key sits in config/payments.ts, line 12",
+          secret: "stripe_live_key · ********a1b2",
+          control: "ISA2027 4.1.3",
+          age: "3d",
+          fix: "none",
+        },
+        {
+          id: "6c0e21b4",
+          mod: "patch",
+          rule: "patch/known-vulnerability",
+          sev: "critical",
+          status: "open",
+          title:
+            "CVE-2023-34540: LangChain before 0.0.225 allows remote code execution in JiraAPIWrapper",
+          asset: "Product",
+          ref: "Shop web",
+          loc: "langchain 0.0.200",
+          ev: "CVSS 9.8. Version 0.0.200 is affected: before the fixed version 0.0.225",
+          patch: {
+            verdict: "Affected",
+            why: "0.0.200 is before 0.0.225, and Shop web uses LangChain as a library, internet-facing",
+            fixedIn: "0.0.225",
+          },
+          age: "3d",
+        },
+        {
+          id: "8a77f0d2",
+          mod: "patch",
+          rule: "patch/known-vulnerability",
+          sev: "critical",
+          status: "open",
+          title:
+            "CVE-2023-34541: LangChain 0.0.171 is vulnerable to arbitrary code execution in load_prompt",
+          asset: "Product",
+          ref: "Shop web",
+          loc: "langchain 0.0.200",
+          ev: "CVSS 9.8. Version 0.0.200 is affected: before the fixed version 0.0.247",
+          patch: { verdict: "Affected", why: "0.0.200 is before 0.0.247", fixedIn: "0.0.247" },
+          age: "3d",
+        },
+        {
+          id: "3f9a1c2e",
+          mod: "guard",
+          rule: "guard/agent-printed-secret",
+          sev: "high",
+          status: "open",
+          proposal: {
+            kind: "False positive",
+            by: "Evelyn (Member)",
+            reason: "That's the test key from the docs, not our live one",
+            at: "1h",
+          },
+          title: "The agent printed a secret to the terminal",
+          asset: "Agent session",
+          ref: "session-demo-7f3a",
+          loc: "events 3–4",
+          ev: "The agent ran cat .env and its output held the Stripe key",
+          control: "ISA2027 5.2.4",
+          age: "2d",
+        },
+        {
+          id: "a51d9e07",
+          mod: "guard",
+          rule: "guard/agent-can-read-env",
+          sev: "high",
+          status: "open",
+          title: "The agent can read .env files",
+          asset: "Repo",
+          ref: "github.com/acme/shop-web",
+          loc: ".claude/settings.local.json",
+          ev: "permissions.allow in .claude/settings.local.json lets the agent read .env",
+          control: "ISA2027 1.3.4",
+          age: "1d",
+          fix: "none",
+        },
+        {
+          id: "e02b44c9",
+          mod: "guard",
+          rule: "guard/agent-can-read-env",
+          sev: "high",
+          status: "fixed",
+          unconfirmed: "a51d9e07",
+          title: "The agent can read .env files",
+          asset: "Repo",
+          ref: "github.com/acme/shop-web",
+          loc: ".claude/settings.json",
+          ev: "Fixed by the last Scan, but the same Rule opened a51d9e07 on this Repo: it may have moved",
+          age: "3d",
+        },
+        {
+          id: "5b3c7d11",
+          mod: "patch",
+          rule: "patch/known-vulnerability",
+          sev: "high",
+          status: "open",
+          title: "minimist 1.2.5 has a known vulnerability",
+          asset: "Product",
+          ref: "shop",
+          loc: "minimist 1.2.5 · CVE-2021-44906",
+          ev: "minimist 1.2.5 is affected by CVE-2021-44906",
+          patch: { verdict: "Affected", why: "1.2.5 is before 1.2.6", fixedIn: "1.2.6" },
+          age: "3d",
+        },
+        {
+          id: "7d20aa3f",
+          mod: "guard",
+          rule: "guard/disk-not-encrypted",
+          sev: "medium",
+          status: "open",
+          proposal: {
+            kind: "Accepted",
+            by: "Warden (agent)",
+            reason: "ada-laptop is being replaced on Dec 8; it holds no customer data",
+            until: "Dec 15, 2026",
+            at: "20m",
+          },
+          title: "The disk isn't encrypted",
+          asset: "Device",
+          ref: "ada-laptop",
+          loc: "disk_encryption",
+          ev: "FileVault is off on ada-laptop",
+          control: "ISA2027 4.1.3",
+          age: "3d",
+        },
+        {
+          id: "c4e8b2a0",
+          mod: "patch",
+          rule: "patch/known-vulnerability",
+          sev: "medium",
+          status: "accepted",
+          title: "axios 0.21.1 has a known vulnerability",
+          asset: "Product",
+          ref: "shop",
+          loc: "axios 0.21.1 · CVE-2021-3749",
+          ev: "Accepted because axios is only called with our own URLs; upgrading next sprint",
+          until: "Jan 26, 2027",
+          age: "3d",
+        },
+        {
+          id: "90f1d3b6",
+          mod: "patch",
+          rule: "patch/known-vulnerability",
+          sev: "high",
+          status: "fixed",
+          title: "ws 7.4.5 has a known vulnerability",
+          asset: "Product",
+          ref: "shop",
+          loc: "ws 7.4.5 · CVE-2021-32640",
+          ev: "Fixed: the last Scan no longer sees it",
+          age: "3d",
+        },
+        {
+          id: "2e6f8c55",
+          mod: "patch",
+          rule: "patch/known-vulnerability",
+          sev: "low",
+          status: "open",
+          title: "@aws-sdk/client-cognito-identity-provider 3.400.0 has a known vulnerability",
+          asset: "Product",
+          ref: "shop",
+          loc: "GHSA-demo-0001",
+          ev: "@aws-sdk/client-cognito-identity-provider 3.400.0 is affected by GHSA-demo-0001",
+          patch: {
+            verdict: "Can't tell",
+            why: "No fixed version listed yet",
+            fixedIn: "No fix listed yet.",
+          },
+          age: "3d",
+        },
+        {
+          id: "b7a0e3d9",
+          mod: "guard",
+          rule: "guard/blanket-bash-allow",
+          sev: "low",
+          status: "fp",
+          title: "A broad Bash allow gets round the agent's deny rules",
+          asset: "Repo",
+          ref: "github.com/acme/shop-web",
+          loc: ".claude/settings.json",
+          ev: "False positive: branch protection refuses the push anyway",
+          age: "3d",
+          fix: "none",
+        },
+      ];
+      const C = [
+        {
+          ref: "1.3.3",
+          q: "To what extent is it ensured that only evaluated and approved external IT services are used for processing the organization's information assets?",
+          verdict: "Not evidenced",
+          review: "Not reviewed",
+          ev: [
+            "guard/unapproved-ai-tool: no Scan in the last 30 days, on 0 of 1 Repo",
+            "guard/mcp-server-unpinned: no Scan in the last 30 days, on 0 of 1 Repo",
+          ],
+          open: 0,
+        },
+        {
+          ref: "1.3.4",
+          q: "To what extent is it ensured that only evaluated and approved software is used for processing the organization's information assets?",
+          verdict: "Evidenced",
+          review: "Reviewed",
+          by: "Elm's Admin, Nov 24",
+          ev: ["guard/agent-can-read-env: Scanned Nov 27, on 1 of 1 Repo"],
+          open: 1,
+        },
+        {
+          ref: "4.1.3",
+          q: "To what extent are user accounts and login information securely managed and applied?",
+          verdict: "Partly evidenced",
+          review: "Reviewed",
+          gap: true,
+          by: "Elm's Admin, Nov 24",
+          ev: ["guard/secret-in-repo: 1 Open Finding", "guard/disk-not-encrypted: 1 Open Finding"],
+          open: 2,
+        },
+        {
+          ref: "5.2.4",
+          q: "To what extent are event logs recorded and analysed?",
+          verdict: "Not evidenced",
+          review: "Reviewed",
+          gap: true,
+          by: "Elm's Admin, Nov 24",
+          ev: ["guard/agent-printed-secret: 1 Open Finding"],
+          open: 1,
+        },
+      ];
+      const STEPS = [
+        {
+          id: "gh",
+          title: "Connect GitHub",
+          state: "done",
+          line: "Installation 4242 linked: 1 repo.",
+          detail:
+            "Warden reads your repos through its read-only GitHub app. An Admin installs it; GitHub sends you back here.",
+        },
+        {
+          id: "write",
+          title: "Grant write access",
+          state: "wait",
+          line: "Needed for one-click Fix PRs. Not granted yet.",
+          detail:
+            "Warden's second GitHub app, the write app, opens Fix PRs. It never merges: a person merges each one.",
+          action: "Install the write app",
+        },
+        {
+          id: "repos",
+          title: "Repos",
+          state: "done",
+          line: "github.com/acme/shop-web · Done, Nov 27, 9:14 AM",
+          detail: "Each Scan runs the Default Pack over the listed Repos.",
+          action: "Scan now",
+        },
+        {
+          id: "cat",
+          title: "Catalogues",
+          state: "done",
+          line: "VDA ISA 2027.1: On, Vouch checks 4 Controls: 1.3.3, 1.3.4, 4.1.3, 5.2.4.",
+          detail:
+            "Turning a Catalogue on starts the road to Audit-ready: a Lead reviews each of its Controls.",
+        },
+        {
+          id: "hook",
+          title: "Agent hook",
+          state: "todo",
+          line: "Standard adds the agent hook and the Judge.",
+          detail:
+            "The hook sends each Agent session's events (Details tier by default) for the Judge to read.",
+          action: "Show the hook token",
+        },
+      ];
+
+      // ---------------- state ----------------
+      const q = new URLSearchParams(location.search);
+      const S = {
+        variant: q.get("variant") || "A",
+        page: q.get("page") || "findings",
+        tab: q.get("tab") || "open",
+        mod: "all",
+        sel: q.get("sel") || null,
+        chat: {},
+        overriding: false,
+        fixBusy: false,
+        theme: q.get("theme") || "",
+      };
+      const VARIANTS = { A: "Board", B: "Lanes", C: "Desk" };
+      if (!S.sel && window.innerWidth >= 1280)
+        S.sel = S.page === "findings" ? "19b131ca" : S.page === "overview" ? "1.3.3" : "write";
+      function sync() {
+        const p = new URLSearchParams({ variant: S.variant, page: S.page });
+        if (S.page === "findings" && S.tab !== "open") p.set("tab", S.tab);
+        if (S.sel) p.set("sel", S.sel);
+        if (S.theme) p.set("theme", S.theme);
+        history.replaceState(null, "", "?" + p);
+        if (S.theme) document.documentElement.dataset.theme = S.theme;
+        else delete document.documentElement.dataset.theme;
+      }
+
+      // ---------------- helpers ----------------
+      const esc = (s) =>
+        String(s).replace(
+          /[&<>"]/g,
+          (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+        );
+      const SEVW = { critical: "Critical", high: "High", medium: "Medium", low: "Low" };
+      const MODW = { guard: "Guard", patch: "Patch", vouch: "Vouch" };
+      function fstate(f) {
+        if (f.proposal) return { k: "wait", w: "Waiting on a Lead", i: ICON.wait };
+        if (f.unconfirmed) return { k: "wait", w: "Unconfirmed fix", i: ICON.moved };
+        if (f.fix === "open") return { k: "open", w: "Fix PR open", i: ICON.pr };
+        return {
+          open: { k: "open", w: "Open", i: ICON.open },
+          fixed: { k: "fixed", w: "Fixed", i: ICON.fixed },
+          accepted: { k: "accepted", w: "Accepted", i: ICON.accepted },
+          fp: { k: "fp", w: "False positive", i: ICON.fp },
+        }[f.status];
+      }
+      function cstate(c) {
+        if (c.review !== "Reviewed") return { k: "wait", w: c.review, i: ICON.wait };
+        if (c.gap) return { k: "gap", w: "Gap", i: ICON.open };
+        return { k: "evidenced", w: "Reviewed", i: ICON.fixed };
+      }
+      const vclass = (v) =>
+        ({
+          Evidenced: "evidenced",
+          "Partly evidenced": "partly",
+          "Not evidenced": "gap",
+          "Not applicable": "na",
+        })[v];
+      const st = (s) => `<span class="st ${s.k}">${s.i}${esc(s.w)}</span>`;
+      const sevp = (s) => `<span class="sev ${s}">${SEVW[s]}</span>`;
+      const modt = (m) => `<span class="tag ${m}">${MODW[m]}</span>`;
+      const waitingF = () => F.filter((f) => f.proposal || f.unconfirmed);
+      const waitingC = () => C.filter((c) => c.review !== "Reviewed");
+      const TABS = [
+        ["open", "Open", (f) => f.status === "open"],
+        ["waiting", "Waiting on a Lead", (f) => f.proposal || f.unconfirmed],
+        ["accepted", "Accepted", (f) => f.status === "accepted"],
+        ["fixed", "Fixed", (f) => f.status === "fixed"],
+        ["fp", "False positive", (f) => f.status === "fp"],
+        ["all", "Every status", () => true],
+      ];
+      function visibleF() {
+        const t = TABS.find((t) => t[0] === S.tab) || TABS[0];
+        return F.filter(t[2]).filter((f) => S.mod === "all" || f.mod === S.mod);
+      }
+
+      // ---------------- pieces ----------------
+      function pageLinks(cls) {
+        const openN = F.filter((f) => f.status === "open").length;
+        const items = [
+          ["findings", "Findings", openN, waitingF().length],
+          ["overview", "Overview", null, waitingC().length],
+          ["products", "Products", 2, 0],
+          ["people", "People", 2, 0],
+          ["setup", "Setup", null, STEPS.filter((s) => s.state === "wait").length],
+        ];
+        return items
+          .map(
+            ([id, w, n, wait]) =>
+              `<a href="#" data-page="${id}" class="${S.page === id ? "current" : ""}" ${S.page === id ? 'aria-current="page"' : ""}>${w}${wait ? `<span class="count wait" title="${wait} waiting on a person">${wait} waiting</span>` : n != null ? `<span class="count">${n}</span>` : ""}</a>`,
+          )
+          .join("");
+      }
+      function rail() {
+        const by = (m) => F.filter((f) => f.mod === m && f.status === "open").length;
+        return `<aside class="rail">
+    <div class="brand"><b>Warden</b></div>
+    <div class="team"><div class="who"><b>Elm</b><div class="muted" style="font-size:12.5px">Level: Quick</div></div><span class="pill role">Admin</span></div>
+    <nav aria-label="Pages">${pageLinks()}
+      <div class="sect">Modules</div>
+      <a href="#" data-mod="guard"><span class="dot guard"></span>Guard<span class="count">${by("guard")}</span></a>
+      <a href="#" data-mod="patch"><span class="dot patch"></span>Patch<span class="count">${by("patch")}</span></a>
+      <a href="#" data-page="overview"><span class="dot vouch"></span>Vouch<span class="count">${C.filter((c) => c.gap).length} Gaps</span></a>
+    </nav>
+    <div class="foot"><span class="live">Last Scan Nov 27, 9:14 AM</span><div style="margin-top:6px">Signed in as Elm's Admin · <a href="#" style="color:var(--accent)">Sign out</a></div></div>
+  </aside>`;
+      }
+      function mobbar() {
+        return `<header class="mobbar mob-only"><div class="top"><b>Warden</b><span>Elm</span><span class="pill role">Admin</span><span style="flex:1"></span><span class="live">Nov 27</span></div><nav aria-label="Pages">${pageLinks()}</nav></header>`;
+      }
+      function topbar() {
+        return `<header class="topbar"><b>Warden</b><span>Elm <span class="pill role">Admin</span></span><nav aria-label="Pages">${pageLinks()}</nav><span style="flex:1"></span><span class="live">Last Scan Nov 27, 9:14 AM</span></header>`;
+      }
+      function findingsBand() {
+        const open = F.filter((f) => f.status === "open");
+        const crit = open.filter((f) => f.sev === "critical").length;
+        const tabs = TABS.map(([id, w, fn]) => {
+          const n = F.filter(fn).length;
+          return `<button class="tab ${S.tab === id ? "sel" : ""}" data-tab="${id}" aria-pressed="${S.tab === id}">${w}<span class="n ${id === "waiting" && n ? "wait" : ""}">${n}</span></button>`;
+        }).join("");
+        return `<div class="band"><div class="row1"><h1>Findings</h1><span class="sub">Level: Quick · <a href="#" data-page="overview" style="color:var(--accent)">see the journey</a></span><span class="spacer"></span></div>
+    <div class="summary">${open.length} open Findings, ${crit} Critical${waitingF().length ? ` · <span style="color:var(--st-wait)">${waitingF().length} waiting on a Lead</span>` : ""}</div>
+    ${S.variant === "B" ? "" : `<div class="tabs" role="group" aria-label="Status">${tabs}</div>`}</div>
+    <div class="filters">${["all", "guard", "patch"].map((m) => `<button class="chipbtn ${S.mod === m ? "sel" : ""}" data-modf="${m}">${m === "all" ? "Any module" : `<span class="dot ${m}"></span>${MODW[m]}`}</button>`).join("")}
+    <span class="viewpath mono">/findings?status=${S.tab}${S.mod !== "all" ? "&module=" + S.mod : ""}</span></div>`;
+      }
+      function frow(f) {
+        return `<li class="row ${f.mod} ${S.sel === f.id ? "sel" : ""}" data-sel="${f.id}" tabindex="0">
+    <div class="stcol">${st(fstate(f))}</div>
+    <div><div class="title">${esc(f.title)}</div>
+      <div class="meta">${modt(f.mod)}<span class="tag mono rule">${f.rule}</span><span class="tag">${f.asset}: ${esc(f.ref)}</span></div>
+      <div class="line">${esc(f.ev)}</div></div>
+    <div class="right">${sevp(f.sev)}<span class="age"><span class="mono">${f.id}</span> · ${f.age}</span></div></li>`;
+      }
+      function fcard(f) {
+        return `<div class="card ${f.mod} ${S.sel === f.id ? "sel" : ""}" data-sel="${f.id}" tabindex="0">
+    <div class="meta">${sevp(f.sev)}${modt(f.mod)}<span class="age" style="margin-left:auto">${f.age}</span></div>
+    <div class="title">${esc(f.title)}</div>
+    <div class="meta">${st(fstate(f))}<span class="muted" style="font-size:12.5px">${f.asset}: ${esc(f.ref)}</span></div></div>`;
+      }
+      function lanes(groups) {
+        return `<div class="lanes">${groups.map(([title, cls, items, render]) => `<section class="lane"><h3><span class="st ${cls}">${title}</span><span class="n">${items.length}</span></h3>${items.map(render).join("") || '<div class="muted" style="padding:6px">Nothing here.</div>'}</section>`).join("")}</div>`;
+      }
+      function deskStrip() {
+        const asks = [
+          ...F.filter((f) => f.proposal).map((f) => ({
+            sel: f.id,
+            page: "findings",
+            k: `Proposal · ${f.proposal.kind}`,
+            t: f.title,
+            by: f.proposal.by,
+            acts: `<button class="btn small primary" data-act="approve" data-id="${f.id}">Approve</button><button class="btn small" data-act="reject" data-id="${f.id}">Reject</button>`,
+          })),
+          ...F.filter((f) => f.unconfirmed).map((f) => ({
+            sel: f.id,
+            page: "findings",
+            k: "Unconfirmed fix",
+            t: f.title,
+            by: "the last Scan",
+            acts: `<button class="btn small primary" data-act="confirmfix" data-id="${f.id}">Confirm fix</button><button class="btn small" data-act="moved" data-id="${f.id}">Mark moved</button>`,
+          })),
+          ...C.filter((c) => c.review !== "Reviewed").map((c) => ({
+            sel: c.ref,
+            page: "overview",
+            k: `Control · ${c.review}`,
+            t: `${c.ref}: ${c.verdict}`,
+            by: "Vouch",
+            acts: `<button class="btn small primary" data-act="confirm" data-id="${c.ref}">Confirm</button><button class="btn small" data-act="override" data-id="${c.ref}">Override…</button>`,
+          })),
+          ...STEPS.filter((s) => s.state === "wait").map((s) => ({
+            sel: s.id,
+            page: "setup",
+            k: "Setup",
+            t: s.title,
+            line: s.line,
+            acts: `<button class="btn small" data-page="setup" data-sel2="${s.id}">Open Setup</button>`,
+          })),
+        ];
+        return `<section class="desk"><h2>Waiting on you <span class="pill" style="background:var(--tint-wait);color:var(--st-wait)">${asks.length}</span></h2>
+    ${asks.length ? `<div class="cards">${asks.map((a) => `<div class="ask" data-sel="${a.sel}" data-page2="${a.page}" tabindex="0"><div class="k">${esc(a.k)}</div><div class="t">${esc(a.t)}</div><div class="muted" style="font-size:12.5px;margin-bottom:8px">${a.line ? esc(a.line) : "from " + esc(a.by)}</div><div class="acts">${a.acts}</div></div>`).join("")}</div>` : '<div class="muted">Nothing waiting. Every decision is made.</div>'}</section>`;
+      }
+
+      // ---------------- pages (the middle) ----------------
+      function findingsMain() {
+        const list = visibleF();
+        if (S.variant === "B") {
+          const pool = F.filter((f) => S.mod === "all" || f.mod === S.mod);
+          return (
+            findingsBand() +
+            lanes([
+              ["Waiting on a Lead", "wait", pool.filter((f) => f.proposal || f.unconfirmed), fcard],
+              [
+                "Open",
+                "open",
+                pool.filter((f) => f.status === "open" && !f.proposal && f.fix !== "open"),
+                fcard,
+              ],
+              ["Fix PR open", "open", pool.filter((f) => f.fix === "open"), fcard],
+              ["Done", "fixed", pool.filter((f) => f.status !== "open" && !f.unconfirmed), fcard],
+            ])
+          );
+        }
+        return (
+          (S.variant === "C" ? deskStrip() : "") +
+          findingsBand() +
+          `<div class="scroll"><ul class="list">${list.map(frow).join("") || '<li class="empty">Nothing matches this view.</li>'}</ul></div>`
+        );
+      }
+      function overviewMain() {
+        const gaps = C.filter((c) => c.gap).length,
+          wait = waitingC().length;
+        const band = `<div class="band" style="padding-bottom:14px"><div class="row1"><h1>Overview</h1><span class="sub">VDA ISA 2027.1</span></div>
+    <div class="summary">Are we ready for the audit? ${gaps || wait ? `Not yet: ${[gaps && `${gaps} Gaps`, wait && `${wait} Control${wait > 1 ? "s" : ""} waiting for review`].filter(Boolean).join(", ")}.` : `Yes: all ${C.length} Controls are reviewed, with no Gaps.`}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${[
+      ["Quick", "Current", "open"],
+      ["Standard", "Not started", "fp"],
+      ["Audit-ready", `${C.length - wait} of ${C.length} Controls reviewed`, "wait"],
+    ]
+      .map(
+        ([l, s, k]) =>
+          `<span class="chipbtn" style="cursor:default"><b>${l}</b><span class="st ${k}" style="font-weight:500">${s}</span></span>`,
+      )
+      .join("")}</div></div>`;
+        const ccard = (c) =>
+          `<div class="card vouch ${S.sel === c.ref ? "sel" : ""}" data-sel="${c.ref}" tabindex="0"><div class="meta"><span class="mono">${c.ref}</span><span class="st ${vclass(c.verdict)}" style="margin-left:auto">${c.verdict}</span></div><div class="title" style="font-weight:500">${esc(c.q)}</div><div class="meta">${st(cstate(c))}</div></div>`;
+        if (S.variant === "B")
+          return (
+            band +
+            lanes([
+              ["Waiting for review", "wait", C.filter((c) => c.review !== "Reviewed"), ccard],
+              ["Gap", "gap", C.filter((c) => c.review === "Reviewed" && c.gap), ccard],
+              ["Evidenced", "fixed", C.filter((c) => c.review === "Reviewed" && !c.gap), ccard],
+            ])
+          );
+        const row = (
+          c,
+        ) => `<li class="row vouch ${S.sel === c.ref ? "sel" : ""}" data-sel="${c.ref}" tabindex="0"><div class="stcol">${st(cstate(c))}</div>
+    <div><div class="title" style="font-weight:500"><span class="mono" style="margin-right:8px">${c.ref}</span>${esc(c.q)}</div><div class="meta"><span class="tag vouch">Vouch</span><span class="tag">${c.open} Open Finding${c.open === 1 ? "" : "s"}</span></div></div>
+    <div class="right"><span class="st ${vclass(c.verdict)}">${c.verdict}</span><span class="age">${c.review === "Reviewed" ? "Reviewed" : c.review}</span></div></li>`;
+        return (
+          (S.variant === "C" ? deskStrip() : "") +
+          band +
+          `<div class="scroll"><ul class="list">${C.map(row).join("")}</ul>
+    <p class="muted" style="padding:12px 24px;font-size:13px">© 2026 ENX Association. Licence: CC BY-ND 4.0</p></div>`
+        );
+      }
+      function setupMain() {
+        const band = `<div class="band" style="padding-bottom:14px"><div class="row1"><h1>Setup</h1><span class="sub">What Warden may read and change for Elm</span></div><div class="summary">${STEPS.filter((s) => s.state === "done").length} of ${STEPS.length} set up · Level: Quick</div></div>`;
+        const icon = { done: "✓", wait: "!", todo: "" };
+        return (
+          (S.variant === "C" ? deskStrip() : "") +
+          band +
+          `<div class="scroll"><ol class="steps">${STEPS.map((s, i) => `<li class="step ${s.state} ${S.sel === s.id ? "sel" : ""}" data-sel="${s.id}" tabindex="0"><span class="num">${icon[s.state] || i + 1}</span><div><h3>${s.title}</h3><div class="muted" style="font-size:14px;overflow-wrap:anywhere">${esc(s.line)}</div></div><div class="right">${s.action ? `<button class="btn small ${s.state === "wait" ? "primary" : ""}" data-act="step" data-id="${s.id}">${s.action}</button>` : st(s.state === "done" ? { k: "fixed", w: "Done", i: ICON.fixed } : { k: "fp", w: "Later", i: ICON.open })}</div></li>`).join("")}</ol></div>`
+        );
+      }
+      function stubMain(w) {
+        return `<div class="band" style="padding-bottom:14px"><h1>${w}</h1></div><div class="empty">Not in this prototype: it would follow the same rail, list and detail pattern.</div>`;
+      }
+
+      // ---------------- detail pane ----------------
+      function chatFor(id, seed) {
+        if (!S.chat[id]) S.chat[id] = seed;
+        return S.chat[id];
+      }
+      function msgs(list) {
+        return list
+          .map(
+            (m) =>
+              `<div class="msg"><span class="av ${m.w ? "w" : ""}">${m.w ? "W" : esc(m.who[0])}</span><div><div class="who">${esc(m.who)}<span>${m.at}</span></div><div>${m.kind ? `<span class="kind ${m.kind}">${m.kind}</span>` : ""}${esc(m.text)}</div></div></div>`,
+          )
+          .join("");
+      }
+      function findingDetail(f) {
+        const s = fstate(f);
+        let decide = "";
+        if (f.proposal)
+          decide = `<div class="decision wait"><h4 style="color:var(--st-wait)">${ICON.wait.replace("<svg", '<svg width="15" height="15"')} Held for a Lead</h4>
+      <p><b>${f.proposal.by}</b> proposes <b>${f.proposal.kind}</b>: “${esc(f.proposal.reason)}”${f.proposal.until ? ` Reopens on ${f.proposal.until}.` : ""}</p>
+      <div class="acts"><button class="btn primary" data-act="approve" data-id="${f.id}">Approve</button><button class="btn" data-act="reject" data-id="${f.id}">Reject</button></div></div>`;
+        else if (f.unconfirmed)
+          decide = `<div class="decision wait"><h4 style="color:var(--st-wait)">${ICON.moved.replace("<svg", '<svg width="15" height="15"')} Unconfirmed fix</h4>
+      <p>The last Scan no longer sees this, but opened <span class="mono">${f.unconfirmed}</span> with the same Rule on this Repo. It may have moved.</p>
+      <div class="acts"><button class="btn primary" data-act="confirmfix" data-id="${f.id}">Confirm fix</button><button class="btn" data-act="moved" data-id="${f.id}">Mark moved</button></div></div>`;
+        else if (f.mod === "guard" && f.status === "open" && f.fix !== undefined) {
+          if (f.fix === "none")
+            decide = `<div class="decision"><h4>${ICON.pr.replace("<svg", '<svg width="15" height="15"')} Fix PR</h4><p>Warden can open a pull request that moves the key into an environment variable. A person merges it; the next Scan confirms the fix.</p>
+      <div class="acts"><button class="btn primary" data-act="openpr" data-id="${f.id}" ${S.fixBusy ? 'aria-busy="true" disabled' : ""}>${S.fixBusy ? "Opening…" : "Open a Fix PR"}</button><button class="btn" data-act="accept" data-id="${f.id}">Accept…</button><button class="btn" data-act="fpmark" data-id="${f.id}">Mark False positive</button></div></div>`;
+          else
+            decide = `<div class="decision done"><h4 style="color:var(--st-fixed)">${ICON.pr.replace("<svg", '<svg width="15" height="15"')} Fix PR open</h4><p><a href="#" style="color:var(--accent)">acme/shop-web#14</a>: “Move the Stripe key out of config/payments.ts”. Waiting for a person to merge it; the next Scan marks the Finding Fixed.</p></div>`;
+        } else if (f.status === "open")
+          decide = `<div class="decision"><h4>Decide</h4><p class="muted">${f.patch ? `Upgrade ${esc(f.loc.split(" ")[0])} to ${esc(f.patch.fixedIn)}, or accept the risk with a reason and a date.` : "Accept the risk with a reason and an expiry, or mark it a False positive."}</p>
+      <div class="acts"><button class="btn" data-act="accept" data-id="${f.id}">Accept…</button><button class="btn" data-act="fpmark" data-id="${f.id}">Mark False positive</button></div></div>`;
+        const kv = [
+          ["Asset", `${f.asset} ${esc(f.ref)}`],
+          ["Location", `<span class="mono">${esc(f.loc)}</span>`],
+          ["Evidence", esc(f.ev)],
+        ];
+        if (f.secret) kv.push(["Secret", `<span class="mono">${esc(f.secret)}</span>`]);
+        if (f.control)
+          kv.push([
+            "Control",
+            `<a href="#" data-page="overview" style="color:var(--accent)">${f.control}</a>`,
+          ]);
+        if (f.until) kv.push(["Reopens on", f.until]);
+        const patch = f.patch
+          ? `<div class="sectionh">Patch</div><dl class="kv"><dt>Your version</dt><dd><b>${f.patch.verdict}</b><br><span class="muted">${esc(f.patch.why)}</span></dd><dt>Fixed in</dt><dd class="mono">${esc(f.patch.fixedIn)}</dd></dl>`
+          : "";
+        const seed = [
+          {
+            who: "Warden",
+            w: 1,
+            at: "3d",
+            kind: "risk",
+            text:
+              f.sev === "critical"
+                ? `${SEVW[f.sev]}: ${f.ev}.`
+                : `Found by the Scan on Nov 24: ${f.ev}.`,
+          },
+          ...(f.proposal
+            ? [
+                {
+                  who: f.proposal.by,
+                  at: f.proposal.at,
+                  kind: "proposal",
+                  text: `${f.proposal.kind}: ${f.proposal.reason}`,
+                },
+              ]
+            : []),
+        ];
+        return {
+          head: `<span><b>${f.mod === "vouch" ? "Control" : "Finding"}</b> <span class="where">in ${MODW[f.mod]}</span></span>`,
+          id: f.id,
+          card: `<div class="dcard"><div class="ids"><span class="mono">${f.id}</span>·${modt(f.mod)}<span class="mono">${f.rule}</span></div><h2>${esc(f.title)}</h2>
+      <div class="statehead">${sevp(f.sev)}${st(s)}</div><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${patch}${decide}</div>`,
+          thread: chatFor(f.id, seed),
+          ctx: `Talking about: <span class="mono">${f.id}</span> · view: Findings, ${TABS.find((t) => t[0] === S.tab)[1]}`,
+        };
+      }
+      function controlDetail(c) {
+        const decide =
+          c.review !== "Reviewed"
+            ? `<div class="decision wait"><h4 style="color:var(--st-wait)">${ICON.wait.replace("<svg", '<svg width="15" height="15"')} Waiting for a Lead's review</h4>
+      <p>Vouch worked out <b>${c.verdict}</b>. Confirm it, or override it with a reason.</p>
+      ${
+        S.overriding
+          ? `<div class="form"><label>Verdict<select id="ovv"><option>Evidenced</option><option>Partly evidenced</option><option>Not evidenced</option><option>Not applicable</option></select></label><label>Reason<textarea id="ovr" rows="3" placeholder="Why the Verdict is different"></textarea></label><div class="acts"><button class="btn primary" data-act="saveoverride" data-id="${c.ref}">Save override</button><button class="btn" data-act="canceloverride">Cancel</button></div></div>`
+          : `<div class="acts"><button class="btn primary" data-act="confirm" data-id="${c.ref}">Confirm</button><button class="btn" data-act="override" data-id="${c.ref}">Override…</button></div>`
+      }</div>`
+            : `<div class="decision done"><h4 style="color:var(--st-fixed)">${ICON.fixed.replace("<svg", '<svg width="15" height="15"')} Reviewed</h4><p>${esc(c.by)}${c.reason ? `: “${esc(c.reason)}”` : ""}. ${c.gap ? "It's a Gap: its Open Findings need fixing or accepting." : ""}</p></div>`;
+        return {
+          head: `<span><b>Control</b> <span class="where">in Vouch · VDA ISA 2027.1</span></span>`,
+          id: c.ref,
+          card: `<div class="dcard" style="background:var(--tint-vouch);border-color:var(--line)"><div class="ids"><span class="mono">${c.ref}</span>·<span class="tag vouch">Vouch</span></div><h2>${esc(c.q)}</h2>
+      <div class="statehead"><span class="st ${vclass(c.verdict)}">${c.verdict}</span>${st(cstate(c))}</div>
+      <div class="sectionh">Evidence</div><ul style="margin:0;padding-left:18px;font-size:14px">${c.ev.map((e) => `<li><span class="mono">${esc(e.split(":")[0])}</span>:${esc(e.split(":").slice(1).join(":"))}</li>`).join("")}</ul>${decide}</div>`,
+          thread: chatFor(c.ref, [
+            {
+              who: "Warden",
+              w: 1,
+              at: "1d",
+              kind: "decision",
+              text: `Worked out ${c.verdict} from ${c.ev.length} Rule${c.ev.length > 1 ? "s" : ""}.`,
+            },
+          ]),
+          ctx: `Talking about: <span class="mono">${c.ref}</span> · view: Overview`,
+        };
+      }
+      function stepDetail(s) {
+        return {
+          head: `<span><b>Setup</b> <span class="where">${esc(s.title)}</span></span>`,
+          id: s.id,
+          card: `<div class="dcard"><h2>${esc(s.title)}</h2><div class="statehead">${st(s.state === "done" ? { k: "fixed", w: "Done", i: ICON.fixed } : s.state === "wait" ? { k: "wait", w: "Needs an Admin", i: ICON.wait } : { k: "fp", w: "Not started", i: ICON.open })}</div><p>${esc(s.detail)}</p><p class="muted">${esc(s.line)}</p>
+      ${s.action ? `<div class="acts"><button class="btn ${s.state === "wait" ? "primary" : ""}" data-act="step" data-id="${s.id}">${s.action}</button></div>` : ""}</div>`,
+          thread: chatFor(s.id, []),
+          ctx: "Talking about: view: Setup",
+        };
+      }
+      function detail() {
+        let d = null;
+        if (S.page === "findings") {
+          const f = F.find((x) => x.id === S.sel);
+          if (f) d = findingDetail(f);
+        }
+        if (S.page === "overview") {
+          const c = C.find((x) => x.ref === S.sel);
+          if (c) d = controlDetail(c);
+        }
+        if (S.page === "setup") {
+          const s = STEPS.find((x) => x.id === S.sel);
+          if (s) d = stepDetail(s);
+        }
+        if (!d) return "";
+        return `<aside class="detail" aria-label="Detail and Ask Warden">
+    <div class="dhead">${d.head}<span style="flex:1"></span><button class="iconbtn" data-act="close" aria-label="Close">${ICON.x}</button></div>
+    <div class="dscroll">${d.card}<div class="sectionh" style="padding:0 18px">Ask Warden · ${d.thread.length} message${d.thread.length === 1 ? "" : "s"}</div><div class="thread">${msgs(d.thread)}</div></div>
+    <form class="composer" data-chat="${d.id}"><div class="ctx">${d.ctx}</div><div class="box"><input name="m" placeholder="Ask about this…" aria-label="Message"><button class="btn primary">Send</button></div></form></aside>`;
+      }
+
+      // ---------------- render ----------------
+      let lastSel = null;
+      function render() {
+        sync();
+        const main =
+          { findings: findingsMain, overview: overviewMain, setup: setupMain }[S.page]?.() ??
+          stubMain(S.page[0].toUpperCase() + S.page.slice(1));
+        const det = detail();
+        const noRail = S.variant === "C";
+        document.getElementById("root").innerHTML =
+          `<div class="app ${noRail ? "no-rail" : ""} ${det ? "" : "no-detail"}">
+    ${noRail ? topbar() : rail() + mobbar()}<main class="main">${main}</main>${det}</div>
+    <div class="switcher" role="toolbar" aria-label="Prototype variants"><button data-sw="-1" aria-label="Previous variant">←</button><span class="lbl">${S.variant} (${VARIANTS[S.variant]})</span><button data-sw="1" aria-label="Next variant">→</button><button class="theme" data-theme-t>${S.theme || "auto"} theme</button></div>`;
+        const dEl = document.querySelector(".detail");
+        if (dEl && S.sel !== lastSel) dEl.classList.add("enter");
+        lastSel = S.sel;
+      }
+      function say(id, who, kind, text) {
+        chatFor(id, []).push({ who, at: "now", kind, text });
+      }
+      document.addEventListener("click", (e) => {
+        const t = e.target.closest(
+          "[data-page],[data-tab],[data-modf],[data-mod],[data-sel],[data-act],[data-sw],[data-theme-t]",
+        );
+        if (!t) return;
+        if (t.tagName === "A") e.preventDefault();
+        if (t.dataset.act) {
+          act(t.dataset.act, t.dataset.id);
+          e.stopPropagation();
+          return render();
+        }
+        if (t.dataset.sw) {
+          const k = Object.keys(VARIANTS);
+          S.variant = k[(k.indexOf(S.variant) + +t.dataset.sw + k.length) % k.length];
+          return render();
+        }
+        if (t.dataset.themeT !== undefined) {
+          S.theme = { "": "light", light: "dark", dark: "" }[S.theme];
+          return render();
+        }
+        if (t.dataset.page) {
+          S.page = t.dataset.page;
+          S.sel =
+            t.dataset.sel2 ||
+            (window.innerWidth >= 1280
+              ? { findings: "19b131ca", overview: "1.3.3", setup: "write" }[S.page] || null
+              : null);
+          S.overriding = false;
+          return render();
+        }
+        if (t.dataset.mod) {
+          S.page = "findings";
+          S.mod = t.dataset.mod;
+          return render();
+        }
+        if (t.dataset.tab) {
+          S.tab = t.dataset.tab;
+          return render();
+        }
+        if (t.dataset.modf) {
+          S.mod = t.dataset.modf;
+          return render();
+        }
+        if (t.dataset.sel) {
+          if (t.dataset.page2) S.page = t.dataset.page2;
+          S.sel = t.dataset.sel;
+          S.overriding = false;
+          return render();
+        }
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.target.matches("input,textarea,select,[contenteditable]")) return;
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+          const k = Object.keys(VARIANTS);
+          S.variant =
+            k[(k.indexOf(S.variant) + (e.key === "ArrowRight" ? 1 : -1) + k.length) % k.length];
+          render();
+        }
+        if (e.key === "Escape" && S.sel) {
+          S.sel = null;
+          render();
+        }
+        if (e.key === "Enter" && e.target.dataset.sel) e.target.click();
+      });
+      document.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const id = e.target.dataset.chat;
+        const v = e.target.m.value.trim();
+        if (!v) return;
+        say(id, "Elm's Admin", "", v);
+        say(id, "Warden", "", "Warden's chat isn't connected yet.");
+        chatFor(id).at(-1).w = 1;
+        render();
+      });
+      function act(a, id) {
+        const f = F.find((x) => x.id === id),
+          c = C.find((x) => x.ref === id);
+        if (a === "close") S.sel = null;
+        if (a === "approve") {
+          f.status = f.proposal.kind === "Accepted" ? "accepted" : "fp";
+          if (f.proposal.until) f.until = f.proposal.until;
+          say(
+            id,
+            "Elm's Admin",
+            "decision",
+            `Approved ${f.proposal.kind}, proposed by ${f.proposal.by}.`,
+          );
+          delete f.proposal;
+        }
+        if (a === "reject") {
+          say(id, "Elm's Admin", "decision", `Rejected ${f.proposal.kind}. It stays Open.`);
+          delete f.proposal;
+        }
+        if (a === "confirmfix") {
+          say(id, "Elm's Admin", "decision", "Confirmed the fix. It counts in the Fix rate.");
+          delete f.unconfirmed;
+        }
+        if (a === "moved") {
+          say(
+            id,
+            "Elm's Admin",
+            "decision",
+            `Marked moved: ${f.unconfirmed} merges into this Finding, which reopens.`,
+          );
+          f.status = "open";
+          F.splice(
+            F.findIndex((x) => x.id === f.unconfirmed),
+            1,
+          );
+          delete f.unconfirmed;
+        }
+        if (a === "openpr") {
+          S.fixBusy = true;
+          setTimeout(() => {
+            S.fixBusy = false;
+            f.fix = "open";
+            say(id, "Warden", "fix", "Opened acme/shop-web#14. A person merges it.");
+            chatFor(id).at(-1).w = 1;
+            render();
+          }, 900);
+        }
+        if (a === "accept" || a === "fpmark")
+          (say(
+            id,
+            "Warden",
+            "",
+            "In the real app this opens the decision form (reason, and an expiry for Accept).",
+          ),
+            (chatFor(id).at(-1).w = 1));
+        if (a === "confirm") {
+          if (S.page !== "overview") {
+            S.page = "overview";
+          }
+          S.sel = id;
+          c.review = "Reviewed";
+          c.by = "Elm's Admin, Nov 27";
+          c.gap = c.verdict !== "Evidenced" && c.verdict !== "Not applicable";
+          say(id, "Elm's Admin", "decision", `Confirmed ${c.verdict}.`);
+        }
+        if (a === "override") {
+          S.page = "overview";
+          S.sel = id;
+          S.overriding = true;
+        }
+        if (a === "canceloverride") S.overriding = false;
+        if (a === "saveoverride") {
+          const v = document.getElementById("ovv").value,
+            r = document.getElementById("ovr").value.trim() || "(no reason given)";
+          c.verdict = v;
+          c.review = "Reviewed";
+          c.by = "Elm's Admin, Nov 27";
+          c.reason = r;
+          c.gap = v === "Not evidenced" || v === "Partly evidenced";
+          S.overriding = false;
+          say(id, "Elm's Admin", "decision", `Overrode to ${v}: ${r}`);
+        }
+        if (a === "step") {
+          const s = STEPS.find((x) => x.id === id);
+          S.sel = id;
+          if (s.id === "write") {
+            s.state = "done";
+            s.line = "Write access granted through installation 4243.";
+            delete s.action;
+            F[0].fix = F[0].fix || "none";
+          } else
+            (say(id, "Warden", "", `${s.action}: in the real app this starts it.`),
+              (chatFor(id).at(-1).w = 1));
+        }
+      }
+      render();
+    </script>
+  </body>
+</html>
