@@ -456,14 +456,54 @@ describe("the review form (story 4)", () => {
     },
   );
 
-  it.each([
-    ["reviewed", { review_state: "reviewed", reviewed_verdict: "not_evidenced" }],
-    ["changed since review", { review_state: "changed_since_review", reviewed_verdict: null }],
-  ] as const)("offers them while %s too", async (_, fields) => {
+  /** The Review row's buttons, by their words, once the read has answered. */
+  const reviewButtons = async () =>
+    within((await section("Reviews")).getByRole("group", { name: "Review" }))
+      .getAllByRole("button")
+      .map((button) => button.textContent);
+
+  it.each<Role>(["lead", "admin"])(
+    "a %s sees Override and no Confirm on a reviewed Control whose newest review is a confirm",
+    async (role) => {
+      show(
+        {
+          review_state: "reviewed",
+          reviewed_verdict: "not_evidenced",
+          reviews: [
+            ADAS_CONFIRM,
+            review({ id: "r-1", outcome: "overridden", verdict: "not_applicable" }),
+          ],
+        },
+        {},
+        role,
+      );
+      expect(await reviewButtons()).toEqual(["Override"]);
+    },
+  );
+
+  it.each<[string, Partial<ControlDetail>]>([
+    [
+      "changed since review, its newest review a confirm",
+      { review_state: "changed_since_review", reviews: [ADAS_CONFIRM] },
+    ],
+    [
+      "reviewed, its newest review an override",
+      {
+        review_state: "reviewed",
+        reviewed_verdict: "not_applicable",
+        reviews: [
+          review({ id: "r-2", outcome: "overridden", verdict: "not_applicable" }),
+          ADAS_CONFIRM,
+        ],
+      },
+    ],
+    [
+      "reviewed with no reviews in the answer",
+      { review_state: "reviewed", reviewed_verdict: "not_evidenced", reviews: [] },
+    ],
+  ])("offers Confirm and Override on a Control %s", async (_, fields) => {
     show(fields, {}, "lead");
-    const reviews = await section("Reviews");
-    expect(reviews.getByRole("button", { name: "Confirm" })).toBeVisible();
-    expect(reviews.getByRole("button", { name: "Override" })).toBeVisible();
+    expect(await reviewButtons()).toEqual(["Confirm", "Override"]);
   });
 
   it("Confirm opens its form in place of the row: an optional Reason, focused, the Confirm submit and Cancel", async () => {
@@ -550,7 +590,8 @@ describe("the review form (story 4)", () => {
     expect(done).toHaveTextContent(/^Confirmed\.$/);
     expect(done).toHaveFocus();
     expect(card.queryByRole("form")).toBeNull();
-    expect(card.getByRole("group", { name: "Review" })).toBeVisible();
+    // The answer is reviewed with the new confirm first: a second Confirm would store the same review again.
+    expect(await reviewButtons()).toEqual(["Override"]);
     const [newest] = within((await section("Reviews")).getByRole("list")).getAllByRole("listitem");
     expect(within(newest!).getByText("Confirmed: Not evidenced")).toBeVisible();
     expect(within(newest!).getByText(/^By you,/)).toBeVisible();
@@ -775,6 +816,17 @@ describe("no answer to a review's POST", () => {
     expect(submit()).toBeEnabled();
     expect(form.getByRole("textbox")).toHaveValue("Checked");
     expect(card.getByRole("alert")).toHaveTextContent(maybeSaved);
+  });
+
+  it("Cancel focuses Override once the read that follows has taken Confirm away", async () => {
+    const { card, form, submit } = await noAnswerThenReread("Confirm", savedAfterAll);
+    await userEvent.click(submit());
+    await vi.waitFor(() => expect(submit()).toBeEnabled());
+
+    await userEvent.click(form.getByRole("button", { name: "Cancel" }));
+    expect(card.queryByRole("form")).toBeNull();
+    expect(card.queryByRole("button", { name: "Confirm" })).toBeNull();
+    expect(card.getByRole("button", { name: "Override" })).toHaveFocus();
   });
 
   it("the Overview is asked again once, even when the read that follows differs from the row", async () => {
