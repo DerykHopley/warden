@@ -34,7 +34,7 @@ function open(
     me: { userId: "user_1", team: TEAM, role, level: "quick" as const },
     onSessionEnded: vi.fn(),
     refreshMe: vi.fn(),
-    panel: { setContext: vi.fn(), open: vi.fn() },
+    panel: { setContext: vi.fn(), open: vi.fn(), uncover: vi.fn() },
   };
   render(<FindingsPage {...props} />);
   return props;

@@ -9,10 +9,12 @@ import type { PageProps } from "./App.tsx";
 import {
   auditAnswerLine,
   controlInAddress,
+  controlGoneNotice,
   controlsByCatalogue,
   focusedControl,
   JOURNEY_STATE_WORDS,
   journeyCards,
+  namesControl,
   NO_CATALOGUE_LINE,
   searchWithControl,
   shownVerdict,
@@ -53,6 +55,29 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
     [audit, selected, focused],
   );
 
+  // A review the card stored, of the Control it was sent from; and the notice when an answer asked for again no longer
+  // holds the focused Control (#395). The card goes with its row, and the notice says what became of it, until a row
+  // is selected. The focus that last answer showed is gone only while still selected: ✕ and another row change the
+  // selection, so they say nothing, and a link the first answer doesn't hold was never shown. Each notice is its own
+  // object, so one with the same words as the last still uncovers the page.
+  const [reviewed, setReviewed] = useState<
+    (NonNullable<ControlInAddress> & { done: string }) | null
+  >(null);
+  const [goneNotice, setGoneNotice] = useState<{ words: string } | null>(null);
+  const [lastShownFocus, setLastShownFocus] = useState(focused);
+  if (audit !== null && focused !== lastShownFocus) {
+    setLastShownFocus(focused);
+    if (
+      lastShownFocus !== null &&
+      focused === null &&
+      namesControl(selected, lastShownFocus.control)
+    ) {
+      const done =
+        reviewed !== null && namesControl(reviewed, lastShownFocus.control) ? reviewed.done : null;
+      setGoneNotice({ words: controlGoneNotice(lastShownFocus, audit, done) });
+    }
+  }
+
   // The address always names the focus shown: one the answer doesn't hold is removed in place. As the page goes (a
   // Team switch, sign-out), its focus leaves the address, so the next Team's page doesn't open it as a link.
   useEffect(() => showInAddress(shown), [shown]);
@@ -65,8 +90,11 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
 
   // The Ask Warden panel talks about the focused Control, its card's ✕ clearing it; with none, about the page. A card
   // whose read is newer than its row asks the answer again, keeping the page on screen while it does.
-  const { setContext, open: openPanel } = panel;
-  const clearFocus = useCallback(() => setSelected(null), []);
+  const { setContext, open: openPanel, uncover } = panel;
+  const clearFocus = useCallback(() => {
+    setSelected(null);
+    setReviewed(null);
+  }, []);
   const refreshRow = call.refresh;
   useEffect(() => {
     setContext(
@@ -75,7 +103,13 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
         : {
             view: ["Overview"],
             focus: null,
-            control: { ...focused, clear: clearFocus, refreshRow },
+            control: {
+              ...focused,
+              clear: clearFocus,
+              refreshRow,
+              onReviewed: (done) =>
+                setReviewed({ catalogue: focused.catalogue.id, ref: focused.control.ref, done }),
+            },
             clearFocus,
             onFindingChanged: nothingToDo,
             onFindingGone: nothingToDo,
@@ -86,6 +120,11 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
   }, [setContext, focused, clearFocus, refreshRow]);
   // As the page goes (a Team switch, sign-out), its context goes with it.
   useEffect(() => () => setContext(null), [setContext]);
+  // The notice is on the page: a panel over it (floating, or full screen) closes, without storing that as the person's
+  // choice, so the notice can be read; one pinned beside the page stays.
+  useEffect(() => {
+    if (goneNotice !== null) uncover();
+  }, [goneNotice, uncover]);
 
   // A link that names a Control opens a closed panel as selecting it does, once the answer holds it: only on the
   // page's load, so an answer asked for again doesn't reopen a panel the person closed.
@@ -96,10 +135,15 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
     linked.current = null;
   }, [audit, focused, openPanel]);
 
-  /** Selecting a Control replaces the address's entry (the effect above writes it), and opens a closed panel. */
+  /**
+   * Selecting a Control replaces the address's entry (the effect above writes it), and opens a closed panel. It removes
+   * the notice, and a stored review of another Control, whose card has gone.
+   */
   const select = useCallback(
     (control: AuditControl) => {
       setSelected({ catalogue: control.catalogue, ref: control.ref });
+      setGoneNotice(null);
+      setReviewed((was) => (namesControl(was, control) ? was : null));
       openPanel();
     },
     [openPanel],
@@ -108,6 +152,11 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
   return (
     <>
       <h1>Overview</h1>
+      {goneNotice !== null && (
+        <p className="notice" role="alert">
+          {goneNotice.words}
+        </p>
+      )}
       {call.result === "loading" && <p className="muted">Loading Overview…</p>}
       {call.result !== "loading" && <CallRefused result={call.result} onRetry={call.retry} />}
       {call.result !== "loading" && <TeamRefused result={call.result} />}
@@ -220,7 +269,7 @@ function AuditCatalogueBlock({
           <AuditControlRow
             key={control.ref}
             control={control}
-            selected={selected?.catalogue === catalogue.id && selected.ref === control.ref}
+            selected={namesControl(selected, control)}
             onSelect={onSelect}
           />
         ))}
