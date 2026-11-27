@@ -67,8 +67,7 @@ Lead's review, so the Overview answers "Not yet: 2 Gaps, 1 Control waiting for r
 up, a Guard Scan of the demo Repo from Setup fails at GitHub. The demo's Scans and Spot run age: about 30 days after
 the seed they fall out of the period Vouch reads, its Controls read Not evidenced, the ones reviewed at another Verdict
 read "Changed since review", and a rerun won't change that (it never reviews a Control twice), so a fresh demo needs a
-fresh Team. Load the snapshot first, once per
-database:
+fresh Team. Load the snapshot first, once per database:
 
 ```sh
 PGUSER=warden_migrate pnpm --filter @warden/server load-cves
@@ -81,17 +80,22 @@ Repo Assets store and Vouch's Catalogue and review stores (Scans, a Spot run, tw
 the demo Repo's link, ISA2027's switch and three reviews, each made as the Team's oldest Admin or Lead). Run again, it
 says the Team is already seeded; on a Team seeded without the demo Product (with `--no-product`, or before the seed
 made one), it adds the Product and runs its Scan, and on one seeded without the ISA2027 state (before the seed wrote
-it, or a run cut short) it adds what's missing. It never changes ISA2027's switch once the Team has one (an Admin may
-have turned it off), nor reviews a Control that has a review. If another Team holds the demo installation, it exits 1
-("demo seed failed", naming `InstallationLinkedElsewhere`); a rerun after finishes it. A rerun takes the seeded Team's demo Findings as they are: decisions
-made on them since (a Lead's, or the daily Job reopening an expired acceptance) and demo Findings stored under an older
-demo Rule id are no mismatch, and it changes none of them. It exits 1, writing nothing, for a Team with Findings of its
-own, for a Team with Products of its own, and when the CVE snapshot isn't loaded (naming `load-cves`). On a Team it
-has seeded before, it also exits 1, writing nothing, for a seed cut short (not every demo run applied, or the seed's
-two decisions missing), a demo Product changed since or a Product of the Lead's under its name, and any Finding the
-seed didn't write (one from a real Scan, or the CVE Findings a deleted demo Product left). One seed runs per Team at a
-time. `--no-product` after the Team id seeds the demo Findings only, with no Product, no snapshot needed, and none of
-the ISA2027 state (no Repo Asset, Catalogue choice or review): the browser tests seed Acme and Bluebird that way.
+it, or a run cut short) it adds what's missing. That rerun works out the Verdicts it confirms as of today, not as of the
+first seed: on a Team seeded more than about 30 days before, whose demo Scans and Spot run are out of the period Vouch
+reads, it confirms 1.3.4, 4.1.3 and 5.2.4 at Not evidenced, so the Team has 3 Gaps rather than an Evidenced Control
+and 2 Gaps, and no later rerun changes that. For the demo, seed a fresh Team. It never changes ISA2027's switch once
+the Team has one (an Admin may have turned it off), nor reviews a Control that has a review. If another Team holds the
+demo installation, it exits 1 ("demo seed failed", naming `InstallationLinkedElsewhere`); a rerun after the cause is
+fixed (the other Team's link of that installation removed) finishes the Vouch step. A rerun takes the seeded Team's demo
+Findings as they are: decisions made on them since (a Lead's, or the daily Job reopening an expired acceptance) and demo
+Findings stored under an older demo Rule id are no mismatch, and it changes none of them. It exits 1, writing nothing,
+for a Team with Findings of its own, for a Team with Products of its own, and when the CVE snapshot isn't loaded (naming
+`load-cves`). On a Team it has seeded before, it also exits 1, writing nothing, for a seed cut short (not every demo run
+applied, or the seed's two decisions missing), a demo Product changed since or a Product of the Lead's under its name,
+and any Finding the seed didn't write (one from a real Scan, or the CVE Findings a deleted demo Product left). One seed
+runs per Team at a time. `--no-product` after the Team id seeds the demo Findings only, with no Product, no snapshot
+needed, and none of the ISA2027 state (no Repo Asset, Catalogue choice or review): the browser tests seed Acme and
+Bluebird that way.
 
 It refuses to start without `WARDEN_SEED_DEMO`. On a hosted database (a `PGHOST` other than `127.0.0.1`,
 `localhost` or `::1`, or any `PGPASSWORD`), `WARDEN_SEED_DEMO` must be the database's name, and the live database,

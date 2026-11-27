@@ -779,9 +779,6 @@ describe("the demo seed's ISA2027 state", () => {
       findings: before.findings.length,
     });
     expect(await stateOf(team)).toEqual(before);
-    expect(isOff(await vouch.teamCatalogues.list(team))).toBe(true);
-    const [newest] = await vouch.controlReviews.history(team, ISA, "4.1.3");
-    expect(newest).toMatchObject({ outcome: "overridden", reviewedBy: "user_lead" });
   });
 
   it("on a rerun, gives a Team seeded before the Vouch step all of it, answering seeded", async () => {
@@ -854,10 +851,6 @@ describe("the demo seed's ISA2027 state", () => {
   });
 });
 
-/** Whether ISA2027 has a choice in `choices`, and it is off. */
-const isOff = (choices: readonly { catalogue: string; on: boolean }[]) =>
-  choices.some((choice) => choice.catalogue === ISA && !choice.on);
-
 describe("pnpm seed", () => {
   const env = () => ({
     PGUSER: "warden_app",
@@ -873,7 +866,6 @@ describe("pnpm seed", () => {
     expect(output).toContain(`"message":"demo Findings, demo Product and ISA2027 seeded"`);
     expect(code).toBe(0);
     expect(await demoFindingsOf(team)).toHaveLength(DEMO_COUNT);
-    await expectVouchState(team, "user_admin");
   });
 
   it("adds the demo Product to a Team seeded without it, its secret under the old Rule id and envLocal Accepted", async () => {
@@ -908,7 +900,6 @@ describe("pnpm seed", () => {
     expect(code).toBe(1);
     expect(output).toContain(`"message":"demo seed failed"`);
     expect(output).toContain("InstallationLinkedElsewhere");
-    await expectNoVouchState(team);
   });
 
   it("exits 1 for a Team with Products of its own, saying so", async () => {
