@@ -165,7 +165,10 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
       {body !== null && (
         <>
           <ol className="journey" aria-label="The journey">
-            {journeyCards(body.level, body.last_scan_at, body.audit).map((card) => (
+            {journeyCards(body.level, body.last_scan_at, body.audit, {
+              agent_sessions: body.agent_sessions,
+              period_days: body.period_days,
+            }).map((card) => (
               <JourneyCard key={card.level} card={card} />
             ))}
           </ol>

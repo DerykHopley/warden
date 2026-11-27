@@ -30,6 +30,7 @@ const overview = (team = "org_a") =>
     last_scan_at: null,
     has_findings: false,
     period_days: 30,
+    agent_sessions: { hook_active: false, judged: 0, needs_human_review: 0 },
     open_at_start: 0,
     open_now: 0,
     fix_rate: { fixed: 0, of: 0 },
