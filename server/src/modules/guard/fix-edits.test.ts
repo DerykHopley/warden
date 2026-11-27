@@ -490,6 +490,13 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
       ["--pip-args", "pipx", ["run", `--pip-args="--index-url ${PRIVATE}"`, "acme-mcp"], undefined],
       ["NPM_CONFIG_REGISTRY", "npx", ["-y", "acme-mcp"], { NPM_CONFIG_REGISTRY: PRIVATE }],
       ["UV_INDEX_URL", "uvx", ["acme-mcp"], { UV_INDEX_URL: PRIVATE }],
+      ["BUN_CONFIG_REGISTRY", "bunx", ["acme-mcp"], { BUN_CONFIG_REGISTRY: PRIVATE }],
+      [
+        "YARN_NPM_REGISTRY_SERVER",
+        "yarn",
+        ["dlx", "acme-mcp"],
+        { YARN_NPM_REGISTRY_SERVER: PRIVATE },
+      ],
     ])(
       "leaves %s on `%s %j`, asking no registry, naming it and never its value",
       async (what, command, args, env) => {
@@ -502,6 +509,25 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
           `no server can be pinned: \`acme\`: uses a private registry (\`${what}\`)`,
         );
         expect(result.reason).not.toContain(PRIVATE);
+      },
+    );
+
+    it.each([
+      ["npm_config_userconfig", "npx", ["-y", "acme-mcp"]],
+      ["UV_CONFIG_FILE", "uvx", ["acme-mcp"]],
+      ["PIP_CONFIG_FILE", "pipx", ["run", "acme-mcp"]],
+    ])(
+      "leaves %s, a config file that can set a registry, on `%s %j`, naming it and never its value (#403)",
+      async (key, command, args) => {
+        const CONFIG = "/etc/acme/registry.conf";
+        const { registry, asked } = fakeRegistry(both);
+        const result = await fix({ acme: { command, args, env: { [key]: CONFIG } } }, registry);
+        if (result.ok) throw new Error("expected a refusal");
+        expect(asked).toEqual([]);
+        expect(result.reason).toBe(
+          `no server can be pinned: \`acme\`: uses a private registry (\`${key}\`)`,
+        );
+        expect(result.reason).not.toContain(CONFIG);
       },
     );
 

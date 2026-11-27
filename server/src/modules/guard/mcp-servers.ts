@@ -230,15 +230,18 @@ type Options = {
   takesValue(option: string, next: string | undefined): boolean;
   /** Whether a short-option cluster (`-it`) is read letter by letter, as docker and podman read it. */
   clusters: boolean;
+  /** Whether a short option's value can be written straight after it (`-ivalue`), as uv's clap and pipx's argparse read it. */
+  attached: boolean;
 };
 
 /**
  * A command whose value options are listed: each takes the next word, whatever it starts with, and any other option is
  * a switch. uv and pipx refuse an option they don't know; npm and pnpm read it as a switch.
  */
-const valueOptions = (values: ReadonlySet<string>): Options => ({
+const valueOptions = (values: ReadonlySet<string>, attached = false): Options => ({
   takesValue: (option) => values.has(option),
   clusters: false,
+  attached,
 });
 
 /**
@@ -250,11 +253,12 @@ function switchOptions(switches: ReadonlySet<string>, clusters = false): Options
   return {
     takesValue: (option, next) => !switches.has(option) && next !== undefined,
     clusters,
+    attached: false,
   };
 }
 
 const NPM = valueOptions(NPM_VALUE_OPTIONS);
-const PYTHON = valueOptions(PYTHON_VALUE_OPTIONS);
+const PYTHON = valueOptions(PYTHON_VALUE_OPTIONS, true);
 const CONTAINER = switchOptions(CONTAINER_SWITCHES, true);
 
 /**
@@ -420,6 +424,17 @@ type RunnerOption = { name: string; value: string | undefined };
 type OnOption = (option: RunnerOption) => void;
 
 /**
+ * A short option that takes a value, given it in the same word (`-ivalue`, never `-i=value`), when `options` read one
+ * so: its name and that value.
+ */
+function attachedOption(word: string, options: Options): RunnerOption | undefined {
+  if (!options.attached || !/^-[^-=][^=]/.test(word)) return undefined;
+  const name = word.slice(0, 2);
+  const value = word.slice(2);
+  return options.takesValue(name, value) ? { name, value } : undefined;
+}
+
+/**
  * The index of the first word from `i` on that isn't an option or an option's value, `--` included. `onOption` is
  * told each option stepped over.
  */
@@ -435,9 +450,10 @@ function afterOptions(
     const width = optionWidth(words, at, options);
     const equals = word.indexOf("=");
     onOption?.(
-      equals < 0
-        ? { name: word, value: width === 2 ? words[at + 1] : undefined }
-        : { name: word.slice(0, equals), value: word.slice(equals + 1) },
+      attachedOption(word, options) ??
+        (equals < 0
+          ? { name: word, value: width === 2 ? words[at + 1] : undefined }
+          : { name: word.slice(0, equals), value: word.slice(equals + 1) }),
     );
     at += width;
   }
@@ -504,9 +520,9 @@ function runnerOptions(
   const at = argsAfterRunner(words, runner, onOption);
   if (at === undefined) return [];
   const withPackage: Options = {
+    ...runner.options,
     takesValue: (option, next) =>
       fromOptions.includes(option) || runner.options.takesValue(option, next),
-    clusters: runner.options.clusters,
   };
   afterOptions(words, at, withPackage, onOption);
   return found;
@@ -515,26 +531,40 @@ function runnerOptions(
 /** npm's options that point a runner at a registry: `--registry`, its `--reg` shorthand, and a scope's own. */
 const isNpmRegistryOption = (name: string) =>
   name === "--registry" || name === "--reg" || /^--@[^:]+:registry$/.test(name);
-/** The env keys npm reads as a registry, in any case: `npm_config_registry` and a scope's own. */
-const NPM_REGISTRY_ENV = /^npm_config_(?:@[^:]+:)?registry$/i;
+/**
+ * The env keys that point an npm runner at a registry, or at a config file that can set one: npm's
+ * `npm_config_registry`, a scope's own and `npm_config_userconfig`, and Yarn's `YARN_NPM_REGISTRY_SERVER`, each in any
+ * case as npm and Yarn read them; and bun's `BUN_CONFIG_REGISTRY`.
+ */
+const isNpmRegistryEnv = (key: string) =>
+  /^(?:npm_config_(?:(?:@[^:]+:)?registry|userconfig)|yarn_npm_registry_server)$/i.test(key) ||
+  key === "BUN_CONFIG_REGISTRY";
 
 /** pip's options that point it at an index other than PyPI, or at local packages; pipx passes them in `--pip-args`. */
 const PIP_INDEX_OPTIONS = ["-i", "--index-url", "--extra-index-url", "-f", "--find-links"];
 /** uv's and pipx's such options: pip's, and uv's own `--index` and `--default-index`. */
 const PYTHON_INDEX_OPTIONS = new Set([...PIP_INDEX_OPTIONS, "--index", "--default-index"]);
-/** The env keys uv and pip read as an index or a place to find packages. */
+/** The env keys uv and pip read as an index or a place to find packages, or as a config file that can set one. */
 const PYTHON_INDEX_ENV = new Set([
   ...["UV_INDEX", "UV_DEFAULT_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_FIND_LINKS"],
   ...["PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_FIND_LINKS"],
+  ...["UV_CONFIG_FILE", "PIP_CONFIG_FILE"],
 ]);
 
-/** Whether a `--pip-args` value, split on white space with any quotes around it dropped, holds an index option. */
+/**
+ * Whether a `--pip-args` value, split on white space with any quotes around it dropped, holds an index option: a long
+ * one alone or with `=value`, a short one with its value attached or not (`-ivalue`).
+ */
 const pipArgsHaveIndex = (value: string | undefined) =>
   (value ?? "")
     .split(/\s+/)
     .map((word) => word.replace(/^["']|["']$/g, ""))
     .some((word) =>
-      PIP_INDEX_OPTIONS.some((option) => word === option || word.startsWith(`${option}=`)),
+      PIP_INDEX_OPTIONS.some((option) =>
+        option.startsWith("--")
+          ? word === option || word.startsWith(`${option}=`)
+          : word.startsWith(option),
+      ),
     );
 
 /** What points each registry's runners somewhere else: one of their options, and an env key Claude Code passes them. */
@@ -544,7 +574,7 @@ const CUSTOM_REGISTRY: Record<
 > = {
   npm: {
     option: ({ name }) => isNpmRegistryOption(name),
-    envKey: (key) => NPM_REGISTRY_ENV.test(key),
+    envKey: isNpmRegistryEnv,
   },
   pypi: {
     option: ({ name, value }) =>
