@@ -683,12 +683,13 @@ function runArgumentsEnd(masked: string, start: number, startsInBackquotes: bool
 }
 
 /**
- * Whether an index in a command with its quotes masked is inside backquotes: an odd number of backquotes before it,
- * skipping a backslash and the character it escapes. Backquotes escaped inside backquotes aren't nested spans here.
- * The reader it returns takes indexes in order, none smaller than the one before, and reads on from where the last
- * one stopped, so a command is read once however many runs it has.
+ * A reader of whether an index in a command with its quotes masked is inside backquotes: an odd number of backquotes
+ * before it, skipping a backslash and the character it escapes. Backquotes escaped inside backquotes aren't nested
+ * spans here. The reader keeps its place and reads on from the last index it was asked about, so a command is read
+ * once however many runs it has. Call it in index order: asked about an index smaller than the last one, it gives the
+ * last one's answer, which can be wrong.
  */
-function backquotesOpenAt(masked: string): (index: number) => boolean {
+function backquoteReader(masked: string): (index: number) => boolean {
   let open = false;
   let at = 0;
   return (index) => {
@@ -763,22 +764,21 @@ type Shells = { left: number; tooDeep: boolean };
  */
 function agentRuns(command: string, shells: Shells): string[] {
   const masked = withQuotesMasked(command);
-  // `runStarts` gives the starts in order, so one reader answers them all.
-  const inBackquotesAt = backquotesOpenAt(masked);
+  // `runStarts` gives the starts in index order, as the reader needs, so one reader answers them all.
+  const inBackquotesAt = backquoteReader(masked);
+  const argumentsEnd = (start: number) => runArgumentsEnd(masked, start, inBackquotesAt(start));
   const runs: string[] = [];
   let end = 0;
   for (const { start, shell } of runStarts(masked)) {
     // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run.
     if (start < end) continue;
     if (!shell) {
-      end = runArgumentsEnd(masked, start, inBackquotesAt(start));
+      end = argumentsEnd(start);
       runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
     } else if (shells.left === 0) shells.tooDeep = true;
     else {
       shells.left--;
-      const script = commandString(
-        shellWords(command.slice(start, runArgumentsEnd(masked, start, inBackquotesAt(start)))),
-      );
+      const script = commandString(shellWords(command.slice(start, argumentsEnd(start))));
       if (script !== undefined) runs.push(...agentRuns(script, shells));
     }
   }
