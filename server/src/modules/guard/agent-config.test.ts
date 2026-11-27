@@ -486,6 +486,13 @@ describe("guard/permission-skip", () => {
     [".claude/settings.json", "PreToolUse", `claude -p x && claude ${FLAG} -p y`, FLAG],
     [".claude/settings.json", "PreToolUse", `claude "${FLAG}" -p x`, FLAG],
     [".claude/settings.json", "PreToolUse", `claude ${MODE} "${BYPASS}"`, `${MODE} ${BYPASS}`],
+    // A shell's `-c` string is read as a command.
+    [
+      ".claude/settings.json",
+      "PreToolUse",
+      `bash -c 'claude ${MODE} ${BYPASS} -p hi'`,
+      `${MODE} ${BYPASS}`,
+    ],
     // A redirect's `&` or `|`, or a separator inside a group or backquotes the run opened, doesn't end its arguments.
     ...[
       `claude -p x 2>&1 ${FLAG}`,
@@ -609,6 +616,20 @@ describe("guard/permission-skip", () => {
       `if true; then x=1 time -f %e claude -p x ${FLAG}; fi`,
       `echo $(x=1 time -f %e claude -p x ${FLAG})`,
       `time -p x=1 time -f %e claude -p x ${FLAG}`,
+      // A shell's `-c` string is read as a command: the shell by name or by path, or after a wrapper.
+      `bash -c 'claude ${FLAG} -p hi'`,
+      `sh -c "claude ${FLAG} -p hi"`,
+      `zsh -c 'claude ${FLAG} -p hi'`,
+      `dash -c 'claude ${FLAG} -p hi'`,
+      `/bin/bash -c 'claude ${FLAG} -p hi'`,
+      `/usr/bin/env bash -c 'claude ${FLAG} -p hi'`,
+      // The `-c` in a cluster of short options, or among other options.
+      `bash -lc 'claude ${FLAG} -p hi'`,
+      `bash -ec 'claude ${FLAG} -p hi'`,
+      `bash -e -c 'claude ${FLAG} -p hi'`,
+      `bash --norc -c 'claude ${FLAG} -p hi'`,
+      `bash -o pipefail -c 'claude ${FLAG} -p hi'`,
+      `bash -c -- 'claude ${FLAG} -p hi'`,
     ].map((command): [string, string, string, string] => [
       ".claude/settings.json",
       "PreToolUse",
@@ -757,8 +778,75 @@ describe("guard/permission-skip", () => {
     ["has claude in a comment with no space after #", `echo hi #claude -p x ${FLAG}`],
     ["is only a comment", `# claude -p x ${FLAG}`],
     ["has claude in a comment after ;", `echo hi;# claude -p x ${FLAG}`],
+    // A shell's `-c` string keeps the rules above.
+    ["greps for the flag through a shell", `bash -c "grep -q -- '${FLAG}' && exit 2 || true"`],
+    ["echoes claude with the flag through a shell", `bash -c 'echo claude ${FLAG}'`],
+    [
+      "has the flag only inside the run's own prompt through a shell",
+      `bash -c 'claude -p "never pass ${FLAG}"'`,
+    ],
+    [
+      "runs claude without the flag through a shell, then has it in a later command after ;",
+      `bash -c 'claude -p x; echo ${FLAG}'`,
+    ],
+    // A shell without `c` among its options runs a script, not a string.
+    ["runs a shell without -c on a script path", `bash -e 'claude ${FLAG}'`],
+    ["runs a shell script with the flag as its argument", `bash script.sh '${FLAG}'`],
   ])("gives nothing for a hook command that %s", (_name, command) => {
     expect(see(".claude/settings.json", settings({}, hooks("PreToolUse", command)))).toEqual([]);
+  });
+
+  describe("a hook command a shell runs from its -c string", () => {
+    const path = ".claude/settings.json";
+    const skips = (command: string) => ofRule(path, settings({}, hooks("Stop", command)), SKIP);
+    const onePlace = (command: string) => {
+      const line = lineWith(settings({}, hooks("Stop", command)), '"command":');
+      return [
+        expect.objectContaining({
+          location: { kind: "file", path, line },
+          evidence: {
+            summary: `1 place skips the agent's permission checks (${FLAG}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
+          },
+        }),
+      ];
+    };
+    /** A word in double quotes, as a shell reads it back: `"`, `\`, `$` and a backquote escaped. */
+    const dq = (text: string) => `"${text.replace(/["\\$`]/g, "\\$&")}"`;
+    const sq = (text: string) => `'${text}'`;
+
+    it("reports a double-quoted string with escaped quotes once, its prompt not a place", () => {
+      const command = `bash -c "claude ${FLAG} -p \\"hi there\\""`;
+
+      expect(skips(command)).toEqual(onePlace(command));
+    });
+
+    it.each([
+      [2, `bash -c "sh -c 'claude ${FLAG}'"`],
+      [3, `bash -c "sh -c 'zsh -c \\"claude ${FLAG}\\"'"`],
+    ])("reports a shell run nested %i deep", (_depth, command) => {
+      expect(skips(command)).toEqual(onePlace(command));
+    });
+
+    it("reads no fourth shell's string, and returns", () => {
+      const threeDeep = `sh -c ${sq(`zsh -c ${dq(`dash -c ${dq(`claude ${FLAG}`)}`)}`)}`;
+
+      expect(skips(threeDeep)).toEqual(onePlace(threeDeep));
+      expect(skips(`bash -c ${dq(threeDeep)}`)).toEqual([]);
+    });
+
+    it.each([
+      ["no word after -c", "bash -c"],
+      ["an empty string", "bash -c ''"],
+      ["an unclosed string with no flag", "bash -c 'claude -p x"],
+    ])("gives nothing for %s, and doesn't throw", (_name, command) => {
+      expect(see(path, settings({}, hooks("Stop", command)))).toEqual([]);
+    });
+
+    it("reports an unclosed string that runs the agent with the flag", () => {
+      const command = `bash -c 'claude ${FLAG}`;
+
+      expect(skips(command)).toEqual(onePlace(command));
+    });
   });
 
   it.each([
@@ -775,6 +863,18 @@ describe("guard/permission-skip", () => {
       FLAG,
     ],
     ["an apiKeyHelper", { apiKeyHelper: `claude ${FLAG} -p key` }, '"apiKeyHelper":', FLAG],
+    [
+      "a statusLine run through bash -c",
+      { statusLine: { type: "command", command: `bash -c 'claude ${FLAG} -p hi'` } },
+      '"command":',
+      FLAG,
+    ],
+    [
+      "an apiKeyHelper run through bash -c",
+      { apiKeyHelper: `bash -c 'claude ${FLAG} -p hi'` },
+      '"apiKeyHelper":',
+      FLAG,
+    ],
   ])(
     "reports %s whose command runs the agent with its checks off, on the command's line",
     (_name, rest, needle, kind) => {
