@@ -99,6 +99,9 @@ function controlsReviewedNote(audit: AuditAnswer): string {
   return changed > 0 ? `${note}, ${changed} changed since` : note;
 }
 
+/** Quick's next step while the Team has no Scan, whether Quick is current or passed without one. */
+const NO_SCAN_YET = { progress: 0, notes: ["Next: the first Scan"] };
+
 /**
  * The three journey cards, Quick, Standard, Audit-ready, for a Team at `level`: a Level after it not started (an
  * empty bar); a Level before it done (a full bar) only when its own rule holds, as the Level can pass it without:
@@ -118,7 +121,7 @@ export function journeyCards(
     const state: JourneyState = i < at ? "done" : i === at ? "current" : "not-started";
     const card = { level: cardLevel, word: LEVEL_WORDS[cardLevel], adds: ADDS[cardLevel], state };
     if (cardLevel === "quick" && state === "done" && lastScanAt === null) {
-      return { ...card, state: "not-started", progress: 0, notes: ["Next: the first Scan"] };
+      return { ...card, state: "not-started", ...NO_SCAN_YET };
     }
     if (cardLevel === "standard" && level === "audit_ready") {
       return {
@@ -138,7 +141,7 @@ export function journeyCards(
     if (state === "done") return { ...card, progress: 100, notes: [] };
     if (state === "not-started" || cardLevel !== "quick")
       return { ...card, progress: 0, notes: [] };
-    if (lastScanAt === null) return { ...card, progress: 0, notes: ["Next: the first Scan"] };
+    if (lastScanAt === null) return { ...card, ...NO_SCAN_YET };
     return {
       ...card,
       progress: 100,
