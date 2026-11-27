@@ -187,10 +187,14 @@ An Agent session names a pseudonymous developer, not a person (built, #183).
 
 How much of an Agent session's content the hook sends to Warden, set per Team by an Admin. Built: the tier,
 stored per Team, and the managed settings an Admin reads from `GET /api/hook` (Guard spec slice 9a-ii, #154). The
-block leaves out only `UserPromptSubmit` below Content: its `PostToolUse` and `PostToolUseFailure` hooks run at
-every tier, and Claude Code posts each hook's whole JSON input, so every tier still sends the tool events' full
-input (`tool_input`) and output (`tool_response`) to Warden. Built (#184): the filter on arrival, which applies the
-tier, and Warden redacting what arrives, whatever the tier.
+block's events: at Metadata and Details, `PostToolUse`, `PostToolUseFailure` and `SessionEnd`; at Content, also
+`UserPromptSubmit`. It sends no `SessionStart`, because Claude Code runs only `command` hooks for it and skips an
+`http` one (#465); a session's record starts at its first event instead. The endpoint still stores a `SessionStart`
+that arrives (from an older block), through the same tier filter and redaction. The block leaves out only
+`UserPromptSubmit` below Content: its `PostToolUse` and `PostToolUseFailure` hooks run at every tier, and Claude Code
+posts each hook's whole JSON input, so every tier still sends the tool events' full input (`tool_input`) and output
+(`tool_response`) to Warden. Built (#184): the filter on arrival, which applies the tier, and Warden redacting what
+arrives, whatever the tier.
 
 - **Metadata:** tool names and outcomes. Kept: `hook_event_name`, `tool_name`, `tool_use_id`, `permission_mode`,
   `agent_id`, `agent_type`, `source`, `reason` and `model`, each only as a string of at most 256 characters with no
