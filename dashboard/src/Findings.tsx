@@ -151,6 +151,7 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     setContext({
       view: findingsViewWords({ status, severity, module }),
       focus: focusedFinding,
+      control: null,
       clearFocus,
       onFindingChanged: refresh,
       onFindingGone,

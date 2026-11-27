@@ -6,12 +6,24 @@ import type { CatalogueId, OverviewBody } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import {
   auditAnswerLine,
+  controlInAddress,
   controlsByCatalogue,
+  focusedControl,
   journeyCards,
+  rowAgrees,
+  searchWithControl,
   shownVerdict,
   trendLine,
 } from "../src/overview.ts";
-import { auditRow, ISA, isaOn, ISA_REFS, NO_CATALOGUE, reviewedRow } from "./audit-fixture.ts";
+import {
+  auditRow,
+  controlDetail,
+  ISA,
+  isaOn,
+  ISA_REFS,
+  NO_CATALOGUE,
+  reviewedRow,
+} from "./audit-fixture.ts";
 
 const SCANNED = "2026-11-24T09:14:00Z";
 const scannedOn = new Date(SCANNED).toLocaleDateString(undefined, { dateStyle: "medium" });
@@ -221,6 +233,100 @@ describe("shownVerdict", () => {
     expect(
       shownVerdict(auditRow("4.1.3", { verdict: "evidenced", review_state: "reviewed" })),
     ).toBe("evidenced");
+  });
+});
+
+describe("controlInAddress", () => {
+  it("is the Catalogue and ref the address names", () => {
+    expect(controlInAddress("?catalogue=vda-isa-2027.1&control=1.3.3")).toEqual({
+      catalogue: "vda-isa-2027.1",
+      ref: "1.3.3",
+    });
+  });
+
+  it.each(["", "?control=1.3.3", "?catalogue=vda-isa-2027.1", "?catalogue=&control=1.3.3"])(
+    "is null unless the address names both (%j)",
+    (search) => {
+      expect(controlInAddress(search)).toBeNull();
+    },
+  );
+});
+
+describe("searchWithControl", () => {
+  const focus = { catalogue: "vda-isa-2027.1", ref: "1.3.3" };
+
+  it("writes the Control's Catalogue and ref, keeping the address's other params", () => {
+    expect(searchWithControl("?tab=x", focus)).toBe(
+      "?tab=x&catalogue=vda-isa-2027.1&control=1.3.3",
+    );
+  });
+
+  it("rewrites a Control already there in place", () => {
+    expect(searchWithControl("?catalogue=other&control=9.9.9&tab=x", focus)).toBe(
+      "?catalogue=vda-isa-2027.1&control=1.3.3&tab=x",
+    );
+  });
+
+  it("drops only the Catalogue and ref with no Control in focus", () => {
+    expect(searchWithControl("?catalogue=vda-isa-2027.1&tab=x&control=1.3.3", null)).toBe("?tab=x");
+    expect(searchWithControl("?control=1.3.3", null)).toBe("");
+  });
+
+  it("gives back the address as it is when it already says so", () => {
+    expect(searchWithControl("?control=1.3.3&catalogue=vda-isa-2027.1", focus)).toBe(
+      "?control=1.3.3&catalogue=vda-isa-2027.1",
+    );
+    expect(searchWithControl("?tab=a%20b", null)).toBe("?tab=a%20b");
+  });
+});
+
+describe("focusedControl", () => {
+  const audit = isaOn();
+
+  it("is the Catalogue and row the address names", () => {
+    expect(focusedControl(audit, { catalogue: ISA.id, ref: "1.3.4" })).toEqual({
+      catalogue: ISA,
+      control: audit.controls.find(({ ref }) => ref === "1.3.4"),
+    });
+  });
+
+  it.each([
+    ["no Control", null],
+    ["a ref the answer doesn't hold", { catalogue: ISA.id, ref: "9.9.9" }],
+    ["a Catalogue the answer doesn't list", { catalogue: "not-on", ref: "1.3.3" }],
+  ])("is null for %s", (_, control) => {
+    expect(focusedControl(audit, control)).toBeNull();
+  });
+
+  it("is null for a row of a Catalogue the answer doesn't list", () => {
+    expect(focusedControl(isaOn({ catalogues: [] }), { catalogue: ISA.id, ref: "1.3.3" })).toBe(
+      null,
+    );
+  });
+});
+
+describe("rowAgrees", () => {
+  const read = controlDetail("1.3.3", {
+    verdict: "partly_evidenced",
+    review_state: "reviewed",
+    reviewed_verdict: "not_applicable",
+  });
+  const row = auditRow("1.3.3", {
+    verdict: "partly_evidenced",
+    review_state: "reviewed",
+    reviewed_verdict: "not_applicable",
+  });
+
+  it("agrees when the row holds the read's Verdicts and review state", () => {
+    expect(rowAgrees(row, read)).toBe(true);
+  });
+
+  it.each([
+    ["the worked-out Verdict", { verdict: "evidenced" }],
+    ["the review state", { review_state: "changed_since_review" }],
+    ["the reviewed Verdict", { reviewed_verdict: "evidenced" }],
+  ] as const)("disagrees on %s", (_, fields) => {
+    expect(rowAgrees({ ...row, ...fields }, read)).toBe(false);
   });
 });
 

@@ -8,6 +8,7 @@ import userEvent from "@testing-library/user-event";
 import type { PendingProposal } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { App } from "../src/App.tsx";
+import { controlDetail, overviewBody } from "./audit-fixture.ts";
 import { callsTo, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { clerk, resetClerk } from "./fake-clerk.tsx";
 import { demoFindings, ID, TEAM } from "./findings-fixture.ts";
@@ -501,6 +502,17 @@ describe("the context line", () => {
       /^Talking about: a1c4e7f0 · view: Findings, Open, High$/,
     );
     expect(within(contextLine()).getByText("a1c4e7f0").tagName).toBe("CODE");
+  });
+
+  it("with a Control in focus on Overview, names its ref and the view", async () => {
+    // A link that names a Control opens the panel.
+    open("/overview?catalogue=vda-isa-2027.1&control=1.3.3", {
+      overview: () => json(200, overviewBody(TEAM)),
+      control: (_, ref) => json(200, controlDetail(ref)),
+    });
+    await screen.findByRole("complementary", { name: "Ask Warden" });
+    expect(contextLine()).toHaveTextContent(/^Talking about: 1\.3\.3 · view: Overview$/);
+    expect(within(contextLine()).getByText("1.3.3").tagName).toBe("CODE");
   });
 
   it("on People, names the page", async () => {

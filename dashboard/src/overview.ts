@@ -1,7 +1,7 @@
 // The Team's Level, trend and audit answer as the server answers them (GET /api/overview), and the Overview's rules:
-// each journey card's state and next step, the trend line's words, and the audit answer's line, its rows by Catalogue
-// and the Verdict each row shows (docs/design.md, Components: Journey card, Trend line, Audit answer, Audit Control
-// row).
+// each journey card's state and next step, the trend line's words, and the audit answer's line, its rows by Catalogue,
+// the Verdict each row shows and the Control the address focuses (docs/design.md, Components: Journey card, Trend
+// line, Audit answer, Audit Control row).
 import {
   hasReview,
   Level,
@@ -9,6 +9,7 @@ import {
   type AuditAnswer,
   type AuditCatalogue,
   type AuditControl,
+  type ControlDetail,
   type ReviewedVerdict,
 } from "@warden/contracts";
 import { useCallback } from "react";
@@ -195,11 +196,69 @@ export function controlsByCatalogue(audit: AuditAnswer): CatalogueControls[] {
   }));
 }
 
+/** The Control the Overview's address names (`?catalogue=…&control=…`); null unless it names both. */
+export type ControlInAddress = { catalogue: string; ref: string } | null;
+
+export function controlInAddress(search: string): ControlInAddress {
+  const query = new URLSearchParams(search);
+  const catalogue = query.get("catalogue");
+  const ref = query.get("control");
+  return catalogue && ref ? { catalogue, ref } : null;
+}
+
+/**
+ * The address's query with `control` in focus (`?catalogue=vda-isa-2027.1&control=1.3.3`), or with none: only those
+ * two params change, the others stay as they are, and a query that already says so comes back unchanged.
+ */
+export function searchWithControl(search: string, control: ControlInAddress): string {
+  const query = new URLSearchParams(search);
+  const current = controlInAddress(search);
+  const unchanged =
+    control === null
+      ? !query.has("catalogue") && !query.has("control")
+      : current?.catalogue === control.catalogue && current.ref === control.ref;
+  if (unchanged) return search;
+  if (control === null) {
+    query.delete("catalogue");
+    query.delete("control");
+  } else {
+    query.set("catalogue", control.catalogue);
+    query.set("control", control.ref);
+  }
+  const rest = query.toString();
+  return rest === "" ? "" : `?${rest}`;
+}
+
+/** The Catalogue and row that `control` names, when the answer holds both; null otherwise. */
+export function focusedControl(
+  audit: AuditAnswer,
+  control: ControlInAddress,
+): { catalogue: AuditCatalogue; control: AuditControl } | null {
+  if (control === null) return null;
+  const catalogue = audit.catalogues.find(({ id }) => id === control.catalogue);
+  const row = audit.controls.find(
+    (row) => row.catalogue === control.catalogue && row.ref === control.ref,
+  );
+  return catalogue === undefined || row === undefined ? null : { catalogue, control: row };
+}
+
+/** Whether a row says what the Control's read says: the same Verdicts and review state. */
+export const rowAgrees = (
+  row: AuditControl,
+  read: Pick<ControlDetail, "verdict" | "review_state" | "reviewed_verdict">,
+) =>
+  row.verdict === read.verdict &&
+  row.review_state === read.review_state &&
+  row.reviewed_verdict === read.reviewed_verdict;
+
 /**
  * The Verdict a Control's row shows: the reviewed one while the Control is reviewed, and the one worked out now
- * otherwise (not reviewed, changed since review, or a reviewed row with no reviewed Verdict).
+ * otherwise (not reviewed, changed since review, or a reviewed row with no reviewed Verdict). The Control card's
+ * `ControlDetail` passes too.
  */
-export function shownVerdict(control: AuditControl): ReviewedVerdict {
+export function shownVerdict(
+  control: Pick<AuditControl, "verdict" | "review_state" | "reviewed_verdict">,
+): ReviewedVerdict {
   return control.review_state === "reviewed" && control.reviewed_verdict !== null
     ? control.reviewed_verdict
     : control.verdict;

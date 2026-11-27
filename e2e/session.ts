@@ -122,6 +122,35 @@ export const ELM = {
   people: [MARY, EVELYN],
 };
 
+export const FRANCES: Person = {
+  userId: "user_e2e_frances",
+  firstName: "Frances",
+  lastName: "Allen",
+  email: "frances@fir.test",
+};
+
+export const JOAN: Person = {
+  userId: "user_e2e_joan",
+  firstName: "Joan",
+  lastName: "Clarke",
+  email: "joan@fir.test",
+};
+
+/**
+ * A sixth Team for spec #341's Control card (e2e/control-card.spec.ts): one Repo Asset, `FIR_REPO`, and a Guard Scan
+ * of it under both of 1.3.3's Rules with one Open `guard/unapproved-ai-tool` Finding, so 1.3.3 is Partly evidenced.
+ * Its review and its Finding's False positive can't be undone, so no other spec reads Fir.
+ */
+export const FIR = {
+  id: "org_e2e_fir",
+  name: "Fir",
+  admin: FRANCES,
+  people: [FRANCES, JOAN],
+};
+
+/** Fir's one Repo Asset, linked by the global setup. */
+export const FIR_REPO = { ref: "https://github.com/fir/assistant", githubId: 5251 };
+
 export type Team = typeof ACME;
 
 /**
