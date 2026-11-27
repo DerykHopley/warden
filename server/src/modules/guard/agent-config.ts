@@ -583,7 +583,10 @@ function runStarts(masked: string): RunStart[] {
   // What each open `(`, backquote (`` ` ``) or nested backquote (`` \` ``) interrupted: where the next word stands at
   // its close, and the word it is inside (`x=$`), which goes on after the close.
   const open: { by: string; after: Position; word: string | undefined }[] = [];
-  const inBackquotes = () => open.some(({ by }) => by !== "(");
+  // The index in `open` of each backquote and nested backquote, bottom first, so no read scans `open`. A nested one
+  // opens only inside backquotes, so the first is the one backquote (`` ` ``), and any later ones are nested.
+  const quotes: number[] = [];
+  const inBackquotes = () => quotes.length > 0;
   let at = COMMAND_START;
   let word: string | undefined;
   const endWord = (index: number) => {
@@ -594,6 +597,7 @@ function runStarts(masked: string): RunStart[] {
     word = undefined;
   };
   const enter = (by: string, after: Position = at) => {
+    if (by !== "(") quotes.push(open.length);
     open.push({ by, after, word });
     at = COMMAND_START;
     word = undefined;
@@ -603,6 +607,7 @@ function runStarts(masked: string): RunStart[] {
     at = after;
     word = outer === undefined ? undefined : outer + (by === "(" ? ")" : "`");
     open.length = index;
+    while (quotes.length > 0 && quotes.at(-1)! >= index) quotes.pop();
   };
   for (let index = 0; index < masked.length; index++) {
     const char = masked[index]!;
@@ -615,7 +620,7 @@ function runStarts(masked: string): RunStart[] {
         continue;
       }
       endWord(index - 1);
-      const nested = open.findLastIndex(({ by }) => by !== "(");
+      const nested = quotes.at(-1)!;
       if (open[nested]!.by === "\\`") close(nested);
       else enter("\\`");
     } else if (char === "#" && word === undefined) {
@@ -638,7 +643,7 @@ function runStarts(masked: string): RunStart[] {
       else if (char === ")" && open.at(-1)?.by === "(") close(open.length - 1);
       // A `)` that closes nothing ends a `case` pattern (`a)`): a command follows.
       else if (char === ")") at = COMMAND_START;
-      else if (char === "`") close(open.findIndex(({ by }) => by === "`"));
+      else if (char === "`") close(quotes[0]!);
     }
   }
   endWord(masked.length);
@@ -658,10 +663,10 @@ const ENDS_COMMAND = new Set([...STARTS_COMMAND, ")"]);
  * continuation among them) don't end it. Nor does a redirect's `&` (`>&`, `<&`, `&>`, `&>>`) or `|` (`>|`), though
  * `&&`, `|&` and a lone `&` or `|` do. Any `(` the run opens (`$(`, `<(`, `$((` or a bare one) and a backquote hold
  * everything up to their close, the close included; one that never closes runs to the end. A `)` the run didn't open
- * still ends it, as does a backquote it didn't open: the one that closes the backquotes the run started in.
+ * still ends it, as does a backquote it didn't open, when the run started in backquotes (`startsInBackquotes`): the
+ * one that closes them.
  */
-function runArgumentsEnd(masked: string, start: number): number {
-  const startsInBackquotes = backquotesOpenAt(masked, start);
+function runArgumentsEnd(masked: string, start: number, startsInBackquotes: boolean): number {
   let depth = 0;
   let inBackquotes = false;
   for (let index = start; index < masked.length; index++) {
@@ -678,16 +683,21 @@ function runArgumentsEnd(masked: string, start: number): number {
 }
 
 /**
- * Whether `index` in a command with its quotes masked is inside backquotes: an odd number of backquotes before it,
+ * Whether an index in a command with its quotes masked is inside backquotes: an odd number of backquotes before it,
  * skipping a backslash and the character it escapes. Backquotes escaped inside backquotes aren't nested spans here.
+ * The reader it returns takes indexes in order, none smaller than the one before, and reads on from where the last
+ * one stopped, so a command is read once however many runs it has.
  */
-function backquotesOpenAt(masked: string, index: number): boolean {
+function backquotesOpenAt(masked: string): (index: number) => boolean {
   let open = false;
-  for (let at = 0; at < index; at++) {
-    if (masked[at] === "\\") at += escapedLength(masked, at);
-    else if (masked[at] === "`") open = !open;
-  }
-  return open;
+  let at = 0;
+  return (index) => {
+    for (; at < index; at++) {
+      if (masked[at] === "\\") at += escapedLength(masked, at);
+      else if (masked[at] === "`") open = !open;
+    }
+    return open;
+  };
 }
 
 /** How many characters the backslash at `index` escapes: two for a CRLF line continuation, otherwise one. */
@@ -753,19 +763,21 @@ type Shells = { left: number; tooDeep: boolean };
  */
 function agentRuns(command: string, shells: Shells): string[] {
   const masked = withQuotesMasked(command);
+  // `runStarts` gives the starts in order, so one reader answers them all.
+  const inBackquotesAt = backquotesOpenAt(masked);
   const runs: string[] = [];
   let end = 0;
   for (const { start, shell } of runStarts(masked)) {
     // A run inside an earlier agent run's arguments (`claude -p $(claude -p y)`) is part of that run.
     if (start < end) continue;
     if (!shell) {
-      end = runArgumentsEnd(masked, start);
+      end = runArgumentsEnd(masked, start, inBackquotesAt(start));
       runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
     } else if (shells.left === 0) shells.tooDeep = true;
     else {
       shells.left--;
       const script = commandString(
-        shellWords(command.slice(start, runArgumentsEnd(masked, start))),
+        shellWords(command.slice(start, runArgumentsEnd(masked, start, inBackquotesAt(start)))),
       );
       if (script !== undefined) runs.push(...agentRuns(script, shells));
     }
