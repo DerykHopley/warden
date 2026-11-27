@@ -10,9 +10,15 @@
 // loaded; it makes at most JUDGE_RUN_CALL_BUDGET calls (a call that may answer next time gets one retry); and before
 // each paid call it reserves the call's assumed cost in the spending ledger, under the Team's daily limit, then settles
 // it to what the answer stated. A Team's own model costs Warden nothing: neither limited nor recorded.
+//
+// Slice 7b (story 10, threats J1 and J7): Warden reads the events itself for text addressed to the Judge, and reports
+// it as its own Observation whatever the model answered. A run that made paid calls sends one Langfuse trace when it
+// ends, metadata only; a trace Langfuse doesn't take is logged and never changes the run's outcome.
 import { agentEventsHash, Status, type SpotRun } from "@warden/contracts";
 import { ConfigError } from "../../config.ts";
 import type { Findings } from "../../findings/index.ts";
+import { TraceNotSent, type JudgeTrace, type TracedCall, type Tracer } from "../../langfuse.ts";
+import type { Logger } from "../../log.ts";
 import { UNBILLED, UNPRICED_CALL_USD, type Settlement, type Spending } from "../../spending.ts";
 import type { AgentSessions, HeldClaim, SessionOutcome } from "./agent-sessions.ts";
 import {
@@ -24,6 +30,7 @@ import {
 } from "./judge-model.ts";
 import { judgePrompt, lastEventsThatFit, maskEvents } from "./judge-prompt.ts";
 import { JUDGE_RULES } from "./judge-rules.ts";
+import { steeringEvents } from "./judge-steering.ts";
 import { readVerdict, VERDICT_JSON_SCHEMA } from "./judge-verdict.ts";
 
 /** The verdict schema's name in the request's `response_format`. */
@@ -100,18 +107,23 @@ const cutEnding = (read: number, total: number) =>
 
 /**
  * `modelFor` gives the Team's model, asked only when there is a session to judge: its own (slice 6a) or OpenRouter's.
- * `spending` is the Team's ledger, read and added to only for a paid model.
+ * `spending` is the Team's ledger, read and added to only for a paid model. `tracer`, when Langfuse's keys are set,
+ * gets each run's paid calls; `logger` gets a trace it couldn't send.
  */
 export function createJudge({
   agentSessions,
   findings,
   spending,
   modelFor,
+  tracer,
+  logger,
 }: {
   agentSessions: Pick<AgentSessions, "claim" | "release" | "readEnded" | "markJudged">;
   findings: Pick<Findings, "report" | "listByRules">;
   spending: Spending;
   modelFor: (team: string) => Promise<JudgeModel>;
+  tracer?: Tracer;
+  logger?: Pick<Logger, "warn">;
 }): Judge {
   /** The Team's meter for `model`: the spending ledger's, for a paid model. */
   function meterFor(team: string, model: JudgeModel): Meter {
@@ -131,29 +143,56 @@ export function createJudge({
   /**
    * The model's answer within the run's call budget, or the Team's spending when it reached the limit before a paid
    * call. Each call's cost is reserved before it's made, so a failed call that may have been billed keeps its
-   * reservation, which the retry's check counts. Only a failure that may answer next time is retried.
+   * reservation, which the retry's check counts. Only a failure that may answer next time is retried. Each paid call
+   * made, answered or not, is added to `traced`.
    */
   async function complete(
     meter: Meter,
     model: JudgeModel,
     messages: ChatMessage[],
+    traced: TracedCall[],
   ): Promise<{ answer: ModelAnswer } | { limited: number }> {
     for (let call = 1; ; call++) {
       const charge = await meter.reserve();
       if ("limited" in charge) return charge;
       let answer: ModelAnswer;
+      const startedAt = new Date();
       try {
         answer = await model.complete(messages, {
           name: VERDICT_SCHEMA_NAME,
           schema: VERDICT_JSON_SCHEMA,
         });
       } catch (error) {
+        // A ConfigError was never sent, so there is no call to trace.
+        if (model.paid && !(error instanceof ConfigError)) {
+          traced.push({
+            model: model.model,
+            inputTokens: null,
+            outputTokens: null,
+            costUsd: mayBeBilled(error) ? UNPRICED_CALL_USD : 0,
+            startedAt,
+            endedAt: new Date(),
+            outcome: "failed",
+          });
+        }
         if (!mayBeBilled(error)) await charge.unbilled();
         // A ConfigError (no key) never left the machine, and a retry would fail the same way.
         if (!(error instanceof ModelCallFailed && error.retry) || call >= JUDGE_RUN_CALL_BUDGET) {
           throw error;
         }
         continue;
+      }
+      if (model.paid) {
+        const { inputTokens, outputTokens, costUsd } = answeredCost(answer.usage);
+        traced.push({
+          model: model.model,
+          inputTokens,
+          outputTokens,
+          costUsd,
+          startedAt,
+          endedAt: new Date(),
+          outcome: answer.refusal ? "refused" : "answered",
+        });
       }
       await charge.settle(answer.usage);
       return { answer };
@@ -165,6 +204,7 @@ export function createJudge({
     team: string,
     sessionId: string,
     claim: HeldClaim,
+    traced: TracedCall[],
   ): Promise<JudgeRunOutcome> {
     const read = await agentSessions.readEnded(team, sessionId);
     if (read === undefined) return { kind: "skipped" };
@@ -175,15 +215,22 @@ export function createJudge({
     const eventsHash = await agentEventsHash(events);
     const { system, user } = judgePrompt(events);
     const model = await modelFor(team);
-    const called = await complete(meterFor(team, model), model, [
-      { role: "system", content: system },
-      { role: "user", content: user },
-    ]);
+    const called = await complete(
+      meterFor(team, model),
+      model,
+      [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      traced,
+    );
     if ("limited" in called) return { kind: "limited", spent: called.limited };
     const verdict = readVerdict(called.answer, {
       sessionId,
       events,
       eventsHash,
+      // Read by Warden, not the model, so a model the text steered still reports it.
+      steering: steeringEvents(events),
       ...(eventsCut > 0 ? { ending: cutEnding(kept.length, read.length) } : {}),
     });
 
@@ -216,20 +263,45 @@ export function createJudge({
     return { kind: "judged", outcome: marked, eventsRead: kept.length, eventsCut, opened };
   }
 
+  /** Sends the run's trace when it made a paid call; a trace Langfuse didn't take is logged, never thrown. */
+  async function sendTrace(
+    team: string,
+    outcome: JudgeTrace["outcome"],
+    calls: TracedCall[],
+  ): Promise<void> {
+    if (tracer === undefined || calls.length === 0) return;
+    try {
+      await tracer.sendJudgeRun({ team, outcome, calls });
+    } catch (error) {
+      // The status or the connection's code alone: never Langfuse's answer body.
+      const reason =
+        error instanceof TraceNotSent
+          ? error.status === undefined
+            ? { code: error.code }
+            : { status: error.status }
+          : { code: "unknown" };
+      logger?.warn("judge trace not sent", reason);
+    }
+  }
+
   return {
     async run(team, sessionId) {
       const claim = await agentSessions.claim(team, sessionId);
       if (claim.kind === "busy") return { kind: "busy" };
       if (claim.kind === "absent") return { kind: "skipped" };
+      const traced: TracedCall[] = [];
       let ran: JudgeRunOutcome;
       try {
-        ran = await judgeClaimed(team, sessionId, claim);
+        ran = await judgeClaimed(team, sessionId, claim, traced);
       } catch (error) {
         // The run's own error is the one to report; a claim not cleared runs out after JUDGE_CLAIM_MINUTES.
         await agentSessions.release(team, sessionId, claim).catch(() => undefined);
+        await sendTrace(team, "failed", traced);
         throw error;
       }
       if (ran.kind !== "judged") await agentSessions.release(team, sessionId, claim);
+      // After the session is marked: the trace is the last thing a run does, and can't hold up its outcome.
+      await sendTrace(team, ran.kind === "judged" ? ran.outcome : "failed", traced);
       return ran;
     },
   };

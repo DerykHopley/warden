@@ -7,6 +7,7 @@ import type { Module } from "@warden/contracts";
 import type { GitHubReaderSettings, JudgeSettings } from "./config.ts";
 import { createFindings, type MoveRule } from "./findings/index.ts";
 import type { Fetch } from "./http-call.ts";
+import { createTracer } from "./langfuse.ts";
 import type { Logger } from "./log.ts";
 import { createAgentSessions } from "./modules/guard/agent-sessions.ts";
 import { createGitHubReader } from "./modules/guard/github-reader.ts";
@@ -66,6 +67,8 @@ export type { Judge, JudgeRunOutcome } from "./modules/guard/judge.ts";
  * (`judge_models`, slice 6a) through the pinned connection with `settings.allowLocalhost`, else OpenRouter's. On
  * OpenRouter with no key in `settings`, the run throws ConfigError naming OPENROUTER_API_KEY before any call. Tests hand
  * it a fake `fetch` (for OpenRouter's call), a stub `resolve` (for the Team's own model's host) and a short timeout.
+ * With Langfuse's keys in `settings.langfuse`, each run's paid calls are traced there (slice 7b), and a trace it
+ * couldn't send goes to `logger`; tests hand it Langfuse's own fake `fetch` and timeout in `langfuse`.
  */
 export function judge({
   withTeam,
@@ -73,18 +76,31 @@ export function judge({
   fetch,
   resolve,
   timeoutMs,
+  logger,
+  langfuse,
 }: {
   withTeam: WithTeam;
   settings: JudgeSettings;
   fetch?: Fetch;
   resolve?: UrlRule["resolve"];
   timeoutMs?: number;
+  logger?: Logger;
+  langfuse?: { fetch?: Fetch; timeoutMs?: number };
 }): Judge {
   const judgeModels = createJudgeModels({ withTeam });
   return createJudge({
     agentSessions: createAgentSessions({ withTeam }),
     findings: createFindings({ withTeam, moveRules: MOVE_RULES }),
     spending: createSpending({ withTeam }),
+    tracer:
+      settings.langfuse === undefined
+        ? undefined
+        : createTracer({
+            ...settings.langfuse,
+            fetch: langfuse?.fetch ?? globalThis.fetch,
+            timeoutMs: langfuse?.timeoutMs,
+          }),
+    logger,
     async modelFor(team) {
       const own = await judgeModels.read(team);
       if (own !== undefined) {

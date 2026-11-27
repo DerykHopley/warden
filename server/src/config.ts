@@ -2,6 +2,7 @@
 // so a missing one stops the server at start rather than at its first query.
 import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
+import { DEFAULT_LANGFUSE_BASE_URL, type LangfuseSettings } from "./langfuse.ts";
 
 /** Clerk's Frontend API host, which a publishable key carries as base64 of `<host>$`. */
 function frontendApiHost(publishableKey: string): string | undefined {
@@ -247,14 +248,38 @@ export function gitHubReaderSettings(
 export const DEFAULT_JUDGE_MODEL = "anthropic/claude-haiku-5.5";
 
 /**
- * The key and model a Judge run calls OpenRouter with, and whether a Team's own model may be on localhost
- * (WARDEN_JUDGE_LOCALHOST).
+ * The key and model a Judge run calls OpenRouter with, whether a Team's own model may be on localhost
+ * (WARDEN_JUDGE_LOCALHOST), and the Langfuse project its traces go to (none: no tracing).
  */
-export type JudgeSettings = { apiKey: string | undefined; model: string; allowLocalhost: boolean };
+export type JudgeSettings = {
+  apiKey: string | undefined;
+  model: string;
+  allowLocalhost: boolean;
+  langfuse: LangfuseSettings | undefined;
+};
 
 /**
- * The Scan Job's settings for a Judge run: OPENROUTER_API_KEY, WARDEN_JUDGE_MODEL or `DEFAULT_JUDGE_MODEL`, and
- * WARDEN_JUDGE_LOCALHOST, read as `loadConfig` reads it (a bad value, or one on Cloud Run, throws ConfigError). An
+ * LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, with LANGFUSE_BASE_URL or Langfuse's EU region: undefined with neither
+ * key, so nothing is traced. One key without the other, or a base URL that isn't https, throws ConfigError naming the
+ * variable, never its value.
+ */
+function readLangfuse(env: Record<string, string | undefined>): LangfuseSettings | undefined {
+  const publicKey = env.LANGFUSE_PUBLIC_KEY || undefined;
+  const secretKey = env.LANGFUSE_SECRET_KEY || undefined;
+  const baseUrl = env.LANGFUSE_BASE_URL || DEFAULT_LANGFUSE_BASE_URL;
+  if (!URL.canParse(baseUrl) || new URL(baseUrl).protocol !== "https:") {
+    throw new ConfigError(["LANGFUSE_BASE_URL"]);
+  }
+  if (publicKey === undefined && secretKey === undefined) return undefined;
+  if (publicKey === undefined) throw new ConfigError(["LANGFUSE_PUBLIC_KEY"]);
+  if (secretKey === undefined) throw new ConfigError(["LANGFUSE_SECRET_KEY"]);
+  return { publicKey, secretKey, baseUrl };
+}
+
+/**
+ * The Scan Job's settings for a Judge run: OPENROUTER_API_KEY, WARDEN_JUDGE_MODEL or `DEFAULT_JUDGE_MODEL`,
+ * WARDEN_JUDGE_LOCALHOST, read as `loadConfig` reads it (a bad value, or one on Cloud Run, throws ConfigError), and the
+ * LANGFUSE_* variables (`readLangfuse`). An
  * empty value counts as unset, as in `loadConfig`. An unset key isn't refused here: the run refuses it after reading
  * the session, before its model call, so a session with nothing to judge (or one judged by the Team's own model) runs
  * without it.
@@ -264,5 +289,6 @@ export function judgeSettings(env: Record<string, string | undefined>): JudgeSet
     apiKey: env.OPENROUTER_API_KEY || undefined,
     model: env.WARDEN_JUDGE_MODEL || DEFAULT_JUDGE_MODEL,
     allowLocalhost: readJudgeLocalhost(env),
+    langfuse: readLangfuse(env),
   };
 }
