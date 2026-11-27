@@ -451,7 +451,7 @@ describe("a Lead's decision in the detail card", () => {
 });
 
 describe("a decision on a Finding the Team no longer has", () => {
-  it("says so on the page, where it outlives the card", async () => {
+  it("says so on the page, where it outlives the card, and the floating panel over the page closes (#452)", async () => {
     const answers = [demoFindings, demoFindings.filter((f) => f.id !== ID.lodash)];
     open("/findings?status=all", {
       me: () => json(200, { userId: "user_ada", team: TEAM, role: "lead", level: "quick" }),
@@ -467,9 +467,10 @@ describe("a decision on a Finding the Team no longer has", () => {
     await userEvent.type(form.getByRole("textbox", { name: "Reason" }), "A test fixture");
     await userEvent.click(form.getByRole("button", { name: "Mark False positive" }));
 
-    await vi.waitFor(() => expect(queryCard()).not.toBeInTheDocument());
+    await vi.waitFor(() => expect(queryPanel()).toBeNull());
     const notice = within(screen.getByRole("main")).getByRole("alert");
     expect(notice).toHaveTextContent("This Finding is no longer in your Team.");
+    await vi.waitFor(() => expect(address()).toBe("/findings?status=all"));
   });
 });
 

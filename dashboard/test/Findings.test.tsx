@@ -5,7 +5,9 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Finding, Role } from "@warden/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { FINDING_GONE } from "../src/decisions.ts";
 import { FindingsPage } from "../src/Findings.tsx";
+import type { PanelContext } from "../src/panel.ts";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { demoFindings, ID, PRODUCT_ID, SHOP_WEB, TEAM } from "./findings-fixture.ts";
 
@@ -39,6 +41,10 @@ function open(
   render(<FindingsPage {...props} />);
   return props;
 }
+
+/** The context the page last gave the fake panel: null once the page has unmounted, undefined before it set one. */
+const lastContext = (panel: ReturnType<typeof open>["panel"]) =>
+  panel.setContext.mock.lastCall?.[0] as PanelContext | null | undefined;
 
 const address = () => location.pathname + location.search;
 const cards = () => within(screen.getByRole("list", { name: "Start here" })).getAllByRole("button");
@@ -481,9 +487,7 @@ describe("a link that names a Finding", () => {
   it("opens it only on the page's load, not again when the list comes back", async () => {
     const { panel } = open(`/findings?finding=${ID.lodash}`);
     await screen.findByRole("table");
-    const context = panel.setContext.mock.lastCall?.[0] as { onFindingChanged: () => void };
-
-    context.onFindingChanged();
+    lastContext(panel)!.onFindingChanged();
     await vi.waitFor(() => expect(callsTo("/api/findings")).toHaveLength(2));
     await screen.findByRole("table");
 
@@ -494,6 +498,53 @@ describe("a link that names a Finding", () => {
     const { panel } = open("/findings?severity=high");
     await screen.findByRole("table");
     expect(panel.open).not.toHaveBeenCalled();
+  });
+});
+
+// The panel's card says a Finding is gone (a decision answered 404); the page says it too, past the card. Which shown
+// states the panel's "uncover" closes is the reducer's, in panel.test.ts; the notice in a real browser is e2e's.
+describe("a Finding the Team no longer has (#452)", () => {
+  /** GET /api/findings answers the demo list, then the list without lodash: the Finding has left the Team. */
+  function openThenGone() {
+    let asked = 0;
+    return open("/findings", demoFindings, {
+      findings: () =>
+        answer(++asked === 1 ? demoFindings : demoFindings.filter((f) => f.id !== ID.lodash)),
+    });
+  }
+  const goneFrom = (panel: ReturnType<typeof open>["panel"]) =>
+    act(() => lastContext(panel)!.onFindingGone());
+
+  it("shows the gone notice and uncovers the panel once, so a floating or full-screen panel doesn't hide it", async () => {
+    const { panel } = openThenGone();
+    await screen.findByRole("table");
+    await userEvent.click(cardOf("lodash 4.17.20 has a known vulnerability"));
+    expect(panel.uncover).not.toHaveBeenCalled();
+
+    goneFrom(panel);
+
+    expect(screen.getByRole("alert")).toHaveTextContent(FINDING_GONE);
+    await vi.waitFor(() => expect(callsTo("/api/findings")).toHaveLength(2));
+    await vi.waitFor(() => expect(address()).toBe("/findings"));
+    await settle();
+    expect(panel.uncover).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent(FINDING_GONE);
+  });
+
+  it("selecting another Finding after the notice drops the notice and opens the panel again", async () => {
+    const { panel } = openThenGone();
+    await screen.findByRole("table");
+    await userEvent.click(cardOf("lodash 4.17.20 has a known vulnerability"));
+    goneFrom(panel);
+    await vi.waitFor(() => expect(address()).toBe("/findings"));
+    panel.open.mockClear();
+
+    await userEvent.click(cardOf("minimist 1.2.5 has a known vulnerability"));
+
+    expect(panel.open).toHaveBeenCalledTimes(1);
+    expect(address()).toBe(`/findings?finding=${ID.minimist}`);
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(panel.uncover).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -573,8 +624,7 @@ describe("a Product Asset's name", () => {
     const { panel } = open(`/findings?finding=${ID.lodash}`, onProduct, {
       products: () => products(),
     });
-    const productName = () =>
-      (panel.setContext.mock.lastCall?.[0] as { productName: string | null } | null)?.productName;
+    const productName = () => lastContext(panel)?.productName;
     await vi.waitFor(() => expect(productName()).toBe("Shop web"));
 
     await userEvent.click(rowButton(MINIMIST));
