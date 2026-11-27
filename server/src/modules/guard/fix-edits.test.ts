@@ -474,30 +474,57 @@ describe("fixedEdit for guard/mcp-server-unpinned", () => {
     const PRIVATE = "https://r.example";
     const PUBLIC = { scoped: { command: "npx", args: ["-y", "@scope/pkg"] } };
 
-    /**
-     * A file with only `server` in it: refused, with the reason it was left, and no registry asked about it. Which
-     * options and env keys count is `serverStart`'s, tested with it.
-     */
-    const leftAlone = async (server: Record<string, unknown>) => {
-      const { registry, asked } = fakeRegistry({ ...versions, "npm:acme-mcp": "9.9.9" });
-      const result = await fix({ acme: server }, registry);
-      if (result.ok) throw new Error("expected a refusal");
-      expect(asked).toEqual([]);
-      return result.reason;
-    };
+    const both = { "npm:acme-mcp": "9.9.9", "pypi:acme-mcp": "9.9.9" };
 
-    it("leaves a server whose runner option names a registry, asking none, naming the option and never its value", async () => {
-      const server = { command: "npx", args: ["-y", "--registry", PRIVATE, "acme-mcp"] };
-      expect(await leftAlone(server)).toBe(
-        "no server can be pinned: `acme`: uses a private registry (`--registry`)",
-      );
-    });
+    it.each([
+      ["--registry", "npx", ["-y", "--registry", PRIVATE, "acme-mcp"], undefined],
+      ["--registry", "npx", ["-y", `--registry=${PRIVATE}`, "acme-mcp"], undefined],
+      ["--reg", "npx", ["-y", "--reg", PRIVATE, "acme-mcp"], undefined],
+      ["--@acme:registry", "npx", ["-y", `--@acme:registry=${PRIVATE}`, "acme-mcp"], undefined],
+      ["--registry", "npm", ["--registry", PRIVATE, "exec", "acme-mcp"], undefined],
+      ["--registry", "pnpm", ["dlx", "--registry", PRIVATE, "acme-mcp"], undefined],
+      ["--index-url", "uvx", ["--index-url", PRIVATE, "acme-mcp"], undefined],
+      ["--extra-index-url", "uvx", [`--extra-index-url=${PRIVATE}`, "acme-mcp"], undefined],
+      ["--index", "uv", ["tool", "run", "--index", PRIVATE, "acme-mcp"], undefined],
+      ["-f", "uvx", ["-f", "./wheels", "acme-mcp"], undefined],
+      ["--pip-args", "pipx", ["run", `--pip-args="--index-url ${PRIVATE}"`, "acme-mcp"], undefined],
+      ["NPM_CONFIG_REGISTRY", "npx", ["-y", "acme-mcp"], { NPM_CONFIG_REGISTRY: PRIVATE }],
+      ["UV_INDEX_URL", "uvx", ["acme-mcp"], { UV_INDEX_URL: PRIVATE }],
+    ])(
+      "leaves %s on `%s %j`, asking no registry, naming it and never its value",
+      async (what, command, args, env) => {
+        const { registry, asked } = fakeRegistry(both);
+        const server = { command, args, ...(env === undefined ? {} : { env }) };
+        const result = await fix({ acme: server }, registry);
+        if (result.ok) throw new Error("expected a refusal");
+        expect(asked).toEqual([]);
+        expect(result.reason).toBe(
+          `no server can be pinned: \`acme\`: uses a private registry (\`${what}\`)`,
+        );
+        expect(result.reason).not.toContain(PRIVATE);
+      },
+    );
 
-    it("leaves a server whose env names a registry for its runner, naming the key", async () => {
-      const server = { command: "uvx", args: ["acme-mcp"], env: { UV_INDEX_URL: PRIVATE } };
-      expect(await leftAlone(server)).toBe(
-        "no server can be pinned: `acme`: uses a private registry (`UV_INDEX_URL`)",
-      );
+    it.each([
+      [
+        "pipx's --pip-args without an index",
+        { command: "pipx", args: ["run", "--pip-args=--no-cache-dir", "acme-mcp"] },
+        "pypi:acme-mcp",
+        ["run", "--pip-args=--no-cache-dir", "acme-mcp==9.9.9"],
+      ],
+      [
+        "the other runner kind's env key",
+        { command: "npx", args: ["-y", "acme-mcp"], env: { UV_INDEX_URL: PRIVATE } },
+        "npm:acme-mcp",
+        ["-y", "acme-mcp@9.9.9"],
+      ],
+    ])("pins a server with %s as before", async (_case, server, lookup, pinned) => {
+      const { registry, asked } = fakeRegistry(both);
+      const result = edited(await fix({ acme: server }, registry));
+      expect(asked).toEqual([lookup]);
+      const after = JSON.parse(result.text) as { mcpServers: { acme: { args: string[] } } };
+      expect(after.mcpServers.acme.args).toEqual(pinned);
+      expect(result.body.join("\n")).not.toContain(PRIVATE);
     });
 
     it("pins a server whose own option, after its package, names a registry, as before", async () => {

@@ -441,12 +441,6 @@ describe("serverStart's customRegistry: the runner option or env key that points
 
   it.each([
     ["npx --registry", server("npx", ["-y", "--registry", PRIVATE, "acme-mcp"]), "--registry"],
-    ["npx --registry=", server("npx", ["-y", `--registry=${PRIVATE}`, "acme-mcp"]), "--registry"],
-    [
-      "pnpm dlx --registry",
-      server("pnpm", ["dlx", "--registry", PRIVATE, "acme-mcp"]),
-      "--registry",
-    ],
     [
       "npx --@scope:registry=",
       server("npx", [`--@acme:registry=${PRIVATE}`, "acme-mcp"]),
@@ -463,18 +457,6 @@ describe("serverStart's customRegistry: the runner option or env key that points
       "--registry",
     ],
     ["uvx -i", server("uvx", ["-i", PRIVATE, "acme-mcp"]), "-i"],
-    ["uvx --index-url", server("uvx", ["--index-url", PRIVATE, "acme-mcp"]), "--index-url"],
-    [
-      "uvx --extra-index-url=",
-      server("uvx", [`--extra-index-url=${PRIVATE}`, "acme-mcp"]),
-      "--extra-index-url",
-    ],
-    ["uvx -f ./wheels", server("uvx", ["-f", "./wheels", "acme-mcp"]), "-f"],
-    [
-      "uv tool run --index",
-      server("uv", ["tool", "run", "--index", PRIVATE, "acme-mcp"]),
-      "--index",
-    ],
     [
       "uvx, past --from's package",
       server("uvx", ["--from", "acme", `--find-links=${PRIVATE}`, "acme"]),
