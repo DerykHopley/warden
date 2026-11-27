@@ -436,7 +436,7 @@ describe("a Catalogue switch on Setup under way across a Team switch", () => {
     return { held, reads, away, back };
   }
 
-  it("never shows on the other Team's Setup, and once it's switched, Acme's Setup reads the Catalogues again", async () => {
+  it("never shows on the other Team's Setup, and once it's switched, Acme's Setup reads the Catalogues and /api/me again", async () => {
     let storedOn = false;
     const { held, reads, away, back } = await switchOnAndHold(() => storedOn);
 
@@ -447,12 +447,15 @@ describe("a Catalogue switch on Setup under way across a Team switch", () => {
     await back();
     expect(screen.getByRole("button", { name: "Turn on" })).toBeEnabled();
     expect(reads.org_a).toBe(2);
+    const meReads = callsTo("/api/me").length;
 
     storedOn = true;
     held.resolve(json(200, catalogue(true)));
 
     expect(await screen.findByText(ON_WORDS)).toBeInTheDocument();
     expect(reads.org_a).toBe(3);
+    // The switch can change the Team's Level (#374): the header reads it again though the page that sent it is gone.
+    await vi.waitFor(() => expect(callsTo("/api/me")).toHaveLength(meReads + 1));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 

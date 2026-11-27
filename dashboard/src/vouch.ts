@@ -2,10 +2,15 @@
 // Team sees it and an Admin's switch turning one on or off, and the watch that rereads them after a switch a Team
 // switch dropped.
 import { CataloguesBody, TeamCatalogue, type CatalogueId } from "@warden/contracts";
-import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
-
-/** 403 and 409 on a Team's call, read as every page reads them. */
-type TeamRefusal = { kind: "no-team" } | { kind: "team-not-opened" };
+import {
+  callWarden,
+  parsed,
+  serverError,
+  type GetToken,
+  type Refused,
+  type TeamRefusal,
+} from "./api.ts";
+import { confirmTeam, type TeamCheckRefused } from "./products.ts";
 
 export type CataloguesResult =
   { kind: "catalogues"; catalogues: TeamCatalogue[] } | TeamRefusal | Refused;
@@ -49,6 +54,22 @@ export async function switchCatalogue(
   if (res.status === 409) return { kind: "team-not-opened" };
   const catalogue = await parsed(res, TeamCatalogue);
   return catalogue === undefined ? { kind: "not-answering" } : { kind: "switched", catalogue };
+}
+
+/**
+ * Switches as `switchCatalogue` does, but only once /api/me says the session is in `team`, the Team Setup was opened
+ * in, and with the token that answer was asked with (`confirmTeam`), as a Product save does: a switch is never sent
+ * with a token for the Team just left. While /api/me names another Team, or gives no answer, nothing is sent.
+ */
+export async function switchCatalogueInTeam(
+  getToken: GetToken,
+  team: string | null,
+  id: CatalogueId,
+  on: boolean,
+): Promise<SwitchResult | TeamCheckRefused> {
+  const inTeam = await confirmTeam(getToken, team);
+  if (inTeam.kind !== "confirmed") return inTeam;
+  return switchCatalogue(inTeam.getToken, id, on);
 }
 
 /** The Setup pages shown now, each told when a dropped switch changed a Team's Catalogues. */

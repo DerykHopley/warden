@@ -38,7 +38,7 @@ import { goTo } from "./navigate.ts";
 import {
   cataloguesChanged,
   fetchCatalogues,
-  switchCatalogue,
+  switchCatalogueInTeam,
   watchCatalogues,
   type CataloguesResult,
 } from "./vouch.ts";
@@ -519,6 +519,7 @@ function CatalogueSection(props: PageProps) {
           {...props}
           catalogue={catalogue}
           onSwitched={showSwitched}
+          readAgain={refresh}
         />
       ))}
     </ul>
@@ -528,12 +529,15 @@ function CatalogueSection(props: PageProps) {
 type CatalogueEntryProps = PageProps & {
   catalogue: TeamCatalogue;
   onSwitched: (catalogue: TeamCatalogue) => void;
+  /** Reads the list again, keeping it on screen until the answer. */
+  readAgain: () => void;
 };
 
 /** One Catalogue: its name and date, its state, when it was last set, an Admin's switch, and its credit and licence. */
 function CatalogueEntry({
   catalogue,
   onSwitched,
+  readAgain,
   getToken,
   me,
   onSessionEnded,
@@ -560,18 +564,22 @@ function CatalogueEntry({
     const sentIn = me.team;
     setSwitching(true);
     setRefusal(null);
-    const result = await switchCatalogue(getToken, catalogue.id, on);
-    // The page that sent it is gone: the Setup shown now for the Team it was sent in reads its Catalogues again.
+    const result = await switchCatalogueInTeam(getToken, sentIn, catalogue.id, on);
+    // The page that sent it is gone: the Setup shown now for the Team it was sent in reads its Catalogues again, and
+    // the shell's /api/me (safe after the page has gone) is read again as below.
     if (switchCall.current !== call) {
       if (result.kind === "switched") cataloguesChanged(sentIn);
+      if (result.kind === "switched" || result.kind === "forbidden") refreshMe();
       return;
     }
     switchCall.current = null;
     setSwitching(false);
     switch (result.kind) {
-      // Turning a Catalogue on or off can change the Team's Level (#374), which the shell reads from /api/me.
+      // Turning a Catalogue on or off can change the Team's Level (#374), which the shell reads from /api/me. The list
+      // is read again too, so a newer ask drops an older read a dropped switch started (as Scan now's `started` does).
       case "switched":
         onSwitched(result.catalogue);
+        readAgain();
         return refreshMe();
       case "forbidden":
         setRefusal(ONLY_ADMIN_SWITCHES);
@@ -581,6 +589,7 @@ function CatalogueEntry({
       case "team-not-opened":
         return setRefusal(TEAM_NOT_OPENED);
       case "too-many-attempts":
+      case "too-many-sign-ins":
         return setRefusal(tryAgainIn(result.retryAfter));
       case "not-answering":
         return setRefusal(NOT_ANSWERING);

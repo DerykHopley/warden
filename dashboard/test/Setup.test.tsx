@@ -10,6 +10,7 @@ import { dayAndTimeWords } from "../src/date-words.ts";
 import { ATTEMPT_KEY, WRITE_ATTEMPT_KEY } from "../src/github-setup.ts";
 import { goTo } from "../src/navigate.ts";
 import { GitHubSetupPage, SetupPage, WriteAppSetupPage } from "../src/Setup.tsx";
+import { cataloguesChanged } from "../src/vouch.ts";
 import { callsTo, deferred, fetchMock, json, serve, type Routes } from "./fake-api.ts";
 import { clerk, resetClerk } from "./fake-clerk.tsx";
 
@@ -99,6 +100,8 @@ const cataloguesOf =
 
 function renderSetup(role: Role, routes: Routes = {}) {
   serve({
+    // The Team check a Catalogue switch asks before its PUT: the session is in Acme, as `props` says.
+    me: () => json(200, { userId: "user_1", team: "org_a", role, level: "quick" }),
     githubApp: app,
     repos: () => json(200, { repos: [] }),
     ...writeRoutes,
@@ -855,6 +858,21 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
   /** A switch route that answers the Catalogue as the body set it. */
   const switched = (_id: string, body: unknown) =>
     json(200, catalogueSet((body as { on: boolean }).on));
+  /**
+   * The list and the switch over one stored Catalogue, as the server keeps it: each switch sets it (once `answer`
+   * settles, when given) and answers it, and the list reads it back.
+   */
+  const storing = (answer?: Promise<void>): Routes => {
+    let stored = CATALOGUE;
+    return {
+      catalogues: () => json(200, { catalogues: [stored] }),
+      switchCatalogue: async (_id, body) => {
+        await answer;
+        stored = catalogueSet((body as { on: boolean }).on);
+        return json(200, stored);
+      },
+    };
+  };
 
   it("shows an Admin the Catalogue by name and date, off, with Turn on", async () => {
     renderSetup("admin");
@@ -868,8 +886,8 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
     expect(entry().getByRole("button", { name: "Turn on" })).toHaveClass("primary");
   });
 
-  it("turns it on with { on: true }, then off with { on: false }, showing each answer at once, and sends nothing else", async () => {
-    renderSetup("admin", { switchCatalogue: switched });
+  it("turns it on with { on: true }, then off with { on: false }, showing each answer, and reading the list again after each", async () => {
+    renderSetup("admin", storing());
 
     await userEvent.click(await (await shown()).findByRole("button", { name: "Turn on" }));
 
@@ -887,12 +905,37 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
       ["PUT", { on: true }],
       ["PUT", { on: false }],
     ]);
-    expect(callsTo("/api/vouch/catalogues")).toHaveLength(1);
+    await vi.waitFor(() => expect(callsTo("/api/vouch/catalogues")).toHaveLength(3));
+  });
+
+  it("shows the switch's answer, not an older read a dropped switch started that answers after it", async () => {
+    const older = deferred<Response>();
+    let reads = 0;
+    renderSetup("admin", {
+      catalogues: () => {
+        reads++;
+        if (reads === 2) return older.promise;
+        return json(200, { catalogues: [reads === 1 ? CATALOGUE : catalogueSet(true)] });
+      },
+      switchCatalogue: switched,
+    });
+    const turnOn = await (await shown()).findByRole("button", { name: "Turn on" });
+
+    // A switch sent from a Setup a Team switch replaced lands: this page reads the list again, and that read is slow.
+    act(() => cataloguesChanged("org_a"));
+    await vi.waitFor(() => expect(reads).toBe(2));
+    await userEvent.click(turnOn);
+    expect(await (await shown()).findByText(ON_WORDS)).toBeInTheDocument();
+    await act(async () => older.resolve(json(200, { catalogues: [CATALOGUE] })));
+
+    expect(entry().getByText(ON_WORDS)).toBeInTheDocument();
+    expect(entry().queryByText("Off.")).toBeNull();
+    expect(reads).toBe(3);
   });
 
   it("is busy and disabled from the click until the answer, and a second click sends no second PUT", async () => {
-    const answer = deferred<Response>();
-    renderSetup("admin", { switchCatalogue: () => answer.promise });
+    const answer = deferred<void>();
+    renderSetup("admin", storing(answer.promise));
     const button = await (await shown()).findByRole("button", { name: "Turn on" });
 
     await userEvent.click(button);
@@ -901,14 +944,14 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute("aria-busy", "true");
     expect(callsTo(PATH)).toHaveLength(1);
-    await act(async () => answer.resolve(json(200, catalogueSet(true))));
+    await act(async () => answer.resolve());
     const turnOff = await (await shown()).findByRole("button", { name: "Turn off" });
     expect(turnOff).toBeEnabled();
     expect(turnOff).not.toHaveAttribute("aria-busy", "true");
   });
 
   it("asks the shell for /api/me again once after a switched answer", async () => {
-    const { refreshMe } = renderSetup("admin", { switchCatalogue: switched });
+    const { refreshMe } = renderSetup("admin", storing());
 
     await userEvent.click(await (await shown()).findByRole("button", { name: "Turn on" }));
 
@@ -986,6 +1029,23 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
     },
   );
 
+  // That no PUT goes while /api/me names another Team is vouch.test.ts's (switchCatalogueInTeam); here, what it says.
+  it("asks /api/me before the PUT, and on its 429 says so as an alert and sends no PUT", async () => {
+    renderSetup("admin", {
+      me: () => json(429, { error: "too many" }, { "Retry-After": "30" }),
+      switchCatalogue: switched,
+    });
+
+    await userEvent.click(await (await shown()).findByRole("button", { name: "Turn on" }));
+
+    expect(await (await shown()).findByRole("alert")).toHaveTextContent(
+      "Too many sign-in attempts. Try again in 30 seconds.",
+    );
+    expect(callsTo("/api/me")).toHaveLength(1);
+    expect(callsTo(PATH)).toEqual([]);
+    expect(entry().getByRole("button", { name: "Turn on" })).toBeEnabled();
+  });
+
   it("ends the session when the switch answers 401", async () => {
     const { onSessionEnded } = renderSetup("admin", {
       switchCatalogue: () => json(401, { error: "signed out" }),
@@ -1024,7 +1084,6 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
     renderSetup("admin", { catalogues: cataloguesOf(catalogueSet(true)) });
 
     await (await shown()).findByText(ON_WORDS);
-    expect(document.body.textContent).not.toContain(SET_BY);
     expect(document.body.innerHTML).not.toContain(SET_BY);
   });
 
