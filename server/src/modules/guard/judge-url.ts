@@ -172,13 +172,13 @@ export type CheckedUrl = { ok: true; url: string } | { ok: false; reason: string
 
 /**
  * Checks a Team's model URL against the URL rule: the URL to store (without a trailing slash, as the Judge adds
- * `/chat/completions`), or why it's refused.
+ * `/chat/completions`), or why it's refused. Its length is checked as typed, before it's parsed, and again as stored,
+ * encoded: a path of 1,000 `é` is about 1,030 characters typed and over 6,000 stored (#464).
  */
 export async function checkJudgeUrl(url: string, rule: UrlRule): Promise<CheckedUrl> {
   const refuse = (reason: string): CheckedUrl => ({ ok: false, reason });
-  if (url.length > MAX_JUDGE_URL_LENGTH) {
-    return refuse(`it's over ${MAX_JUDGE_URL_LENGTH} characters`);
-  }
+  const tooLong = refuse(`it's over ${MAX_JUDGE_URL_LENGTH} characters`);
+  if (url.length > MAX_JUDGE_URL_LENGTH) return tooLong;
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -190,7 +190,9 @@ export async function checkJudgeUrl(url: string, rule: UrlRule): Promise<Checked
   }
   if (parsed.search !== "" || url.includes("?")) return refuse("it holds a query");
   if (parsed.hash !== "" || url.includes("#")) return refuse("it holds a fragment");
+  const stored = parsed.href.replace(/\/+$/, "");
+  if (stored.length > MAX_JUDGE_URL_LENGTH) return tooLong;
   const target = await checkTarget(parsed, rule);
   if (!target.ok) return target;
-  return { ok: true, url: parsed.href.replace(/\/+$/, "") };
+  return { ok: true, url: stored };
 }
