@@ -2,6 +2,7 @@
 // and a person's stored choice, what a change shows and what it chooses, how each state shows at a width, and the
 // context line's view words.
 import type { AuditCatalogue, AuditControl, Finding, FindingsView } from "@warden/contracts";
+import type { RefObject } from "react";
 import { MODULE_WORDS, SEVERITY_WORDS, STATUS_WORDS } from "./finding-words.ts";
 
 /** A person's choice: closed (a button), floating over the page, or pinned beside it. */
@@ -162,8 +163,12 @@ export type PagePanel = {
   setContext: (context: PanelContext | null) => void;
   /** Opens the panel floating when it's closed; an open or pinned panel stays as it is. */
   open: () => void;
-  /** Closes a panel that covers the page (floating, or full screen), not stored, so a notice on it can be read. */
-  uncover: () => void;
+  /**
+   * Closes a panel that covers the page (floating, or full screen), not stored, so a notice on it can be read. When
+   * focus was in that panel, it moves to `notice` once the panel has closed, rather than falling to the page's body;
+   * focus elsewhere stays where it is.
+   */
+  uncover: (notice?: RefObject<HTMLElement | null>) => void;
 };
 
 /** The Findings page's view words: "Findings", then each filter that isn't "all", as status, severity, module. */

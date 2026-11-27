@@ -662,6 +662,56 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
       await vi.waitFor(() => expect(panel()?.dataset.shown ?? null).toBe(shownAfter));
     });
 
+    // #453: focus in a panel the notice closes would fall to <body>, and the first Tab to the closed Ask Warden button.
+    it.each<[number, string, "floating" | "pinned", boolean]>([
+      [390, "closes the full-screen panel and takes focus", "floating", true],
+      [1024, "closes the floating panel and takes focus", "floating", true],
+      [1600, "leaves the pinned panel, and focus doesn't move to it", "pinned", false],
+    ])("at %ipx, with focus in the card, the notice %s", async (width, _, chosen, toNotice) => {
+      window.innerWidth = width;
+      onTestFinished(() => {
+        window.innerWidth = 1024;
+      });
+      localStorage.setItem("warden.askWardenPanel", JSON.stringify({ mode: chosen, width: 400 }));
+      const card = await openThen(without133());
+      await confirmIn(card);
+      // The card's Done line takes focus, in the panel, before the Overview's answer comes back.
+      await vi.waitFor(() => expect(card).toContainElement(document.activeElement as HTMLElement));
+      const words =
+        "Confirmed. Your review of 1.3.3 is stored, but the Overview no longer shows it.";
+      await expectNotice(words);
+      const notice = screen.getByText(words);
+      if (!toNotice) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(panel()).toBeVisible();
+        expect(document.activeElement).not.toBe(notice);
+        return;
+      }
+      await vi.waitFor(() => expect(panel()).toBeNull());
+      await vi.waitFor(() => expect(document.activeElement).toBe(notice));
+      await userEvent.tab();
+      expect(document.activeElement).toBe(await rowButton("1.3.4"));
+    });
+
+    it("with focus on the page, not in the panel, the notice closes the panel and leaves focus where it was", async () => {
+      const late = deferred<Response>();
+      let asked = 0;
+      await openThen(without133(), {
+        overview: () => (++asked === 1 ? answer({ audit: isaOn() }) : late.promise),
+        // A read newer than the row asks the answer again, with nothing pressed in the card.
+        control: (_, ref) => json(200, controlDetail(ref, { review_state: "reviewed" })),
+      });
+      await vi.waitFor(() => expect(callsTo("/api/overview")).toHaveLength(2));
+      const row = await rowButton("1.3.4");
+      row.focus();
+
+      late.resolve(answer({ audit: without133() }));
+      await expectNotice("1.3.3 is no longer on the Overview.");
+      await vi.waitFor(() => expect(panel()).toBeNull());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(document.activeElement).toBe(row);
+    });
+
     it("a review's 201 that lands after the focus moved to 1.3.4, then an answer without 1.3.3: no notice, and 1.3.4's card stays", async () => {
       const late = deferred<Response>();
       await confirmIn(await openThen(without133(), { review: () => late.promise }));

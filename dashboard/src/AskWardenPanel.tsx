@@ -11,6 +11,7 @@ import {
   type CSSProperties,
   type FormEvent,
   type KeyboardEvent,
+  type RefObject,
 } from "react";
 import type { Role } from "@warden/contracts";
 import { askAboutTeam, type GetToken } from "./api.ts";
@@ -78,9 +79,18 @@ export type PanelControls = {
   commit: () => void;
   /** Opens the panel floating when it's closed, without storing it; an open or pinned panel stays as it is. */
   openFloating: () => void;
-  /** Closes a panel over the page at the window's width now, without storing it; a pinned one beside it stays. */
-  uncover: () => void;
+  /**
+   * Closes a panel over the page at the window's width now, without storing it; a pinned one beside it stays. Focus
+   * that was in the panel it closes moves to `notice`.
+   */
+  uncover: (notice?: RefObject<HTMLElement | null>) => void;
 };
+
+/** Whether focus is in the panel while it covers the page (floating, or full screen): the panel `uncover` closes. */
+function focusInPanelOverPage(): boolean {
+  const shownAs = document.activeElement?.closest<HTMLElement>(".ask-warden")?.dataset.shown;
+  return shownAs === "floating" || shownAs === "full-screen";
+}
 
 /**
  * The panel's state, for the shell: the width default or the person's stored choice on load. Each choice the person
@@ -101,10 +111,18 @@ export function usePanelState(): PanelControls {
   const resize = useCallback((width: number) => dispatch({ type: "resize", width }), []);
   const commit = useCallback(() => dispatch({ type: "commit" }), []);
   const openFloating = useCallback(() => dispatch({ type: "open" }), []);
-  const uncover = useCallback(
-    () => dispatch({ type: "uncover", windowWidth: window.innerWidth }),
-    [],
-  );
+  // Focus in a panel that closes would fall to the page's body: it goes to the page's notice once the panel has gone,
+  // which is after the render the close brings (a notice set in the same update has rendered by then too).
+  const focusAfterUncover = useRef<RefObject<HTMLElement | null> | null>(null);
+  const uncover = useCallback((notice?: RefObject<HTMLElement | null>) => {
+    focusAfterUncover.current = notice !== undefined && focusInPanelOverPage() ? notice : null;
+    dispatch({ type: "uncover", windowWidth: window.innerWidth });
+  }, []);
+  useEffect(() => {
+    const notice = focusAfterUncover.current;
+    focusAfterUncover.current = null;
+    notice?.current?.focus();
+  });
   return { state: shown, choose, show, resize, commit, openFloating, uncover };
 }
 
