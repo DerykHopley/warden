@@ -138,16 +138,18 @@ export function FindingsPage({ getToken, me, onSessionEnded, panel }: PageProps)
     [findings, focusedFinding],
   );
   const clearFocus = useCallback(() => setView((old) => ({ ...old, finding: undefined })), []);
-  const { setContext, open: openPanel } = panel;
+  const { setContext, open: openPanel, uncover } = panel;
   const { status, severity, module } = shown;
   const { refresh } = list;
   // A decision on a Finding the Team no longer has: said on the page, as People says a person who left, since the
-  // card goes once the list comes back without it.
+  // card goes once the list comes back without it. As on the Overview (#395, #452), a panel over the page (floating,
+  // or full screen) closes, without storing that as the person's choice, so the notice can be read; a pinned one stays.
   const [gone, setGone] = useState(false);
   const onFindingGone = useCallback(() => {
     setGone(true);
+    uncover();
     refresh();
-  }, [refresh]);
+  }, [uncover, refresh]);
   useEffect(() => {
     setContext({
       view: findingsViewWords({ status, severity, module }),
