@@ -1,10 +1,10 @@
 // The daily Job (ADR 0009): reopens every Team's Accepted Findings whose expiry has passed, then runs each module's
 // daily step for the Team (`DailyStep`): Patch's CVE refresh, one Patch Scan per Product plus the sweep of Product
 // Assets with no Product row; then Guard's, which deletes Agent events older than 7 days and starts a Judge run for
-// each missed Agent session (#499). It lists the Team ids through `withAdmin` (warden_admin, which may read `teams (id)` and
-// nothing else, read only), then changes each Team inside `withTeam` (warden_app), so row-level security binds every
-// change. A Team's expiry or step failing is logged with its id (and the step's name) and the rest still run. It is
-// a start-up file for ADR 0005, so it may import the modules.
+// each missed Agent session (#499). It lists the Team ids through `withAdmin` (warden_admin, which may read
+// `teams (id)` and nothing else, read only), then changes each Team inside `withTeam` (warden_app), so row-level
+// security binds every change. A Team's expiry or step failing is logged with its id (and the step's name) and the
+// rest still run. It is a start-up file for ADR 0005, so it may import the modules.
 //
 // As its own process (`pnpm --filter @warden/server expire`, or the Cloud Run Job #24 makes):
 // - WARDEN_DATABASE_ROLES picks the role set, as for the server; an unknown value exits 1 before connecting.
@@ -17,9 +17,11 @@
 //   anything else exits 1.
 // - The database unreachable, or a login refused: exit 1 with the error, nothing changed.
 // - WARDEN_SCAN_JOB names the Cloud Run Job a Judge run starts as; without it, off Cloud Run a run starts as a child
-//   process, and in a Cloud Run Job (CLOUD_RUN_JOB) none starts, so a Team with a missed session fails in part.
-// It needs no Clerk variable and no model key. Exit 0 when every Team's expiry and steps ran; 1 otherwise (a Patch Scan before
-// `load-cves` has run fails, changing nothing).
+//   process, one at a time, and in a Cloud Run Job (CLOUD_RUN_JOB) none starts, so a Team with a missed session
+//   fails in part.
+// It needs no Clerk variable. On Cloud Run it needs no model key either; off Cloud Run, the child run gets the Job's
+// own OPENROUTER_API_KEY and Judge variables, as the server's child runs get the server's. Exit 0 when every Team's
+// expiry and steps ran; 1 otherwise (a Patch Scan before `load-cves` has run fails, changing nothing).
 import type pg from "pg";
 import {
   createPool,

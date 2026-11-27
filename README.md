@@ -147,7 +147,10 @@ Findings (one Patch Scan per Product, against the loaded CVE snapshot, plus the 
 logs one summary line. Before `load-cves` has run, each Patch Scan fails without changing a Finding, so the Job exits
 1 when any Team has a Product, or a deleted Product's Findings, to scan. `warden_admin`'s one grant is select on
 `teams (id)`: every other table refuses it. Where `PGPASSWORD` is set, the Job also needs `WARDEN_ADMIN_PASSWORD`; it
-never sends the app's password as the admin's.
+never sends the app's password as the admin's. Guard's step then deletes Agent events received over 7 days ago and
+starts a Judge run for each missed Agent session, at most 50 per Team. Locally each run is a child process, one at a
+time, given the shell's `OPENROUTER_API_KEY` and Judge variables, so it calls the model as the server's runs do. On
+Cloud Run the daily Job holds no model key: it starts the Scan Job, which reads its own.
 `GET /api/health` answers 200 when the database answers and offers the `vector` extension, and 503 naming the
 failed part otherwise.
 

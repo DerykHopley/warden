@@ -646,6 +646,15 @@ for mode in preview release; do
     "${args[0]}" "${scan_names[@]}" judge
   assert_no_match "$mode with the Judge's keys: the revision gets none of them" \
     'OPENROUTER|LANGFUSE|openrouter|langfuse' "$(call_of "gcloud run deploy $service ")"
+  if [[ $mode == release ]]; then
+    # The daily Job starts Judge runs as the Scan Job, which reads its own keys (#499).
+    daily=$(call_of "gcloud run jobs update warden-daily-expiry ")
+    assert_line "release with the Judge's keys: the daily Job names the Scan Job in WARDEN_SCAN_JOB" \
+      "WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan" \
+      "$(gcloud_dict "$(flag set-env-vars "$daily")")"
+    assert_no_match "release with the Judge's keys: the daily Job still gets no model or Langfuse secret" \
+      'OPENROUTER|LANGFUSE|openrouter|langfuse' "$daily"
+  fi
 
   run_deploy 200 ok WARDEN_JUDGE_KEYS= -- "${args[@]}"
   [[ $code == 0 ]] || fail "$mode with WARDEN_JUDGE_KEYS empty failed (exit $code): $out"

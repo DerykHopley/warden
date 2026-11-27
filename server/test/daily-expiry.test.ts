@@ -22,7 +22,6 @@ import { createGuardDailyStep, JUDGE_SWEEP_LIMIT } from "../src/modules/guard/da
 import { hookEventRoutes } from "../src/modules/guard/hook-event-routes.ts";
 import { createHookSettings } from "../src/modules/guard/hook-settings.ts";
 import { HOOK_EVENTS_PATH } from "../src/modules/guard/managed-settings.ts";
-import { dailyJudgeJobStarterFor } from "../src/scan-job-starters.ts";
 import { runJudgeJob } from "../src/scan-job.ts";
 import type { JudgeJobStarter } from "../src/scans.ts";
 import { createSpending, TEAM_DAILY_SPENDING_LIMIT_USD } from "../src/spending.ts";
@@ -467,7 +466,10 @@ describe("Guard's daily step (story 11)", () => {
       logger,
     });
 
-  /** A Team with a hook token, and the hook endpoint's app for it, as the server mounts it, with no Judge starter. */
+  /**
+   * A Team with a hook token, and the hook endpoint's app for it, as the server mounts it, with `startJudgeJob` as its
+   * SessionEnd's Judge starter, or none when it's left out.
+   */
   async function teamWithHook(withTeam: WithTeam, team: string, startJudgeJob?: JudgeJobStarter) {
     await seedTeam(withTeam, team, [[ADMIN, "admin"]]);
     const hookSettings = createHookSettings({ withTeam });
@@ -822,38 +824,6 @@ describe("Guard's daily step (story 11)", () => {
     for (const sessionId of missed) expect(lines.join("\n")).not.toContain(sessionId);
     expect(done.steps).toEqual({
       guard: { eventsDeleted: 0, judgeRunsStarted: 2, judgeStartsFailed: 1, teamsFailed: 1 },
-    });
-  }, 30_000);
-
-  it("in a Cloud Run Job with no WARDEN_SCAN_JOB, starts nothing, logs WARDEN_SCAN_JOB once, and fails the step in part for a Team with a missed session", async () => {
-    const db = await freshDatabase();
-    const missedTeams = ["org_guard_nostart_a", "org_guard_nostart_b"];
-    const cleanTeam = "org_guard_nostart_c";
-    for (const team of [...missedTeams, cleanTeam])
-      await seedTeam(db.withTeam, team, [[ADMIN, "admin"]]);
-    for (const team of missedTeams) {
-      const sessionId = newSession();
-      await store(db.withTeam, team, sessionId, "SessionEnd");
-      await moveSession(db.withTeam, team, sessionId, "ended_at", MISSED_AGO);
-    }
-    const lines: string[] = [];
-    const logger = createLogger((line) => lines.push(line));
-    // As main() chooses it, in the daily Job on Cloud Run with WARDEN_SCAN_JOB missing.
-    const startJudgeJob = dailyJudgeJobStarterFor({ CLOUD_RUN_JOB: "warden-daily" }, { logger });
-
-    const code = await runDailyExpiry({
-      ...db,
-      steps: [guardStep(db.withTeam, startJudgeJob, logger)],
-      logger,
-      now: NOW,
-    });
-
-    expect(code).toBe(1);
-    const { logged, done } = parsed(lines);
-    expect(logged.filter((e) => String(e.message).includes("WARDEN_SCAN_JOB"))).toHaveLength(1);
-    expect(logged.filter((e) => e.step === "guard").map((e) => e.team)).toEqual(missedTeams);
-    expect(done.steps).toEqual({
-      guard: { eventsDeleted: 0, judgeRunsStarted: 0, judgeStartsFailed: 2, teamsFailed: 2 },
     });
   }, 30_000);
 });

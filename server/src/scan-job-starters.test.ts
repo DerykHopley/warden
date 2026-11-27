@@ -24,7 +24,11 @@ function fakes() {
   const spawn: Spawn = (_command, args) => {
     spawned.push(args);
     const child = new EventEmitter();
-    queueMicrotask(() => child.emit("spawn"));
+    // Started, then exited at once, so a starter that waits for the exit resolves too.
+    queueMicrotask(() => {
+      child.emit("spawn");
+      child.emit("exit", 0, null);
+    });
     return child;
   };
   return { fetched, spawned, deps: { logger: createLogger(() => {}), fetch, spawn } };
@@ -128,6 +132,26 @@ describe("dailyJudgeJobStarterFor: the daily Job's Judge run starter, from its e
       expect(fake.fetched).toEqual([]);
     },
   );
+
+  it("off Cloud Run, resolves a start only once its child has exited, so a sweep's runs go one at a time", async () => {
+    const child = new EventEmitter();
+    const spawn: Spawn = () => {
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    };
+    const start = dailyJudgeJobStarterFor({}, { logger: createLogger(() => {}), spawn });
+    let resolved = false;
+    const started = start!(SESSION).then(() => {
+      resolved = true;
+    });
+
+    await new Promise((settle) => setImmediate(settle));
+    expect(resolved).toBe(false);
+
+    child.emit("exit", 0, null);
+    await started;
+    expect(resolved).toBe(true);
+  });
 
   it("wires none in a Cloud Run Job (CLOUD_RUN_JOB set) without WARDEN_SCAN_JOB", () => {
     const fake = fakes();

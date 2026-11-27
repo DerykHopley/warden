@@ -1,7 +1,7 @@
 // Guard's step in the daily Job (spec #225, slice 8a, #499; ADR 0009): for each Team, it deletes the Agent events
 // received more than AGENT_EVENT_RETENTION_DAYS ago, then starts one Judge run for each missed session, at most
-// JUDGE_SWEEP_LIMIT, oldest end first. The delete runs first, so the sweep never starts a run for events that are
-// about to go. It keeps no model key: each run it starts is a Job of its own, which reads its own. Its log lines name
+// JUDGE_SWEEP_LIMIT, oldest end first. The delete runs first, so the 7-day promise holds even when a start fails. On
+// Cloud Run it keeps no model key: each run it starts is a Job of its own, which reads its own. Its log lines name
 // the Team, never a session id (threat H7). The step's shape is the daily Job's `DailyStep`, written here as Patch's
 // refresh writes its own, so the module needn't import the start-up file.
 import type { Logger } from "../../log.ts";

@@ -3,7 +3,7 @@
 // GitHub App's client id and key, which it reads repos with. Nothing else of the server's environment is handed on: no
 // Clerk key, no admin password, no GitHub client secret. It isn't waited on; its exit is logged. The Judge run's
 // starter runs the same child with the session's id in place of the Scan's, and the Judge's key, model and localhost
-// setting (#444, #461).
+// setting (#444, #461); the daily Job's sweep waits for each run's exit, so its runs don't pile up (#499).
 import { spawn as nodeSpawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import { fileURLToPath } from "node:url";
@@ -61,14 +61,19 @@ const JUDGE_VARIABLES = [
 type StarterDeps = { logger: Logger; env?: NodeJS.ProcessEnv; spawn?: Spawn };
 
 /**
- * Spawns scan-job.ts with `childEnv`, resolving once it has started; its exit is logged with `fields` and the exit
- * code, as `exited` on 0 and `failed` otherwise.
+ * Spawns scan-job.ts with `childEnv`, resolving once it has started, or with `waitForExit` once it has exited; its
+ * exit is logged with `fields` and the exit code, as `exited` on 0 and `failed` otherwise.
  */
 function spawnJob(
   spawn: Spawn,
   logger: Logger,
   childEnv: NodeJS.ProcessEnv,
-  { fields, exited, failed }: { fields: Record<string, string>; exited: string; failed: string },
+  {
+    fields,
+    exited,
+    failed,
+    waitForExit = false,
+  }: { fields: Record<string, string>; exited: string; failed: string; waitForExit?: boolean },
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [SCAN_JOB], {
@@ -76,11 +81,12 @@ function spawnJob(
       // Its log lines go where the server's go.
       stdio: "inherit",
     });
-    child.once("spawn", () => resolve());
+    if (!waitForExit) child.once("spawn", () => resolve());
     child.once("error", reject);
     child.once("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       if (code === 0) logger.info(exited, { ...fields, code, signal });
       else logger.error(failed, { ...fields, code, signal });
+      resolve();
     });
   });
 }
@@ -106,13 +112,15 @@ export function localScanJobStarter({
 /**
  * The Judge run's starter (#444): the same child, with the session's id and Team in place of the Scan's, and the
  * Judge's key and model when the server has them. Its exit line holds the Team and the exit code, never the session id
- * (threat H7).
+ * (threat H7). With `waitForExit`, a start resolves only once the run has exited, whatever its code: the daily Job's
+ * sweep starts up to JUDGE_SWEEP_LIMIT runs per Team, and one at a time they don't pile up on the database (#499).
  */
 export function localJudgeJobStarter({
   logger,
   env = process.env,
   spawn = nodeSpawn,
-}: StarterDeps): JudgeJobStarter {
+  waitForExit = false,
+}: StarterDeps & { waitForExit?: boolean }): JudgeJobStarter {
   return ({ sessionId, team }) =>
     spawnJob(
       spawn,
@@ -129,6 +137,7 @@ export function localJudgeJobStarter({
         fields: { team },
         exited: "judge run exited",
         failed: "judge run exited without finishing its session",
+        waitForExit,
       },
     );
 }
