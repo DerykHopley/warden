@@ -20,14 +20,21 @@ const notYet = (...controls: AuditControl[]): AuditAnswer => ({
   answer: "not_yet",
   gaps: 0,
   waiting: 0,
+  catalogues: [],
   controls,
 });
 
 describe("auditReadyOfAnswer", () => {
   it("is false with no Catalogue on", () => {
-    expect(auditReadyOfAnswer({ answer: "no_catalogue", gaps: 0, waiting: 0, controls: [] })).toBe(
-      false,
-    );
+    expect(
+      auditReadyOfAnswer({
+        answer: "no_catalogue",
+        gaps: 0,
+        waiting: 0,
+        catalogues: [],
+        controls: [],
+      }),
+    ).toBe(false);
   });
 
   it("is false while a row waits for its first review", () => {

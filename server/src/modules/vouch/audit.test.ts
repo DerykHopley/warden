@@ -1,11 +1,40 @@
 // "Are we ready for the audit?" and the Audit-ready Level (spec #341, slice 4, stories 8 and 9): the answer's case table
 // from each Control's worked-out Verdict and review state, and when a Team is Audit-ready from its Catalogue switches
 // and reviews. Pure: no database, no clock.
-import { ReviewedVerdict, type ReviewState, type Verdict } from "@warden/contracts";
+import {
+  ReviewedVerdict,
+  type AuditCatalogue,
+  type ReviewState,
+  type Verdict,
+} from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { auditAnswerOf, isAuditReady, type ControlStanding } from "./audit.ts";
+import {
+  auditAnswerOf,
+  isAuditReady,
+  type AnsweredCatalogue,
+  type ControlStanding,
+} from "./audit.ts";
 
 const ISA = "vda-isa-2027.1";
+
+/** ISA2027 as the answer reads it: what it is, and its credit and licence. */
+const ISA_CATALOGUE: AnsweredCatalogue = {
+  id: ISA,
+  name: "VDA ISA 2027.1",
+  date: "2026-09-30",
+  credit: "© 2026 ENX Association.",
+  licence: { name: "CC BY-ND 4.0", url: "https://creativecommons.org/licenses/by-nd/4.0/" },
+};
+
+/** ISA2027 as the answer gives it. */
+const ISA_ANSWERED: AuditCatalogue = {
+  id: ISA,
+  name: "VDA ISA 2027.1",
+  date: "2026-09-30",
+  credit: "© 2026 ENX Association.",
+  licence: "CC BY-ND 4.0",
+  licence_url: "https://creativecommons.org/licenses/by-nd/4.0/",
+};
 
 /** A Control `ref` of ISA2027 standing at `verdict`, `review_state` and `reviewed_verdict`. */
 const control = (
@@ -22,16 +51,31 @@ const control = (
 });
 
 /** ISA2027 on, with `controls`. */
-const on = (...controls: ControlStanding[]) => [{ catalogue: ISA, controls }] as const;
+const on = (...controls: ControlStanding[]) => [{ catalogue: ISA_CATALOGUE, controls }] as const;
 
 describe("auditAnswerOf", () => {
-  it("answers no_catalogue, with no counts and no rows, when no Catalogue is on", () => {
+  it("answers no_catalogue, with no counts, no rows and no Catalogues, when no Catalogue is on", () => {
     expect(auditAnswerOf([])).toEqual({
       answer: "no_catalogue",
       gaps: 0,
       waiting: 0,
+      catalogues: [],
       controls: [],
     });
+  });
+
+  it("gives one Catalogue per Catalogue on, in the order given, with its credit and licence", () => {
+    // Warden has one Catalogue: a second stands in for one with another id, as the answer reads only what it's given.
+    const second = { ...ISA_CATALOGUE, name: "A second Catalogue", credit: "© Someone else." };
+    const answer = auditAnswerOf([
+      { catalogue: ISA_CATALOGUE, controls: [control("1.3.3", "evidenced")] },
+      { catalogue: second, controls: [control("1.1", "evidenced")] },
+    ]);
+
+    expect(answer.catalogues).toEqual([
+      ISA_ANSWERED,
+      { ...ISA_ANSWERED, name: "A second Catalogue", credit: "© Someone else." },
+    ]);
   });
 
   it("answers not_yet with every Control waiting when one is on and none is reviewed, a row each in order", () => {
@@ -43,6 +87,7 @@ describe("auditAnswerOf", () => {
       answer: "not_yet",
       gaps: 0,
       waiting: 2,
+      catalogues: [ISA_ANSWERED],
       controls: [
         {
           catalogue: ISA,
@@ -120,7 +165,13 @@ describe("auditAnswerOf", () => {
   });
 
   it("answers not_yet, never yes, when the Catalogue on judges no Control", () => {
-    expect(auditAnswerOf(on())).toEqual({ answer: "not_yet", gaps: 0, waiting: 0, controls: [] });
+    expect(auditAnswerOf(on())).toEqual({
+      answer: "not_yet",
+      gaps: 0,
+      waiting: 0,
+      catalogues: [ISA_ANSWERED],
+      controls: [],
+    });
   });
 });
 

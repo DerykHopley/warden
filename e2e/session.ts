@@ -97,6 +97,31 @@ export const DAHLIA = {
   people: [DOROTHY, ANNIE],
 };
 
+export const MARY: Person = {
+  userId: "user_e2e_mary",
+  firstName: "Mary",
+  lastName: "Jackson",
+  email: "mary@elm.test",
+};
+
+export const EVELYN: Person = {
+  userId: "user_e2e_evelyn",
+  firstName: "Evelyn",
+  lastName: "Granville",
+  email: "evelyn@elm.test",
+};
+
+/**
+ * A fifth Team for spec #341's stories 8 and 9 (e2e/overview.spec.ts), with no demo seed and no Scan: it turns VDA ISA
+ * 2027.1 on and reviews its Controls, which can't be undone, so no other spec's Overview or Setup reads it.
+ */
+export const ELM = {
+  id: "org_e2e_elm",
+  name: "Elm",
+  admin: MARY,
+  people: [MARY, EVELYN],
+};
+
 export type Team = typeof ACME;
 
 /**

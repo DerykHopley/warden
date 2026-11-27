@@ -15,6 +15,7 @@ import {
 import type { MountRoutes } from "../../app.ts";
 import { pathId } from "../../path-id.ts";
 import { refusedBody } from "../../refused-body.ts";
+import { catalogueAsAnswered } from "./audit.ts";
 import type { Catalogue, Control } from "./catalogue.ts";
 import type { StoredControlReview } from "./control-reviews.ts";
 import { judgeCatalogue, judgeControls, type JudgedControl } from "./controls.ts";
@@ -28,12 +29,7 @@ function teamCatalogue(
   choice: TeamCatalogueChoice | undefined,
 ): TeamCatalogue {
   return {
-    id: catalogue.id,
-    name: catalogue.name,
-    date: catalogue.date,
-    credit: catalogue.credit,
-    licence: catalogue.licence.name,
-    licence_url: catalogue.licence.url,
+    ...catalogueAsAnswered(catalogue),
     on: choice?.on ?? false,
     set_by: choice?.setBy ?? null,
     set_at: choice?.setAt.toISOString() ?? null,

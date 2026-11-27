@@ -36,6 +36,7 @@ import {
 import { useLandOnAnchor } from "./land-on-anchor.ts";
 import { goTo } from "./navigate.ts";
 import {
+  CATALOGUES_ANCHOR,
   cataloguesChanged,
   fetchCatalogues,
   switchCatalogueInTeam,
@@ -49,6 +50,9 @@ const READ_AGAIN_MS = 5_000;
 /** The Repos heading, when the address's anchor names it. */
 const findReposHeading = (anchor: string) =>
   anchor === REPOS_ANCHOR ? document.getElementById(REPOS_ANCHOR) : null;
+/** The Catalogues heading, when the address's anchor names it. */
+const findCataloguesHeading = (anchor: string) =>
+  anchor === CATALOGUES_ANCHOR ? document.getElementById(CATALOGUES_ANCHOR) : null;
 const NOT_A_LEAD = "Only a Lead or an Admin starts a Scan.";
 /** The write app's Setup URL's path, `WriteAppSetupPage`'s route. */
 const WRITE_SETUP_PATH = "/setup/github/write";
@@ -126,8 +130,8 @@ export function SetupPage(props: PageProps) {
         <h2 id={REPOS_ANCHOR}>Repos</h2>
         <RepoList {...props} />
       </section>
-      <section className="setup-section" aria-labelledby="setup-catalogues">
-        <h2 id="setup-catalogues">Catalogues</h2>
+      <section className="setup-section" aria-labelledby={CATALOGUES_ANCHOR}>
+        <h2 id={CATALOGUES_ANCHOR}>Catalogues</h2>
         <CatalogueSection {...props} />
       </section>
     </>
@@ -496,6 +500,7 @@ function CatalogueSection(props: PageProps) {
     (catalogue: TeamCatalogue) => setResult((old) => withCatalogue(old, catalogue)),
     [setResult],
   );
+  useLandOnAnchor(list.result !== "loading", findCataloguesHeading);
 
   if (list.result === "loading") {
     return <p className="muted">Loading the Team's Catalogues…</p>;

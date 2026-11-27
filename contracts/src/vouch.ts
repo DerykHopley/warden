@@ -196,14 +196,31 @@ export const AuditControl = z.object({
 export type AuditControl = z.infer<typeof AuditControl>;
 
 /**
- * `GET /api/overview`'s `audit`: the answer, its Gaps, the Controls waiting for a review, and one row per judged
- * Control of each Catalogue the Team has on, the Catalogues in the order `GET /api/vouch/catalogues` lists them and
- * each one's Controls in the order it shows them. Worked out on read, never stored.
+ * One Catalogue the Team has on, as the Overview answers it (spec #341, slice 6): what it is, and its credit and
+ * licence, which go wherever its Controls' text is shown. `TeamCatalogue`'s fields of the same names.
+ */
+export const AuditCatalogue = TeamCatalogue.pick({
+  id: true,
+  name: true,
+  date: true,
+  credit: true,
+  licence: true,
+  licence_url: true,
+});
+export type AuditCatalogue = z.infer<typeof AuditCatalogue>;
+
+/**
+ * `GET /api/overview`'s `audit`: the answer, its Gaps, the Controls waiting for a review, each Catalogue the Team has
+ * on, and one row per judged Control of each one, the Catalogues in the order `GET /api/vouch/catalogues` lists them
+ * (`controls` groups them in the same order) and each one's Controls in the order it shows them. Worked out on read,
+ * never stored.
  */
 export const AuditAnswer = z.object({
   answer: ReadyForAudit,
   gaps: z.number().int().nonnegative(),
   waiting: z.number().int().nonnegative(),
+  /** None with `no_catalogue`. */
+  catalogues: z.array(AuditCatalogue),
   controls: z.array(AuditControl),
 });
 export type AuditAnswer = z.infer<typeof AuditAnswer>;

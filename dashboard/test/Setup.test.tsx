@@ -1149,6 +1149,42 @@ describe("SetupPage: Catalogues (spec #341, slice 5)", () => {
     expect(await catalogues().findByText("No Catalogues on this Warden.")).toHaveClass("muted");
     await othersShow();
   });
+
+  describe("opened at #setup-catalogues, the Overview's Setup pointer (#383)", () => {
+    // jsdom lays nothing out, so it has no scrollIntoView: each test gives Element one, and records what it was called on.
+    const scrolled = vi.fn<(this: Element, options?: ScrollIntoViewOptions) => void>();
+    beforeEach(() => {
+      scrolled.mockReset();
+      Element.prototype.scrollIntoView = scrolled;
+    });
+    afterEach(() => {
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    });
+
+    it("brings the Catalogues heading into view once the list answers, and only it", async () => {
+      window.history.replaceState(null, "", "/setup#setup-catalogues");
+      const list = deferred<Response>();
+      renderSetup("admin", { catalogues: () => list.promise });
+
+      await vi.waitFor(() => expect(callsTo("/api/vouch/catalogues")).toHaveLength(1));
+      expect(scrolled).not.toHaveBeenCalled();
+      list.resolve(cataloguesOf(CATALOGUE)());
+
+      await shown();
+      await vi.waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
+      expect(scrolled.mock.contexts[0]).toBe(
+        screen.getByRole("heading", { level: 2, name: "Catalogues" }),
+      );
+    });
+
+    it("scrolls nothing at #setup-repos once only the Catalogues have answered", async () => {
+      window.history.replaceState(null, "", "/setup#setup-repos");
+      renderSetup("admin", { repos: () => deferred<Response>().promise });
+
+      await shown();
+      expect(scrolled).not.toHaveBeenCalled();
+    });
+  });
 });
 
 function renderGitHubSetup(search: string, role: Role = "admin", routes: Routes = {}) {
