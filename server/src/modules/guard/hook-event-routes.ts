@@ -9,7 +9,7 @@ import type { AppEnv, MountRoutes } from "../../app.ts";
 import { createAttemptLimit } from "../../attempt-limit.ts";
 import { setNewest } from "../../capped-map.ts";
 import { refusedBody } from "../../refused-body.ts";
-import { SESSION_ID_PATTERN } from "../../scans.ts";
+import { SESSION_ID_PATTERN, SESSION_ID_RULE } from "../../scans.ts";
 import { clientAddress, createSignInLimit } from "../../sign-in-limit.ts";
 import type { AgentSessions } from "./agent-sessions.ts";
 import type { HookSettings } from "./hook-settings.ts";
@@ -37,7 +37,7 @@ const STORED_EVENTS: ReadonlySet<string> = new Set(HOOK_EVENTS);
 
 /** What the endpoint reads of an event before the tier filter: its session and its name. */
 const EventShape = z.object({
-  session_id: z.string().regex(SESSION_ID_PATTERN, "isn't 1 to 128 of A-Z, a-z, 0-9, _ and -"),
+  session_id: z.string().regex(SESSION_ID_PATTERN, SESSION_ID_RULE),
   hook_event_name: z.string(),
 });
 

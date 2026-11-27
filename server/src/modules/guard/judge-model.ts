@@ -4,6 +4,7 @@
 // connection, answers non-2xx or doesn't answer a chat completion throws, naming only its status: never the key, the
 // prompt or the answer.
 import { z } from "zod";
+import { ConfigError } from "../../config.ts";
 import { callJson, type Fetch } from "../../http-call.ts";
 
 /** OpenRouter's OpenAI-compatible API. */
@@ -102,6 +103,26 @@ export function chatCompletionsModel({
       return { refusal: false, content };
     },
   };
+}
+
+/**
+ * The Judge's model for a run's settings: on OpenRouter with `apiKey`, or, with none, a model whose every call
+ * rejects with ConfigError naming OPENROUTER_API_KEY before anything is sent, so a run with nothing to judge still
+ * exits 0 without the key.
+ */
+export function judgeModel({
+  apiKey,
+  ...options
+}: {
+  apiKey: string | undefined;
+  model: string;
+  fetch?: Fetch;
+  timeoutMs?: number;
+}): JudgeModel {
+  if (apiKey === undefined) {
+    return { complete: () => Promise.reject(new ConfigError(["OPENROUTER_API_KEY"])) };
+  }
+  return openRouterModel({ apiKey, ...options });
 }
 
 /** The Judge's model on OpenRouter, with its routing (`OPENROUTER_PROVIDER`). */

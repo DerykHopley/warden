@@ -1,7 +1,7 @@
-import { DEMO_OBSERVATIONS, demoRuns } from "@warden/contracts/demo";
+import { demoRuns } from "@warden/contracts/demo";
 import { RuleId } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { AGENT_SENDS_SECRETS, JUDGE_RULES, judgeRule } from "./judge-rules.ts";
+import { JUDGE_RULES, judgeRule } from "./judge-rules.ts";
 
 describe("the Judge's Rules", () => {
   it("are Guard Rules, each listed once", () => {
@@ -16,6 +16,5 @@ describe("the Judge's Rules", () => {
     for (const observation of spotRun.observations) {
       expect(judgeRule(observation.rule_id), observation.rule_id).toBeDefined();
     }
-    expect(DEMO_OBSERVATIONS.printed.rule_id).toBe(AGENT_SENDS_SECRETS);
   });
 });

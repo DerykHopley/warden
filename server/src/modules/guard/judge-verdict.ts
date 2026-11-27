@@ -5,7 +5,7 @@
 import type { MaskedAgentEvent, Observation } from "@warden/contracts";
 import { z } from "zod";
 import type { ModelAnswer } from "./judge-model.ts";
-import { cut } from "./judge-prompt.ts";
+import { cut } from "./cut.ts";
 import { JUDGE_RULES, judgeRule } from "./judge-rules.ts";
 
 /** The most cited events one Finding keeps, as the contracts' `SessionEvidence` holds them. */

@@ -37,6 +37,7 @@ import {
   createScans,
   SCAN_ID_VARIABLE,
   SESSION_ID_PATTERN,
+  SESSION_ID_RULE,
   SESSION_ID_VARIABLE,
   TEAM_VARIABLE,
   type Scanners,
@@ -250,10 +251,7 @@ async function judgeMain(
     ]);
   }
   if (!SESSION_ID_PATTERN.test(sessionId)) {
-    problems.push([
-      `${SESSION_ID_VARIABLE} isn't 1 to 128 of A-Z, a-z, 0-9, _ and -`,
-      [SESSION_ID_VARIABLE],
-    ]);
+    problems.push([`${SESSION_ID_VARIABLE} ${SESSION_ID_RULE}`, [SESSION_ID_VARIABLE]]);
   }
   if (team === undefined) problems.push([`set ${TEAM_VARIABLE}`, [TEAM_VARIABLE]]);
   if (team === undefined || problems.length > 0) {

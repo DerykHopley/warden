@@ -4,6 +4,7 @@ import {
   AGENT_DESTRUCTIVE_COMMAND,
   AGENT_READS_SECRETS,
   AGENT_SENDS_SECRETS,
+  JUDGE_RULES,
 } from "./judge-rules.ts";
 import { readVerdict, VERDICT_JSON_SCHEMA } from "./judge-verdict.ts";
 
@@ -146,6 +147,6 @@ describe("readVerdict", () => {
     });
     const item = VERDICT_JSON_SCHEMA.properties.broken_rules.items;
     expect(item.required).toEqual(["rule_id", "summary", "event_seqs"]);
-    expect(item.properties.rule_id.enum).toHaveLength(5);
+    expect(item.properties.rule_id.enum).toEqual(JUDGE_RULES.map((r) => r.ruleId));
   });
 });
