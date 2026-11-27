@@ -495,8 +495,10 @@ const isShell = (word: string) => /^(?:sh|bash|zsh|dash)$/.test(commandName(word
 type RunStart = { start: number; shell: boolean };
 
 /** The run `word`, which ends at `end`, starts when it stands where a command runs: the agent's, or a shell's. */
-const runOf = (word: string, end: number): RunStart | undefined =>
-  isAgent(word) || isShell(word) ? { start: end, shell: isShell(word) } : undefined;
+const runOf = (word: string, end: number): RunStart | undefined => {
+  const shell = isShell(word);
+  return shell || isAgent(word) ? { start: end, shell } : undefined;
+};
 
 /**
  * The run `word`, which ends at `end`, starts from `at` (at `end`, or at the end of the word after `coproc` when this
@@ -560,20 +562,20 @@ function readWord(
  * Where each run of the agent's or a shell's arguments starts, in a command with its quotes masked: just after each
  * word that runs it (`isAgent`, `isShell`). Reads command words, not the whole shell grammar. A word ends at unescaped
  * white space, `;`, `&`, `|`, `(`, `)` or a backquote; a backslash joins the character it escapes to the word, and a
- * line continuation joins the words either side. A word runs the agent or a shell when it is the command word (the first of a command, past `NAME=value`, a
- * redirect and reserved words such as `then` or `!`, and `time`'s `-p` and `--`), the `time` program's command word
- * (past its options and their values), or any later word after a wrapper (`env`, `sudo`, `npx`, …). A word is a
- * reserved word only before any assignment or redirect in its command; after one, it is the command word, and `time`
- * is the `time` program, as it is by path (`/usr/bin/time`). After the reserved word `coproc`, a compound command is
- * read as it is anywhere; any other word is its command word, unless a compound command follows that word, which makes
- * it the coprocess's name. An unescaped `#` at a word's start hides the rest of its line. Each `(` and backquote
- * starts a command, and its close restores where the word before it stood; inside backquotes, an escaped
- * backquote opens or closes a nested one. A backquote, `$(`, `<(` or `>(` inside a word (`x=$(foo)bar`) doesn't end the
- * word: it goes on after the close. After a `)` that closes nothing (a `case` pattern's) or one whose `(` came after a
- * command's word (a `case` pattern's `(a)`, a function's `()`), a command starts; so it does after `function` and the
- * name that follows it.
+ * line continuation joins the words either side. A word runs the agent or a shell when it is the command word (the
+ * first of a command, past `NAME=value`, a redirect and reserved words such as `then` or `!`, and `time`'s `-p` and
+ * `--`), the `time` program's command word (past its options and their values), or any later word after a wrapper
+ * (`env`, `sudo`, `npx`, …). A word is a reserved word only before any assignment or redirect in its command; after
+ * one, it is the command word, and `time` is the `time` program, as it is by path (`/usr/bin/time`). After the
+ * reserved word `coproc`, a compound command is read as it is anywhere; any other word is its command word, unless a
+ * compound command follows that word, which makes it the coprocess's name. An unescaped `#` at a word's start hides
+ * the rest of its line. Each `(` and backquote starts a command, and its close restores where the word before it
+ * stood; inside backquotes, an escaped backquote opens or closes a nested one. A backquote, `$(`, `<(` or `>(` inside
+ * a word (`x=$(foo)bar`) doesn't end the word: it goes on after the close. After a `)` that closes nothing (a `case`
+ * pattern's) or one whose `(` came after a command's word (a `case` pattern's `(a)`, a function's `()`), a command
+ * starts; so it does after `function` and the name that follows it.
  */
-function agentRunStarts(masked: string): RunStart[] {
+function runStarts(masked: string): RunStart[] {
   const starts: RunStart[] = [];
   // What each open `(`, backquote (`` ` ``) or nested backquote (`` \` ``) interrupted: where the next word stands at
   // its close, and the word it is inside (`x=$`), which goes on after the close.
@@ -602,10 +604,9 @@ function agentRunStarts(masked: string): RunStart[] {
   for (let index = 0; index < masked.length; index++) {
     const char = masked[index]!;
     if (char === "\\") {
-      const length = escapedLength(masked, index);
-      const escaped = masked.slice(index + 1, index + 1 + length);
-      index += length;
-      if (escaped === "\n" || escaped === "\r\n" || escaped === "") continue;
+      const escaped = escapedAt(masked, index);
+      index += escaped.length;
+      if (isContinuation(escaped) || escaped === "") continue;
       if (escaped !== "`" || !inBackquotes()) {
         word = (word ?? "") + escaped;
         continue;
@@ -691,6 +692,13 @@ function escapedLength(masked: string, index: number): number {
   return masked.startsWith("\r\n", index + 1) ? 2 : 1;
 }
 
+/** The text the backslash at `index` escapes (`escapedLength`): empty when the backslash ends the text. */
+const escapedAt = (text: string, index: number) =>
+  text.slice(index + 1, index + 1 + escapedLength(text, index));
+
+/** Whether a backslash's escaped text is a line continuation, which the shell removes with the backslash. */
+const isContinuation = (escaped: string) => escaped === "\n" || escaped === "\r\n";
+
 /** Whether the `&` or `|` at `index` belongs to a redirect: `>&`, `<&`, `&>` (`&>>` too) or `>|`. */
 function isRedirect(masked: string, index: number): boolean {
   const before = masked[index - 1];
@@ -700,9 +708,13 @@ function isRedirect(masked: string, index: number): boolean {
 
 /**
  * A backslash and the character it escapes, or a single- or double-quoted argument (to the end of the text when it
- * isn't closed). In double quotes a backslash escapes the next character; in single quotes nothing is escaped.
+ * isn't closed), with the text inside its quotes captured: a double-quoted one's first, a single-quoted one's second.
+ * In double quotes a backslash escapes the next character; in single quotes nothing is escaped.
  */
-const ESCAPE_OR_QUOTED = /\\[\s\S]|"(?:[^"\\]|\\[\s\S])*"?|'[^']*'?/g;
+const ESCAPE_OR_QUOTED = /\\[\s\S]|"((?:[^"\\]|\\[\s\S])*)"?|'([^']*)'?/g;
+
+/** `ESCAPE_OR_QUOTED` at its `lastIndex` only, to read the quoted argument that starts there. */
+const QUOTED_AT = new RegExp(ESCAPE_OR_QUOTED.source, "y");
 
 /**
  * A shell command with each quoted argument, its quotes too, masked by `_`, so its length and every index stay the
@@ -730,14 +742,14 @@ function agentRuns(command: string, shells = 0): string[] {
   const masked = withQuotesMasked(command);
   const runs: string[] = [];
   let end = 0;
-  for (const { start, shell } of agentRunStarts(masked)) {
+  for (const { start, shell } of runStarts(masked)) {
     // A run inside an earlier run's arguments (`claude -p $(claude -p y)`) is part of that run.
     if (start < end) continue;
     end = runArgumentsEnd(masked, start);
     if (!shell) runs.push(withQuotesMasked(command.slice(start, end), isOneWord));
     else if (shells < SHELL_DEPTH) {
-      const string = commandString(shellWords(command.slice(start, end)));
-      if (string !== undefined) runs.push(...agentRuns(string, shells + 1));
+      const script = commandString(shellWords(command.slice(start, end)));
+      if (script !== undefined) runs.push(...agentRuns(script, shells + 1));
     }
   }
   return runs;
@@ -767,14 +779,29 @@ function commandString(words: readonly string[]): string | undefined {
   return undefined;
 }
 
-/** The characters a backslash keeps its meaning before inside double quotes. */
-const ESCAPED_IN_DOUBLE_QUOTES = new Set(['"', "\\", "$", "`", "\n"]);
+/** The characters a backslash keeps its meaning before inside double quotes, besides a line continuation. */
+const ESCAPED_IN_DOUBLE_QUOTES = new Set(['"', "\\", "$", "`"]);
+
+/**
+ * The text inside double quotes as the shell reads it: a backslash before `"`, `\`, `$` or a backquote is removed, and
+ * a line continuation (`escapedAt`, so a CRLF one too) with its backslash.
+ */
+function doubleQuoted(inside: string): string {
+  let text = "";
+  for (let i = 0; i < inside.length; i++) {
+    const escaped = inside[i] === "\\" ? escapedAt(inside, i) : "";
+    if (isContinuation(escaped)) i += escaped.length;
+    else if (ESCAPED_IN_DOUBLE_QUOTES.has(escaped)) text += inside[++i];
+    else text += inside[i];
+  }
+  return text;
+}
 
 /**
  * A command's arguments as the shell splits and joins them, with no expansion: words end at unquoted white space;
- * single quotes are kept as written; in double quotes a backslash before `"`, `\`, `$` or a backquote is removed, and a
- * line continuation with it; unquoted, a backslash escape keeps the character it escapes, and a line continuation joins
- * the words either side. A quote that never closes runs to the end.
+ * single quotes are kept as written; double quotes as `doubleQuoted` reads them; unquoted, a backslash escape keeps the
+ * character it escapes, and a line continuation joins the words either side. A quote that never closes runs to the
+ * end, as `ESCAPE_OR_QUOTED` reads it.
  */
 function shellWords(text: string): string[] {
   const words: string[] = [];
@@ -788,25 +815,14 @@ function shellWords(text: string): string[] {
     }
     word ??= "";
     if (char === "\\") {
-      const length = escapedLength(text, i);
-      const escaped = text.slice(i + 1, i + 1 + length);
-      i += length;
-      if (escaped !== "\n" && escaped !== "\r\n") word += escaped;
-    } else if (char === "'") {
-      const close = text.indexOf("'", i + 1);
-      const stop = close < 0 ? text.length : close;
-      word += text.slice(i + 1, stop);
-      i = stop;
-    } else if (char === '"') {
-      for (i += 1; i < text.length && text[i] !== '"'; i++) {
-        const next = text[i + 1];
-        if (text[i] !== "\\" || next === undefined || !ESCAPED_IN_DOUBLE_QUOTES.has(next)) {
-          word += text[i];
-          continue;
-        }
-        if (next !== "\n") word += next;
-        i += 1;
-      }
+      const escaped = escapedAt(text, i);
+      i += escaped.length;
+      if (!isContinuation(escaped)) word += escaped;
+    } else if (char === "'" || char === '"') {
+      QUOTED_AT.lastIndex = i;
+      const [quoted, inDouble, inSingle] = QUOTED_AT.exec(text)!;
+      word += inSingle ?? doubleQuoted(inDouble!);
+      i += quoted.length - 1;
     } else word += char;
   }
   if (word !== undefined) words.push(word);

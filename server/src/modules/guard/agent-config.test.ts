@@ -262,6 +262,16 @@ describe("guard/blanket-bash-allow", () => {
 });
 
 describe("guard/permission-skip", () => {
+  /** The one Finding of a file with one place that skips the checks, of `kind`, on `line`. */
+  const onePlace = (path: string, line: number, kind: string) => [
+    expect.objectContaining({
+      location: { kind: "file", path, line },
+      evidence: {
+        summary: `1 place skips the agent's permission checks (${kind}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
+      },
+    }),
+  ];
+
   it.each([
     ["scripts/agent.sh", `#!/bin/sh\nset -e\nclaude ${FLAG} -p "$1"\n`, 3],
     [
@@ -640,16 +650,8 @@ describe("guard/permission-skip", () => {
     "reports a hook in %s whose %s command runs the agent with its checks off, on the command's line",
     (path, event, command, kind) => {
       const text = settings({}, hooks(event, command));
-      const line = lineWith(text, '"command":');
 
-      expect(ofRule(path, text, SKIP)).toEqual([
-        expect.objectContaining({
-          location: { kind: "file", path, line },
-          evidence: {
-            summary: `1 place skips the agent's permission checks (${kind}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
-          },
-        }),
-      ]);
+      expect(ofRule(path, text, SKIP)).toEqual(onePlace(path, lineWith(text, '"command":'), kind));
     },
   );
 
@@ -799,38 +801,41 @@ describe("guard/permission-skip", () => {
   describe("a hook command a shell runs from its -c string", () => {
     const path = ".claude/settings.json";
     const skips = (command: string) => ofRule(path, settings({}, hooks("Stop", command)), SKIP);
-    const onePlace = (command: string) => {
-      const line = lineWith(settings({}, hooks("Stop", command)), '"command":');
-      return [
-        expect.objectContaining({
-          location: { kind: "file", path, line },
-          evidence: {
-            summary: `1 place skips the agent's permission checks (${FLAG}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
-          },
-        }),
-      ];
-    };
+    /** The one Finding of a `Stop` hook running `command`, with the flag in one place. */
+    const onePlaceIn = (command: string) =>
+      onePlace(path, lineWith(settings({}, hooks("Stop", command)), '"command":'), FLAG);
     /** A word in double quotes, as a shell reads it back: `"`, `\`, `$` and a backquote escaped. */
     const dq = (text: string) => `"${text.replace(/["\\$`]/g, "\\$&")}"`;
     const sq = (text: string) => `'${text}'`;
+    /** A run of the agent with the flag, three shells deep: `SHELL_DEPTH`'s limit. */
+    const threeDeep = `sh -c ${sq(`zsh -c ${dq(`dash -c ${dq(`claude ${FLAG}`)}`)}`)}`;
 
     it("reports a double-quoted string with escaped quotes once, its prompt not a place", () => {
       const command = `bash -c "claude ${FLAG} -p \\"hi there\\""`;
 
-      expect(skips(command)).toEqual(onePlace(command));
+      expect(skips(command)).toEqual(onePlaceIn(command));
+    });
+
+    it.each([
+      ["a line continuation", "\n"],
+      ["a CRLF line continuation", "\r\n"],
+    ])("reports the flag split by %s inside a double-quoted string", (_name, newline) => {
+      const split = join("--dangerously", "\\", newline, "-skip-permissions");
+      const command = `bash -c "claude '${split}' -p hi"`;
+
+      expect(skips(command)).toEqual(onePlaceIn(command));
     });
 
     it.each([
       [2, `bash -c "sh -c 'claude ${FLAG}'"`],
-      [3, `bash -c "sh -c 'zsh -c \\"claude ${FLAG}\\"'"`],
+      [3, threeDeep],
     ])("reports a shell run nested %i deep", (_depth, command) => {
-      expect(skips(command)).toEqual(onePlace(command));
+      expect(skips(command)).toEqual(onePlaceIn(command));
     });
 
     it("reads no fourth shell's string, and returns", () => {
-      const threeDeep = `sh -c ${sq(`zsh -c ${dq(`dash -c ${dq(`claude ${FLAG}`)}`)}`)}`;
-
-      expect(skips(threeDeep)).toEqual(onePlace(threeDeep));
+      // A guard on the test, not the code: the string the fourth shell runs is valid, so only the depth limit stops it.
+      expect(skips(threeDeep)).toEqual(onePlaceIn(threeDeep));
       expect(skips(`bash -c ${dq(threeDeep)}`)).toEqual([]);
     });
 
@@ -845,7 +850,7 @@ describe("guard/permission-skip", () => {
     it("reports an unclosed string that runs the agent with the flag", () => {
       const command = `bash -c 'claude ${FLAG}`;
 
-      expect(skips(command)).toEqual(onePlace(command));
+      expect(skips(command)).toEqual(onePlaceIn(command));
     });
   });
 
@@ -880,16 +885,8 @@ describe("guard/permission-skip", () => {
     (_name, rest, needle, kind) => {
       const path = ".claude/settings.json";
       const text = settings({}, rest);
-      const line = lineWith(text, needle);
 
-      expect(ofRule(path, text, SKIP)).toEqual([
-        expect.objectContaining({
-          location: { kind: "file", path, line },
-          evidence: {
-            summary: `1 place skips the agent's permission checks (${kind}) in ${path}, on line ${line}. To fix: ${packRule(SKIP).fix}`,
-          },
-        }),
-      ]);
+      expect(ofRule(path, text, SKIP)).toEqual(onePlace(path, lineWith(text, needle), kind));
     },
   );
 
