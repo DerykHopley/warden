@@ -272,7 +272,7 @@ describe("the audit section with ISA2027 on (spec #341, story 8)", () => {
     expect(audit.getAllByRole("link").map((link) => link.textContent)).toEqual(["CC BY-ND 4.0"]);
   });
 
-  it("tells the panel nothing with no Control in focus, and clears its context as it goes", async () => {
+  it("tells the panel nothing with no Control in focus", async () => {
     const { panel } = open({ audit: isaOn() });
     await auditSection();
     expect(panel.setContext).toHaveBeenLastCalledWith(null);
@@ -319,7 +319,7 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
       overview: () => answer({ audit: isaOn() }),
       control,
     });
-    render(<App />);
+    return render(<App />);
   }
   const readOf = (ref: string) =>
     json(200, controlDetail(ref, { reason: `Reason ${ref}`, question: `Question ${ref}?` }));
@@ -353,18 +353,47 @@ describe("focusing a Control (spec #341, slice 7a)", () => {
     expect(address()).toBe("/overview?catalogue=vda-isa-2027.1&control=1.3.4");
   });
 
-  it.each([
-    ["a ref the answer doesn't hold", "?catalogue=vda-isa-2027.1&control=9.9.9"],
-    ["a Catalogue the answer doesn't hold", "?catalogue=vda-isa-2099.1&control=1.3.3"],
-    ["a ref with no Catalogue", "?control=1.3.3"],
-  ])("%s selects nothing and is removed from the address", async (_, query) => {
-    openApp(`/overview${query}`);
+  // Which addresses name a Control the answer holds is focusedControl's, in overview.test.ts.
+  it("a link to a Control the answer doesn't hold selects nothing, opens nothing, and only its params leave the address", async () => {
+    openApp("/overview?tab=x&catalogue=vda-isa-2027.1&control=9.9.9#notes");
     for (const ref of ["1.3.3", "1.3.4", "4.1.3", "5.2.4"]) {
       expect(await rowButton(ref)).not.toHaveAttribute("aria-current");
     }
-    await vi.waitFor(() => expect(address()).toBe("/overview"));
+    await vi.waitFor(() => expect(address()).toBe("/overview?tab=x"));
+    expect(location.hash).toBe("#notes");
     expect(panel()).toBeNull();
     expect(callsTo("/api/vouch/catalogues/vda-isa-2027.1/controls/9.9.9")).toHaveLength(0);
+  });
+
+  it("selecting a row changes only the Control in the address, keeping its other params, its hash and the entry's state", async () => {
+    openApp("/overview?tab=x#notes");
+    const button = await rowButton("1.3.3");
+    history.replaceState({ kept: true }, "", location.href);
+
+    await userEvent.click(button);
+    expect(address()).toBe("/overview?tab=x&catalogue=vda-isa-2027.1&control=1.3.3");
+    expect(location.hash).toBe("#notes");
+    expect(history.state).toEqual({ kept: true });
+  });
+
+  it("a Team switch drops the focus, so a panel closed on the old Team stays closed on the new one", async () => {
+    const { rerender } = openApp("/overview?catalogue=vda-isa-2027.1&control=1.3.3");
+    await screen.findByRole("complementary", { name: "Ask Warden" });
+    await userEvent.click(screen.getByRole("button", { name: "Close Ask Warden" }));
+    expect(panel()).toBeNull();
+
+    clerk.auth.orgId = "org_b";
+    clerk.orgNames = { ...clerk.orgNames, org_b: "Bluebird" };
+    serve({
+      me: () => json(200, { userId: "user_ada", team: "org_b", role: "lead", level: "quick" }),
+      overview: () => json(200, { ...overview({ audit: isaOn() }), team: "org_b" }),
+      control: (_, ref) => readOf(ref),
+    });
+    rerender(<App />);
+    await vi.waitFor(() => expect(callsTo("/api/overview").length).toBeGreaterThanOrEqual(2));
+    expect(await rowButton("1.3.3")).not.toHaveAttribute("aria-current");
+    expect(address()).toBe("/overview");
+    expect(panel()).toBeNull();
   });
 
   it("the card's ✕ removes the focus from the address, and the panel stays open", async () => {

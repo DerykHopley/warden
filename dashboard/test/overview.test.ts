@@ -6,8 +6,11 @@ import type { CatalogueId, OverviewBody } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import {
   auditAnswerLine,
+  controlInAddress,
   controlsByCatalogue,
+  focusedControl,
   journeyCards,
+  searchWithControl,
   shownVerdict,
   trendLine,
 } from "../src/overview.ts";
@@ -221,6 +224,77 @@ describe("shownVerdict", () => {
     expect(
       shownVerdict(auditRow("4.1.3", { verdict: "evidenced", review_state: "reviewed" })),
     ).toBe("evidenced");
+  });
+});
+
+describe("controlInAddress", () => {
+  it("is the Catalogue and ref the address names", () => {
+    expect(controlInAddress("?catalogue=vda-isa-2027.1&control=1.3.3")).toEqual({
+      catalogue: "vda-isa-2027.1",
+      ref: "1.3.3",
+    });
+  });
+
+  it.each(["", "?control=1.3.3", "?catalogue=vda-isa-2027.1", "?catalogue=&control=1.3.3"])(
+    "is null unless the address names both (%j)",
+    (search) => {
+      expect(controlInAddress(search)).toBeNull();
+    },
+  );
+});
+
+describe("searchWithControl", () => {
+  const focus = { catalogue: "vda-isa-2027.1", ref: "1.3.3" };
+
+  it("writes the Control's Catalogue and ref, keeping the address's other params", () => {
+    expect(searchWithControl("?tab=x", focus)).toBe(
+      "?tab=x&catalogue=vda-isa-2027.1&control=1.3.3",
+    );
+  });
+
+  it("rewrites a Control already there in place", () => {
+    expect(searchWithControl("?catalogue=other&control=9.9.9&tab=x", focus)).toBe(
+      "?catalogue=vda-isa-2027.1&control=1.3.3&tab=x",
+    );
+  });
+
+  it("drops only the Catalogue and ref with no Control in focus", () => {
+    expect(searchWithControl("?catalogue=vda-isa-2027.1&tab=x&control=1.3.3", null)).toBe(
+      "?tab=x",
+    );
+    expect(searchWithControl("?control=1.3.3", null)).toBe("");
+  });
+
+  it("gives back the address as it is when it already says so", () => {
+    expect(searchWithControl("?control=1.3.3&catalogue=vda-isa-2027.1", focus)).toBe(
+      "?control=1.3.3&catalogue=vda-isa-2027.1",
+    );
+    expect(searchWithControl("?tab=a%20b", null)).toBe("?tab=a%20b");
+  });
+});
+
+describe("focusedControl", () => {
+  const audit = isaOn();
+
+  it("is the Catalogue and row the address names", () => {
+    expect(focusedControl(audit, { catalogue: ISA.id, ref: "1.3.4" })).toEqual({
+      catalogue: ISA,
+      control: audit.controls.find(({ ref }) => ref === "1.3.4"),
+    });
+  });
+
+  it.each([
+    ["no Control", null],
+    ["a ref the answer doesn't hold", { catalogue: ISA.id, ref: "9.9.9" }],
+    ["a Catalogue the answer doesn't list", { catalogue: "not-on", ref: "1.3.3" }],
+  ])("is null for %s", (_, control) => {
+    expect(focusedControl(audit, control)).toBeNull();
+  });
+
+  it("is null for a row of a Catalogue the answer doesn't list", () => {
+    expect(focusedControl(isaOn({ catalogues: [] }), { catalogue: ISA.id, ref: "1.3.3" })).toBe(
+      null,
+    );
   });
 });
 

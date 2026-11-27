@@ -16,7 +16,7 @@ import { GitHubCallbackPage, WriteAppCallbackPage } from "./GitHubCallback.tsx";
 import { landingPage } from "./landing.ts";
 import { fetchMe, type MeResult } from "./me.ts";
 import { OverviewPage } from "./Overview.tsx";
-import type { PagePanel, PanelContext } from "./panel.ts";
+import { nothingToDo, type PagePanel, type PanelContext } from "./panel.ts";
 import { PeoplePage } from "./People.tsx";
 import { ProductsPage } from "./Products.tsx";
 import { ROLE_WORDS } from "./roles.ts";
@@ -120,9 +120,6 @@ export type PageProps = {
   /** The Ask Warden panel: what the page is talking about, and opening it. Without a context it names the page. */
   panel: PagePanel;
 };
-
-/** The default context's callbacks: with no focus there is nothing to clear, and no Finding to ask for again. */
-const nothingToDo = () => {};
 
 type Page = { path: string; label: string; Page: ComponentType<PageProps> };
 

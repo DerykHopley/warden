@@ -138,6 +138,9 @@ export type PanelContext = {
   productName: string | null;
 };
 
+/** A context callback with nothing to do: no focus to clear, or no Finding to ask for again. */
+export const nothingToDo = () => {};
+
 /** What the shell gives a page to talk to the panel. Both functions keep their identity across renders. */
 export type PagePanel = {
   /** Tells the panel what the page is talking about; null (as the page unmounts) gives it back the page's name. */

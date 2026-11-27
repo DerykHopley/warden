@@ -14,20 +14,24 @@ import {
   JOURNEY_STATE_WORDS,
   journeyCards,
   NO_CATALOGUE_LINE,
-  overviewPath,
+  searchWithControl,
   shownVerdict,
   trendLine,
   useOverview,
   type ControlInAddress,
   type JourneyCardView,
 } from "./overview.ts";
+import { nothingToDo } from "./panel.ts";
 import { CATALOGUES_ANCHOR, REVIEW_STATE_WORDS, VOUCH_VERDICT_WORDS } from "./vouch.ts";
 import { CallRefused, TeamRefused } from "./warden-call.tsx";
 
-const here = () => location.pathname + location.search;
-
-/** The Overview's context has no Finding: nothing to ask for again. */
-const nothingToDo = () => {};
+/** Writes `control` into the address's entry in place: only its two params change, the rest of the entry stays. */
+function showInAddress(control: ControlInAddress) {
+  const search = searchWithControl(location.search, control);
+  if (search !== location.search) {
+    history.replaceState(history.state, "", `${location.pathname}${search}${location.hash}`);
+  }
+}
 
 export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps) {
   const call = useOverview(getToken, me.team, onSessionEnded);
@@ -41,16 +45,23 @@ export function OverviewPage({ getToken, me, onSessionEnded, panel }: PageProps)
     () => (audit === null ? null : focusedControl(audit, selected)),
     [audit, selected],
   );
-  const shown: ControlInAddress =
-    audit === null
-      ? selected
-      : focused && { catalogue: focused.catalogue.id, ref: focused.control.ref };
-  const path = overviewPath(shown);
+  const shown: ControlInAddress = useMemo(
+    () =>
+      audit === null
+        ? selected
+        : focused && { catalogue: focused.catalogue.id, ref: focused.control.ref },
+    [audit, selected, focused],
+  );
 
-  // The address always reads the focus as overviewPath writes it: one the answer doesn't hold is rewritten in place.
-  useEffect(() => {
-    if (here() !== path) history.replaceState(null, "", path);
-  }, [path]);
+  // The address always names the focus shown: one the answer doesn't hold is removed in place. As the page goes (a
+  // Team switch, sign-out), its focus leaves the address, so the next Team's page doesn't open it as a link.
+  useEffect(() => showInAddress(shown), [shown]);
+  useEffect(
+    () => () => {
+      if (location.pathname === "/overview") showInAddress(null);
+    },
+    [],
+  );
 
   // The Ask Warden panel talks about the focused Control, its card's ✕ clearing it; with none, about the page.
   const { setContext, open: openPanel } = panel;

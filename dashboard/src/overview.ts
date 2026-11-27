@@ -205,11 +205,28 @@ export function controlInAddress(search: string): ControlInAddress {
   return catalogue && ref ? { catalogue, ref } : null;
 }
 
-/** The Overview's address with `control` in focus: `/overview?catalogue=vda-isa-2027.1&control=1.3.3`, or `/overview`. */
-export const overviewPath = (control: ControlInAddress) =>
-  control === null
-    ? "/overview"
-    : `/overview?${new URLSearchParams({ catalogue: control.catalogue, control: control.ref })}`;
+/**
+ * The address's query with `control` in focus (`?catalogue=vda-isa-2027.1&control=1.3.3`), or with none: only those
+ * two params change, the others stay as they are, and a query that already says so comes back unchanged.
+ */
+export function searchWithControl(search: string, control: ControlInAddress): string {
+  const query = new URLSearchParams(search);
+  const current = controlInAddress(search);
+  const unchanged =
+    control === null
+      ? !query.has("catalogue") && !query.has("control")
+      : current?.catalogue === control.catalogue && current.ref === control.ref;
+  if (unchanged) return search;
+  if (control === null) {
+    query.delete("catalogue");
+    query.delete("control");
+  } else {
+    query.set("catalogue", control.catalogue);
+    query.set("control", control.ref);
+  }
+  const rest = query.toString();
+  return rest === "" ? "" : `?${rest}`;
+}
 
 /** The Catalogue and row that `control` names, when the answer holds both; null otherwise. */
 export function focusedControl(
