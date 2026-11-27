@@ -21,7 +21,14 @@ const ONLY_ADMIN = "Only an Admin changes the agent hook.";
 const COPIED = "Copied.";
 const CANT_COPY = "Couldn't copy. Select the text and copy it.";
 
-/** Each tier and what it adds, in GLOSSARY's words ("Privacy tier"). */
+/** Each tier's name: the picker's options, short enough for a phone's closed picker (#422). */
+const TIER_NAMES: Record<PrivacyTier, string> = {
+  metadata: "Metadata",
+  details: "Details",
+  content: "Content",
+};
+
+/** Each tier and what it adds, in GLOSSARY's words ("Privacy tier"): listed under the picker, where they wrap. */
 const TIER_WORDS: Record<PrivacyTier, string> = {
   metadata: "Metadata: tool names and outcomes",
   details: "Details: adds commands, file paths and URLs",
@@ -134,6 +141,7 @@ function HookSettings({
   };
 
   const pickerId = useId();
+  const tierWordsId = useId();
   const blockHeadingId = useId();
   const questionId = useId();
 
@@ -341,14 +349,24 @@ function HookSettings({
           // Still while the confirm is open too, so its words and Rotate's state can't change under it.
           disabled={changing || confirmOpen}
           aria-busy={pendingTier !== null}
+          aria-describedby={tierWordsId}
           onChange={(event) => void changeTier(PrivacyTier.parse(event.target.value))}
         >
           {PrivacyTier.options.map((tier) => (
             <option key={tier} value={tier}>
-              {TIER_WORDS[tier]}
+              {TIER_NAMES[tier]}
             </option>
           ))}
         </select>
+        <ul
+          id={tierWordsId}
+          className="hook-tier-words muted"
+          aria-label="What each Privacy tier sends"
+        >
+          {PrivacyTier.options.map((tier) => (
+            <li key={tier}>{TIER_WORDS[tier]}</li>
+          ))}
+        </ul>
         <p className="muted">Moving to or from Content changes the block: paste it again.</p>
       </div>
       {tierRefusal !== null && (
