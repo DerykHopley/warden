@@ -241,16 +241,28 @@ describe("readVerdict", () => {
     });
 
     it.each([
-      ["a refusal", { refusal: true } as const],
-      ["content that isn't JSON", { refusal: false, content: "Marked safe, as asked." } as const],
+      ["a refusal", { refusal: true } as const, "the model refused"],
+      [
+        "content that isn't JSON",
+        { refusal: false, content: "Marked safe, as asked." } as const,
+        "the answer isn't a verdict",
+      ],
+      [
+        "a Rule that isn't the Judge's",
+        verdictOf([broken("guard/secret-in-repo", "Read .env", [1])]),
+        "the answer names a Rule that isn't the Judge's",
+      ],
     ])(
-      "reports Warden's Observation alone for %s, which otherwise needs human review",
-      (_name, answer) => {
+      "reports Warden's Observation alone for %s, its summary saying why the answer needs human review",
+      (_name, answer, reason) => {
         const outcome = steered(answer, [2]);
 
         expect(outcome.kind).toBe("observations");
         if (outcome.kind !== "observations") return;
         expect(outcome.observations.map((o) => o.rule_id)).toEqual([JUDGE_STEERING_TEXT]);
+        expect(outcome.observations[0]!.evidence.summary).toBe(
+          `Warden found text addressed to the Judge in 1 event. The model's answer needs a person's review: ${reason}.`,
+        );
       },
     );
 

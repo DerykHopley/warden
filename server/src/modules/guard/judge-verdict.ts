@@ -109,8 +109,8 @@ const steeringSummary = (count: number) =>
  * at most the first 50 cited events in session order beside `events_read` and `events_hash`. With `ending` (slice
  * 7a: what the Judge left unread), each summary ends with it, the model's text cut to leave it room. With `steering`
  * (slice 7b: the seqs Warden's own patterns matched), a `guard/judge-steering-text` Observation citing them, merged
- * with the model's for that Rule, and reported even when the answer needs review. The reason a person must review it
- * otherwise; the reason never holds the answer's text.
+ * with the model's for that Rule, and reported even when the answer needs review, its summary then naming the reason.
+ * The reason a person must review it otherwise; the reason never holds the answer's text.
  */
 export function readVerdict(
   answer: ModelAnswer,
@@ -142,12 +142,16 @@ export function readVerdict(
     for (const seq of seqs) entry.seqs.add(seq);
     byRule.set(ruleId, entry);
   };
-  // An answer a person must review adds nothing: Warden's own Observation stands alone.
+  // An answer a person must review adds no Observation: Warden's own stands alone, its summary saying why.
   if ("rules" in answered) {
     for (const { rule_id, summary, event_seqs } of answered.rules)
       add(rule_id, summary, event_seqs);
   }
-  if (steering.length > 0) add(JUDGE_STEERING_TEXT, steeringSummary(steering.length), steering);
+  if (steering.length > 0) {
+    const why =
+      "reason" in answered ? ` The model's answer needs a person's review: ${answered.reason}.` : "";
+    add(JUDGE_STEERING_TEXT, `${steeringSummary(steering.length)}${why}`, steering);
+  }
 
   const observations = [...byRule].map(([ruleId, { summaries, seqs }]): Observation => {
     const rule = judgeRule(ruleId)!;
