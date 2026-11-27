@@ -73,6 +73,13 @@ describe("checkJudgeUrl", () => {
       PUBLIC,
       /2048 characters/,
     ],
+    // 1,030 characters as typed, but over 6,000 as stored: each é is encoded as %C3%A9 (#464).
+    [
+      "over 2048 characters once encoded",
+      `https://models.example.com/${"é".repeat(1000)}`,
+      PUBLIC,
+      /over 2048 characters/,
+    ],
     [
       "a host that doesn't resolve",
       "https://models.example.com/v1",

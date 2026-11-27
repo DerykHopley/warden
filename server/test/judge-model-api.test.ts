@@ -183,6 +183,20 @@ describe("PUT and GET /api/judge/model", () => {
     expect(await storedRows(team)).toEqual([]);
   });
 
+  // 1,000 é is about 1,030 characters as typed, and over 6,000 once encoded as the table stores it (#464).
+  it("refuses a URL over 2048 characters once encoded with 400, saying so, and stores nothing", async () => {
+    const team = await teamOfThree();
+    const { app } = judgeApp();
+
+    const res = await change(app, team, {
+      local_model: { url: `${HOSTED.url}/${"é".repeat(1000)}`, model: LOCAL_MODEL },
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "local_model.url: it's over 2048 characters" });
+    expect(await storedRows(team)).toEqual([]);
+  });
+
   it("answers a Lead's and a Member's GET and PUT with 403, and leaves the setting as it was", async () => {
     const team = await teamOfThree();
     const { app } = judgeApp();
