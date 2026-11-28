@@ -177,6 +177,11 @@ export function loadEvalTargets(folder: string = EVAL_CASES_DIR): EvalTargets {
   return EvalTargetsSchema.parse(JSON.parse(readFileSync(join(folder, TARGETS_FILE), "utf8")));
 }
 
+/** Every file `loadEvalTargets` and `loadEvalCases` read in `folder`, as paths: `targets.json`, then each case file. */
+export function evalSetFiles(folder: string = EVAL_CASES_DIR): string[] {
+  return [TARGETS_FILE, ...caseFileNames(folder)].map((file) => join(folder, file));
+}
+
 /** Every string in a case's events, keys included, joined by line breaks: what a search for a phrase reads. */
 export function eventText(c: EvalCase): string {
   const strings: string[] = [];

@@ -1,14 +1,21 @@
 // Writes the Judge eval's report (spec #225, story 17; slice 13a) from the run list and the results files it names,
 // with no database and no model: `pnpm --filter @warden/server eval:report`, which writes `docs/eval/report.md` from
 // `docs/eval/runs.json`, or `eval:report -- <runs.json> <report.md>`. The results files sit in `results/` beside the
-// run list. Anything wrong in the inputs exits 2, naming it, and writes nothing.
+// run list. Anything wrong in the inputs exits 2, naming it, and writes nothing: so does a report path that is one of
+// the files it reads, an empty results file, and a run's results file missing a case for a model in it (#546).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cliArgs, isMain } from "./cli.ts";
-import { firstIssue, loadEvalCases, loadEvalTargets, type EvalCase } from "./eval-cases.ts";
+import { cliArgs, isMain, spellings } from "./cli.ts";
+import {
+  evalSetFiles,
+  firstIssue,
+  loadEvalCases,
+  loadEvalTargets,
+  type EvalCase,
+} from "./eval-cases.ts";
 import { renderReport, ReportRuns, type ReportInputs } from "./report.ts";
-import { readResults, type EvalResultLine } from "./results.ts";
+import { byModel, readResults, type EvalResultLine } from "./results.ts";
 
 const REPO_DIR = fileURLToPath(new URL("../../../", import.meta.url));
 /** The committed run list, and the report rendered from it. */
@@ -17,9 +24,30 @@ export const REPORT_FILE = join(REPO_DIR, "docs/eval/report.md");
 
 const USAGE = "usage: pnpm --filter @warden/server eval:report [-- <runs.json> <report.md>]";
 
-/** The run list at `runsFile`, each results file it names (from `results/` beside it), the cases and the targets;
- * throws naming the file and what's wrong in it. */
-export function readReportInputs(runsFile: string): ReportInputs {
+/** `runsFile`'s path as the report's header shows it: from the repo root, with `/`, when it's inside the repo. */
+function shownPath(runsFile: string): string {
+  const resolved = resolve(runsFile);
+  const inRepo = relative(REPO_DIR, resolved);
+  return inRepo === "" || inRepo.startsWith("..") || isAbsolute(inRepo)
+    ? resolved
+    : inRepo.split(sep).join("/");
+}
+
+/** The first case in the case set's order that a model with a line in `lines` has no line for, as a message. */
+function missingCase(lines: readonly EvalResultLine[], cases: readonly EvalCase[]): string | null {
+  for (const { provider, model, cases: has } of byModel(lines).values()) {
+    const missing = cases.find((c) => !has.has(c.name));
+    if (missing !== undefined)
+      return `${model} (${provider}) has no line for case "${missing.name}"`;
+  }
+  return null;
+}
+
+/** The run list at `runsFile`, each results file it names (from `results/` beside it), the cases and the targets,
+ * with every file read for them (`files`): the run list, the results files, `targets.json` and the case files. Throws
+ * naming the file and what's wrong in it: a results file holding no line, or a run's results file without a line for
+ * some case on a model in it. */
+export function readReportInputs(runsFile: string): { inputs: ReportInputs; files: string[] } {
   if (!existsSync(runsFile)) throw new Error(`no run list at ${runsFile}`);
   let text: string;
   try {
@@ -40,18 +68,41 @@ export function readReportInputs(runsFile: string): ReportInputs {
   const runs = parsed.data;
   const cases = loadEvalCases();
   const byName = new Map(cases.map((c) => [c.name, c]));
+  // A flip-rerun file holds only the flipped cases, so only a run's own results file must hold every case.
+  const runResults = new Set(runs.runs.map((run) => run.results));
   const results = new Map<string, readonly EvalResultLine[]>();
+  const files = [runsFile, ...evalSetFiles()];
   for (const name of runs.runs.flatMap((run) => [run.results, ...run.flip_reruns])) {
     if (results.has(name)) continue;
     const file = join(dirname(runsFile), "results", name);
+    files.push(file);
     const lines = readResults(file);
     for (const line of lines) {
       const mismatch = caseMismatch(line, byName.get(line.case));
       if (mismatch !== null) throw new Error(`${file}: case "${line.case}" ${mismatch}`);
     }
+    if (lines.length === 0) throw new Error(`${file} holds no results`);
+    const missing = runResults.has(name) ? missingCase(lines, cases) : null;
+    if (missing !== null) throw new Error(`${file}: ${missing}`);
     results.set(name, lines);
   }
-  return { runs, results, cases, targets: loadEvalTargets() };
+  const inputs = {
+    runs,
+    runsFile: shownPath(runsFile),
+    results,
+    cases,
+    targets: loadEvalTargets(),
+  };
+  return { inputs, files };
+}
+
+/** `path` resolved, and where its links lead when it exists. */
+const namesOf = (path: string) => spellings(resolve(path));
+
+/** Whether `reportFile` is one of `inputs`, compared after `resolve` and after following links. */
+function isInput(reportFile: string, inputs: readonly string[]): boolean {
+  const read = new Set(inputs.flatMap(namesOf));
+  return namesOf(reportFile).some((name) => read.has(name));
 }
 
 /** A case's labels in words, in any order: `clean` for none. */
@@ -82,7 +133,10 @@ function main(argv: readonly string[]): number {
   const [runsFile, reportFile] =
     args.length === 0 ? [RUNS_FILE, REPORT_FILE] : args.map((given) => resolve(from, given));
   try {
-    const report = renderReport(readReportInputs(runsFile!));
+    const { inputs, files } = readReportInputs(runsFile!);
+    if (isInput(reportFile!, files))
+      throw new Error(`${reportFile} is one of eval:report's inputs`);
+    const report = renderReport(inputs);
     writeFileSync(reportFile!, report);
     console.log(`wrote ${reportFile}`);
     return 0;

@@ -2,7 +2,7 @@
 // latest line per (model, case), and each case that passed in the earlier and fails in the later listed under its
 // model, with the line that reruns them. `eval:regressions` prints it (`regressions-cli.ts`).
 import { join } from "node:path";
-import { latestResults, modelKey, type EvalResultLine, type ResultModel } from "./results.ts";
+import { byModel, type EvalResultLine, type ResultModel } from "./results.ts";
 
 /** Which of the two files something is in. */
 export type InFile = "earlier" | "later";
@@ -22,21 +22,6 @@ export type Regressions = {
   /** Each model in only one file, in the same order. */
   onlyIn: (ResultModel & { in: InFile })[];
 };
-
-/** A model's latest lines, by case. */
-type ModelLines = ResultModel & { cases: Map<string, EvalResultLine> };
-
-/** Each model's latest lines by case, keyed by `modelKey`, in the order each model was first saved. */
-function byModel(results: readonly EvalResultLine[]): Map<string, ModelLines> {
-  const models = new Map<string, ModelLines>();
-  for (const result of latestResults(results)) {
-    const key = modelKey(result);
-    const { provider, model } = result;
-    if (!models.has(key)) models.set(key, { provider, model, cases: new Map() });
-    models.get(key)!.cases.set(result.case, result);
-  }
-  return models;
-}
 
 /** The flips from `earlier` to `later`, each file read by its latest line per (model, case). */
 export function findRegressions(
