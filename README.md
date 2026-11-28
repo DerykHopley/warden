@@ -335,7 +335,9 @@ The numbers come from the results files; what each run changed, why, and which m
 in the run list. After a new run, add it to the end of `runs.json` first (its results file, any `flip_reruns` files
 from `eval:regressions` below, its commit, its change and its notes), then render the report and commit both. A test
 fails when the committed report differs from a fresh render. `eval:report -- <runs.json> <report.md>` renders another
-run list; a wrong argument or a bad file exits 2 and writes nothing.
+run list, and its header names that run list. A wrong argument or a bad file exits 2 and writes nothing: so does a
+report path that is one of the files it reads, an empty results file, and a run's results file missing a case for a
+model in it (a save that stopped partway).
 
 **Regressions.** `pnpm --filter @warden/server eval:regressions -- <earlier.jsonl> <later.jsonl>` lists, for each
 model in both files, each case that passed in the earlier and fails in the later, with the Rules it missed or flagged
