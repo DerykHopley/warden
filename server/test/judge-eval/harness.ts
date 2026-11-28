@@ -158,8 +158,8 @@ function stated(values: readonly (number | undefined)[]): number | null {
   return known.length === 0 ? null : known.reduce((total, value) => total + value, 0);
 }
 
-/** The hook events a Team at `tier` sends: those the managed-settings block has a hook for. */
-const sentAt = (tier: EvalCase["tier"]) =>
+/** The hook events a Team at `tier` sends: those the managed-settings block has a hook for. The replay shares it. */
+export const hookEventsSentAt = (tier: EvalCase["tier"]) =>
   new Set(Object.keys(managedSettings({ url: "http://127.0.0.1", token: null, tier }).hooks));
 
 /** The model a run's `model` names, with no tracing. */
@@ -258,7 +258,7 @@ async function startWarden(withTeam: WithTeam) {
     const { token } = await hookSettings.issueToken(team, { issuedBy: ADMIN });
     await hookSettings.setPrivacyTier(team, { tier: c.tier, setBy: ADMIN });
     const sessionId = `eval-${randomUUID()}`;
-    const sent = sentAt(c.tier);
+    const sent = hookEventsSentAt(c.tier);
     const startedAt = performance.now();
     for (const [i, event] of c.events.entries()) {
       if (!sent.has(event.hook_event_name)) continue;
