@@ -64,6 +64,19 @@ export const JudgeModelBody = z.strictObject({
 export type JudgeModelBody = z.infer<typeof JudgeModelBody>;
 
 /**
+ * `GET /api/guard/findings/:id/session` (spec #225, slice 9b, story 9): an Agent session Finding's session record, as
+ * `agent_sessions` keeps it after its events are dropped: the developer's pseudonym (null when the hook named none),
+ * and when the session started, ended and was judged (null until it has). Never a developer's name, nor an event.
+ */
+export const AgentSessionBody = z.strictObject({
+  developer: z.string().nullable(),
+  started_at: DateTime,
+  ended_at: DateTime.nullable(),
+  judged_at: DateTime.nullable(),
+});
+export type AgentSessionBody = z.infer<typeof AgentSessionBody>;
+
+/**
  * `PUT /api/judge/model`'s body: the Team's own model, or null to clear it. The model name is 1 to 200 characters, not
  * only spaces, with no control character, each refusal in plain words, as Setup shows them (#464); the server checks
  * the URL against its URL rule.

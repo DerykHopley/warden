@@ -1,7 +1,7 @@
 // A Team's Agent sessions and their Agent events (spec #225, slice 1, #183): what the hook endpoint stores from each
 // event Claude Code posts (0019_agent_sessions), and what the Judge reads of an ended session then drops (slice 5a,
 // #443), claiming it first so one run judges it at a time (slice 7a), and what the daily Job deletes and sweeps (slice
-// 8a, #499). Every call runs inside `withTeam`, so row-level security keeps each Team's rows to itself (ADR 0006); the
+// 8a, #499), and one session's record, which the detail card reads (slice 9b, #505). Every call runs inside `withTeam`, so row-level security keeps each Team's rows to itself (ADR 0006); the
 // Team is always the hook token's or the Job's, never the event's.
 import { sql, type Generated } from "kysely";
 import type { WithTeam } from "../../with-team.ts";
@@ -59,6 +59,17 @@ export type StoredEvent = {
   refusedEvents: number;
 };
 
+/**
+ * One session's record (slice 9b, #505), as the detail card reads it: the developer's pseudonym, null when the hook
+ * named none, and when it started, ended and was judged. It outlasts the session's events.
+ */
+export type SessionRecord = {
+  developer: string | null;
+  startedAt: Date;
+  endedAt: Date | null;
+  judgedAt: Date | null;
+};
+
 /** One stored event as the Judge reads it. */
 export type ReadAgentEvent = {
   /**
@@ -105,6 +116,8 @@ export interface AgentSessions {
    * its end, its refused count, and its developer when it had none yet), then adds the event.
    */
   store(team: string, event: StoredEvent): Promise<void>;
+  /** The session's record, from `agent_sessions` alone; undefined when the Team holds no such session. */
+  record(team: string, sessionId: string): Promise<SessionRecord | undefined>;
   /**
    * An ended session's events, in stored order: undefined when the Team holds no such session, it hasn't ended, or it
    * holds no events (none sent, or the Judge already dropped them).
@@ -184,6 +197,25 @@ export function createAgentSessions({ withTeam }: { withTeam: WithTeam }): Agent
             fields: sql`${JSON.stringify(event.fields)}::jsonb`,
           })
           .execute();
+      });
+    },
+
+    record(team, sessionId) {
+      return withTeam(team, async (tx) => {
+        const row = await tx
+          .$extendTables<AgentSessionTables>()
+          .selectFrom("agent_sessions")
+          .select(["developer", "started_at", "ended_at", "judged_at"])
+          .where("session_id", "=", sessionId)
+          .executeTakeFirst();
+        return (
+          row && {
+            developer: row.developer,
+            startedAt: row.started_at,
+            endedAt: row.ended_at,
+            judgedAt: row.judged_at,
+          }
+        );
       });
     },
 

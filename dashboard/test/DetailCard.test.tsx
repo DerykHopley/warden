@@ -281,6 +281,20 @@ describe("the card's Session section", () => {
     expect(card.queryByRole("region", { name: "Session" })).toBeNull();
     expect(card.queryByRole("heading", { name: "Session" })).toBeNull();
   });
+
+  it("isn't asked for on a Finding that isn't an Agent session's: its card reads only what its own sections ask", async () => {
+    const sessionRecord = vi.fn(() => json(200, {}));
+    serve({
+      me: () => json(200, { userId: ME, team: TEAM, role: "lead", level: "quick" }),
+      fixPr: () => json(200, { fixable: false, fix_pr: null }),
+      sessionRecord,
+    });
+    show(finding(ID), listed([]), { role: "lead" });
+    // The Fix PR read is the card's last ask, after its own /api/me.
+    await vi.waitFor(() => expect(callsTo(`/api/guard/findings/${ID}/fix-pr`)).toHaveLength(1));
+    expect(sessionRecord).not.toHaveBeenCalled();
+    expect(callsTo(`/api/guard/findings/${ID}/session`)).toEqual([]);
+  });
 });
 
 type Card = ReturnType<typeof show>["card"];

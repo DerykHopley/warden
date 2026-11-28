@@ -1766,6 +1766,20 @@ button[aria-busy="true"],
   margin-right: 0;
 }
 
+/* The session record's loading, 404 and failed lines take the record rows' place, under the heading and above the
+   hash; the failed line has Retry beside it, wrapping under it on a narrow panel, as the card's other failed lines do. */
+.session-record-line {
+  margin: 0 0 8px;
+}
+
+.session-section > p.session-record-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 8px;
+}
+
 .session-hash {
   overflow-wrap: anywhere;
 }

@@ -511,8 +511,13 @@ export function DetailCard(props: {
         )}
       </dl>
       {finding.asset.kind === "agent_session" && finding.evidence.session && (
-        // From the Finding alone: it asks nothing.
-        <SessionSection session={finding.evidence.session} />
+        // The evidence is the Finding's own; only the session record is asked.
+        <SessionSection
+          finding={finding}
+          session={finding.evidence.session}
+          getToken={getToken}
+          onSessionEnded={props.onSessionEnded}
+        />
       )}
       {finding.module === "patch" && (
         // Keyed by what a decision changes, so the section asks again after one and drops the earlier ask's answer.

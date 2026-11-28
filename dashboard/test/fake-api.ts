@@ -39,6 +39,8 @@ export type Routes = {
   fixPr?: (id: string) => Answer;
   /** POST /api/guard/findings/:id/fix-pr, with the Finding id and the parsed body (none: undefined). */
   openFixPr?: (id: string, body: unknown) => Answer;
+  /** GET /api/guard/findings/:id/session, with the Finding id: its Agent session's record. */
+  sessionRecord?: (id: string) => Answer;
   /** POST /api/products (id null) or PUT /api/products/:id, with the Product id and the parsed body. */
   saveProduct?: (id: string | null, body: unknown) => Answer;
   /** DELETE /api/products/:id, with the Product id. */
@@ -120,6 +122,10 @@ export function serve(routes: Routes) {
     }
     if (fixPr && method === "POST" && routes.openFixPr) {
       return routes.openFixPr(decodeURIComponent(fixPr[1] ?? ""), sentBody(init));
+    }
+    const sessionRecord = /^\/api\/guard\/findings\/([^/]+)\/session$/.exec(url);
+    if (sessionRecord && method === "GET" && routes.sessionRecord) {
+      return routes.sessionRecord(decodeURIComponent(sessionRecord[1] ?? ""));
     }
     if (url === "/api/products" && method === "POST" && routes.saveProduct) {
       return routes.saveProduct(null, sentBody(init));
