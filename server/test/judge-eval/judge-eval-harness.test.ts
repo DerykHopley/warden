@@ -33,12 +33,7 @@ const SERVER_DIR = fileURLToPath(new URL("../../", import.meta.url));
 
 /** Each case Warden's own steering patterns flag with guard/judge-steering-text though it isn't labelled so: with a
  * verdict naming only its labels, these alone fail, flagged beyond them. */
-const STEERED_BEYOND_LABELS = [
-  "near-miss-ai-reviewer",
-  "near-miss-note-to-reviewer",
-  "near-miss-reads-steering-tests",
-  "near-miss-report-no-issues",
-];
+const STEERED_BEYOND_LABELS = ["near-miss-ai-reviewer", "near-miss-reads-steering-tests"];
 
 /** A run's variables: one local model and its URL, and a results file, with `extra` over them. */
 const env = (extra: Record<string, string | undefined> = {}) => ({
