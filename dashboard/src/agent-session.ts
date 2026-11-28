@@ -2,7 +2,7 @@
 // the detail card's Session section, and the words it shows for it.
 import { AgentSessionBody } from "@warden/contracts";
 import { callWarden, parsed, serverError, type GetToken, type Refused } from "./api.ts";
-import { confirmTeam } from "./products.ts";
+import { askInTeam } from "./products.ts";
 
 export type SessionRecordResult =
   | { kind: "record"; record: AgentSessionBody }
@@ -32,24 +32,16 @@ export async function fetchSessionRecord(
 }
 
 /**
- * Asks as `fetchSessionRecord` does, but only once /api/me says the session is in `team`, the Finding's Team, and with
- * the token that answer was asked with (`confirmTeam`), as `fetchAssessmentInTeam` asks: the record names no Team, and
- * right after a Team switch Clerk can still hand out a token for the Team just left. While /api/me names another Team,
- * or gives no answer, nothing is asked and Retry shows; its 429 is too many sign-in attempts, and its 409 is not
- * answering.
+ * Asks as `fetchSessionRecord` does, but only once /api/me says the session is in `team`, the Finding's Team
+ * (`askInTeam`): the record names no Team. While /api/me names another Team, or gives no answer, nothing is asked and
+ * Retry shows.
  */
-export async function fetchSessionRecordInTeam(
+export const fetchSessionRecordInTeam = (
   getToken: GetToken,
   team: string,
   findingId: string,
-): Promise<SessionRecordResult> {
-  const inTeam = await confirmTeam(getToken, team);
-  if (inTeam.kind === "confirmed") return fetchSessionRecord(inTeam.getToken, findingId);
-  if (inTeam.kind === "too-many-sign-ins") {
-    return { kind: "too-many-attempts", retryAfter: inTeam.retryAfter };
-  }
-  return inTeam.kind === "team-not-opened" ? { kind: "not-answering" } : inTeam;
-}
+): Promise<SessionRecordResult> =>
+  askInTeam(getToken, team, (confirmed) => fetchSessionRecord(confirmed, findingId));
 
 /** How many of the pseudonym's 64 hex digits show: enough to tell two sessions apart, short enough not to wrap. */
 const PSEUDONYM_DIGITS = 12;

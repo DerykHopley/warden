@@ -251,9 +251,7 @@ describe("GET /api/guard/findings/:id/session", () => {
   });
 
   it("answers 401 to a request with no session", async () => {
-    const { finding } = await judgedSession();
-
-    const res = await app().request(sessionPath(finding.id));
+    const res = await app().request(sessionPath(randomUUID()));
 
     expect(res.status).toBe(401);
   });

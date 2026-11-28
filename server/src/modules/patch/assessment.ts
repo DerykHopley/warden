@@ -5,7 +5,7 @@
  */
 import { PatchAssessment, type Finding, type ProductDependency } from "@warden/contracts";
 import { sql } from "kysely";
-import type { Findings } from "../../findings/index.ts";
+import { findingOf, type Findings } from "../../findings/index.ts";
 import type { WithTeam } from "../../with-team.ts";
 import { cvssSeverity, type NvdSeverity } from "./cvss-band.ts";
 import { CveNotInSnapshot, PatchFindingNotFound } from "./errors.ts";
@@ -146,10 +146,8 @@ export function createPatchAssessment({
 }): PatchAssessments {
   return {
     async read(team, findingId) {
-      const finding = (await findings.list(team)).find((f) => f.id === findingId);
-      if (finding === undefined || !isPatchFinding(finding)) {
-        throw new PatchFindingNotFound(findingId);
-      }
+      const finding = await findingOf(findings, team, findingId, PatchFindingNotFound);
+      if (!isPatchFinding(finding)) throw new PatchFindingNotFound(findingId);
       const cveId = finding.location.vulnerability;
       const asOf = now();
 

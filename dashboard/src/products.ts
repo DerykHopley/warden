@@ -183,6 +183,25 @@ export async function confirmTeam(
 }
 
 /**
+ * Asks `ask` only once /api/me says the session is in `team`, and with the token that answer was asked with
+ * (`confirmTeam`), for a read whose answer names no Team: right after a Team switch Clerk can still hand out a token
+ * for the Team just left. While /api/me names another Team, or gives no answer, nothing is asked and the read's
+ * refusal comes back; its 429 is too many sign-in attempts, and its 409 is not answering.
+ */
+export async function askInTeam<T>(
+  getToken: GetToken,
+  team: string | null,
+  ask: (getToken: GetToken) => Promise<T>,
+): Promise<T | Refused> {
+  const inTeam = await confirmTeam(getToken, team);
+  if (inTeam.kind === "confirmed") return ask(inTeam.getToken);
+  if (inTeam.kind === "too-many-sign-ins") {
+    return { kind: "too-many-attempts", retryAfter: inTeam.retryAfter };
+  }
+  return inTeam.kind === "team-not-opened" ? { kind: "not-answering" } : inTeam;
+}
+
+/**
  * Saves as `saveProduct` does, but only once /api/me says the session is in `team`, the Team the form was opened in,
  * and with the token that answer was asked with (`confirmTeam`); while it names another Team, or gives no answer,
  * nothing is sent.

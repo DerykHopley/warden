@@ -1,8 +1,9 @@
 // A Team's Agent sessions and their Agent events (spec #225, slice 1, #183): what the hook endpoint stores from each
 // event Claude Code posts (0019_agent_sessions), and what the Judge reads of an ended session then drops (slice 5a,
 // #443), claiming it first so one run judges it at a time (slice 7a), and what the daily Job deletes and sweeps (slice
-// 8a, #499), and one session's record, which the detail card reads (slice 9b, #505). Every call runs inside `withTeam`, so row-level security keeps each Team's rows to itself (ADR 0006); the
-// Team is always the hook token's or the Job's, never the event's.
+// 8a, #499), and one session's record, which the detail card reads (slice 9b, #505). Every call runs inside
+// `withTeam`, so row-level security keeps each Team's rows to itself (ADR 0006); the Team is always the hook token's or
+// the Job's, never the event's.
 import { sql, type Generated } from "kysely";
 import type { WithTeam } from "../../with-team.ts";
 
