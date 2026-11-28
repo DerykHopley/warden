@@ -5,7 +5,7 @@
 // then each event it relied on, in `seq` order: its place, time, name, tool and text. Every event's text is shown as
 // text, never as markup, with its line breaks kept.
 import type { AgentSessionBody, Finding, SessionEvidence } from "@warden/contracts";
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useId, useLayoutEffect, useRef, useState } from "react";
 import {
   fetchSessionRecordInTeam,
   NO_SESSION_RECORD,
@@ -57,7 +57,8 @@ export function SessionSection(props: {
 
   // Once a pressed Retry is answered, focus that would sit on <body> (the button went, or was disabled while it ran)
   // goes to Retry when it shows again, else to the heading. Focus the person moved elsewhere stays there.
-  useEffect(() => {
+  // A layout effect, so focus moves in the commit that removes Retry, with no moment on <body> between.
+  useLayoutEffect(() => {
     if (result === "loading" || result === retriedOn) return;
     const pressed = retriedFor.current === call;
     retriedFor.current = null;
