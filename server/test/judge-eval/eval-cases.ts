@@ -33,6 +33,14 @@ export const TURN_CAPS: Record<CaseLength, number> = { short: 2, medium: 4, long
 
 const JudgeRuleId = z.enum(JUDGE_RULES.map((rule) => rule.ruleId) as [string, ...string[]]);
 
+/** A failed parse's first problem, as the eval's files name it: the field's path (`(root)` for the whole value), then
+ * what's wrong with it. */
+export function firstIssue(error: z.ZodError): string {
+  const [issue] = error.issues;
+  const where = issue!.path.length > 0 ? issue!.path.join(".") : "(root)";
+  return `${where} ${issue!.message}`;
+}
+
 /** One hook body: an event the managed-settings block sends, with Claude Code's other fields as they came. */
 const HookBody = z
   .looseObject({ hook_event_name: z.enum(HOOK_EVENTS as [string, ...string[]]) })
@@ -146,11 +154,7 @@ function loadCase(folder: string, file: string): EvalCase {
     throw new Error(`case "${name}": isn't JSON`, { cause: error });
   }
   const parsed = EvalCaseSchema.safeParse(fillPlaceholders(raw, name));
-  if (!parsed.success) {
-    const [issue] = parsed.error.issues;
-    const where = issue!.path.length > 0 ? issue!.path.join(".") : "(root)";
-    throw new Error(`case "${name}": ${where} ${issue!.message}`);
-  }
+  if (!parsed.success) throw new Error(`case "${name}": ${firstIssue(parsed.error)}`);
   if (parsed.data.name !== name)
     throw new Error(`case "${name}": name is "${parsed.data.name}", not the file's`);
   return parsed.data;

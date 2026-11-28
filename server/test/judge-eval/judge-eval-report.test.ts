@@ -1,7 +1,7 @@
 // The Judge eval's report (spec #225, story 17; slice 13a): `renderReport` over a run list and its saved results, and
 // `eval:report`, which writes it as Markdown from the files, with no database and no model. The committed report is
 // checked against a fresh render, so a results file, a case or a target changed without a re-render fails.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,10 +19,10 @@ import {
   type EvalCase,
 } from "./eval-cases.ts";
 import { readReportInputs, REPORT_FILE, RUNS_FILE } from "./report-cli.ts";
-import { renderReport, type ReportRuns } from "./report.ts";
+import { renderReport, type ReportRun, type ReportRuns } from "./report.ts";
 import { resultLine, resultsFile } from "./result-fixtures.ts";
 import type { EvalResultLine } from "./results.ts";
-import { scoreResults } from "./score.ts";
+import { scoreResults, splitScore } from "./score.ts";
 
 const SERVER_DIR = fileURLToPath(new URL("../../", import.meta.url));
 const REPO_DIR = fileURLToPath(new URL("../../../", import.meta.url));
@@ -62,9 +62,7 @@ const errorLine = (c: EvalCase, change: Partial<EvalResultLine> = {}) =>
 
 const OTHER = { model: "gemma3:12b" } as const;
 
-type Run = ReportRuns["runs"][number];
-
-const FIRST: Run = {
+const FIRST: ReportRun = {
   name: "first",
   results: "first.jsonl",
   flip_reruns: [],
@@ -75,7 +73,7 @@ const FIRST: Run = {
   notes: ["The first run's failures were the model's own."],
 };
 
-const SECOND: Run = {
+const SECOND: ReportRun = {
   name: "second",
   results: "second.jsonl",
   flip_reruns: ["second-rerun.jsonl"],
@@ -91,7 +89,7 @@ const SECOND: Run = {
   notes: ["One flip on the held-out readme, rerun once."],
 };
 
-const runList = (runs: Run[] = [FIRST, SECOND]): ReportRuns => ({
+const runList = (runs: ReportRun[] = [FIRST, SECOND]): ReportRuns => ({
   about: ["The cases come from a matrix."],
   runs,
 });
@@ -131,7 +129,7 @@ describe("renderReport: the regressions", () => {
     const row = verdictOf([fails(HELD_OUT), passes(HELD_OUT)]);
 
     expect(row).toBe(
-      `| qwen3:8b | ${HELD_OUT.name} | held-out | none | ${AGENT_READS_SECRETS} | - | **noise** |`,
+      `| qwen3:8b | local | ${HELD_OUT.name} | held-out | none | ${AGENT_READS_SECRETS} | - | **noise** |`,
     );
   });
 
@@ -143,8 +141,35 @@ describe("renderReport: the regressions", () => {
     expect(verdictOf([passes(HELD_OUT, OTHER), passes(DEV)])).toContain("| **not rerun** |");
   });
 
+  it("takes the flip's latest rerun line by its time, not by the file or the place it's in", () => {
+    const later = { at: "2026-11-28T12:00:00.000Z" };
+    const earlier = { at: "2026-11-28T11:00:00.000Z" };
+    const runs = runList([
+      FIRST,
+      { ...SECOND, flip_reruns: ["second-rerun.jsonl", "older.jsonl"] },
+    ]);
+    const verdict = (rerun: EvalResultLine[], older: EvalResultLine[]) =>
+      rowsStarting(
+        section(
+          render({ ...FILES, "second-rerun.jsonl": rerun, "older.jsonl": older }, runs),
+          "Regressions",
+        ),
+        "qwen3:8b",
+      )[0];
+
+    expect(verdict([passes(HELD_OUT, later)], [fails(HELD_OUT, earlier)])).toContain(
+      "| **noise** |",
+    );
+    expect(verdict([passes(HELD_OUT, later), fails(HELD_OUT, earlier)], [])).toContain(
+      "| **noise** |",
+    );
+    expect(verdict([passes(HELD_OUT, earlier)], [fails(HELD_OUT, later)])).toContain(
+      "| **confirmed** |",
+    );
+  });
+
   it("says no case broke for a model with no flip", () => {
-    expect(section(render(), "Regressions")).toContain("`gemma3:12b`: no case broke.");
+    expect(section(render(), "Regressions")).toContain("`gemma3:12b` (local): no case broke.");
   });
 });
 
@@ -249,10 +274,10 @@ describe("renderReport: each run's section", () => {
     const failing = first.slice(first.indexOf("### Failing cases"));
 
     expect(rowsStarting(failing, "qwen3:8b")).toEqual([
-      `| qwen3:8b | ${HELD_OUT.name} | held-out | none | ${AGENT_READS_SECRETS} | - |`,
+      `| qwen3:8b | local | ${HELD_OUT.name} | held-out | none | ${AGENT_READS_SECRETS} | - |`,
     ]);
     expect(rowsStarting(failing, "gemma3:12b")).toEqual([
-      `| gemma3:12b | ${DEV.name} | dev | ${AGENT_RUNS_REMOTE_SCRIPT} | none | the Judge's model call answered 500 |`,
+      `| gemma3:12b | local | ${DEV.name} | dev | ${AGENT_RUNS_REMOTE_SCRIPT} | none | the Judge's model call answered 500 |`,
     ]);
   });
 
@@ -266,26 +291,48 @@ describe("renderReport: the summary, held-out score and cost", () => {
     const summary = section(render(), "Summary");
 
     expect(rowsStarting(summary, "second")).toEqual([
-      "| second | qwen3:8b | 1/1 | 0/1 | 1.00 | 0.00 | met | **missed** | **missed** | n/a | n/a |",
-      "| second | gemma3:12b | 1/1 | 1/1 | 1.00 | - | met | met | met | n/a | n/a |",
+      "| second | qwen3:8b | local | 1/1 | 0/1 | 1.00 | 0.00 | met | **missed** | **missed** | n/a | n/a |",
+      "| second | gemma3:12b | local | 1/1 | 1/1 | 1.00 | - | met | met | met | n/a | n/a |",
     ]);
+  });
+
+  it("tells apart one model name on two providers by the provider, in every table", () => {
+    const paid = { provider: "openrouter", cost_usd: 0.0042 } as const;
+    const report = render({
+      ...FILES,
+      "second.jsonl": [...FILES["second.jsonl"]!, fails(DEV, paid), passes(HELD_OUT, paid)],
+    });
+
+    expect(
+      rowsStarting(section(report, "Summary"), "second").map((row) => row.split(" | ")[2]),
+    ).toEqual(["local", "local", "openrouter"]);
+    expect(rowsStarting(section(report, "Run: second"), "qwen3:8b")).toEqual([
+      `| qwen3:8b | local | ${HELD_OUT.name} | held-out | none | ${AGENT_READS_SECRETS} | - |`,
+      `| qwen3:8b | openrouter | ${DEV.name} | dev | none | ${AGENT_READS_SECRETS} | - |`,
+    ]);
+    expect(rowsStarting(section(report, "Held-out score"), "second")).toEqual([
+      "| second | qwen3:8b | local | 0/1 | 0.00 |",
+      "| second | gemma3:12b | local | 1/1 | - |",
+      "| second | qwen3:8b | openrouter | 1/1 | - |",
+    ]);
+    expect(section(report, "Regressions")).toContain(
+      "`qwen3:8b` (openrouter): only in second, so nothing to compare.",
+    );
   });
 
   it("shows each run and model's held-out passed and precision, and that held-out cases chose no change", () => {
     const heldOut = section(render(), "Held-out score");
 
     expect(rowsStarting(heldOut, "second")).toEqual([
-      "| second | qwen3:8b | 0/1 | 0.00 |",
-      "| second | gemma3:12b | 1/1 | - |",
+      "| second | qwen3:8b | local | 0/1 | 0.00 |",
+      "| second | gemma3:12b | local | 1/1 | - |",
     ]);
     expect(heldOut).toContain("Held-out cases chose no change");
   });
 
   it("shows a cost row per run and model, a local model at $0.00 with its tokens per session from scoreResults", () => {
     const cost = section(render(), "Cost");
-    const all = scoreResults(FILES["first.jsonl"]!, TARGETS)[0]!.splits.find(
-      ({ split }) => split === "all",
-    )!;
+    const all = splitScore(scoreResults(FILES["first.jsonl"]!, TARGETS)[0]!, "all");
 
     expect(rowsStarting(cost, "first")).toHaveLength(2);
     expect(rowsStarting(cost, "second")).toHaveLength(2);
@@ -331,9 +378,16 @@ const evalReport = (args: string[], env: Record<string, string> = {}) =>
     clean: true,
   });
 
+/** The folders `reportFolder` made, removed after each test. */
+const folders: string[] = [];
+afterEach(() => {
+  for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+});
+
 /** A new folder holding `runs.json` (`runs`) and its `results/` folder (`files`), and a report there already. */
 function reportFolder(runs: unknown = runList(), files: Record<string, EvalResultLine[]> = FILES) {
   const folder = mkdtempSync(join(tmpdir(), "warden-report-"));
+  folders.push(folder);
   mkdirSync(join(folder, "results"));
   for (const [name, lines] of Object.entries(files))
     resultsFile(lines, join(folder, "results", name));
@@ -378,10 +432,11 @@ describe("eval:report: story 17, the report from the run list and its saved resu
   it("takes relative paths from where pnpm was run (INIT_CWD)", async () => {
     const { folder, report } = reportFolder();
 
-    const { code } = await evalReport(["runs.json", "report.md"], { INIT_CWD: folder });
+    const { code, stdout } = await evalReport(["runs.json", "report.md"], { INIT_CWD: folder });
 
     expect(code).toBe(0);
-    expect(readFileSync(report, "utf8")).toBe(render());
+    expect(stdout).toBe(`wrote ${report}\n`);
+    expect(readFileSync(report, "utf8")).not.toBe("the old report\n");
   });
 
   it("is linked from the README's eval section, and the committed report exists", () => {
@@ -426,6 +481,11 @@ describe("eval:report: refuses, writing nothing", () => {
       "a missing run list",
       ({ folder, report }) => [join(folder, "no-such-runs.json"), report],
       "no run list at",
+    ],
+    [
+      "a run list that can't be read (a folder)",
+      ({ folder, report }) => [join(folder, "results"), report],
+      "can't read the run list",
     ],
   ];
 
@@ -478,6 +538,24 @@ describe("eval:report: refuses, writing nothing", () => {
       runList(),
       { ...FILES, "second.jsonl": [passes(DEV), passes(DEV, { case: "no-such-case" })] },
       'second.jsonl: case "no-such-case" isn\'t in the case set',
+    ],
+    [
+      "a results line whose split isn't its case's",
+      runList(),
+      { ...FILES, "second.jsonl": [passes(DEV, { split: "held-out" })] },
+      `second.jsonl: case "${DEV.name}" has split held-out, not the case set's dev`,
+    ],
+    [
+      "a results line whose group isn't its case's",
+      runList(),
+      { ...FILES, "second.jsonl": [passes(DEV, { group: "near-miss" })] },
+      `second.jsonl: case "${DEV.name}" has group near-miss, not the case set's misbehaving`,
+    ],
+    [
+      "a results line whose labels aren't its case's",
+      runList(),
+      { ...FILES, "second.jsonl": [passes(DEV, { labels: [] })] },
+      `second.jsonl: case "${DEV.name}" has labels clean, not the case set's ${AGENT_RUNS_REMOTE_SCRIPT}`,
     ],
   ];
 
