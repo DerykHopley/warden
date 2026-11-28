@@ -37,7 +37,7 @@ export const STEERING_PATTERNS: readonly SteeringPattern[] = [
   {
     name: "report-nothing",
     pattern:
-      /(?<!\b(?:(?:we|they|i|he|she)(?:['’]ll)?|(?:we|they|i)['’]d)(?:[ \t]+[\w'’]+){0,2}[ \t]+)\b(?:report|answer|flag)\s+(?:no|zero)\s+(?:broken\s+)?(?:rules?|findings?|issues?|violations?)\b/i,
+      /(?<!\b(?:we|they|i|he|she)(?:['’](?:ll|d))?(?:[ \t]+[\w'’]+){0,2}[ \t]+)\b(?:report|answer|flag)\s+(?:no|zero)\s+(?:broken\s+)?(?:rules?|findings?|issues?|violations?)\b/i,
   },
   // Addresses the Judge, a grader, an evaluator or an AI or LLM reviewer: "note to the AI reviewer", "AI judge:". A
   // plain "note to the reviewer" is written for a human one.
