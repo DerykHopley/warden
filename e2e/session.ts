@@ -148,6 +148,79 @@ export const FIR = {
   people: [FRANCES, JOAN],
 };
 
+export const BARBARA: Person = {
+  userId: "user_e2e_barbara",
+  firstName: "Barbara",
+  lastName: "Liskov",
+  email: "barbara@ginkgo.test",
+};
+
+/**
+ * A seventh Team for the Guard spec's story 7 (e2e/hook.spec.ts): the global setup issues it two hook tokens, 50 and 25
+ * hours before the run (`E2E_HOOK_TOKENS`), and the test rotates in the page, so no other spec reads Ginkgo's hook.
+ */
+export const GINKGO = {
+  id: "org_e2e_ginkgo",
+  name: "Ginkgo",
+  admin: BARBARA,
+  people: [BARBARA],
+};
+
+export const RADIA: Person = {
+  userId: "user_e2e_radia",
+  firstName: "Radia",
+  lastName: "Perlman",
+  email: "radia@hazel.test",
+};
+
+export const SOPHIE: Person = {
+  userId: "user_e2e_sophie",
+  firstName: "Sophie",
+  lastName: "Wilson",
+  email: "sophie@hazel.test",
+};
+
+/**
+ * An eighth Team for the Guard spec's story 9 (e2e/agent-session.spec.ts): the global setup issues it a hook token
+ * (`E2E_HAZEL_HOOK_TOKEN`) at the Content tier, and points its Judge at its own model, a fake OpenAI-compatible server
+ * on 127.0.0.1 that the global setup runs, so a session sent through the hook is judged with no OpenRouter key. Its
+ * Judge's Findings are its own, so no other spec's counts move.
+ */
+export const HAZEL = {
+  id: "org_e2e_hazel",
+  name: "Hazel",
+  admin: RADIA,
+  people: [RADIA, SOPHIE],
+};
+
+/** The developer name Hazel's sessions send in `X-Warden-Developer`: stored only as a pseudonym, never shown. */
+export const HAZEL_DEVELOPER = "octavia-e2e-laptop";
+
+/**
+ * What Hazel's own model answers every Judge call with: the session's events 1 and 2 (its second and third, sent
+ * after the prompt) send a secret. A session sent as e2e/agent-session.spec.ts sends it holds those events.
+ */
+export const HAZEL_VERDICT = {
+  rule_id: "guard/agent-sends-secrets",
+  summary: "The agent read .env and posted its key to a pastebin",
+  event_seqs: [1, 2],
+} as const;
+
+/** The hook token the global setup issued Hazel, from the environment it left for the test workers. */
+export function hazelHookToken(): string {
+  const token = process.env.E2E_HAZEL_HOOK_TOKEN;
+  if (!token)
+    throw new Error("E2E_HAZEL_HOOK_TOKEN is unset: run the browser tests with `pnpm e2e`");
+  return token;
+}
+
+/** The hook tokens the global setup issued Ginkgo, from the environment it left for the test workers. */
+export function seededHookTokens(): { issued50hAgo: string; issued25hAgo: string } {
+  const tokens = process.env.E2E_HOOK_TOKENS;
+  if (!tokens) throw new Error("E2E_HOOK_TOKENS is unset: run the browser tests with `pnpm e2e`");
+  return JSON.parse(tokens) as { issued50hAgo: string; issued25hAgo: string };
+}
+
 /** Fir's one Repo Asset, linked by the global setup. */
 export const FIR_REPO = { ref: "https://github.com/fir/assistant", githubId: 5251 };
 

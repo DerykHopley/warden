@@ -4,7 +4,7 @@
 // one against the Rules in code.
 //
 // Finalised against the Rules in code at 693d63b. Left out until code produces them: `patch/end-of-life` (1.3.4) and
-// the Judge's `guard/agent-printed-secret` (4.1.3, #225). The spec that builds each adds its line here.
+// the Judge's `guard/agent-sends-secrets` (4.1.3, #225). The spec that builds each adds its line here.
 import type { RuleId } from "@warden/contracts";
 
 /** For `vda-isa-2027.1`: each Rule, and the judged Controls its Findings and Scans evidence. */

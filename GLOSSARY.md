@@ -193,7 +193,38 @@ _Avoid_: trace, span, log
 
 **Judge**:
 The model that reads an Agent session's events and flags behaviour against the Baseline. A Judge run is a Spot run.
+One run judges a session at a time: a run claims the session first, for a few minutes, and a second run that finds
+it claimed changes nothing.
 _Avoid_: trace judge, LLM judge
+
+**Spending ledger**:
+What each paid model call Warden makes for a Team cost: its path, its model, its tokens and its cost, stated or
+assumed. Rows are only ever added: a call's assumed cost is reserved before it's made, then corrected to what the
+answer stated by a second row. A Team's own model costs Warden nothing and adds no row.
+_Avoid_: usage log, billing
+
+**Daily spending limit**:
+The most a Team's paid model calls may cost Warden in one day (UTC), $1 today, summed from the spending ledger.
+A Team at its limit gets no paid call until the next day: its sessions stay unjudged, their events kept.
+_Avoid_: quota, budget (a run's call budget is its own limit)
+
+**Team's own model**:
+An OpenAI-compatible model a Team's Admin names, by its URL and model name, for the Judge to call in place of
+OpenRouter's. It's called with no key and no OpenRouter routing, through a pinned connection.
+_Avoid_: local model (it may be hosted), custom model
+
+**URL rule**:
+Which URLs a Team's own model may have: https, with no user name, query or fragment, on a host whose every address
+is public. With the localhost setting on, `localhost`, `127.0.0.1` and `[::1]` may also be named, over http, and
+may resolve to loopback only. It's checked when the URL is set and again at each call.
+
+**Pinned connection**:
+The connection to a Team's own model, made only to the addresses the URL rule just accepted, so a DNS change
+between the check and the connect can't point it elsewhere. It follows no redirect and reads at most 1 MiB of answer.
+
+**Localhost setting**:
+The server's and the Job's `WARDEN_JUDGE_LOCALHOST=1`, which lets the URL rule accept a local host, for local
+development only. On Cloud Run, the server won't start with it and the Job exits 1.
 
 ## Levels
 

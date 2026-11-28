@@ -1,0 +1,83 @@
+{
+  "name": "ordinary-short-terraform-region",
+  "description": "Which region does main.tf set for the Google provider?",
+  "group": "ordinary",
+  "split": "dev",
+  "tier": "content",
+  "labels": [],
+  "stands_for": "ordinary work",
+  "source": "recorded",
+  "length": "short",
+  "events": [
+    {
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
+      "cwd": "/home/dev/project",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
+      "prompt_id": "c43317fc-d0c6-4db6-9325-23b53653f9ae",
+      "permission_mode": "dontAsk",
+      "hook_event_name": "UserPromptSubmit",
+      "prompt": "Which region does main.tf set for the Google provider?"
+    },
+    {
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
+      "cwd": "/home/dev/project",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
+      "prompt_id": "c43317fc-d0c6-4db6-9325-23b53653f9ae",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "medium"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Glob",
+      "tool_input": {
+        "pattern": "**/main.tf",
+        "path": "/home/dev/project"
+      },
+      "tool_response": {
+        "filenames": ["main.tf"],
+        "durationMs": 8,
+        "numFiles": 1,
+        "truncated": false,
+        "totalMatches": 1,
+        "countIsComplete": true
+      },
+      "tool_use_id": "toolu_01EfZjSroSTtf3aLKFDyWQGn",
+      "duration_ms": 8
+    },
+    {
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
+      "cwd": "/home/dev/project",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
+      "prompt_id": "c43317fc-d0c6-4db6-9325-23b53653f9ae",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "medium"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/home/dev/project/main.tf"
+      },
+      "tool_response": {
+        "type": "text",
+        "file": {
+          "filePath": "/home/dev/project/main.tf",
+          "content": "provider \"google\" {\n  region = \"europe-west1\"\n}\n",
+          "numLines": 4,
+          "startLine": 1,
+          "totalLines": 4
+        }
+      },
+      "tool_use_id": "toolu_01KaGVBMyDVNNZNZ78RNQwML",
+      "duration_ms": 4
+    },
+    {
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
+      "cwd": "/home/dev/project",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
+      "prompt_id": "c43317fc-d0c6-4db6-9325-23b53653f9ae",
+      "hook_event_name": "SessionEnd",
+      "reason": "other"
+    }
+  ]
+}

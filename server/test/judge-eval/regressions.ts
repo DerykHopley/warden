@@ -1,0 +1,145 @@
+// The Judge eval's regression check (spec #225, story 16; slice 10c): two saved results files compared, each by its
+// latest line per (model, case), and each case that passed in the earlier and fails in the later listed under its
+// model, with the line that reruns them. `eval:regressions` prints it (`regressions-cli.ts`).
+import { join } from "node:path";
+import { byModel, type EvalResultLine, type ResultModel } from "./results.ts";
+
+/** Which of the two files something is in. */
+export type InFile = "earlier" | "later";
+
+/** A case that passed in the earlier file and fails in the later: the later line's Rules and error. */
+export type Flip = { case: string; missing: string[]; extra: string[]; error: string | null };
+
+/** A model in both files: its flips, and the cases it ran in only one of them. */
+export type ModelRegressions = ResultModel & {
+  flips: Flip[];
+  notInBoth: { case: string; in: InFile }[];
+};
+
+export type Regressions = {
+  /** Each model in both files, in the order first saved, the earlier file's first. */
+  models: ModelRegressions[];
+  /** Each model in only one file, in the same order. */
+  onlyIn: (ResultModel & { in: InFile })[];
+};
+
+/** The flips from `earlier` to `later`, each file read by its latest line per (model, case). */
+export function findRegressions(
+  earlier: readonly EvalResultLine[],
+  later: readonly EvalResultLine[],
+): Regressions {
+  const before = byModel(earlier);
+  const after = byModel(later);
+  const regressions: Regressions = { models: [], onlyIn: [] };
+  for (const key of new Set([...before.keys(), ...after.keys()])) {
+    const was = before.get(key);
+    const now = after.get(key);
+    if (was === undefined || now === undefined) {
+      const { provider, model } = (was ?? now)!;
+      regressions.onlyIn.push({ provider, model, in: was === undefined ? "later" : "earlier" });
+      continue;
+    }
+    const flips: Flip[] = [];
+    const notInBoth: ModelRegressions["notInBoth"] = [];
+    for (const [name, then] of was.cases) {
+      const line = now.cases.get(name);
+      if (line === undefined) notInBoth.push({ case: name, in: "earlier" });
+      else if (then.pass && !line.pass)
+        flips.push({ case: name, missing: line.missing, extra: line.extra, error: line.error });
+    }
+    for (const name of now.cases.keys())
+      if (!was.cases.has(name)) notInBoth.push({ case: name, in: "later" });
+    const { provider, model } = was;
+    regressions.models.push({ provider, model, flips, notInBoth });
+  }
+  return regressions;
+}
+
+/** `model` as a file name's part: anything but letters, digits, `.`, `_` and `-` made a `-`. */
+const fileSafe = (model: string) => model.replace(/[^A-Za-z0-9._-]/g, "-");
+
+/** `at` as a file name's part: its ISO time to the millisecond, without `-` and `:` (`20261128T100000.000Z`). */
+const fileTime = (at: Date) => at.toISOString().replace(/[-:]/g, "");
+
+/** What the rerun line of an OpenRouter model ends with: a paid run waits for the owner. Pasted as it is, the shell
+ * refuses it, so it can't start a paid run by accident. */
+const PAID_NOTE = "(paid: OpenRouter — needs the owner's yes)";
+
+/** The local models' URL a rerun line names when `eval:regressions`' own WARDEN_EVAL_LOCAL_URL is unset or blank:
+ * Ollama's default, as in the README. */
+export const DEFAULT_LOCAL_URL = "http://localhost:11434/v1";
+
+/** What a rerun line runs against: the folder its results file goes in, and the local models' URL it names. */
+export type RerunTarget = {
+  /** The later file's folder, as written from where pnpm is run: "" for that folder itself. */
+  folder: string;
+  /** The local models' OpenAI-compatible base URL, as printed. */
+  localUrl: string;
+};
+
+/** `value` as one shell word: as it is when it holds only characters the shell neither splits nor expands on,
+ * otherwise single-quoted. */
+const shellWord = (value: string) =>
+  /^[A-Za-z0-9._/:@%+,=-]*$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * The line that reruns `cases` once on `model` alone, taken from where pnpm is run, into a results file in
+ * `target.folder` named by the provider, the model and `at` (when `eval:regressions` ran): the harness skips a
+ * (model, case) its results file already holds, so each run's line names a new one. A local model's line starts with
+ * its URL; an OpenRouter model's line ends with PAID_NOTE. Each value is one shell word (`shellWord`).
+ */
+export function rerunLine(
+  { provider, model }: ResultModel,
+  cases: readonly string[],
+  at: Date,
+  { folder, localUrl }: RerunTarget,
+) {
+  const results = join(folder, `rerun-${provider}-${fileSafe(model)}-${fileTime(at)}.jsonl`);
+  const models =
+    provider === "local" ? "WARDEN_EVAL_LOCAL_MODELS" : "WARDEN_EVAL_OPENROUTER_MODELS";
+  const line =
+    `WARDEN_EVAL_RESULTS=${shellWord(results)} ${models}=${shellWord(model)} ` +
+    `WARDEN_EVAL_CASES=${shellWord(cases.join(","))} pnpm --filter @warden/server eval:judge`;
+  return provider === "openrouter"
+    ? `${line} ${PAID_NOTE}`
+    : `WARDEN_EVAL_LOCAL_URL=${shellWord(localUrl)} ${line}`;
+}
+
+/** A list of Rules, comma-separated, or `none`. */
+export const ruleList = (list: readonly string[]) => (list.length === 0 ? "none" : list.join(", "));
+
+/** The regressions as `eval:regressions` prints them at `at`: each model's flips and rerun line (its file and URL
+ * from `target`), then the one-file models. */
+export function regressionsText(
+  { models, onlyIn }: Regressions,
+  at: Date,
+  target: RerunTarget,
+): string {
+  const lines: string[] = [];
+  for (const found of models) {
+    const { provider, model, flips, notInBoth } = found;
+    const count =
+      flips.length === 0 ? "no case" : `${flips.length} case${flips.length === 1 ? "" : "s"}`;
+    lines.push(`${provider} ${model}: ${count} broke`);
+    for (const flip of flips)
+      lines.push(
+        `  ${flip.case}: ${flip.error ?? `missing ${ruleList(flip.missing)}; extra ${ruleList(flip.extra)}`}`,
+      );
+    if (flips.length > 0)
+      lines.push(
+        `  rerun: ${rerunLine(
+          found,
+          flips.map((flip) => flip.case),
+          at,
+          target,
+        )}`,
+      );
+    if (notInBoth.length > 0)
+      lines.push(
+        `  not in both: ${notInBoth.map((one) => `${one.case} (${one.in} only)`).join(", ")}`,
+      );
+  }
+  for (const { provider, model, in: file } of onlyIn)
+    lines.push(`${provider} ${model}: only in the ${file} file`);
+  return lines.join("\n");
+}

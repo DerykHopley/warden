@@ -2,25 +2,28 @@
 // to turn the hook on for every laptop of the Team. Names are Claude Code's own, from its hooks reference
 // (https://code.claude.com/docs/en/hooks). It holds only Warden's hooks: no setting that would change hooks the Team
 // didn't get from Warden (`allowManagedHooksOnly`, `httpHookAllowedEnvVars`).
-import type { PrivacyTier } from "@warden/contracts";
+import { HOOK_TOKEN_PLACEHOLDER, type PrivacyTier } from "@warden/contracts";
 
 /** Where the hook sends its events, on Warden's own origin. Slice 10 serves it. */
 export const HOOK_EVENTS_PATH = "/api/hook/events";
 
-/** What stands in the token's place when there is no token to give: every read after the answer that issued it. */
-export const HOOK_TOKEN_PLACEHOLDER = "<rotate the hook token in Warden to get a new one>";
-
 /** Seconds Claude Code waits for Warden before going on, so a slow Warden can't hold up a session. */
 const TIMEOUT_SECONDS = 5;
 
-/** The events every tier sends; `content` adds the developer's prompts (docs/data.md, "The Privacy tier"). */
-const EVERY_TIER = ["SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"] as const;
+/**
+ * The events every tier sends; `content` adds the developer's prompts (docs/data.md, "The Privacy tier"). No
+ * SessionStart: Claude Code runs only `command` hooks for it and skips an `http` one (#465).
+ */
+const EVERY_TIER = ["PostToolUse", "PostToolUseFailure", "SessionEnd"] as const;
 const CONTENT_ONLY = ["UserPromptSubmit"] as const;
+
+type HookEvent = (typeof EVERY_TIER)[number] | (typeof CONTENT_ONLY)[number];
+
+/** Every event the block sends, at one tier or another. The hook endpoint stores these, and SessionStart. */
+export const HOOK_EVENTS: readonly HookEvent[] = [...EVERY_TIER, ...CONTENT_ONLY];
 
 /** Events whose matcher is the tool's name: `*` matches every tool. */
 const TOOL_EVENTS: ReadonlySet<string> = new Set(["PostToolUse", "PostToolUseFailure"]);
-
-type HookEvent = (typeof EVERY_TIER)[number] | (typeof CONTENT_ONLY)[number];
 
 /** Claude Code's `http` hook handler. */
 type HttpHook = {
@@ -60,8 +63,7 @@ export function managedSettings({
     allowedEnvVars: ["USER"],
     timeout: TIMEOUT_SECONDS,
   };
-  const events: HookEvent[] =
-    tier === "content" ? [...EVERY_TIER, ...CONTENT_ONLY] : [...EVERY_TIER];
+  const events: readonly HookEvent[] = tier === "content" ? HOOK_EVENTS : EVERY_TIER;
   return {
     hooks: Object.fromEntries(
       events.map((event) => [

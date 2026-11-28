@@ -135,3 +135,32 @@ describe("redact", () => {
     expect(redact({ n: 1, b: true, z: null })).toEqual({ n: 1, b: true, z: null });
   });
 });
+
+// An Agent event's field reaches the redactor at up to the 1 MiB body limit (#434): a JWT is looked for once per run
+// of base64url text, not once from every `eyJ` in it.
+describe("redact: a JWT", () => {
+  it.each([
+    ["after a dash", `a-${jwt} seen`, "a-*** seen"],
+    ["after other eyJs in its first part", `eyJ-eyJ-${jwt}`, "***"],
+    ["after a dash in a dotted run", `x.y-${jwt}.z`, "x.y-***.z"],
+    ["as a dotted run's later part", `x.${jwt}`, "x.***"],
+    ["twice in one dotted run", `${jwt}.${jwt}`, "***.***"],
+  ])("masks one %s", (_name, input, masked) => {
+    expect(redact(input)).toBe(masked);
+  });
+
+  it("leaves an eyJ that only follows a word character", () => {
+    expect(redact("a_eyJx.y.z")).toBe("a_eyJx.y.z");
+  });
+
+  it.each([
+    ["eyJ-", "eyJ-"],
+    ["eyJ-…eyJ.", "eyJ-eyJ."],
+    ["eyJ.eyJ-", "eyJ.eyJ-"],
+  ])("redacts 1 MiB of %s in well under a second", (_name, unit) => {
+    const text = unit.repeat((1024 * 1024) / unit.length);
+    const started = performance.now();
+    redact(text);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+});

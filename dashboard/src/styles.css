@@ -191,6 +191,7 @@ button:focus-visible,
 .candidate input:focus-visible,
 .product-name:focus-visible,
 h1[data-focus]:focus-visible,
+.session-section h4:focus-visible,
 .card-line:focus-visible,
 .notice:focus-visible {
   outline: 3px solid var(--accent);
@@ -1102,6 +1103,123 @@ button[aria-busy="true"],
   border-radius: var(--radius);
 }
 
+/* Setup's Agent hook (story 7): the token lines, the token shown once in a box on --surface, Issue or Rotate (with
+   its confirm, dressed as Products' delete confirm), the Privacy tier picker (the Role picker) and the block. The
+   token and the block are mono and wrap rather than pushing the page sideways; each Copy has its line beside it. The
+   Judge's model (below) shares its lines, its mono values and its action row. */
+.hook-settings p,
+.judge-model p {
+  margin: 0 0 8px;
+}
+
+.hook-token,
+.hook-block {
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.hook-token {
+  margin: 0 0 12px;
+}
+
+.hook-token p:last-child {
+  margin-bottom: 0;
+}
+
+.hook-token-value,
+.judge-model-value {
+  overflow-wrap: anywhere;
+}
+
+.hook-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 0 0 8px;
+}
+
+.hook-copy .notice {
+  margin: 0;
+}
+
+.hook-actions,
+.judge-model-actions {
+  margin: 8px 0 12px;
+}
+
+.hook-tier {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.hook-tier label {
+  font-weight: 600;
+}
+
+.hook-tier .role-picker {
+  max-width: 100%;
+}
+
+.hook-tier p {
+  margin: 0;
+}
+
+/* What each tier sends, under the picker: the options hold only the tiers' names, which a phone's closed select
+   shows whole, and these lines wrap (#422). */
+.hook-tier-words {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hook-settings h3 {
+  margin: 16px 0 8px;
+  font-size: 1rem;
+}
+
+.hook-block {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Setup's Judge's model (spec #225, story 10): the setting, laid out as the Agent hook's lines (grouped with its rules
+   above), its URL and model name mono and wrapping rather than pushing the page sideways; then the form, its fields
+   full width, Save under them. */
+.judge-model-setting {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 0 8px;
+}
+
+.judge-model-setting dt {
+  font-weight: 600;
+}
+
+.judge-model-setting dd {
+  margin: 0;
+}
+
+.judge-model-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 16px 0 0;
+}
+
+.judge-model-form p {
+  margin: 0;
+}
+
 /* The Overview (story 10): the journey as three cards, the trend line, and "Are we ready for the audit?". Nothing here
    moves. Under 640px the cards stack; from 640px three sit in a row. */
 .journey {
@@ -1631,6 +1749,82 @@ button[aria-busy="true"],
   min-width: 44px;
   min-height: 44px;
   color: var(--accent);
+}
+
+/* An Agent session Finding's evidence, under the card's fields, set like the Patch section above. The hash and each
+   event's text are mono and wrap anywhere, so a 71-character hash or a 4,000-character event scrolls nothing sideways;
+   an event's text keeps its line breaks. */
+.session-section {
+  margin-right: 8px;
+}
+
+.session-section h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.session-section .detail-fields {
+  margin-right: 0;
+}
+
+/* The session record's loading, 404 and failed lines take the record rows' place, under the heading and above the
+   hash; the failed line has Retry beside it, wrapping under it on a narrow panel, as the card's other failed lines do. */
+.session-record-line {
+  margin: 0 0 8px;
+}
+
+.session-section > p.session-record-failed {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 0 0 8px;
+}
+
+.session-hash {
+  overflow-wrap: anywhere;
+}
+
+.session-read {
+  margin: 0 0 8px;
+}
+
+.session-events {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-event-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  margin: 0 0 4px;
+}
+
+/* An unbroken tool or event name (up to 128 characters) wraps inside the card rather than widening it. */
+.session-event-head > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-event-head time {
+  color: var(--muted);
+}
+
+.session-event-text {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
 }
 
 /* A Guard Finding's Fix PR, between the card's fields and its decisions, set like the Patch section above. */

@@ -8,13 +8,18 @@
 // and Fir are opened through the API as their Admins would (each Team's Member joins too); Cedar gets two Repo Assets
 // and a stale Guard Scan of them (`seedCedarRepos`); Dahlia gets one Repo Asset, a write grant and an Open Finding for
 // story 6's Fix PR (`seedDahliaFixPr`); Fir gets one Repo Asset and a Guard Scan of it with an Open Finding under
-// 1.3.3 for the Control card (`seedFirControl`); Acme and Bluebird are then filled by the demo seed (`server/src/seed.ts`)
+// 1.3.3 for the Control card (`seedFirControl`); Ginkgo gets two hook tokens, issued 50 and 25 hours before the run
+// (`seedGinkgoHookTokens`, handed to the test workers as `E2E_HOOK_TOKENS`), and the server a pseudonym key made for
+// the run, so the hook endpoint stores events (story 7); Hazel gets a hook token at the Content tier and its Judge
+// on its own model, a fake OpenAI-compatible server on 127.0.0.1 run here (`startHazelModel`), so a session it sends
+// is judged with no OpenRouter key (story 9); Acme and Bluebird are then filled by the demo seed (`server/src/seed.ts`)
 // without its demo Product (`--no-product`), so the Findings their tests count stay the demo ones. Returns the
 // teardown: the server stopped, the database dropped, the build and the fake's log removed.
 import { spawn } from "node:child_process";
-import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -22,6 +27,8 @@ import { exportJWK, exportSPKI, generateKeyPair } from "jose";
 import { createPool } from "../server/src/database.ts";
 import { createFindings } from "../server/src/findings/index.ts";
 import { createLogger } from "../server/src/log.ts";
+import { createHookSettings } from "../server/src/modules/guard/hook-settings.ts";
+import { createJudgeModels } from "../server/src/modules/guard/judge-models.ts";
 import { createRepoAssets } from "../server/src/modules/guard/repo-assets.ts";
 import { createWriteGrants } from "../server/src/modules/guard/write-grants.ts";
 import { MOVE_RULES } from "../server/src/wiring.ts";
@@ -35,6 +42,7 @@ import { OWNER_PGPORT, refuseOwnerDatabase } from "../server/test/owner-database
 import {
   ACME,
   ANNIE,
+  BARBARA,
   BLUEBIRD,
   CEDAR,
   CEDAR_REPOS,
@@ -47,12 +55,17 @@ import {
   FIR_REPO,
   FRANCES,
   FRONTEND_API_HOST,
+  GINKGO,
   GRACE,
+  HAZEL,
+  HAZEL_VERDICT,
   HEDY,
   JOAN,
   KATHERINE,
   MARGARET,
+  RADIA,
   sessionToken,
+  SOPHIE,
   type Person,
   type Team,
 } from "./session.ts";
@@ -249,6 +262,86 @@ async function seedFirControl(connection: { host: string; port: number }, databa
   });
 }
 
+/**
+ * Ginkgo's hook tokens for story 7, as warden_app inside withTeam: one issued 50 hours ago and the next 25 hours ago, as
+ * Barbara's rotations then would have written them. The older stopped working an hour ago, 24 hours after the newer.
+ */
+async function seedGinkgoHookTokens(
+  connection: { host: string; port: number },
+  database: string,
+): Promise<{ issued50hAgo: string; issued25hAgo: string }> {
+  const tokens: string[] = [];
+  await withAppPool(connection, database, async (withTeam) => {
+    for (const hoursAgo of [50, 25]) {
+      const settings = createHookSettings({
+        withTeam,
+        now: () => Date.now() - hoursAgo * 3_600_000,
+      });
+      tokens.push((await settings.issueToken(GINKGO.id, { issuedBy: BARBARA.userId })).token);
+    }
+  });
+  const [issued50hAgo, issued25hAgo] = tokens as [string, string];
+  return { issued50hAgo, issued25hAgo };
+}
+
+/**
+ * Hazel's own Judge model for story 9: a fake OpenAI-compatible server on 127.0.0.1, answering every chat completion
+ * with `HAZEL_VERDICT`, as a JSON-schema answer would. Nothing leaves the machine. Its URL, and the close.
+ */
+async function startHazelModel(): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createHttpServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: JSON.stringify({ broken_rules: [HAZEL_VERDICT] }),
+              },
+            },
+          ],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${port}/v1`,
+    close: () =>
+      new Promise((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+/**
+ * Hazel's hook for story 9, as warden_app inside withTeam: a hook token at the Content tier and its own Judge model at
+ * `modelUrl`, as Radia's issue, tier pick and model save would write them. The token.
+ */
+async function seedHazelHook(
+  connection: { host: string; port: number },
+  database: string,
+  modelUrl: string,
+): Promise<string> {
+  let token = "";
+  await withAppPool(connection, database, async (withTeam) => {
+    const settings = createHookSettings({ withTeam });
+    ({ token } = await settings.issueToken(HAZEL.id, { issuedBy: RADIA.userId }));
+    await settings.setPrivacyTier(HAZEL.id, { tier: "content", setBy: RADIA.userId });
+    await createJudgeModels({ withTeam }).set(HAZEL.id, {
+      url: modelUrl,
+      model: "e2e-fake-judge",
+      setBy: RADIA.userId,
+    });
+  });
+  return token;
+}
+
 export default async function globalSetup() {
   const cleanup: (() => Promise<unknown> | void)[] = [];
   const teardown = async () => {
@@ -321,6 +414,11 @@ export default async function globalSetup() {
           GITHUB_WRITE_APP_CLIENT_SECRET: "e2e-write-app-secret-unused",
           GITHUB_WRITE_APP_PRIVATE_KEY: writeAppKey,
           E2E_FAKE_GITHUB_LOG: githubLog,
+          // A key made for this run, so the hook endpoint stores events (story 7): no other copy of it exists.
+          WARDEN_PSEUDONYM_KEY: randomBytes(32).toString("hex"),
+          // The Judge's model URL rule lets an Admin name localhost, so Setup can save one (#464), and Hazel's Judge
+          // calls its fake model on 127.0.0.1 (story 9).
+          WARDEN_JUDGE_LOCALHOST: "1",
           // Handed on to each Scan Job: the fake in both, and the delay, which holds a Scan Job before it runs and
           // lets the server run at once.
           NODE_OPTIONS: [
@@ -365,6 +463,15 @@ export default async function globalSetup() {
     await open(FIR.admin, FIR, "admin");
     await open(JOAN, FIR, "member");
     await seedFirControl(connection, database.name);
+    // Ginkgo is story 7's alone (e2e/hook.spec.ts): two hook tokens, issued 50 and 25 hours ago.
+    await open(BARBARA, GINKGO, "admin");
+    const hookTokens = await seedGinkgoHookTokens(connection, database.name);
+    // Hazel is story 9's alone (e2e/agent-session.spec.ts): a hook token, and its Judge on its own fake model.
+    await open(RADIA, HAZEL, "admin");
+    await open(SOPHIE, HAZEL, "member");
+    const hazelModel = await startHazelModel();
+    cleanup.push(hazelModel.close);
+    const hazelToken = await seedHazelHook(connection, database.name, hazelModel.url);
     for (const team of [ACME, BLUEBIRD]) {
       await run(process.execPath, ["server/src/seed.ts", team.id, "--no-product"], {
         ...db,
@@ -375,6 +482,8 @@ export default async function globalSetup() {
     process.env.E2E_BASE_URL = origin;
     process.env.E2E_FAKE_GITHUB_LOG = githubLog;
     process.env.E2E_SIGNING_JWK = JSON.stringify(await exportJWK(privateKey));
+    process.env.E2E_HOOK_TOKENS = JSON.stringify(hookTokens);
+    process.env.E2E_HAZEL_HOOK_TOKEN = hazelToken;
   } catch (error) {
     await teardown();
     throw error;

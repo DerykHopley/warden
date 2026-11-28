@@ -1,8 +1,8 @@
-// The Overview's rules below the page (story 10, and spec #341's stories 8 and 9): each journey card's state from the
-// Team's Level, Quick's bar and next step from its latest Scan, Standard's while Warden has no Standard rule,
-// Audit-ready's from the Controls with a review, the trend line's four wordings, and the audit answer's line, its rows
-// by Catalogue and the Verdict each row shows.
-import type { CatalogueId, OverviewBody } from "@warden/contracts";
+// The Overview's rules below the page (story 10, spec #341's stories 8 and 9, and spec #225's story 12): each journey
+// card's state from the Team's Level, Quick's bar and next step from its latest Scan, Standard's from the hook and the
+// Judge, Audit-ready's from the Controls with a review, the trend line's four wordings, and the audit answer's line,
+// its rows by Catalogue and the Verdict each row shows.
+import type { AgentSessionActivity, CatalogueId, OverviewBody } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
 import {
   auditAnswerLine,
@@ -28,10 +28,28 @@ import {
 const SCANNED = "2026-11-24T09:14:00Z";
 const scannedOn = new Date(SCANNED).toLocaleDateString(undefined, { dateStyle: "medium" });
 
+/** The Overview's Agent session counts over its 30 days, as the Standard card reads them. */
+const sessions = (
+  hook_active: boolean,
+  judged = 0,
+  needs_human_review = 0,
+): Pick<OverviewBody, "agent_sessions" | "period_days"> => ({
+  agent_sessions: { hook_active, judged, needs_human_review } satisfies AgentSessionActivity,
+  period_days: 30,
+});
+
+/** No hook event and no session judged in the period. */
+const NO_SESSIONS = sessions(false);
+/** The hook sending, and 3 sessions judged in the period: Standard's two parts hold. */
+const JUDGED = sessions(true, 3);
+
 describe("journeyCards", () => {
   it("at Quick: Quick current, then Standard and Audit-ready not started", () => {
     expect(
-      journeyCards("quick", SCANNED, NO_CATALOGUE).map((card) => [card.word, card.state]),
+      journeyCards("quick", SCANNED, NO_CATALOGUE, NO_SESSIONS).map((card) => [
+        card.word,
+        card.state,
+      ]),
     ).toEqual([
       ["Quick", "current"],
       ["Standard", "not-started"],
@@ -41,7 +59,10 @@ describe("journeyCards", () => {
 
   it("at Standard: Quick done, Standard current, Audit-ready not started", () => {
     expect(
-      journeyCards("standard", SCANNED, NO_CATALOGUE).map((card) => [card.word, card.state]),
+      journeyCards("standard", SCANNED, NO_CATALOGUE, JUDGED).map((card) => [
+        card.word,
+        card.state,
+      ]),
     ).toEqual([
       ["Quick", "done"],
       ["Standard", "current"],
@@ -50,20 +71,18 @@ describe("journeyCards", () => {
   });
 
   it("says what each Level adds", () => {
-    expect(journeyCards("quick", null, NO_CATALOGUE).map((card) => card.adds)).toEqual([
-      "Repo scan and top fixes",
-      "Agent hook and the Judge",
-      "Evidence for an audit",
-    ]);
+    expect(journeyCards("quick", null, NO_CATALOGUE, NO_SESSIONS).map((card) => card.adds)).toEqual(
+      ["Repo scan and top fixes", "Agent hook and the Judge", "Evidence for an audit"],
+    );
   });
 
   it("before the first Scan, Quick's bar is empty and its next step is the first Scan", () => {
-    const [quick] = journeyCards("quick", null, NO_CATALOGUE);
+    const [quick] = journeyCards("quick", null, NO_CATALOGUE, NO_SESSIONS);
     expect(quick).toMatchObject({ progress: 0, notes: ["Next: the first Scan"] });
   });
 
   it("after a Scan, Quick's bar is full, with the Scan's date and Standard as the next step", () => {
-    const [quick] = journeyCards("quick", SCANNED, NO_CATALOGUE);
+    const [quick] = journeyCards("quick", SCANNED, NO_CATALOGUE, NO_SESSIONS);
     expect(quick).toMatchObject({
       progress: 100,
       notes: [`Last Scan: ${scannedOn}`, "Next: Standard adds the agent hook and the Judge"],
@@ -71,26 +90,75 @@ describe("journeyCards", () => {
   });
 
   it("gives a done Level a full bar, and a Level not started an empty one", () => {
-    const [quick, standard, auditReady] = journeyCards("standard", SCANNED, NO_CATALOGUE);
+    const [quick, , auditReady] = journeyCards("standard", SCANNED, NO_CATALOGUE, JUDGED);
     expect(quick!.progress).toBe(100);
-    expect(standard!.progress).toBe(0);
     expect(auditReady!.progress).toBe(0);
   });
 
   it("at Standard with no Scan, Quick is not started, its bar empty, its next step the first Scan", () => {
-    const [quick] = journeyCards("standard", null, NO_CATALOGUE);
+    const [quick] = journeyCards("standard", null, NO_CATALOGUE, JUDGED);
     expect(quick).toMatchObject({
       state: "not-started",
       progress: 0,
       notes: ["Next: the first Scan"],
     });
   });
+});
 
-  it("at Quick and at Standard, the Standard card has no note, its bar empty", () => {
-    for (const level of ["quick", "standard"] as const) {
-      const [, standard] = journeyCards(level, SCANNED, NO_CATALOGUE);
-      expect(standard).toMatchObject({ progress: 0, notes: [] });
-    }
+describe("the Standard card (story 12)", () => {
+  const standardAt = (
+    level: OverviewBody["level"],
+    counts: Pick<OverviewBody, "agent_sessions" | "period_days">,
+  ) => journeyCards(level, SCANNED, NO_CATALOGUE, counts)[1]!;
+
+  it("at Quick with no hook event in 30 days: not started, an empty bar, an Admin turning on the hook next", () => {
+    expect(standardAt("quick", NO_SESSIONS)).toMatchObject({
+      state: "not-started",
+      progress: 0,
+      notes: ["Next: an Admin turns on the agent hook on Setup"],
+    });
+  });
+
+  it("at Quick with the hook sending and no session judged: not started, half a bar, the Judge's first session next", () => {
+    expect(standardAt("quick", sessions(true))).toMatchObject({
+      state: "not-started",
+      progress: 50,
+      notes: ["Next: the Judge reads the first ended session"],
+    });
+  });
+
+  it("at Quick with sessions judged but no hook event in 30 days: half a bar, the hook first", () => {
+    expect(standardAt("quick", sessions(false, 2))).toMatchObject({
+      state: "not-started",
+      progress: 50,
+      notes: ["Next: an Admin turns on the agent hook on Setup"],
+    });
+  });
+
+  it("at Standard: current, a full bar, and the sessions judged, in the singular for one", () => {
+    expect(standardAt("standard", sessions(true, 1))).toMatchObject({
+      state: "current",
+      progress: 100,
+      notes: ["1 session judged in 30 days"],
+    });
+    expect(standardAt("standard", sessions(true, 12))).toMatchObject({
+      notes: ["12 sessions judged in 30 days"],
+    });
+  });
+
+  it("names the sessions that need human review: 1 needs, 2 need", () => {
+    expect(standardAt("standard", sessions(true, 3, 1)).notes).toEqual([
+      "3 sessions judged in 30 days, 1 needs human review",
+    ]);
+    expect(standardAt("standard", sessions(true, 12, 2)).notes).toEqual([
+      "12 sessions judged in 30 days, 2 need human review",
+    ]);
+  });
+
+  it("says the period the server counted over", () => {
+    expect(standardAt("standard", { ...sessions(true, 1), period_days: 7 }).notes).toEqual([
+      "1 session judged in 7 days",
+    ]);
   });
 });
 
@@ -102,17 +170,30 @@ const allReviewed = isaOn({
 });
 
 describe("journeyCards at Audit-ready", () => {
-  const [quick, standard, auditReady] = journeyCards("audit_ready", SCANNED, allReviewed);
+  const [quick, standard, auditReady] = journeyCards("audit_ready", SCANNED, allReviewed, JUDGED);
 
   it("gives Quick Done, with a full bar", () => {
     expect(quick).toMatchObject({ state: "done", progress: 100, notes: [] });
   });
 
-  it("never gives Standard Done while Warden has no Standard rule: not started, an empty bar, and why", () => {
+  it("gives Standard Done, a full bar, and the sessions judged, while both its parts hold", () => {
     expect(standard).toMatchObject({
+      state: "done",
+      progress: 100,
+      notes: ["3 sessions judged in 30 days"],
+    });
+  });
+
+  it("gives Standard Not started with its parts' bar while one part doesn't hold, as the Level passes it without", () => {
+    expect(journeyCards("audit_ready", SCANNED, allReviewed, sessions(true))[1]).toMatchObject({
+      state: "not-started",
+      progress: 50,
+      notes: ["Next: the Judge reads the first ended session"],
+    });
+    expect(journeyCards("audit_ready", SCANNED, allReviewed, NO_SESSIONS)[1]).toMatchObject({
       state: "not-started",
       progress: 0,
-      notes: ["Warden doesn't check this yet."],
+      notes: ["Next: an Admin turns on the agent hook on Setup"],
     });
   });
 
@@ -129,6 +210,7 @@ describe("journeyCards at Audit-ready", () => {
       "audit_ready",
       null,
       allReviewed,
+      JUDGED,
     );
     expect(noScanQuick).toMatchObject({
       state: "not-started",
@@ -148,7 +230,7 @@ describe("journeyCards at Audit-ready", () => {
         auditRow("5.2.4", { review_state: "changed_since_review" }),
       ],
     });
-    expect(journeyCards("audit_ready", SCANNED, audit)[2]).toMatchObject({
+    expect(journeyCards("audit_ready", SCANNED, audit, NO_SESSIONS)[2]).toMatchObject({
       state: "current",
       notes: ["4 of 4 Controls have a review, 1 changed since"],
     });
@@ -157,7 +239,7 @@ describe("journeyCards at Audit-ready", () => {
 
 describe("the Audit-ready card before it is reached", () => {
   const auditReadyAtQuick = (audit: OverviewBody["audit"]) =>
-    journeyCards("quick", SCANNED, audit)[2];
+    journeyCards("quick", SCANNED, audit, NO_SESSIONS)[2];
 
   it("with no Catalogue on, its next step is an Admin turning one on", () => {
     expect(auditReadyAtQuick(NO_CATALOGUE)).toMatchObject({
@@ -396,6 +478,7 @@ const body = (fields: Partial<OverviewBody>): OverviewBody => ({
   last_scan_at: SCANNED,
   has_findings: true,
   period_days: 30,
+  agent_sessions: { hook_active: false, judged: 0, needs_human_review: 0 },
   open_at_start: 0,
   open_now: 7,
   fix_rate: { fixed: 1, of: 11 },

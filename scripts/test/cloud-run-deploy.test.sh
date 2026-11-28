@@ -222,12 +222,13 @@ gcloud_dict() {
   fi
   awk -v RS="$delim" '{ sub(/\n$/, ""); print }' <<<"$value"
 }
-# assert_scan_job <what> <call> <image> <account> <database> <user> <password secret>: that recorded update sets the
-# Scan Job's whole configuration afresh: <image>, `node server/src/scan-job.ts` as <account>, the Cloud SQL instance,
-# one retry, an hour a task, <database> as <user> with the GitHub app's client id, and two pinned secrets: the
-# password and the GitHub app's private key. Never the app's client secret, which signs people in.
+# assert_scan_job <what> <call> <image> <account> <database> <user> <password secret> [judge]: that recorded update
+# sets the Scan Job's whole configuration afresh: <image>, `node server/src/scan-job.ts` as <account>, the Cloud SQL
+# instance, one retry, an hour a task, <database> as <user> with the GitHub app's client id, and pinned secrets: the
+# password and the GitHub app's private key, and with `judge` (WARDEN_JUDGE_KEYS set) the Judge's OpenRouter key and
+# Langfuse keys too (#482). Never the app's client secret, which signs people in.
 assert_scan_job() {
-  local what=$1 call=$2 image=$3 account=$4 database=$5 user=$6 password=$7 secrets
+  local what=$1 call=$2 image=$3 account=$4 database=$5 user=$6 password=$7 judge=${8-} secrets expected
   assert_equal "$what runs the image" "$image" "$(flag image "$call")"
   assert_equal "$what runs as $account" "$account@$project.iam.gserviceaccount.com" \
     "$(flag service-account "$call")"
@@ -243,10 +244,19 @@ PGDATABASE=$database
 GITHUB_APP_CLIENT_ID=$github_client_id" \
     "$(gcloud_dict "$(flag set-env-vars "$call")")"
   secrets=$(gcloud_dict "$(flag set-secrets "$call")")
-  assert_equal "$what's two secrets: $password and the GitHub app's private key" \
-    "PGPASSWORD=$password
-GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
-    "$(sed 's/:[^:]*$//' <<<"$secrets")"
+  expected="PGPASSWORD=$password
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key"
+  if [[ $judge == judge ]]; then
+    expected+="
+OPENROUTER_API_KEY=warden-openrouter-api-key
+LANGFUSE_PUBLIC_KEY=warden-langfuse-public-key
+LANGFUSE_SECRET_KEY=warden-langfuse-secret-key"
+    assert_equal "$what's five secrets: $password, the GitHub app's private key, and the Judge's three keys" \
+      "$expected" "$(sed 's/:[^:]*$//' <<<"$secrets")"
+  else
+    assert_equal "$what's two secrets: $password and the GitHub app's private key, none of the Judge's" \
+      "$expected" "$(sed 's/:[^:]*$//' <<<"$secrets")"
+  fi
   assert_equal "each of $what's secrets is pinned to a version number" "" \
     "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$secrets" || true)"
 }
@@ -307,15 +317,24 @@ GITHUB_APP_CLIENT_ID=$github_client_id" \
   "$(gcloud_dict "$(flag set-env-vars "$service_deploy")")"
 service_secrets=$(gcloud_dict "$(flag set-secrets "$service_deploy")")
 # A preview shares the live read-only GitHub app (#275): the same two secrets as a release's revision.
-assert_equal "the revision's secrets: the preview app password, the two Clerk keys and the GitHub app's two" \
+assert_equal "the revision's secrets: the preview app password, the two Clerk keys, the GitHub app's two and the preview pseudonym key" \
   "PGPASSWORD=warden-db-preview-app-password
 CLERK_SECRET_KEY=warden-clerk-secret
 CLERK_JWT_KEY=warden-clerk-jwt-key
 GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
-GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key
+WARDEN_PSEUDONYM_KEY=warden-preview-pseudonym-key" \
   "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
 assert_equal "each of the revision's secrets is pinned to a version number" "" \
   "$(grep -vE '^[A-Z_]+=[a-z-]+:[1-9][0-9]*$' <<<"$service_secrets" || true)"
+# The pseudonym key (#185): a preview has its own, so its pseudonyms can't be matched against live ones.
+assert_equal "the revision's pseudonym key is pinned at version 1" "1" \
+  "$(grep '^WARDEN_PSEUDONYM_KEY=' <<<"$service_secrets" | sed 's/.*://')"
+assert_no_match "no call of a preview names the live pseudonym key" 'warden-pseudonym-key' "$calls"
+assert_no_match "the preview's revision gets neither the Judge's OpenRouter key nor a Langfuse key" \
+  'openrouter|OPENROUTER|langfuse|LANGFUSE' "$service_deploy"
+assert_no_match "no job of a preview (migration or Scan) gets a pseudonym key" 'pseudonym|PSEUDONYM' \
+  "$(grep -F 'gcloud run jobs ' <<<"$calls")"
 
 assert_line "the health gate calls /api/health on the tag's URL" \
   "https://demo---warden-preview-123456789012.europe-west1.run.app/api/health" "$(grep '^curl ' <<<"$calls")"
@@ -487,13 +506,20 @@ WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan
 GITHUB_APP_CLIENT_ID=$github_client_id" \
   "$(gcloud_dict "$(flag set-env-vars "$service_deploy")")"
 service_secrets=$(gcloud_dict "$(flag set-secrets "$service_deploy")")
-assert_equal "release: the revision's secrets: the app password, the two Clerk keys and the GitHub app's two" \
+assert_equal "release: the revision's secrets: the app password, the two Clerk keys, the GitHub app's two and the pseudonym key" \
   "PGPASSWORD=warden-db-app-password
 CLERK_SECRET_KEY=warden-clerk-secret
 CLERK_JWT_KEY=warden-clerk-jwt-key
 GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret
-GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key" \
+GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key
+WARDEN_PSEUDONYM_KEY=warden-pseudonym-key" \
   "$(sed 's/:[^:]*$//' <<<"$service_secrets")"
+assert_equal "release: the revision's pseudonym key is pinned at version 1 (#185)" "1" \
+  "$(grep '^WARDEN_PSEUDONYM_KEY=' <<<"$service_secrets" | sed 's/.*://')"
+assert_no_match "release: no job (migration, Scan or daily) gets a pseudonym key" 'pseudonym|PSEUDONYM' \
+  "$(grep -F 'gcloud run jobs ' <<<"$calls")"
+assert_no_match "release: the revision gets neither the Judge's OpenRouter key nor a Langfuse key" \
+  'openrouter|OPENROUTER|langfuse|LANGFUSE' "$service_deploy"
 assert_equal "release: the GitHub app's secrets are pinned at version 1, as #132 makes them" \
   "GITHUB_APP_CLIENT_SECRET=warden-github-app-client-secret:1
 GITHUB_APP_PRIVATE_KEY=warden-github-app-private-key:1" \
@@ -525,13 +551,14 @@ assert_equal "release: the daily Job runs node server/src/daily-expiry.ts" "node
 assert_equal "release: the daily Job has the Cloud SQL instance attached" "$connection" \
   "$(flag set-cloudsql-instances "$daily")"
 assert_equal "release: the daily Job retries once" 1 "$(flag max-retries "$daily")"
-assert_equal "release: the daily Job's plain values: as warden_app on warden" \
+assert_equal "release: the daily Job's plain values: as warden_app on warden, starting Judge runs as warden-scan (#499)" \
   "PGHOST=/cloudsql/$connection
 PGUSER=warden_app
-PGDATABASE=warden" \
+PGDATABASE=warden
+WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan" \
   "$(gcloud_dict "$(flag set-env-vars "$daily")")"
 daily_secrets=$(gcloud_dict "$(flag set-secrets "$daily")")
-assert_equal "release: the daily Job's secrets: the app password and the admin password" \
+assert_equal "release: the daily Job's secrets: the app password and the admin password, no model or Langfuse key" \
   "PGPASSWORD=warden-db-app-password
 WARDEN_ADMIN_PASSWORD=warden-db-admin-password" \
   "$(sed 's/:[^:]*$//' <<<"$daily_secrets")"
@@ -598,6 +625,44 @@ GITHUB_WRITE_APP_PRIVATE_KEY=warden-github-write-app-private-key:1" \
     assert_no_match "$mode with the write app's client id $setting: no call names the write app" \
       'GITHUB_WRITE_APP|write-app' "$calls"
   done
+done
+
+# --- The Judge's keys (#482): optional, switched on by WARDEN_JUDGE_KEYS, for the Scan Job alone ---
+# Until the owner has made the three secrets, a deploy that pinned them would fail; unset, the Scan Job runs without
+# them, and a Judge run stops on its own ConfigError naming OPENROUTER_API_KEY.
+for mode in preview release; do
+  if [[ $mode == preview ]]; then
+    args=("$image" preview demo) service=warden-preview scan_job=warden-scan-preview
+    scan_names=(warden-preview-scan warden_preview warden_preview_app warden-db-preview-app-password)
+  else
+    args=("$release_image" release) service=warden scan_job=warden-scan
+    scan_names=(warden-scan warden warden_app warden-db-app-password)
+  fi
+
+  run_deploy 200 ok WARDEN_JUDGE_KEYS=on -- "${args[@]}"
+  [[ $code == 0 ]] || fail "$mode with the Judge's keys against the stubs failed (exit $code): $out"
+  pass "$mode with the Judge's keys: exits 0"
+  assert_scan_job "$mode with the Judge's keys: the Scan Job" "$(call_of "gcloud run jobs update $scan_job ")" \
+    "${args[0]}" "${scan_names[@]}" judge
+  assert_no_match "$mode with the Judge's keys: the revision gets none of them" \
+    'OPENROUTER|LANGFUSE|openrouter|langfuse' "$(call_of "gcloud run deploy $service ")"
+  if [[ $mode == release ]]; then
+    # The daily Job starts Judge runs as the Scan Job, which reads its own keys (#499).
+    daily=$(call_of "gcloud run jobs update warden-daily-expiry ")
+    assert_line "release with the Judge's keys: the daily Job names the Scan Job in WARDEN_SCAN_JOB" \
+      "WARDEN_SCAN_JOB=projects/$project/locations/europe-west1/jobs/warden-scan" \
+      "$(gcloud_dict "$(flag set-env-vars "$daily")")"
+    assert_no_match "release with the Judge's keys: the daily Job still gets no model or Langfuse secret" \
+      'OPENROUTER|LANGFUSE|openrouter|langfuse' "$daily"
+  fi
+
+  run_deploy 200 ok WARDEN_JUDGE_KEYS= -- "${args[@]}"
+  [[ $code == 0 ]] || fail "$mode with WARDEN_JUDGE_KEYS empty failed (exit $code): $out"
+  pass "$mode with WARDEN_JUDGE_KEYS empty: exits 0"
+  assert_scan_job "$mode with WARDEN_JUDGE_KEYS empty: the Scan Job" "$(call_of "gcloud run jobs update $scan_job ")" \
+    "${args[0]}" "${scan_names[@]}"
+  assert_no_match "$mode with WARDEN_JUDGE_KEYS empty: no call names a Judge secret" \
+    'openrouter|langfuse' "$calls"
 done
 
 # --- The first release, from Google's placeholder: no release to tag previous ---

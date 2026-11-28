@@ -39,6 +39,8 @@ export type Routes = {
   fixPr?: (id: string) => Answer;
   /** POST /api/guard/findings/:id/fix-pr, with the Finding id and the parsed body (none: undefined). */
   openFixPr?: (id: string, body: unknown) => Answer;
+  /** GET /api/guard/findings/:id/session, with the Finding id: its Agent session's record. */
+  sessionRecord?: (id: string) => Answer;
   /** POST /api/products (id null) or PUT /api/products/:id, with the Product id and the parsed body. */
   saveProduct?: (id: string | null, body: unknown) => Answer;
   /** DELETE /api/products/:id, with the Product id. */
@@ -60,6 +62,16 @@ export type Routes = {
   control?: (catalogue: string, ref: string) => Answer;
   /** POST /api/vouch/catalogues/:id/controls/:ref/reviews, with the Catalogue id, the Control's ref and the parsed body. */
   review?: (catalogue: string, ref: string, body: unknown) => Answer;
+  /** GET /api/hook: the Team's hook settings (story 7), never a token. */
+  hook?: () => Answer;
+  /** POST /api/hook/token: issues or rotates the Team's hook token. */
+  issueHookToken?: () => Answer;
+  /** PUT /api/hook/privacy-tier, with the parsed body. */
+  setPrivacyTier?: (body: unknown) => Answer;
+  /** GET /api/judge/model: the Team's own Judge model, or null (spec #225, story 10). */
+  judgeModel?: () => Answer;
+  /** PUT /api/judge/model, with the parsed body. */
+  setJudgeModel?: (body: unknown) => Answer;
 };
 
 const sentBody = (init: RequestInit | undefined): unknown =>
@@ -111,6 +123,10 @@ export function serve(routes: Routes) {
     if (fixPr && method === "POST" && routes.openFixPr) {
       return routes.openFixPr(decodeURIComponent(fixPr[1] ?? ""), sentBody(init));
     }
+    const sessionRecord = /^\/api\/guard\/findings\/([^/]+)\/session$/.exec(url);
+    if (sessionRecord && method === "GET" && routes.sessionRecord) {
+      return routes.sessionRecord(decodeURIComponent(sessionRecord[1] ?? ""));
+    }
     if (url === "/api/products" && method === "POST" && routes.saveProduct) {
       return routes.saveProduct(null, sentBody(init));
     }
@@ -151,6 +167,19 @@ export function serve(routes: Routes) {
     if (reviewed && method === "POST" && routes.review) {
       const [, catalogue = "", ref = ""] = reviewed;
       return routes.review(decodeURIComponent(catalogue), decodeURIComponent(ref), sentBody(init));
+    }
+    if (url === "/api/hook" && method === "GET" && routes.hook) return routes.hook();
+    if (url === "/api/hook/token" && method === "POST" && routes.issueHookToken) {
+      return routes.issueHookToken();
+    }
+    if (url === "/api/hook/privacy-tier" && method === "PUT" && routes.setPrivacyTier) {
+      return routes.setPrivacyTier(sentBody(init));
+    }
+    if (url === "/api/judge/model" && method === "GET" && routes.judgeModel) {
+      return routes.judgeModel();
+    }
+    if (url === "/api/judge/model" && method === "PUT" && routes.setJudgeModel) {
+      return routes.setJudgeModel(sentBody(init));
     }
     throw new Error(`The test gave no answer for ${method} ${url}`);
   });

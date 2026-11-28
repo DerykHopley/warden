@@ -89,7 +89,7 @@ export const DEMO_OBSERVATIONS = {
   },
   printed: {
     asset: SESSION,
-    rule_id: "guard/agent-printed-secret",
+    rule_id: "guard/agent-sends-secrets",
     location: { kind: "session" },
     severity: "high",
     title: "The agent printed a secret to the terminal",

@@ -16,6 +16,13 @@ export const PrivacyTierBody = z.strictObject({ privacy_tier: PrivacyTier });
 export type PrivacyTierBody = z.infer<typeof PrivacyTierBody>;
 
 /**
+ * What stands in the token's place in the managed-settings block when there is no token to give: every read after the
+ * answer that issued it. The dashboard swaps it for a token it holds, so the block it shows after a tier change still
+ * works.
+ */
+export const HOOK_TOKEN_PLACEHOLDER = "<rotate the hook token in Warden to get a new one>";
+
+/**
  * The managed-settings block an Admin pastes into Claude Code to turn the hook on. Its shape is Claude Code's (its
  * hooks reference), which the server's unit test checks, so here it is any JSON object.
  */
@@ -46,3 +53,46 @@ export const HookTokenBody = z.strictObject({
   managed_settings: ManagedSettings,
 });
 export type HookTokenBody = z.infer<typeof HookTokenBody>;
+
+/**
+ * `GET /api/judge/model` and `PUT`'s answer (spec #225, slice 6a, story 10): the Team's own Judge model, its
+ * OpenAI-compatible base URL and model name and when it was set, or null when the Team is judged on OpenRouter.
+ */
+export const JudgeModelBody = z.strictObject({
+  local_model: z.strictObject({ url: z.string(), model: z.string(), set_at: DateTime }).nullable(),
+});
+export type JudgeModelBody = z.infer<typeof JudgeModelBody>;
+
+/**
+ * `GET /api/guard/findings/:id/session` (spec #225, slice 9b, story 9): an Agent session Finding's session record, as
+ * `agent_sessions` keeps it after its events are dropped: the developer's pseudonym (null when the hook named none),
+ * and when the session started, ended and was judged (null until it has). Never a developer's name, nor an event.
+ */
+export const AgentSessionBody = z.strictObject({
+  developer: z.string().nullable(),
+  started_at: DateTime,
+  ended_at: DateTime.nullable(),
+  judged_at: DateTime.nullable(),
+});
+export type AgentSessionBody = z.infer<typeof AgentSessionBody>;
+
+/**
+ * `PUT /api/judge/model`'s body: the Team's own model, or null to clear it. The model name is 1 to 200 characters, not
+ * only spaces, with no control character, each refusal in plain words, as Setup shows them (#464); the server checks
+ * the URL against its URL rule.
+ */
+export const JudgeModelChange = z.strictObject({
+  local_model: z
+    .strictObject({
+      url: z.string(),
+      model: z
+        .string()
+        // An empty name is only that: not "only spaces" as well.
+        .min(1, { message: "is empty", abort: true })
+        .max(200, { message: "is over 200 characters" })
+        .regex(/\S/, { message: "is only spaces" })
+        .regex(/^\P{Cc}*$/u, { message: "holds a control character" }),
+    })
+    .nullable(),
+});
+export type JudgeModelChange = z.infer<typeof JudgeModelChange>;

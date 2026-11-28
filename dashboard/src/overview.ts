@@ -103,19 +103,43 @@ function controlsReviewedNote(audit: AuditAnswer): string {
 /** Quick's next step while the Team has no Scan, whether Quick is current or passed without one. */
 const NO_SCAN_YET = { progress: 0, notes: ["Next: the first Scan"] };
 
+/** What the Standard card reads: the hook's and the Judge's counts, over the days the server counted them. */
+export type StandardCounts = Pick<OverviewBody, "agent_sessions" | "period_days">;
+
+/**
+ * The Standard card's bar, whether its rule holds, and its note. Its two parts are the hook sending in the period and
+ * the Judge having judged a session in it, so the bar is half per part. The note is the first step missing, the hook
+ * before the Judge, or once both hold, the sessions judged, with those that need human review named.
+ */
+function standardCard({ agent_sessions: sessions, period_days: days }: StandardCounts) {
+  const judged = sessions.judged > 0;
+  const progress = (Number(sessions.hook_active) + Number(judged)) * 50;
+  const holds = sessions.hook_active && judged;
+  if (!sessions.hook_active) {
+    return { holds, progress, notes: ["Next: an Admin turns on the agent hook on Setup"] };
+  }
+  if (!judged) return { holds, progress, notes: ["Next: the Judge reads the first ended session"] };
+  const line = `${counted(sessions.judged, "session")} judged in ${days} days`;
+  const review = sessions.needs_human_review;
+  const note =
+    review > 0 ? `${line}, ${review} ${review === 1 ? "needs" : "need"} human review` : line;
+  return { holds, progress, notes: [note] };
+}
+
 /**
  * The three journey cards, Quick, Standard, Audit-ready, for a Team at `level`: a Level after it not started (an
  * empty bar); a Level before it done (a full bar) only when its own rule holds, as the Level can pass it without:
  * Audit-ready is reached on reviews alone. Quick's one part in the foundation is a Scan, so while current its bar
  * and next step follow `lastScanAt`, and before the Level it is done only with a Scan, otherwise not started with the
- * first Scan as its next step. Standard has no parts yet, and Warden has no Standard rule: at Audit-ready it is not
- * started, never done, and says so. Audit-ready's note counts the Controls with a review in `audit`; current, its bar
- * is full, as the Level needs every Control reviewed.
+ * first Scan as its next step. Standard's bar, rule and note follow `sessions` (`standardCard`) at every Level: at
+ * Audit-ready it is done only while its rule holds. Audit-ready's note counts the Controls with a review in `audit`;
+ * current, its bar is full, as the Level needs every Control reviewed.
  */
 export function journeyCards(
   level: Level,
   lastScanAt: string | null,
   audit: AuditAnswer,
+  sessions: StandardCounts,
 ): JourneyCardView[] {
   const at = Level.options.indexOf(level);
   return Level.options.map((cardLevel, i) => {
@@ -124,13 +148,10 @@ export function journeyCards(
     if (cardLevel === "quick" && state === "done" && lastScanAt === null) {
       return { ...card, state: "not-started", ...NO_SCAN_YET };
     }
-    if (cardLevel === "standard" && level === "audit_ready") {
-      return {
-        ...card,
-        state: "not-started",
-        progress: 0,
-        notes: ["Warden doesn't check this yet."],
-      };
+    if (cardLevel === "standard") {
+      const { holds, progress, notes } = standardCard(sessions);
+      const passed = state === "done" && !holds ? "not-started" : state;
+      return { ...card, state: passed, progress, notes };
     }
     if (cardLevel === "audit_ready") {
       return {

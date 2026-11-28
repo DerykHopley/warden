@@ -11,15 +11,21 @@ import { connectionFailure, createHealthCheck, createPool, guardDatabaseRole } f
 import { createFindings } from "./findings/index.ts";
 import { createLogger } from "./log.ts";
 import { createMembers } from "./members.ts";
+import { createAgentSessions } from "./modules/guard/agent-sessions.ts";
 import { fixPrRoutes } from "./modules/guard/fix-pr-routes.ts";
 import { createFixPrs } from "./modules/guard/fix-prs.ts";
 import { createGitHubWriter } from "./modules/guard/github-writer.ts";
 import { createGitHub } from "./modules/guard/github.ts";
+import { hookEventRoutes } from "./modules/guard/hook-event-routes.ts";
 import { hookRoutes } from "./modules/guard/hook-routes.ts";
 import { createHookSettings } from "./modules/guard/hook-settings.ts";
+import { judgeModelRoutes } from "./modules/guard/judge-model-routes.ts";
+import { createJudgeModels } from "./modules/guard/judge-models.ts";
 import { createPackageRegistry } from "./modules/guard/package-registry.ts";
 import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
+import { createSessionActivity } from "./modules/guard/session-activity.ts";
+import { agentSessionRoutes } from "./modules/guard/session-routes.ts";
 import { writeGrantRoutes } from "./modules/guard/write-grant-routes.ts";
 import { createWriteGrants } from "./modules/guard/write-grants.ts";
 import { createPatchAssessment } from "./modules/patch/assessment.ts";
@@ -30,7 +36,7 @@ import { createPatchScan } from "./modules/patch/scan.ts";
 import { createAuditReads } from "./modules/vouch/audit.ts";
 import { createVouchDeps } from "./modules/vouch/deps.ts";
 import { vouchRoutes } from "./modules/vouch/routes.ts";
-import { scanJobStarterFor } from "./scan-job-starters.ts";
+import { judgeJobStarterFor, scanJobStarterFor } from "./scan-job-starters.ts";
 import { createScans } from "./scans.ts";
 import { createShutdown } from "./shutdown.ts";
 import { MOVE_RULES, scanners } from "./wiring.ts";
@@ -98,6 +104,8 @@ const repoAssets = createRepoAssets({ withTeam });
 const hookSettings = createHookSettings({ withTeam });
 const writeGrants = createWriteGrants({ withTeam });
 const fixPrs = createFixPrs({ withTeam });
+// The hook's stored sessions, which the hook endpoint writes and the session record's route reads.
+const agentSessions = createAgentSessions({ withTeam });
 const scans = createScans({ withTeam });
 // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503). A Lead's
 // start and the first Scan after a link both start it.
@@ -162,6 +170,23 @@ const appDeps: AppDeps = {
         : { findings, repoAssets, writeGrants, fixPrs },
     ),
     hookRoutes({ hookSettings }),
+    // The Team's own Judge model; a URL on localhost is accepted only with WARDEN_JUDGE_LOCALHOST (local development).
+    judgeModelRoutes({
+      judgeModels: createJudgeModels({ withTeam }),
+      allowLocalhost: config.judgeLocalhost,
+    }),
+    // Without WARDEN_PSEUDONYM_KEY, the hook endpoint answers 503 and stores nothing. A stored SessionEnd starts the
+    // Judge run, chosen as the Scan Job's starter is; on Cloud Run without a Job, none starts.
+    hookEventRoutes({
+      hookSettings,
+      agentSessions,
+      pseudonymKey: config.pseudonymKey,
+      behindCloudRun: config.behindCloudRun,
+      startJudgeJob: judgeJobStarterFor(config, { logger }),
+      logger,
+    }),
+    // An Agent session Finding's session record: its pseudonym and times, for the detail card.
+    agentSessionRoutes({ findings, agentSessions }),
     patchRoutes({
       products,
       scan: createPatchScan({ findings, logger }),
@@ -174,6 +199,8 @@ const appDeps: AppDeps = {
   ],
   // Vouch's answer to "Are we ready for the audit?" and the Audit-ready fact, from the same stores as its routes.
   audit: createAuditReads(vouch),
+  // Guard's counts of the hook's and the Judge's activity, which the Overview and the Level read.
+  agentSessions: createSessionActivity({ withTeam }),
   startScanJob,
   behindCloudRun: config.behindCloudRun,
   checkHealth: createHealthCheck(pool, logger),

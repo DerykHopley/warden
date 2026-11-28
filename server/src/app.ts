@@ -11,6 +11,7 @@ import {
   RoleChangeBody,
   StartScanBody,
   type Actor,
+  type AgentSessionActivity,
   type AuditAnswer,
   type Finding,
   type FindingsBody,
@@ -37,7 +38,7 @@ import {
   ProposalPending,
   type Findings,
 } from "./findings/index.ts";
-import { auditReadyOfAnswer, teamLevel } from "./level.ts";
+import { auditReadyOfAnswer, standardFacts, teamLevel } from "./level.ts";
 import type { Logger } from "./log.ts";
 import type { Members, RoleChanged, TeamMemberRow } from "./members.ts";
 import { idParam, pathId } from "./path-id.ts";
@@ -68,6 +69,8 @@ export type AppDeps = {
   assetChecks: AssetChecks;
   /** Vouch's answer and the Audit-ready fact the Overview and the Level read, as the start-up file wires them. */
   audit: AuditReads;
+  /** Guard's counts of the Team's Agent sessions, which the Overview and the Level read, as the start-up file wires them. */
+  agentSessions: AgentSessionReads;
   /** Starts the Scan Job for a queued Scan; without one (none wired here), a start answers 503. */
   startScanJob?: ScanJobStarter;
   /**
@@ -92,6 +95,14 @@ export type AppDeps = {
 export type AuditReads = {
   answer(team: string, now: Date): Promise<AuditAnswer>;
   auditReady(team: string): Promise<boolean>;
+};
+
+/**
+ * What the app reads of a Team's Agent sessions (spec #225, slice 8b), built by the Guard module (ADR 0005): over the
+ * last `days` days, whether the hook sent an event, and the sessions the Judge judged, those needing review counted.
+ */
+export type AgentSessionReads = {
+  activity(team: string, days: number): Promise<AgentSessionActivity>;
 };
 
 /** What a handler behind requireRole reads from the context: the session, its Team and the person's Role there. */
@@ -161,28 +172,22 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
       },
       deps.behindCloudRun,
     );
-    const retryAfter = signInLimit.attempt(address);
-    if (retryAfter !== undefined) {
+    // Clerk not answering throws on: the token wasn't found bad, so it doesn't count.
+    const checked = await signInLimit.check(
+      address,
+      c.req.header("Authorization"),
+      deps.verifySessionToken,
+    );
+    if ("heldFor" in checked) {
       c.set("refusedSignInAddress", address);
-      c.header("Retry-After", String(retryAfter));
+      c.header("Retry-After", String(checked.heldFor));
       return c.json({ error: "Too many sign-in attempts" }, 429);
     }
-    // An auth scheme's name is case-insensitive (RFC 9110, 11.1): `bearer` and `BEARER` are `Bearer`.
-    const token = /^Bearer (\S+)$/i.exec(c.req.header("Authorization") ?? "")?.[1];
-    let session: Session | null;
-    try {
-      session = token === undefined ? null : await deps.verifySessionToken(token);
-    } catch (error) {
-      // Clerk couldn't be asked: the token wasn't found bad, so it doesn't count.
-      signInLimit.takeBack(address);
-      throw error;
-    }
-    if (session === null) {
+    if ("refused" in checked) {
       c.set("refusedSignInAddress", address);
       return c.json({ error: "Not signed in" }, 401);
     }
-    signInLimit.takeBack(address);
-    return session;
+    return checked.found;
   }
 
   /**
@@ -231,8 +236,14 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     if (opened instanceof Response) return opened;
     const { session, team } = opened;
     const role = team === null ? null : opened.role;
+    // The same facts the Overview reads, over the same period, so the two never disagree.
     const level =
-      team === null ? null : teamLevel({ auditReady: await deps.audit.auditReady(team) });
+      team === null
+        ? null
+        : teamLevel({
+            auditReady: await deps.audit.auditReady(team),
+            ...standardFacts(await deps.agentSessions.activity(team, OVERVIEW_PERIOD_DAYS)),
+          });
     return c.json({ userId: session.userId, team, role, level } satisfies MeBody);
   });
 
@@ -386,17 +397,20 @@ export function createApp(deps: AppDeps, mount?: MountRoutes): Hono<AppEnv> {
     return c.json({ team, findings: list } satisfies FindingsBody);
   });
 
-  // Any person in the Team reads its Level and trend (story 10), and Vouch's answer to "Are we ready for the audit?"
-  // (spec #341, story 8): the Overview. A read that throws answers the logged 500, never part of an answer.
+  // Any person in the Team reads its Level and trend (story 10), Vouch's answer to "Are we ready for the audit?"
+  // (spec #341, story 8) and the hook's and the Judge's activity (spec #225, story 12): the Overview. A read that throws
+  // answers the logged 500, never part of an answer.
   app.get("/api/overview", requireRole("member"), async (c) => {
     const team = c.get("team");
     const numbers = await findings.overview(team, OVERVIEW_PERIOD_DAYS);
     const audit = await deps.audit.answer(team, new Date());
+    const agentSessions = await deps.agentSessions.activity(team, OVERVIEW_PERIOD_DAYS);
     return c.json({
       team,
-      // From the answer in hand, so the Level and the answer can't disagree and Vouch is read once.
-      level: teamLevel({ auditReady: auditReadyOfAnswer(audit) }),
+      // From the answer and counts in hand, so the Level and what the page shows can't disagree, each read once.
+      level: teamLevel({ auditReady: auditReadyOfAnswer(audit), ...standardFacts(agentSessions) }),
       audit,
+      agent_sessions: agentSessions,
       period_days: OVERVIEW_PERIOD_DAYS,
       ...numbers,
     } satisfies OverviewBody);

@@ -1,17 +1,13 @@
 // The managed-settings block an Admin pastes into Claude Code (story 7): its events follow the Privacy tier, and every
 // hook is the same `http` handler, the token in a header and never in a URL. Shapes from Claude Code's hooks reference.
+import { HOOK_TOKEN_PLACEHOLDER } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import {
-  HOOK_EVENTS_PATH,
-  HOOK_TOKEN_PLACEHOLDER,
-  managedSettings,
-  type ManagedSettings,
-} from "./managed-settings.ts";
+import { HOOK_EVENTS_PATH, managedSettings, type ManagedSettings } from "./managed-settings.ts";
 
 const URL_BASE = "https://warden.example";
 const TOKEN = "org_a.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-const EVERY_TIER = ["SessionStart", "PostToolUse", "PostToolUseFailure", "SessionEnd"];
+const EVERY_TIER = ["PostToolUse", "PostToolUseFailure", "SessionEnd"];
 
 /** Every hook handler in the block, with the event it's under. */
 const handlers = (block: ManagedSettings) =>
@@ -21,7 +17,7 @@ const handlers = (block: ManagedSettings) =>
 
 describe("managedSettings: the events follow the Privacy tier", () => {
   it.each(["metadata", "details"] as const)(
-    "at %s holds the four session and tool events, and no UserPromptSubmit",
+    "at %s holds the tool events and SessionEnd, and no UserPromptSubmit",
     (tier) => {
       const block = managedSettings({ url: URL_BASE, token: TOKEN, tier });
 
@@ -34,6 +30,16 @@ describe("managedSettings: the events follow the Privacy tier", () => {
 
     expect(Object.keys(block.hooks).sort()).toEqual([...EVERY_TIER, "UserPromptSubmit"].sort());
   });
+
+  // Claude Code runs only `command` hooks for SessionStart: it skips an `http` one (#465).
+  it.each(["metadata", "details", "content"] as const)(
+    "at %s has no SessionStart, which Claude Code skips as an http hook",
+    (tier) => {
+      const block = managedSettings({ url: URL_BASE, token: TOKEN, tier });
+
+      expect(block.hooks).not.toHaveProperty("SessionStart");
+    },
+  );
 });
 
 describe("managedSettings: every hook is the same http handler", () => {

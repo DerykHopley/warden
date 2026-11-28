@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Sets up Warden's Google Cloud project, once: the APIs, the Docker repositories, the database's backups and network,
-# log retention and Secret Manager's audit logs, one password secret per database role, the database roles
-# themselves, two sets of service accounts (live, with the daily Job's and the Scan Job's, and owner previews),
-# GitHub's deploy identities, the two public services, the preview migration job, the daily expiry Job with the Cloud
-# Scheduler job that starts it, and the Scan Jobs (warden-scan, and warden-scan-preview for owner previews), which the
-# service starts for a Lead's Scan. Safe to run again: it creates only what's missing, and sets each setting to the
-# value below whatever it was. README.md's "Setting up Google Cloud" says what it makes, and why.
+# log retention and Secret Manager's audit logs, one password secret per database role and one pseudonym key per
+# service, the database roles themselves, two sets of service accounts (live, with the daily Job's and the Scan Job's,
+# and owner previews), GitHub's deploy identities, the two public services, the preview migration job, the daily
+# expiry Job with the Cloud Scheduler job that starts it, and the Scan Jobs (warden-scan, and warden-scan-preview for
+# owner previews), which the service starts for a Lead's Scan. Safe to run again: it creates only what's missing, and
+# sets each setting to the value below whatever it was. README.md's "Setting up Google Cloud" says what it makes, and
+# why.
 #
 # Usage: [DRY_RUN=1] scripts/gcp-setup.sh <project-id> <instance>
 #        DRY_RUN=1 prints each command instead of running it, needs no credentials, and assumes nothing exists yet.
@@ -17,8 +18,9 @@
 #        <project-id> or unset), node, cloud-sql-proxy, and the server's dependencies
 #        (pnpm install): the roles step runs server/src/roles.ts from this machine.
 #
-# No secret value is printed, logged or written to a file: each password is generated in a pipe straight into
-# `gcloud secrets create --data-file=-`, and read back only into the one roles process's environment.
+# No secret value is printed, logged or written to a file: each password and key is generated in a pipe straight into
+# `gcloud secrets create --data-file=-`; a password is read back only into the one roles process's environment, and a
+# key never.
 set -euo pipefail
 
 readonly REGION=europe-west1
@@ -42,15 +44,27 @@ readonly SECRET_READS_SERVICE=secretmanager.googleapis.com
 # Cloud SQL's docs: "the transaction log retention setting must be less than the backup retention setting".
 readonly BACKUPS=7
 readonly LOG_DAYS=6
-# The database passwords the script generates: each set's app and migration roles, and the live admin role's, which
-# only the daily Job reads. (Assigned, then made readonly: the form bash 3.2 accepts.)
+# The secrets the script generates: the database passwords (each set's app and migration roles, and the live admin
+# role's, which only the daily Job reads), and the hook's pseudonym keys (#185), the live service's and a preview's
+# own. The keys are never rotated: a new key gives every developer a new pseudonym, so their earlier Agent sessions
+# no longer match. (Assigned, then made readonly: the form bash 3.2 accepts.)
 GENERATED_SECRETS=(warden-db-app-password warden-db-migrate-password warden-db-preview-app-password
-  warden-db-preview-migrate-password warden-db-admin-password)
+  warden-db-preview-migrate-password warden-db-admin-password warden-pseudonym-key warden-preview-pseudonym-key)
 readonly GENERATED_SECRETS
+# What the owner makes by hand, checked before any change: the instance's postgres password and Clerk's three, which
+# use automatic replication (checked live, #65), and the read-only GitHub app's two (#132's steps), which the live
+# service reads.
+HAND_MADE_SECRETS=(warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key
+  warden-github-app-client-secret warden-github-app-private-key)
+readonly HAND_MADE_SECRETS
 # The write GitHub app's two (#334), made by hand and optional: it opens Fix PRs, and only the two services read it.
 # The write app is both or neither: preflight stops on one alone.
 WRITE_APP_SECRETS=(warden-github-write-app-client-secret warden-github-write-app-private-key)
 readonly WRITE_APP_SECRETS
+# The Judge's three (#482), made by hand and required: the OpenRouter key a Judge run calls the model with, and the
+# Langfuse keys it traces with. Only the two Scan Jobs' accounts read them.
+JUDGE_SECRETS=(warden-openrouter-api-key warden-langfuse-public-key warden-langfuse-secret-key)
+readonly JUDGE_SECRETS
 # The repository this script is in: the roles step runs its server/src/roles.ts.
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 readonly ROOT
@@ -356,9 +370,8 @@ preflight() {
   # What the owner makes by hand, checked before any change.
   exists gcloud sql instances describe "$instance" --project="$project" ||
     missing+=("Cloud SQL instance $instance")
-  # The GitHub app's two (#132's steps) are made by hand too: the live service reads them.
-  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-    warden-github-app-client-secret warden-github-app-private-key; do
+  # So are the Judge's three (#482), which the Scan Jobs read.
+  for secret in ${HAND_MADE_SECRETS[@]+"${HAND_MADE_SECRETS[@]}"} ${JUDGE_SECRETS[@]+"${JUDGE_SECRETS[@]}"}; do
     exists gcloud secrets describe "$secret" --project="$project" || missing+=("secret $secret")
   done
   # The write app's two: both, and it's granted; neither, and Fix PRs stay off (step 10 says so); one alone stops here.
@@ -607,8 +620,8 @@ main() {
   note "Each secret's replication: warden-db-password, warden-clerk-secret, warden-clerk-publishable and" \
     "warden-clerk-jwt-key use automatic replication (made by hand); every other one should be user-managed," \
     "in $REGION only"
-  for secret in warden-db-password warden-clerk-secret warden-clerk-publishable warden-clerk-jwt-key \
-    warden-github-app-client-secret warden-github-app-private-key ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
+  for secret in ${HAND_MADE_SECRETS[@]+"${HAND_MADE_SECRETS[@]}"} ${JUDGE_SECRETS[@]+"${JUDGE_SECRETS[@]}"} \
+    ${GENERATED_SECRETS[@]+"${GENERATED_SECRETS[@]}"}; do
     run gcloud secrets describe "$secret" --format='yaml(name,replication)' --project="$project"
   done
   if [[ $write_app == yes ]]; then
@@ -663,11 +676,19 @@ main() {
   # (#188). It works inside one Team and lists none, so it never needs the admin password; and it never gets the
   # GitHub app's client secret, so it can't sign anyone in to GitHub.
   grant_secrets "$project" "$scan_sa" warden-db-app-password warden-github-app-private-key
+  # The Judge's three (#482): a Judge run, in the Scan Job, calls OpenRouter and traces to Langfuse. The Scan Jobs'
+  # accounts only, never a service's; a preview shares the key and the Langfuse project.
+  grant_secrets "$project" "$scan_sa" ${JUDGE_SECRETS[@]+"${JUDGE_SECRETS[@]}"}
   grant_secrets "$project" "$preview_run_sa" warden-clerk-secret warden-clerk-jwt-key warden-db-preview-app-password
   grant_secrets "$project" "$preview_run_sa" warden-github-app-client-secret warden-github-app-private-key
   grant_secrets "$project" "$preview_migrate_sa" warden-db-preview-migrate-password
   # warden-preview-scan (the preview Scan Job, #275): warden-scan's twin, with the preview app password.
   grant_secrets "$project" "$preview_scan_sa" warden-db-preview-app-password warden-github-app-private-key
+  grant_secrets "$project" "$preview_scan_sa" ${JUDGE_SECRETS[@]+"${JUDGE_SECRETS[@]}"}
+  # The pseudonym keys (#185): each service reads its own and no other account either, so a preview's pseudonyms can't
+  # be matched against live ones. No Scan Job reads the hook.
+  grant_secrets "$project" "$run_sa" warden-pseudonym-key
+  grant_secrets "$project" "$preview_run_sa" warden-preview-pseudonym-key
   # The write app's two (#334): the two services only, which open Fix PRs; a preview shares the live write app
   # (#224). Never a Scan Job, so Scans stay read-only.
   if [[ $write_app == yes ]]; then
@@ -755,10 +776,13 @@ main() {
     --http-method=POST --oauth-service-account-email="$scheduler_sa" --project="$project"
   # The Scan Job (ADR 0009): a release gives it Warden's image and settings. The service starts each execution with
   # the Scan's id and Team as an env override, which run.invoker can't pass: warden-run gets
-  # run.jobsExecutorWithOverrides on this Job only.
+  # run.jobsExecutorWithOverrides on this Job only. The daily Job's Guard step (#499) starts a Judge run the same way
+  # for each missed Agent session, so warden-daily gets it too, on this Job only, never a preview Job's.
   ensure_job "$project" "$SCAN_JOB" "$scan_sa"
   run_retrying gcloud run jobs add-iam-policy-binding "$SCAN_JOB" --region="$REGION" \
     --member="serviceAccount:$run_sa" --role=roles/run.jobsExecutorWithOverrides --project="$project"
+  run_retrying gcloud run jobs add-iam-policy-binding "$SCAN_JOB" --region="$REGION" \
+    --member="serviceAccount:$daily_sa" --role=roles/run.jobsExecutorWithOverrides --project="$project"
   # The preview Scan Job (#275): a preview deploy gives it the preview's image and settings, so warden-preview-deploy
   # gets run.developer on it; the preview service starts its executions as warden-preview-run.
   ensure_job "$project" "$PREVIEW_SCAN_JOB" "$preview_scan_sa"
@@ -795,6 +819,8 @@ main() {
     note "Fix PRs stay off: the write app's secrets ${WRITE_APP_SECRETS[0]} and ${WRITE_APP_SECRETS[1]} don't exist." \
       "Make both (README.md, \"Granting write access\"), then run this script again"
   fi
+  # The Judge's three exist (preflight checked them), so the Scan Jobs may pin them: a deploy does once it's set (#482).
+  print_command gh variable set WARDEN_JUDGE_KEYS --body on --repo "$GITHUB_REPO"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

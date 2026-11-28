@@ -42,6 +42,7 @@ import { FixPrSection } from "./FixPrSection.tsx";
 import { PatchSection } from "./PatchSection.tsx";
 import { personName, type ClerkUser } from "./person-name.ts";
 import type { ProposalsResult } from "./proposals.ts";
+import { SessionSection } from "./SessionSection.tsx";
 import { SeverityPill } from "./SeverityPill.tsx";
 
 /** What a person can do from the card. Each but approve opens a form. */
@@ -509,6 +510,15 @@ export function DetailCard(props: {
           </>
         )}
       </dl>
+      {finding.asset.kind === "agent_session" && finding.evidence.session && (
+        // The evidence is the Finding's own; only the session record is asked.
+        <SessionSection
+          finding={finding}
+          session={finding.evidence.session}
+          getToken={getToken}
+          onSessionEnded={props.onSessionEnded}
+        />
+      )}
       {finding.module === "patch" && (
         // Keyed by what a decision changes, so the section asks again after one and drops the earlier ask's answer.
         <PatchSection

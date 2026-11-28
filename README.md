@@ -33,6 +33,24 @@ You need Node 24, pnpm 10 (`corepack enable pnpm` runs the version `package.json
    The JWT key is the JWKS Public Key (PEM) on the Clerk Dashboard's API keys page; with it, the server checks
    session tokens without calling Clerk.
 
+   Then make the agent hook's pseudonym key (once), piped straight into the keyring, so it's never shown:
+
+   ```sh
+   openssl rand -hex 32 | secret-tool store --label "Warden pseudonym key (local)" service warden-pseudonym-key
+   ```
+
+   This local key is apart from the live and preview ones, which `scripts/gcp-setup.sh` makes in Secret Manager
+   ("Setting up Google Cloud"). It's optional: without it the server runs, and only the hook endpoint answers 503.
+
+   For the Judge, its OpenRouter key and, optionally, the Langfuse project's two keys it traces with (Langfuse's
+   project settings, API keys; leave both out and no trace is sent):
+
+   ```sh
+   secret-tool store --label "Warden OpenRouter API key" service warden-openrouter-api-key
+   secret-tool store --label "Warden Langfuse public key" service warden-langfuse-public-key
+   secret-tool store --label "Warden Langfuse secret key" service warden-langfuse-secret-key
+   ```
+
 2. `direnv allow`: the committed `.envrc` loads the keys from the keyring and points the `PG*` variables at the
    compose database. `.env.example` lists every variable Warden reads.
 3. `docker compose up -d --wait`: Postgres 17 with pgvector on `127.0.0.1:54329`, trust auth (no password).
@@ -129,7 +147,10 @@ Findings (one Patch Scan per Product, against the loaded CVE snapshot, plus the 
 logs one summary line. Before `load-cves` has run, each Patch Scan fails without changing a Finding, so the Job exits
 1 when any Team has a Product, or a deleted Product's Findings, to scan. `warden_admin`'s one grant is select on
 `teams (id)`: every other table refuses it. Where `PGPASSWORD` is set, the Job also needs `WARDEN_ADMIN_PASSWORD`; it
-never sends the app's password as the admin's.
+never sends the app's password as the admin's. Guard's step then deletes Agent events received over 7 days ago and
+starts a Judge run for each missed Agent session, at most 50 per Team. Locally each run is a child process, one at a
+time, given the shell's `OPENROUTER_API_KEY` and Judge variables, so it calls the model as the server's runs do. On
+Cloud Run the daily Job holds no model key: it starts the Scan Job, which reads its own.
 `GET /api/health` answers 200 when the database answers and offers the `vector` extension, and 503 naming the
 failed part otherwise.
 
@@ -205,6 +226,149 @@ Only an Admin grants write access; a Lead or a Member sees "An Admin grants writ
 "Linking GitHub on a preview" says for the read app: `<preview URL>/setup/github/write/callback`. The write app's
 Setup URL is the live dashboard's, so after an install note the `installation_id` in that address and open
 `<preview URL>/setup/github/write?installation_id=<id>` on the preview.
+
+## Turning on the agent hook
+
+Guard records each developer's Claude Code sessions through a hook that Claude Code's managed settings turn on, on
+every laptop. An Admin sets it up from Setup's "Agent hook" section; a Lead or a Member sees "An Admin turns on the
+agent hook."
+
+The hook needs Warden's pseudonym key (`WARDEN_PSEUDONYM_KEY`): without it, the hook endpoint answers 503 ("The hook
+isn't set up here") and stores nothing. Locally it's in the keyring ("Local setup", step 1); the live service and the
+owner previews each read their own from Secret Manager ("Setting up Google Cloud").
+
+1. **Issue the token, and copy it at once.** Choose **Issue a hook token**. Setup shows the token this once, with
+   **Copy token**: Warden keeps only its hash, so after a reload it's gone, and the only way to a new one is to rotate.
+2. **Pick the Privacy tier.** Metadata sends tool names and outcomes; Details (the default) adds commands, file paths
+   and URLs; Content adds tool output and prompts. The tier is the Team's, and Warden applies it to each event it
+   stores.
+3. **Copy the block into every laptop's managed settings.** Choose **Copy block**: while Setup still shows the token,
+   the block holds it; otherwise it holds a placeholder for the token you copied. Paste it as Claude Code's managed
+   settings file, which takes precedence over each developer's own settings:
+   - macOS: `/Library/Application Support/ClaudeCode/managed-settings.json`
+   - Linux and WSL: `/etc/claude-code/managed-settings.json`
+   - Windows: `C:\Program Files\ClaudeCode\managed-settings.json`
+
+   The block sends the laptop's `USER` as `X-Warden-Developer`: Warden stores only a pseudonym of it, never the name.
+   Windows sets `USERNAME`, not `USER`, so a Windows laptop sends no developer unless `USER` is set there, and its
+   sessions are stored without a pseudonym.
+   Moving the tier to or from Content changes the block (Content adds the prompt event), so paste it again on every
+   laptop after such a change.
+4. **Rotate a token that leaked.** Choose **Rotate the hook token** and paste the new block. The token before it keeps
+   working for 24 hours, so laptops can catch up. Rotating again inside those 24 hours stops that older token at once
+   (Setup asks first): laptops that haven't got the current token stop sending.
+
+### The Judge's own model
+
+By default the Judge calls OpenRouter. An Admin can point the Team's Judge at a model the Team runs itself instead:
+an OpenAI-compatible base URL and a model name. Then the Judge sends the Team's events to that URL, with no key, and
+sends nothing to OpenRouter. Set it on Setup's "Judge's model" section, signed in as the Team's Admin: type the URL
+and the model name, and Save. "Use OpenRouter" clears it, putting the Team back on OpenRouter. The URL
+must be https, with no user name, query or fragment, at most 2,048 characters once encoded, on a host whose every
+address is public; a refusal says why.
+Each call connects only to the address it checked, and never follows a redirect.
+
+**Locally,** with Ollama on the same machine, `.envrc` sets `WARDEN_JUDGE_LOCALHOST=1`, which also accepts
+`http://localhost:11434/v1` (or `127.0.0.1`, `[::1]`). It's for local development only: on Cloud Run it stops the
+server and the Scan Job at start.
+
+**What the Judge may spend.** On OpenRouter, a Team may spend $1 a day (UTC) on Judge calls. Once it has, the Judge
+makes no more calls that day: the Team's ended sessions stay unjudged, their events kept, and the run logs "the
+Team's daily spending limit is reached". Each run makes at most two calls (one retry when the first times out, loses
+its connection, or answers 429 or 5xx) and sends at most about 30,000 tokens; a longer session is judged on its last
+events, and its Findings say how many were read. Each call reserves its cost before it's made, so two runs at once
+can't both spend the Team's last cents; the limit can still be passed by the one call that crosses it. A Team's own
+model costs Warden nothing, so its calls don't count toward the $1. Warden's operator also sets a cap on the
+OpenRouter key itself, at OpenRouter.
+
+**Text addressed to the Judge.** When an event the Judge reads tells a judge or reviewer to ignore its instructions,
+mark the session safe or report nothing, Warden reports a Medium `guard/judge-steering-text` Finding citing those
+events itself, whatever the model answered, so the session is flagged even when the model obeys.
+
+**Traces.** With Langfuse's keys set (`LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`), each Judge run on OpenRouter
+sends Langfuse Cloud (EU region, or `LANGFUSE_BASE_URL`) one trace of metadata only: the Team id and the run's outcome,
+and for each call its model, tokens, cost, times and outcome. Never an event, the prompt, the model's answer, a
+summary, the session id or the developer's pseudonym. A trace Langfuse refuses or doesn't answer within 5 seconds is
+logged as `judge trace not sent` and changes nothing. With neither key, no trace is sent; with only one, the run
+stops, naming the missing one.
+
+## The Judge's eval
+
+The Judge is measured on a fixed set of labelled Agent sessions: one JSON file per case in
+`server/test/session-fixtures/eval/`, each with its group, its split (`dev` or `held-out`), its Privacy tier and the
+Judge Rules a correct run flags. The pass targets sit beside them in `targets.json`, fixed before any run.
+
+**[The eval report](docs/eval/report.md)** shows the results so far: the case set and why, the criteria, each run's
+score and failing cases, what each run changed and why, the regressions between runs, the held-out score and the cost.
+
+**Recording an ordinary case.** `pnpm --filter @warden/server eval:record -- <case-name> <repo-name>
+<metadata|details|content> <short|medium|long> "<task>"` runs a real `claude -p` session on a Seeded org repo, on the
+Claude subscription, and writes its hook events as a new case labelled clean, with its split and `stands_for` left
+for you to set.
+
+**Running it.** `pnpm --filter @warden/server eval:judge` replays each case through the hook endpoint of a local
+Warden, runs the real Judge on it and adds one line per (model, case) to the results file. It reads:
+
+| Variable | What it sets |
+|---|---|
+| `WARDEN_EVAL_LOCAL_MODELS` | local models, comma-separated, run first (`qwen3:8b`) |
+| `WARDEN_EVAL_LOCAL_URL` | their OpenAI-compatible base URL (`http://localhost:11434/v1`) |
+| `WARDEN_EVAL_OPENROUTER_MODELS` | OpenRouter models, with `OPENROUTER_API_KEY` |
+| `WARDEN_EVAL_RESULTS` | the JSON Lines results file (required); a relative path is taken from where pnpm runs |
+| `WARDEN_EVAL_SPLIT` | `dev`, `held-out` or `all` (the default) |
+| `WARDEN_EVAL_CASES` | only these cases, comma-separated |
+
+A run needs a throwaway Postgres, as the server's tests do: the test setup refuses the owner's database port (see
+"Running the tests locally" under "Checks"), so start one and pass its `PGHOST` and `PGPORT`. A run carries on from
+its results file: a (model, case) already saved without an error isn't run again.
+
+**A run with `WARDEN_EVAL_OPENROUTER_MODELS` is paid,** so it runs only on the owner's yes, with a cost estimate first.
+The harness keeps its own ledger and stops before a case that could take OpenRouter's spending past
+`EVAL_PAID_CAP_USD` ($5), counting what the results file already spent. Local models cost nothing.
+
+**Scoring.** `pnpm --filter @warden/server eval:score -- <results.jsonl>` prints each model's score per split, and
+each target met or missed, from a saved file, with no database and no model.
+
+**Re-rendering the report.** `pnpm --filter @warden/server eval:report` writes `docs/eval/report.md` from the run
+list, `docs/eval/runs.json`, and the results files it names in `docs/eval/results/`, with no database and no model.
+The numbers come from the results files; what each run changed, why, and which model and change were kept are written
+in the run list. After a new run, add it to the end of `runs.json` first (its results file, any `flip_reruns` files
+from `eval:regressions` below, its commit, its change and its notes), then render the report and commit both. A test
+fails when the committed report differs from a fresh render. `eval:report -- <runs.json> <report.md>` renders another
+run list, and its header names that run list. A wrong argument or a bad file exits 2 and writes nothing: so does a
+report path that is one of the files it reads, whether named as it is, through a link or through a hard link, an empty
+results file, and a run's results file missing a case for a model in it (a save that stopped partway).
+
+**Regressions.** `pnpm --filter @warden/server eval:regressions -- <earlier.jsonl> <later.jsonl>` lists, for each
+model in both files, each case that passed in the earlier and fails in the later, with the Rules it missed or flagged
+beyond its labels (or its error), and prints the line that reruns those cases once on that model alone, to run as
+printed from where you ran `eval:regressions`. Its new results file goes in the later file's folder, named by the
+provider, the model and when `eval:regressions` ran (`rerun-<provider>-<model>-<time>.jsonl`: the harness skips a
+case its results file already holds, so each run names a new one). A local model's line starts with
+`WARDEN_EVAL_LOCAL_URL`: your own when it's set for `eval:regressions`, otherwise `http://localhost:11434/v1`. From the
+repo root, on two files in `docs/eval/results/`:
+
+```sh
+WARDEN_EVAL_LOCAL_URL=http://localhost:11434/v1 WARDEN_EVAL_RESULTS=docs/eval/results/rerun-local-qwen3-8b-20261128T100000.000Z.jsonl WARDEN_EVAL_LOCAL_MODELS=qwen3:8b WARDEN_EVAL_CASES=<case>,<case> pnpm --filter @warden/server eval:judge
+```
+
+A path or URL the shell would split (a space, `$`, a quote) is single-quoted in the line.
+
+An OpenRouter model's line ends with `(paid: OpenRouter — needs the owner's yes)`: it's a paid run, and the shell
+refuses the line as it is, so drop the note only once the owner has said yes.
+
+A case in only one file is listed under "not in both", not as a regression. It exits 1 when a case broke, 0 when none
+did, and 2 at a wrong argument, a missing or bad file, or no model in both files.
+
+**The demo's live attack.** `WARDEN_REPLAY_URL=<warden> WARDEN_HOOK_TOKEN=<token> pnpm --filter @warden/server
+eval:replay` posts the case marked `replay` (`sends-secrets-plain-pastebin`: an agent that reads `.env` and posts its
+AWS key to a pastebin) to that Warden's hook endpoint, as the managed-settings block sends it at the case's tier
+(Content), under a new session (`replay-<uuid>`) and the developer `demo`. Warden stores each event at the receiving
+Team's Privacy tier, not the case's, so first set that Team's Privacy tier in Setup to **Content**: at Details or
+Metadata it drops the tool output and prompts the case was labelled with. It prints the session id and how
+many events it posted; that Warden then judges the session like any other. The URL must be https (http only for
+`localhost` or `127.0.0.1`), and the token is the Team's hook token from Setup. Any answer but 204 stops it, printing the event and the status; it never prints the
+token or an event.
 
 ## CVE data
 
@@ -330,6 +494,20 @@ And these, made by hand:
   `warden-clerk-publishable` and `warden-clerk-jwt-key`;
 - the GitHub app's secrets `warden-github-app-client-secret` and `warden-github-app-private-key`, as #132's steps
   make them;
+- the Judge's three secrets: `warden-openrouter-api-key` (the OpenRouter key, with its $15 cap set at OpenRouter),
+  and `warden-langfuse-public-key` and `warden-langfuse-secret-key` (the Langfuse project's keys, from its project
+  settings, API keys). Make each in `europe-west1` only, from the keyring so the value is never shown:
+
+  ```sh
+  secret-tool lookup service warden-openrouter-api-key | gcloud secrets create warden-openrouter-api-key \
+    --replication-policy=user-managed --locations=europe-west1 --data-file=- --project=<project-id>
+  ```
+
+  and the same for the two Langfuse keys. The script grants all three to the Scan Jobs' accounts only
+  (`warden-scan` and `warden-preview-scan`), and prints the `WARDEN_JUDGE_KEYS` variable's line. With that
+  repository variable set, each release, rollback and preview pins them on the Scan Jobs as `OPENROUTER_API_KEY`,
+  `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`; unset, as until the three exist, a deploy pins none of them, and a
+  Judge run stops with a config error naming `OPENROUTER_API_KEY`. Previews share the key and the Langfuse project;
 - optionally, the write app's secrets `warden-github-write-app-client-secret` and
   `warden-github-write-app-private-key` ("Granting write access" says how). The script checks them with the rest,
   before it changes anything. With both, it grants them to `warden-run` and `warden-preview-run` and prints the
@@ -352,7 +530,7 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 | Artifact Registry | the Docker repositories `warden` (releases) and `warden-preview` (owner previews), in `europe-west1` |
 | Cloud SQL | the databases `warden` and `warden_preview`; daily backups, 7 kept; point-in-time recovery with 6 days of logs (Cloud SQL's docs ask for fewer log days than backups); no authorized networks, connectors required, and encrypted connections only (`--ssl-mode=ENCRYPTED_ONLY`) |
 | Logging | the `_Default` log bucket keeps 30 days; Data Access audit logs (`DATA_READ`) for Secret Manager only, so each read of a secret is recorded |
-| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-admin-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. It then prints all eleven secrets' replication, and the write app's two when they exist |
+| Secrets | `warden-db-app-password`, `warden-db-migrate-password`, `warden-db-admin-password`, `warden-db-preview-app-password` and `warden-db-preview-migrate-password`, and the agent hook's pseudonym keys `warden-pseudonym-key` (the live service's) and `warden-preview-pseudonym-key` (the owner previews' own), each a random value piped straight into Secret Manager (never printed or written to a file), stored in `europe-west1` only. A secret that exists is left alone. The pseudonym keys are never rotated: a new key gives every developer a new pseudonym, so their earlier sessions no longer match. It then prints all sixteen secrets' replication (the Judge's three included), and the write app's two when they exist |
 | Database roles | run from your machine, as `postgres`, through the Cloud SQL Auth Proxy on a free local port: `server/src/roles.ts` makes the live roles (`warden_migrate`, `warden_app`, `warden_admin`) on `warden`, with their three passwords, then the preview roles (`warden_preview_migrate`, `warden_preview_app`, `warden_preview_admin`) on `warden_preview`, with the app and migrate passwords only: no preview Job runs as it, so `warden_preview_admin` can't log in. Each database lets only its own set connect. The passwords go from Secret Manager into that one process's environment only; the proxy is stopped when the script ends, also on failure. No service account reads the `postgres` password, so **rerun the script after a change to `createRoles`** |
 | Service accounts | none has a key. See the table below |
 | Workload Identity Federation | the pool `github` and its provider `warden`, which admits only the repository you name, by its numeric id, only a push or a manual dispatch, and only on its `main` and `preview/*` branches. The provider maps each token to its repository id and branch kind (`attribute.deploy`, such as `<repo-id>:main`): only this repository's `main` tokens may act as `warden-deploy`, and only its `preview/*` tokens as `warden-preview-deploy`, so a token from another repository can never match, even through another provider in the pool |
@@ -364,14 +542,14 @@ the `warden_preview` database, and nothing in it can act as a live account or ro
 
 | Account | Used by | May |
 |---|---|---|
-| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (it and `warden-preview-run` are the only accounts that read the GitHub app's client secret, which signs people in); when they exist, `warden-github-write-app-client-secret` and `warden-github-write-app-private-key`, for Fix PRs; start `warden-scan` with an override (`roles/run.jobsExecutorWithOverrides` on that Job only) |
+| `warden-run` | the `warden` service | Cloud SQL client; read `warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (it and `warden-preview-run` are the only accounts that read the GitHub app's client secret, which signs people in); `warden-pseudonym-key`, the only account that reads it; when they exist, `warden-github-write-app-client-secret` and `warden-github-write-app-private-key`, for Fix PRs; start `warden-scan` with an override (`roles/run.jobsExecutorWithOverrides` on that Job only) |
 | `warden-migrate` | the live migration job | Cloud SQL client; read `warden-db-app-password` and `warden-db-migrate-password`. Not the `postgres` password |
 | `warden-daily` | the daily expiry Job `warden-daily-expiry` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-db-admin-password`. The only account that reads the admin password, so the server can't list Teams |
-| `warden-scan` | the Scan Job `warden-scan` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-github-app-private-key`, to read the Team's repos as the GitHub app. Never the admin password: it works inside one Team and lists none. Never the GitHub app's client secret, so it can't sign anyone in to GitHub |
+| `warden-scan` | the Scan Job `warden-scan` (the setup script makes it; each release updates its image) | Cloud SQL client; read `warden-db-app-password` and `warden-github-app-private-key`, to read the Team's repos as the GitHub app; and the Judge's `warden-openrouter-api-key`, `warden-langfuse-public-key` and `warden-langfuse-secret-key`, the only accounts that read them with `warden-preview-scan`. Never the admin password: it works inside one Team and lists none. Never the GitHub app's client secret, so it can't sign anyone in to GitHub |
 | `warden-deploy` | GitHub Actions on `main` | Cloud Run developer on the project; writer on the `warden` repository; act as `warden-run`, `warden-migrate`, `warden-daily` and `warden-scan`. Reads no secret |
-| `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (as `warden-run` does: previews share the live read-only GitHub app); when they exist, the write app's `warden-github-write-app-client-secret` and `warden-github-write-app-private-key` (previews share the live write app too); start `warden-scan-preview` with an override (on that Job only) |
+| `warden-preview-run` | the `warden-preview` service | Cloud SQL client; read `warden-db-preview-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and `warden-github-app-private-key` (as `warden-run` does: previews share the live read-only GitHub app); `warden-preview-pseudonym-key`, the only account that reads it (never the live key, so a preview's pseudonyms can't be matched against live ones); when they exist, the write app's `warden-github-write-app-client-secret` and `warden-github-write-app-private-key` (previews share the live write app too); start `warden-scan-preview` with an override (on that Job only) |
 | `warden-preview-migrate` | the `warden-migrate-preview` job | Cloud SQL client; read `warden-db-preview-migrate-password` only |
-| `warden-preview-scan` | the preview Scan Job `warden-scan-preview` (the setup script makes it; each preview updates its image) | Cloud SQL client; read `warden-db-preview-app-password` and `warden-github-app-private-key`. Never a live password, the admin password or the GitHub app's client secret |
+| `warden-preview-scan` | the preview Scan Job `warden-scan-preview` (the setup script makes it; each preview updates its image) | Cloud SQL client; read `warden-db-preview-app-password`, `warden-github-app-private-key` and the Judge's three (as `warden-scan` does). Never a live password, the admin password or the GitHub app's client secret |
 | `warden-preview-deploy` | GitHub Actions on `preview/*` | Cloud Run developer on the `warden-preview` service and the `warden-migrate-preview` and `warden-scan-preview` jobs only, never the project; writer on the `warden-preview` repository only; act as `warden-preview-run`, `warden-preview-migrate` and `warden-preview-scan` only. Reads no secret |
 | `warden-scheduler` | Cloud Scheduler | start `warden-daily-expiry` (`roles/run.invoker` on that Job), nothing else; reads no secret. The only account bound on the Job; `roles/run.developer` on the project (`warden-deploy`) and the project's owner also hold `run.jobs.run` |
 
@@ -426,12 +604,14 @@ GitHub repository that deploys (Warden's own: `coherent-bay-515713-r7`, `warden-
    service as `GITHUB_APP_CLIENT_ID`). The publishable key and the client id are public by design; their lines read
    them from your keyring when you paste them. With both write-app secrets in Secret Manager, it also prints
    `WARDEN_GITHUB_WRITE_APP_CLIENT_ID`'s line, the write app's client id, which switches Fix PRs on at the next
-   release or preview; without them it prints a note in its place, and Fix PRs stay off:
+   release or preview; without them it prints a note in its place, and Fix PRs stay off. Last comes
+   `WARDEN_JUDGE_KEYS`, which switches the Judge's three secrets on for the Scan Jobs at the next deploy (#482):
 
    ```sh
    gh variable set VITE_CLERK_PUBLISHABLE_KEY --body "$(secret-tool lookup service warden-clerk-publishable)" --repo <owner>/<repo>
    gh variable set WARDEN_GITHUB_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-app-client-id)" --repo <owner>/<repo>
    gh variable set WARDEN_GITHUB_WRITE_APP_CLIENT_ID --body "$(secret-tool lookup service warden-github-write-app-client-id)" --repo <owner>/<repo>
+   gh variable set WARDEN_JUDGE_KEYS --body on --repo <owner>/<repo>
    ```
 
 **Why the database keeps a public IP.** A private IP needs a VPC network, private services access and Direct VPC
@@ -491,7 +671,8 @@ replace the preview.
    migration or load stops the deploy before any revision exists.
 5. **The Scan Job:** `warden-scan-preview` gets the image and its settings afresh, as a release does for
    `warden-scan`, but as `warden-preview-scan` on `warden_preview` as `warden_preview_app`, with the preview app
-   password and the GitHub app's private key, both pinned (never its client secret). It comes before the revision, so
+   password and the GitHub app's private key, both pinned (never its client secret), and with `WARDEN_JUDGE_KEYS`
+   set, the Judge's three keys, pinned. It comes before the revision, so
    the revision's first Scan runs this image. If this fails, the run fails naming the Job and no revision is deployed:
    push again.
 6. **Deploy:** a `warden-preview` revision named `warden-preview-pre-<name>-<sha7>-<run>-<attempt>`, as
@@ -499,7 +680,9 @@ replace the preview.
    afresh, so none carries over from an earlier revision. Its `WARDEN_SCAN_JOB` names
    `projects/<project-id>/locations/europe-west1/jobs/warden-scan-preview`, which "Scan now" and a GitHub link start,
    and it gets the read-only GitHub app's settings as a release does: `GITHUB_APP_CLIENT_ID` from the repository
-   variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned. When the optional
+   variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY`, pinned. It always gets the agent
+   hook's `WARDEN_PSEUDONYM_KEY` from the previews' own `warden-preview-pseudonym-key`, pinned, never the live key; with
+   that secret missing, Cloud Run refuses the revision and the run fails. When the optional
    repository variable `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` is set, it also gets the write app's, which switch Fix PRs
    on: `GITHUB_WRITE_APP_CLIENT_ID` from it, and the secrets `GITHUB_WRITE_APP_CLIENT_SECRET` and
    `GITHUB_WRITE_APP_PRIVATE_KEY`, pinned (previews share the live write app). Unset or empty, it gets none of the
@@ -543,7 +726,8 @@ read into `warden_preview` only.
 **Secrets are pinned.** The revision and the jobs read their passwords and keys from Secret Manager by version
 number, never `latest`. The numbers live in `secret_version` in `scripts/lib/cloud-run.sh`. To move one: add the
 new version (`gcloud secrets versions add <secret> --data-file=-`), change its number there in a PR, merge it, then
-push a preview. Disable the old version only after no running revision reads it.
+push a preview. Disable the old version only after no running revision reads it. The two pseudonym keys never move:
+a new key gives every developer a new pseudonym.
 
 **Logs:** the workflow run on GitHub (Actions, "Preview"); the migration job's and the Scan Job's executions
 (`gcloud run jobs executions list --job warden-migrate-preview --region europe-west1`, and the same for
@@ -586,7 +770,8 @@ PRs on (step 4); unset or empty, the release runs with Fix PRs off.
    installation starts it too, for the first Scan of the linked repos, and uses one of the Team's hourly Scans; the
    link answers once the Job has started, which can take up to about 20 seconds. It also gets the GitHub app's
    settings: `GITHUB_APP_CLIENT_ID` from the repository variable, and the secrets `GITHUB_APP_CLIENT_SECRET` and
-   `GITHUB_APP_PRIVATE_KEY`, pinned. With the optional repository variable `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` set, it also
+   `GITHUB_APP_PRIVATE_KEY`, pinned, and the agent hook's `WARDEN_PSEUDONYM_KEY` from `warden-pseudonym-key`, pinned,
+   always. With the optional repository variable `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` set, it also
    gets the write app's, for Fix PRs: `GITHUB_WRITE_APP_CLIENT_ID` from it, and the secrets
    `GITHUB_WRITE_APP_CLIENT_SECRET` and `GITHUB_WRITE_APP_PRIVATE_KEY`, pinned; without it, none of the three. A
    preview's revision gets the same, naming `warden-scan-preview` instead (see "Owner previews"). A revision with no Scan Job starts no Scan when an installation is linked.
@@ -635,8 +820,8 @@ traffic meanwhile, it stops with traffic unchanged, and you dispatch it again if
 starts after a rollback moved the traffic releases forward from it, as any merge to `main` does.
 
 Secrets are pinned as for previews: see "Secrets are pinned" in "Owner previews" above. The live service reads
-`warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret` and
-`warden-github-app-private-key`, and the write app's `warden-github-write-app-client-secret` and
+`warden-db-app-password`, `warden-clerk-secret`, `warden-clerk-jwt-key`, `warden-github-app-client-secret`,
+`warden-github-app-private-key` and `warden-pseudonym-key`, and the write app's `warden-github-write-app-client-secret` and
 `warden-github-write-app-private-key` when `WARDEN_GITHUB_WRITE_APP_CLIENT_ID` is set; the migration job
 `warden-db-migrate-password`; the daily Job `warden-db-app-password` and `warden-db-admin-password`; the Scan Job
 `warden-db-app-password` and `warden-github-app-private-key`, never the client secret nor either of the write

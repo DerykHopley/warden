@@ -12,7 +12,13 @@
     "seed": "PGUSER=warden_app node src/seed.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "eval:rules": "vitest run --reporter=default test/rules-eval.test.ts"
+    "eval:rules": "vitest run --reporter=default test/rules-eval.test.ts",
+    "eval:record": "node test/judge-eval/record.ts",
+    "eval:judge": "WARDEN_EVAL=1 vitest run --reporter=default test/judge-eval-run.test.ts",
+    "eval:score": "node test/judge-eval/score-cli.ts",
+    "eval:regressions": "node test/judge-eval/regressions-cli.ts",
+    "eval:report": "node test/judge-eval/report-cli.ts",
+    "eval:replay": "node test/judge-eval/replay.ts"
   },
   "dependencies": {
     "@clerk/backend": "^3.32.0",

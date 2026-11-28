@@ -2,6 +2,7 @@
 // so a missing one stops the server at start rather than at its first query.
 import { createPrivateKey } from "node:crypto";
 import { z } from "zod";
+import { DEFAULT_LANGFUSE_BASE_URL, type LangfuseSettings } from "./langfuse.ts";
 
 /** Clerk's Frontend API host, which a publishable key carries as base64 of `<host>$`. */
 function frontendApiHost(publishableKey: string): string | undefined {
@@ -55,6 +56,12 @@ const Env = z.object({
   WARDEN_SCAN_JOB: optional.refine((value) => value === undefined || JOB_NAME.test(value), {
     message: "isn't projects/<project>/locations/<region>/jobs/<job>",
   }),
+  /** The key every Team's pseudonym key is derived from (docs/data.md, "The pseudonym"): 64 hex digits. */
+  WARDEN_PSEUDONYM_KEY: optional
+    .refine((value) => value === undefined || /^[0-9a-f]{64}$/i.test(value), {
+      message: "isn't 64 hex digits",
+    })
+    .transform((value) => (value === undefined ? undefined : Buffer.from(value, "hex"))),
 });
 
 /** The App's private key as GitHub downloads it (PKCS#1 PEM): it signs the App's JWTs, so it must be RSA. */
@@ -137,7 +144,24 @@ export type Config = {
   github: GitHubAppSettings | undefined;
   /** The write GitHub App, which Fix PRs go through with a Team's write grant; unset, none can be opened. */
   githubWrite: GitHubAppSettings | undefined;
+  /** The pseudonym key's 32 bytes, which the hook endpoint derives each Team's key from; unset, it answers 503. */
+  pseudonymKey: Buffer | undefined;
+  /** WARDEN_JUDGE_LOCALHOST: an Admin may name a local Judge model on localhost (local development only). */
+  judgeLocalhost: boolean;
 };
+
+/**
+ * WARDEN_JUDGE_LOCALHOST, which lets a Team's own Judge model be on `localhost`, `127.0.0.1` or `[::1]`: `1` turns it
+ * on, unset or empty leaves it off, and any other value throws ConfigError naming it. On Cloud Run (K_SERVICE in a
+ * service, CLOUD_RUN_JOB in a Job's container) it throws too, so the live app never runs with it.
+ */
+function readJudgeLocalhost(env: Record<string, string | undefined>): boolean {
+  const value = env.WARDEN_JUDGE_LOCALHOST || undefined;
+  if (value === undefined) return false;
+  const onCloudRun = Boolean(env.K_SERVICE) || Boolean(env.CLOUD_RUN_JOB);
+  if (value !== "1" || onCloudRun) throw new ConfigError(["WARDEN_JUDGE_LOCALHOST"]);
+  return true;
+}
 
 /** A GitHub App's settings: its client id and secret, and the private key it signs its JWTs with. */
 export type GitHubAppSettings = { clientId: string; clientSecret: string; privateKey: string };
@@ -171,6 +195,7 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
   if (behindCloudRun && data.CLERK_AUTHORIZED_PARTIES === undefined) {
     throw new ConfigError(["CLERK_AUTHORIZED_PARTIES"]);
   }
+  const judgeLocalhost = readJudgeLocalhost(present);
   return {
     port: data.PORT,
     behindCloudRun,
@@ -183,6 +208,8 @@ export function loadConfig(env: Record<string, string | undefined>): Config {
     },
     github: github.settings,
     githubWrite: githubWrite.settings,
+    pseudonymKey: data.WARDEN_PSEUDONYM_KEY,
+    judgeLocalhost,
   };
 }
 
@@ -215,4 +242,53 @@ export function gitHubReaderSettings(
     throw new ConfigError([...new Set(parsed.error.issues.map((issue) => String(issue.path[0])))]);
   }
   return parsed.data;
+}
+
+/** Claude Haiku 5.5's OpenRouter slug (openrouter.ai/api/v1/models): the Judge's model unless WARDEN_JUDGE_MODEL names one. */
+export const DEFAULT_JUDGE_MODEL = "anthropic/claude-haiku-5.5";
+
+/**
+ * The key and model a Judge run calls OpenRouter with, whether a Team's own model may be on localhost
+ * (WARDEN_JUDGE_LOCALHOST), and the Langfuse project its traces go to (none: no tracing).
+ */
+export type JudgeSettings = {
+  apiKey: string | undefined;
+  model: string;
+  allowLocalhost: boolean;
+  langfuse: LangfuseSettings | undefined;
+};
+
+/**
+ * LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, with LANGFUSE_BASE_URL or Langfuse's EU region: undefined with neither
+ * key, so nothing is traced and the base URL isn't read. One key without the other, or with the keys a base URL that
+ * isn't https, throws ConfigError naming the variable, never its value.
+ */
+function readLangfuse(env: Record<string, string | undefined>): LangfuseSettings | undefined {
+  const publicKey = env.LANGFUSE_PUBLIC_KEY || undefined;
+  const secretKey = env.LANGFUSE_SECRET_KEY || undefined;
+  if (publicKey === undefined && secretKey === undefined) return undefined;
+  const baseUrl = env.LANGFUSE_BASE_URL || DEFAULT_LANGFUSE_BASE_URL;
+  if (!URL.canParse(baseUrl) || new URL(baseUrl).protocol !== "https:") {
+    throw new ConfigError(["LANGFUSE_BASE_URL"]);
+  }
+  if (publicKey === undefined) throw new ConfigError(["LANGFUSE_PUBLIC_KEY"]);
+  if (secretKey === undefined) throw new ConfigError(["LANGFUSE_SECRET_KEY"]);
+  return { publicKey, secretKey, baseUrl };
+}
+
+/**
+ * The Scan Job's settings for a Judge run: OPENROUTER_API_KEY, WARDEN_JUDGE_MODEL or `DEFAULT_JUDGE_MODEL`,
+ * WARDEN_JUDGE_LOCALHOST, read as `loadConfig` reads it (a bad value, or one on Cloud Run, throws ConfigError), and the
+ * LANGFUSE_* variables (`readLangfuse`). An
+ * empty value counts as unset, as in `loadConfig`. An unset key isn't refused here: the run refuses it after reading
+ * the session, before it reserves anything for its model call, so a session with nothing to judge (or one judged by
+ * the Team's own model) runs without it.
+ */
+export function judgeSettings(env: Record<string, string | undefined>): JudgeSettings {
+  return {
+    apiKey: env.OPENROUTER_API_KEY || undefined,
+    model: env.WARDEN_JUDGE_MODEL || DEFAULT_JUDGE_MODEL,
+    allowLocalhost: readJudgeLocalhost(env),
+    langfuse: readLangfuse(env),
+  };
 }

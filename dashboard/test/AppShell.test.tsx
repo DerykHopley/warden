@@ -30,6 +30,7 @@ const overview = (team = "org_a") =>
     last_scan_at: null,
     has_findings: false,
     period_days: 30,
+    agent_sessions: { hook_active: false, judged: 0, needs_human_review: 0 },
     open_at_start: 0,
     open_now: 0,
     fix_rate: { fixed: 0, of: 0 },
@@ -411,6 +412,14 @@ describe("a Catalogue switch on Setup under way across a Team switch", () => {
       writeApp: () => json(200, { slug: "warden-writer", client_id: "Iv23li-writer" }),
       writeGrant: () => json(200, { installations: [] }),
       repos: () => json(200, { repos: [] }),
+      hook: () =>
+        json(200, {
+          token: null,
+          previous_valid_until: null,
+          privacy_tier: "details",
+          managed_settings: { hooks: {} },
+        }),
+      judgeModel: () => json(200, { local_model: null }),
       catalogues: () => {
         const team = clerk.auth.orgId ?? "";
         reads[team] = (reads[team] ?? 0) + 1;

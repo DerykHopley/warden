@@ -2,8 +2,8 @@
 # What the Cloud Run deploy and rollback scripts share: the region, the daily Job and the Scan Job and how each is
 # configured, the pinned secret versions, the service's URLs and serving revision, and the health check. Sourced,
 # never run; the script sets PROGRAM (its name, for messages) and USAGE first, GCP_PROJECT_ID and
-# CLOUD_SQL_CONNECTION before calling anything that reaches gcloud, and WARDEN_GITHUB_APP_CLIENT_ID before
-# update_scan_job.
+# CLOUD_SQL_CONNECTION before calling anything that reaches gcloud, and WARDEN_GITHUB_APP_CLIENT_ID (and, once the
+# Judge's three secrets exist, WARDEN_JUDGE_KEYS) before update_scan_job.
 #
 # Every secret is a reference to a pinned version (secret_version below), never `latest` (ADR 0009): a new version
 # reaches a revision or a job only through a PR that moves its number here.
@@ -19,7 +19,8 @@ readonly SCAN_JOB=warden-scan
 readonly SCAN_ACCOUNT=warden-scan
 
 # Secret Manager versions the deploys read, one per secret: the only place a version number lives. gcp-setup.sh makes
-# each generated password as version 1; check a hand-made secret's with `gcloud secrets versions list <secret>`.
+# each generated password and pseudonym key as version 1 (a key never gets a second: #185); check a hand-made secret's
+# with `gcloud secrets versions list <secret>`.
 secret_version() {
   case $1 in
     warden-db-app-password) echo 1 ;;
@@ -33,6 +34,11 @@ secret_version() {
     warden-github-app-private-key) echo 1 ;;
     warden-github-write-app-client-secret) echo 1 ;;
     warden-github-write-app-private-key) echo 1 ;;
+    warden-pseudonym-key) echo 1 ;;
+    warden-preview-pseudonym-key) echo 1 ;;
+    warden-openrouter-api-key) echo 1 ;;
+    warden-langfuse-public-key) echo 1 ;;
+    warden-langfuse-secret-key) echo 1 ;;
     *)
       echo "$PROGRAM: no pinned version for the secret $1" >&2
       exit 1
@@ -132,14 +138,16 @@ update_job() {
     --project="$GCP_PROJECT_ID"
 }
 
-# <image>: the daily Job (ADR 0009) runs that image. The Cloud Scheduler job that starts it is left alone. Returns
-# gcloud's status.
+# <image>: the daily Job (ADR 0009) runs that image. The Cloud Scheduler job that starts it is left alone. Guard's step
+# in it starts a Judge run as an execution of the live Scan Job for each missed Agent session (#499), so it names that
+# Job in WARDEN_SCAN_JOB; it keeps no model or Langfuse key, as the run reads its own. Returns gcloud's status.
 update_daily_job() {
   local app_password admin_password
   app_password=$(pinned warden-db-app-password) || exit 1
   admin_password=$(pinned warden-db-admin-password) || exit 1
   update_job "$DAILY_JOB" "$1" "$DAILY_ACCOUNT" server/src/daily-expiry.ts warden warden_app \
-    "$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")"
+    "$(dict "PGPASSWORD=$app_password" "WARDEN_ADMIN_PASSWORD=$admin_password")" \
+    "WARDEN_SCAN_JOB=$(scan_job_name "$SCAN_JOB")"
 }
 
 # <job>: a Scan Job's resource name, as a revision's WARDEN_SCAN_JOB holds it.
@@ -151,19 +159,33 @@ scan_job_name() { echo "projects/$GCP_PROJECT_ID/locations/$REGION/jobs/$1"; }
 # execution's override holds only a Scan id and a Team; the Job works inside that Team, as the app role, so it gets the
 # app password, never the admin password or a Clerk key. It reads the Team's repos as the GitHub app (#168): the
 # client id (WARDEN_GITHUB_APP_CLIENT_ID, which each caller requires) and the private key, never the client secret, so
-# it can't sign anyone in to GitHub. Any other arguments stop the script before a gcloud call. Returns gcloud's status.
+# it can't sign anyone in to GitHub. A Judge run (#482) calls OpenRouter and traces to Langfuse, so with
+# WARDEN_JUDGE_KEYS set (a repo variable, any non-empty value) the Job gets their keys too; a preview shares them,
+# under the same $15 cap on the OpenRouter key. Unset or empty, as until the owner has made the three secrets
+# (gcp-setup.sh's hand-made list), the Job gets none, so a deploy doesn't fail on a missing secret, and a Judge run
+# stops on its own config error naming OPENROUTER_API_KEY. Any other arguments stop the script before a gcloud call.
+# Returns gcloud's status.
 update_scan_job() {
   # Read here, not inside the $(...) below, so an unset one stops the script (set -u) rather than only the subshell.
-  local client_id=$WARDEN_GITHUB_APP_CLIENT_ID app_password github_key
+  local client_id=$WARDEN_GITHUB_APP_CLIENT_ID secrets=() secret
   local job=$SCAN_JOB account=$SCAN_ACCOUNT database=warden user=warden_app password_secret=warden-db-app-password
   case $#:${2-} in
     1:) ;;
     7:preview) job=$3 account=$4 database=$5 user=$6 password_secret=$7 ;;
     *) fail "update_scan_job takes an image, alone or with preview and the Job's five names, not: ${*:2}" ;;
   esac
-  app_password=$(pinned "$password_secret") || exit 1
-  github_key=$(pinned warden-github-app-private-key) || exit 1
-  update_job "$job" "$1" "$account" server/src/scan-job.ts "$database" "$user" \
-    "$(dict "PGPASSWORD=$app_password" "GITHUB_APP_PRIVATE_KEY=$github_key")" "GITHUB_APP_CLIENT_ID=$client_id" \
-    --task-timeout=3600s
+  secret=$(pinned "$password_secret") || exit 1
+  secrets+=("PGPASSWORD=$secret")
+  secret=$(pinned warden-github-app-private-key) || exit 1
+  secrets+=("GITHUB_APP_PRIVATE_KEY=$secret")
+  if [[ -n ${WARDEN_JUDGE_KEYS:-} ]]; then
+    secret=$(pinned warden-openrouter-api-key) || exit 1
+    secrets+=("OPENROUTER_API_KEY=$secret")
+    secret=$(pinned warden-langfuse-public-key) || exit 1
+    secrets+=("LANGFUSE_PUBLIC_KEY=$secret")
+    secret=$(pinned warden-langfuse-secret-key) || exit 1
+    secrets+=("LANGFUSE_SECRET_KEY=$secret")
+  fi
+  update_job "$job" "$1" "$account" server/src/scan-job.ts "$database" "$user" "$(dict "${secrets[@]}")" \
+    "GITHUB_APP_CLIENT_ID=$client_id" --task-timeout=3600s
 }

@@ -81,6 +81,8 @@ jobs:
           # The Scan Job's GitHub app client id (public). Not in the gate above: without it the script stops red,
           # naming it, before any gcloud call, as a release does.
           WARDEN_GITHUB_APP_CLIENT_ID: ${{ vars.WARDEN_GITHUB_APP_CLIENT_ID }}
+          # The Judge's keys (#482): optional, as on a release.
+          WARDEN_JUDGE_KEYS: ${{ vars.WARDEN_JUDGE_KEYS }}
           REVISION: ${{ inputs.revision }}
           ROLLBACK_FROM: ${{ inputs.from }}
         # The inputs go in as environment variables, never into the script's text, and the script checks each is a

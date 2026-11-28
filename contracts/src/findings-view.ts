@@ -22,14 +22,26 @@ export type Level = z.infer<typeof Level>;
 const Count = z.number().int().nonnegative();
 
 /**
+ * The Team's Agent sessions over the Overview's `period_days` (spec #225, story 12): whether the hook sent an event in
+ * it, how many sessions the Judge judged in it, whatever their outcome, and how many of those need human review.
+ */
+export const AgentSessionActivity = z.object({
+  hook_active: z.boolean(),
+  judged: Count,
+  needs_human_review: Count,
+});
+export type AgentSessionActivity = z.infer<typeof AgentSessionActivity>;
+
+/**
  * `GET /api/overview`: the session's Team (as in `FindingsBody`), its Level, its latest Scan, and the trend over the
  * last `period_days`: Open Findings then and now, and the Fix rate (`fixed` of `of`, so never over 100%). `audit` is
- * Vouch's answer to "Are we ready for the audit?".
+ * Vouch's answer to "Are we ready for the audit?"; `agent_sessions` the hook's and the Judge's activity over the period.
  */
 export const OverviewBody = z.object({
   team: Id,
   level: Level,
   audit: AuditAnswer,
+  agent_sessions: AgentSessionActivity,
   /** The latest Scan's `started_at` (Spot runs don't count); null before the first Scan. */
   last_scan_at: DateTime.nullable(),
   /** Whether the Team has any Finding at all, whatever its Status. */

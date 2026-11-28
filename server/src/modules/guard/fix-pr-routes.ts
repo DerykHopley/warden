@@ -15,7 +15,7 @@ import {
 import type { Context } from "hono";
 import type { AppEnv, MountRoutes } from "../../app.ts";
 import { createAttemptLimit } from "../../attempt-limit.ts";
-import { FindingNotFound, type Findings } from "../../findings/index.ts";
+import { FindingNotFound, findingOf, type Findings } from "../../findings/index.ts";
 import type { Logger } from "../../log.ts";
 import { idParam } from "../../path-id.ts";
 import { packRule } from "./default-pack.ts";
@@ -121,13 +121,9 @@ export function fixPrRoutes(
   const pullWait = deps.pullWait ?? (() => delay(PULL_WAIT_MS));
   const limit = createAttemptLimit({ max: FIX_PRS_PER_HOUR, windowMs: 60 * 60_000 });
 
-  /** The Team's Finding the path names, or FindingNotFound. The Findings module has no one-Finding read. */
-  async function findingOf(c: Context<AppEnv>): Promise<Finding> {
-    const id = idParam(c, FindingNotFound);
-    const finding = (await findings.list(c.get("team"))).find((f) => f.id === id);
-    if (finding === undefined) throw new FindingNotFound(id);
-    return finding;
-  }
+  /** The Team's Finding the path names, or FindingNotFound. */
+  const pathFinding = (c: Context<AppEnv>) =>
+    findingOf(findings, c.get("team"), idParam(c, FindingNotFound));
 
   /** The refusal the Finding alone gives, its Rule and Location then its Status; or the file Location it fixes. */
   function refusalOf(finding: Finding): { refusal: Refusal } | { location: FileLocation } {
@@ -166,7 +162,7 @@ export function fixPrRoutes(
       }
 
       return refusing(c, async () => {
-        const finding = await findingOf(c);
+        const finding = await pathFinding(c);
         const fixable = refusalOf(finding);
         if ("refusal" in fixable)
           return c.json({ error: fixable.refusal.error }, fixable.refusal.status);
@@ -295,7 +291,7 @@ export function fixPrRoutes(
     // (slice 5). No GitHub call, so it answers the same without the write app.
     app.get("/api/guard/findings/:id/fix-pr", requireRole("member"), (c) =>
       refusing(c, async () => {
-        const finding = await findingOf(c);
+        const finding = await pathFinding(c);
         const newest = await fixPrs.newest(c.get("team"), finding.id);
         return c.json({
           fixable: fixRefusal(finding.rule_id, finding.location) === undefined,

@@ -298,6 +298,21 @@ async function recordScan(
   return { scan: { id, team, module, started_at, assets, rules, observations }, unread };
 }
 
+/**
+ * The Team's Finding with id `id`, or `NotFound` thrown when the Team has none: the caller's own error, as `idParam`
+ * takes, so its refusal answers the same 404. The store has no one-Finding read, so this lists the Team's.
+ */
+export async function findingOf(
+  findings: Pick<Findings, "list">,
+  team: string,
+  id: string,
+  NotFound: new (id: string) => Error = FindingNotFound,
+): Promise<Finding> {
+  const finding = (await findings.list(team)).find((f) => f.id === id);
+  if (finding === undefined) throw new NotFound(id);
+  return finding;
+}
+
 export function createFindings({
   withTeam,
   moveRules,

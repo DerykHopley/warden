@@ -65,6 +65,7 @@ export const overviewBody = (team: string, fields: Partial<OverviewBody> = {}): 
   last_scan_at: "2026-11-24T09:14:00Z",
   has_findings: true,
   period_days: 30,
+  agent_sessions: { hook_active: false, judged: 0, needs_human_review: 0 },
   open_at_start: 0,
   open_now: 1,
   fix_rate: { fixed: 0, of: 1 },

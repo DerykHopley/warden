@@ -1,7 +1,13 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { FRONTEND_API_HOST, testPublishableKey as publishableKey } from "../test/helpers.ts";
-import { ConfigError, gitHubReaderSettings, loadConfig } from "./config.ts";
+import {
+  ConfigError,
+  DEFAULT_JUDGE_MODEL,
+  gitHubReaderSettings,
+  judgeSettings,
+  loadConfig,
+} from "./config.ts";
 
 /** A GitHub App's key as GitHub downloads it: PKCS#1 PEM, `BEGIN RSA PRIVATE KEY`. */
 const { privateKey: appKey, publicKey } = generateKeyPairSync("rsa", {
@@ -298,6 +304,58 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("the pseudonym key (WARDEN_PSEUDONYM_KEY)", () => {
+    const hex = "0123456789abcdefFEDCBA9876543210".repeat(2);
+
+    it("leaves pseudonymKey undefined when unset or empty", () => {
+      expect(loadConfig(env).pseudonymKey).toBeUndefined();
+      expect(loadConfig({ ...env, WARDEN_PSEUDONYM_KEY: "" }).pseudonymKey).toBeUndefined();
+    });
+
+    it("reads 64 hex digits as the key's 32 bytes", () => {
+      const key = loadConfig({ ...env, WARDEN_PSEUDONYM_KEY: hex }).pseudonymKey;
+      expect(key).toEqual(Buffer.from(hex, "hex"));
+      expect(key?.length).toBe(32);
+    });
+
+    it.each([
+      ["63 hex digits", hex.slice(1)],
+      ["65 hex digits", `${hex}0`],
+      ["a digit that isn't hex", `${hex.slice(1)}g`],
+      ["spaces around it", ` ${hex} `],
+    ])("refuses %s, naming only WARDEN_PSEUDONYM_KEY and never its value", (_name, value) => {
+      const error = configError(() => loadConfig({ ...env, WARDEN_PSEUDONYM_KEY: value }));
+      expect(error.variables).toEqual(["WARDEN_PSEUDONYM_KEY"]);
+      expect(error.message).not.toContain(value.trim());
+    });
+  });
+
+  describe("the Judge's localhost setting (WARDEN_JUDGE_LOCALHOST)", () => {
+    const onCloudRun = { K_SERVICE: "warden", CLERK_AUTHORIZED_PARTIES: "https://w.example" };
+
+    it("is on with 1, and off unset or empty", () => {
+      expect(loadConfig({ ...env, WARDEN_JUDGE_LOCALHOST: "1" }).judgeLocalhost).toBe(true);
+      expect(loadConfig(env).judgeLocalhost).toBe(false);
+      expect(loadConfig({ ...env, WARDEN_JUDGE_LOCALHOST: "" }).judgeLocalhost).toBe(false);
+    });
+
+    it("refuses any other value, naming the variable", () => {
+      const error = configError(() => loadConfig({ ...env, WARDEN_JUDGE_LOCALHOST: "yes" }));
+      expect(error.variables).toEqual(["WARDEN_JUDGE_LOCALHOST"]);
+    });
+
+    it.each([
+      ["K_SERVICE", onCloudRun],
+      ["CLOUD_RUN_JOB", { CLOUD_RUN_JOB: "warden-scan" }],
+    ])("refuses 1 on Cloud Run (%s set), naming the variable", (_name, cloudRun) => {
+      const error = configError(() =>
+        loadConfig({ ...env, ...cloudRun, WARDEN_JUDGE_LOCALHOST: "1" }),
+      );
+      expect(error.variables).toEqual(["WARDEN_JUDGE_LOCALHOST"]);
+      expect(loadConfig({ ...env, ...cloudRun }).judgeLocalhost).toBe(false);
+    });
+  });
+
   it.each([
     ["a path", "https://warden.example/app"],
     ["no scheme", "warden.example"],
@@ -391,4 +449,106 @@ describe("gitHubReaderSettings (the Scan Job's)", () => {
     expect(error.message).not.toContain(value);
     expect(error.message).not.toContain("BEGIN");
   });
+});
+
+describe("judgeSettings (the Scan Job's, for a Judge run)", () => {
+  it("reads the key and the model", () => {
+    expect(
+      judgeSettings({ OPENROUTER_API_KEY: "sk-or-v1-abc", WARDEN_JUDGE_MODEL: "test/model" }),
+    ).toEqual({
+      apiKey: "sk-or-v1-abc",
+      model: "test/model",
+      allowLocalhost: false,
+      langfuse: undefined,
+    });
+  });
+
+  it.each([
+    ["unset", {}],
+    [
+      "empty",
+      {
+        OPENROUTER_API_KEY: "",
+        WARDEN_JUDGE_MODEL: "",
+        WARDEN_JUDGE_LOCALHOST: "",
+        LANGFUSE_PUBLIC_KEY: "",
+        LANGFUSE_SECRET_KEY: "",
+        LANGFUSE_BASE_URL: "",
+      },
+    ],
+  ])(
+    "leaves the key undefined, takes Claude Haiku 5.5, keeps localhost off and traces nothing when they're %s",
+    (_name, env) => {
+      expect(judgeSettings(env)).toEqual({
+        apiKey: undefined,
+        model: DEFAULT_JUDGE_MODEL,
+        allowLocalhost: false,
+        langfuse: undefined,
+      });
+      expect(DEFAULT_JUDGE_MODEL).toBe("anthropic/claude-haiku-5.5");
+    },
+  );
+
+  it("reads both Langfuse keys, with Langfuse's EU region unless LANGFUSE_BASE_URL names another", () => {
+    const keys = { LANGFUSE_PUBLIC_KEY: "pk-lf-1", LANGFUSE_SECRET_KEY: "sk-lf-1" };
+    expect(judgeSettings(keys).langfuse).toEqual({
+      publicKey: "pk-lf-1",
+      secretKey: "sk-lf-1",
+      baseUrl: "https://cloud.langfuse.com",
+    });
+    expect(
+      judgeSettings({ ...keys, LANGFUSE_BASE_URL: "https://us.cloud.langfuse.com" }).langfuse
+        ?.baseUrl,
+    ).toBe("https://us.cloud.langfuse.com");
+  });
+
+  it.each([
+    ["LANGFUSE_PUBLIC_KEY", { LANGFUSE_PUBLIC_KEY: "pk-lf-planted" }, "LANGFUSE_SECRET_KEY"],
+    ["LANGFUSE_SECRET_KEY", { LANGFUSE_SECRET_KEY: "sk-lf-planted" }, "LANGFUSE_PUBLIC_KEY"],
+  ])("refuses %s alone, naming the one missing and no value", (_name, env, missing) => {
+    const error = configError(() => judgeSettings(env));
+    expect(error.variables).toEqual([missing]);
+    expect(error.message).not.toContain("planted");
+  });
+
+  it.each(["http://langfuse.example", "langfuse.example", "ftp://langfuse.example"])(
+    "refuses LANGFUSE_BASE_URL=%s, which isn't https, naming the variable",
+    (url) => {
+      const error = configError(() =>
+        judgeSettings({
+          LANGFUSE_PUBLIC_KEY: "pk-lf-1",
+          LANGFUSE_SECRET_KEY: "sk-lf-1",
+          LANGFUSE_BASE_URL: url,
+        }),
+      );
+      expect(error.variables).toEqual(["LANGFUSE_BASE_URL"]);
+      expect(error.message).not.toContain("langfuse.example");
+    },
+  );
+
+  it("traces nothing, and doesn't stop the run, for a LANGFUSE_BASE_URL that isn't https with neither key set", () => {
+    expect(
+      judgeSettings({ LANGFUSE_BASE_URL: "http://langfuse.example" }).langfuse,
+    ).toBeUndefined();
+  });
+
+  it("turns localhost on with WARDEN_JUDGE_LOCALHOST=1", () => {
+    expect(judgeSettings({ WARDEN_JUDGE_LOCALHOST: "1" }).allowLocalhost).toBe(true);
+  });
+
+  it("refuses WARDEN_JUDGE_LOCALHOST=yes, naming the variable", () => {
+    expect(configError(() => judgeSettings({ WARDEN_JUDGE_LOCALHOST: "yes" })).variables).toEqual([
+      "WARDEN_JUDGE_LOCALHOST",
+    ]);
+  });
+
+  it.each(["K_SERVICE", "CLOUD_RUN_JOB"])(
+    "refuses WARDEN_JUDGE_LOCALHOST=1 with %s set, naming the variable",
+    (cloudRun) => {
+      const error = configError(() =>
+        judgeSettings({ WARDEN_JUDGE_LOCALHOST: "1", [cloudRun]: "warden-scan" }),
+      );
+      expect(error.variables).toEqual(["WARDEN_JUDGE_LOCALHOST"]);
+    },
+  );
 });

@@ -14,6 +14,19 @@ export const timedOut = (error: unknown) =>
   error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 
 /**
+ * Why a call threw, as a code safe to log: `timeout` for a timeout, else the first string `code` on the error or its
+ * causes (fetch puts a refused connection's ECONNREFUSED on its cause), else undefined.
+ */
+export function failureCode(error: unknown): string | undefined {
+  for (let at: unknown = error; at instanceof Error; at = at.cause) {
+    if (timedOut(at)) return "timeout";
+    const code = (at as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return undefined;
+}
+
+/**
  * A call, or its body's read, that threw: it timed out, or its connection was lost. `status` is the answer's when one
  * came before its body was lost, undefined when none came. Its cause is fetch's own error.
  */
