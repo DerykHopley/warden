@@ -34,9 +34,12 @@ export function resultLine(change: Partial<EvalResultLine> = {}): EvalResultLine
   return { ...merged, ...caseVerdict(merged) };
 }
 
-/** A new results file holding `content`: lines, one JSON line each, or text as it is. */
-export function resultsFile(content: readonly EvalResultLine[] | string): string {
-  const file = join(mkdtempSync(join(tmpdir(), "warden-results-")), "results.jsonl");
+/** A results file holding `content`: lines, one JSON line each, or text as it is. It's `file` when given (its folder
+ * must exist), else a new one in a new temp folder. */
+export function resultsFile(
+  content: readonly EvalResultLine[] | string,
+  file = join(mkdtempSync(join(tmpdir(), "warden-results-")), "results.jsonl"),
+): string {
   const text =
     typeof content === "string"
       ? content
