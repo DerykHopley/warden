@@ -55,8 +55,12 @@ const DEV_CLAUDE_TMP = "/tmp/claude-dev";
 /** The session id the case names in its transcript and scratchpad paths, in place of the recorded one. */
 export const DEV_SESSION_ID = "00000000-0000-4000-8000-000000000000";
 
-/** User and home folder names a case can't be cleaned of: they stand for many machines, and are ordinary words. */
-const GENERIC_NAMES = new Set(["root", "node", "runner", "admin", "user"]);
+/** User and home folder names a case can't be cleaned of: they stand for many machines, and are ordinary words, or
+ * Claude Code tool names, which the case-blind rewrite would turn into dev in every `tool_name` (#520). */
+const GENERIC_NAMES = new Set([
+  ...["root", "node", "runner", "admin", "user"],
+  ...["bash", "read", "edit", "write", "grep", "glob"],
+]);
 /** Whether `name` is empty or one of the generic user names, which the recorder refuses to record as. */
 export const isGenericName = (name: string) => !name || GENERIC_NAMES.has(name.toLowerCase());
 
@@ -344,7 +348,7 @@ const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  * path, or in a tool's output such as `whoami`, `ls -l` or `git log`. A longer word holding it (alicesmith) doesn't
  * match. Safe because the recorder refuses generic names. */
 export const userWord = (user: string, flags = "") =>
-  new RegExp(`(?<![A-Za-z0-9_])${escaped(user)}(?![A-Za-z0-9_])`, `${flags}i`);
+  new RegExp(`(?<![A-Za-z0-9_])${escaped(user)}(?![A-Za-z0-9_])`, `${flags.replace("i", "")}i`);
 
 /** Every secret-fixtures.ts string export and its name, longest first, so a secret inside another is found second. */
 const fixtureSecrets = () => [...FIXTURE_SECRETS].sort(([, a], [, b]) => b.length - a.length);
