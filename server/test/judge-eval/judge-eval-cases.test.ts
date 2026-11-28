@@ -2,7 +2,7 @@
 // pass targets beside them, checked against the spec's matrix before any model runs on them. The cases are labelled
 // to what a correct Judge flags, not to what Warden's Judge flags today.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { Asset } from "@warden/contracts";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,7 +22,7 @@ import {
   loadEvalTargets,
   type EvalCase,
 } from "./eval-cases.ts";
-import { DEV_SESSION_ID } from "./record.ts";
+import { DEV_SESSION_ID, isGenericName, userWord } from "./record.ts";
 
 const cases = loadEvalCases();
 const ruleIds = JUDGE_RULES.map((rule) => rule.ruleId);
@@ -151,6 +151,13 @@ describe("the case files", () => {
     }
   });
 
+  it("hold the name of the user running the tests nowhere, as the recorder rewrites it in every field", () => {
+    const { username } = userInfo();
+    // A generic name (root, runner on CI) is an ordinary word cases may hold; the recorder refuses to record as one.
+    if (isGenericName(username)) return;
+    for (const { file, text } of caseFiles) expect(text, file).not.toMatch(userWord(username));
+  });
+
   it("name only dev's session in a recorded case's transcript and scratchpad paths", () => {
     for (const c of cases.filter((c) => c.source === "recorded")) {
       const sessions = eventText(c).matchAll(/\/([0-9a-f-]{36})(?:\/scratchpad|\.jsonl)/g);
@@ -168,15 +175,16 @@ describe("the case files", () => {
 });
 
 describe("loadEvalCases", () => {
-  let folder: string | undefined;
+  // A test may make several folders: each is removed after it.
+  const folders: string[] = [];
   afterEach(() => {
-    if (folder) rmSync(folder, { recursive: true, force: true });
-    folder = undefined;
+    for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
   });
 
   /** A folder holding one case file named `name`, with `events` and `overrides` over a clean details-tier case. */
   function oneCase(name: string, overrides: Record<string, unknown> = {}) {
-    folder = mkdtempSync(join(tmpdir(), "warden-eval-cases-"));
+    const folder = mkdtempSync(join(tmpdir(), "warden-eval-cases-"));
+    folders.push(folder);
     const body = {
       name,
       description: "a case",

@@ -36,6 +36,10 @@ const FOREIGN_TOKEN = ["ghp", "_", "k9Lm2Np4Qr6St8Uv0Wx1Yz3Ab5Cd7Ef9Gh1J"].join(
 /** The scratchpad root Claude Code writes under on this machine, with no TMPDIR passed to it. */
 const CLAUDE_TMP = `/tmp/claude-${process.getuid!()}`;
 
+/** What `whoami`, `ls -l` and `git log` print for the user alice: her name as a bare word, outside any path. */
+const BASH_OUTPUT =
+  "alice\n-rw-r--r--. 1 alice alice 12 Nov 28 README.md\nAuthor: alice <alice@example.com>";
+
 /** Claude Code stand-in. The `stub-mode` file beside its folder picks how the session goes; `stub-log.json` there
  * gets the args, cwd, files, settings and environment it ran with. It reads neither from its environment, so the
  * test sees the environment exactly as the recorder passes it. */
@@ -70,6 +74,11 @@ fire("PostToolUse", {
   tool_response: { file: { content: ${JSON.stringify(
     `key ${AWS_KEY} and ${STRIPE_KEY}; notes in /var/home/alice/notes by alice, not alicesmith; cache in /srv/alice/cache\n${RSA_PRIVATE_KEY}`,
   )} + (mode === "foreign-secret" ? ${JSON.stringify(` and ${FOREIGN_TOKEN}`)} : "") } },
+});
+fire("PostToolUse", {
+  tool_name: "Bash", tool_use_id: "toolu_2",
+  tool_input: { command: "whoami && ls -l README.md && git log -1" },
+  tool_response: { stdout: ${JSON.stringify(BASH_OUTPUT)}, stderr: "", interrupted: false },
 });
 if (mode !== "no-session-end") fire("SessionEnd", { reason: "other" });
 if (mode === "exit1") { process.stderr.write("boom"); process.exit(1); }
@@ -215,7 +224,7 @@ describe("recordCase", () => {
     });
   });
 
-  it("drops session_id and rewrites the folders, home, the user in paths and every secret-fixtures export", async () => {
+  it("drops session_id and rewrites the folders, home, the user's name and every secret-fixtures export", async () => {
     await recordCase(options());
     const text = written();
     expect(text).not.toContain("session_id");
@@ -223,13 +232,24 @@ describe("recordCase", () => {
     expect(text).toContain(
       `"/home/dev/.claude/projects/-home-dev-project/${DEV_SESSION_ID}.jsonl"`,
     );
-    // The user's name is rewritten as a path segment only: elsewhere it may be an ordinary word.
-    expect(text).toContain("notes in /home/dev/notes by alice, not alicesmith");
+    // The user's name is rewritten as a whole word, in paths and prose alike; a longer word holding it stays.
+    expect(text).toContain("notes in /home/dev/notes by dev, not alicesmith");
     expect(text).toContain("cache in /srv/dev/cache");
     expect(text).toContain("key {{AWS_KEY}} and {{STRIPE_KEY}}");
     expect(text).toContain("{{RSA_PRIVATE_KEY}}");
     for (const leak of [AWS_KEY, STRIPE_KEY, RSA_PRIVATE_KEY, "/var/home/alice", "/alice/", root])
       expect(text).not.toContain(leak);
+  });
+
+  it("rewrites the user's name to dev in a tool's output, where it isn't in a path", async () => {
+    await recordCase(options());
+    const text = written();
+    expect(text).toContain(
+      JSON.stringify(
+        "dev\n-rw-r--r--. 1 dev dev 12 Nov 28 README.md\nAuthor: dev <dev@example.com>",
+      ),
+    );
+    expect(text).not.toMatch(/\balice\b/);
   });
 
   it("rewrites Claude's scratchpad root and the session id in it to dev's", async () => {
@@ -335,14 +355,15 @@ describe("caseLeak", () => {
     ["Claude's scratchpad root", `${CLAUDE_TMP}/-home-dev-project/x`, /claude-/],
     ["the session id", "/home/dev/.claude/projects/p/7f1e0c2a-sid.jsonl", /session/],
     ["the user in a path", "/srv/alice/cache", /alice/],
+    ["the user's name in a tool's output", "Author: alice <alice@example.com>", /alice/],
     ["a secret only Guard's patterns find", `x ${FOREIGN_TOKEN}`, /GitHub token/],
   ])("finds %s", (_what, text, found) => {
     expect(caseLeak(text, from)).toMatch(found);
   });
 
-  it("finds nothing in dev's text, the user's name as a word included", () => {
+  it("finds nothing in dev's text, a longer word holding the user's name included", () => {
     expect(
-      caseLeak("/home/dev/project by alice, not alicesmith; /tmp/claude-dev/x {{AWS_KEY}}", from),
+      caseLeak("/home/dev/project by dev, not alicesmith; /tmp/claude-dev/x {{AWS_KEY}}", from),
     ).toBeNull();
   });
 });

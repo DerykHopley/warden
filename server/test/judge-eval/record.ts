@@ -57,6 +57,8 @@ export const DEV_SESSION_ID = "00000000-0000-4000-8000-000000000000";
 
 /** User and home folder names a case can't be cleaned of: they stand for many machines, and are ordinary words. */
 const GENERIC_NAMES = new Set(["root", "node", "runner", "admin", "user"]);
+/** Whether `name` is empty or one of the generic user names, which the recorder refuses to record as. */
+export const isGenericName = (name: string) => !name || GENERIC_NAMES.has(name.toLowerCase());
 
 /** The variables `claude` keeps from the recording environment: where to find it and its config, the terminal, and
  * how it reaches Anthropic (a base URL or proxy, such as one that traces the session). Nothing else passes: not
@@ -155,7 +157,7 @@ export async function recordCase(options: RecordOptions): Promise<string> {
   const claude = onPath("claude", env.PATH);
   if (!claude)
     throw new Error("`claude` isn't on PATH: install Claude Code and sign in, then run this again");
-  if ([user, basename(home)].some((name) => !name || GENERIC_NAMES.has(name.toLowerCase())))
+  if ([user, basename(home)].some(isGenericName))
     throw new Error(
       `the user "${user}" with home ${home} is generic, so the case couldn't be told apart from it: record as your own user`,
     );
@@ -338,15 +340,16 @@ function spellings(path: string): string[] {
 const slug = (path: string) => path.replace(/[^A-Za-z0-9]/g, "-");
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** `user` as a whole path segment: after a separator, before another, the end, or anything a name can't hold. */
-const userSegment = (user: string, flags = "") =>
-  new RegExp(`(?<=[/\\\\])${escaped(user)}(?![A-Za-z0-9._-])`, `i${flags}`);
+/** `user` as a whole word, case-sensitive, anywhere: in a path, or in a tool's output such as `whoami`, `ls -l` or
+ * `git log`. A longer word holding it (alicesmith) doesn't match. Safe because the recorder refuses generic names. */
+export const userWord = (user: string, flags = "") =>
+  new RegExp(`(?<![A-Za-z0-9_])${escaped(user)}(?![A-Za-z0-9_])`, flags);
 
 /** Every secret-fixtures.ts string export and its name, longest first, so a secret inside another is found second. */
 const fixtureSecrets = () => [...FIXTURE_SECRETS].sort(([, a], [, b]) => b.length - a.length);
 
 /** Rewrites every string and key of a hook body: the throwaway folder, Claude's config folder and scratchpad root,
- * home and the recorded session id to a developer `dev`'s, the user's name where it's a path segment to `dev`, and
+ * home and the recorded session id to a developer `dev`'s, the user's name as a whole word to `dev`, and
  * each secret-fixtures.ts export to its `{{EXPORT}}` placeholder. */
 function rewriter({
   workRoot,
@@ -377,16 +380,16 @@ function rewriter({
   for (const id of sessionIds) pairs.push([id, DEV_SESSION_ID]);
   for (const [name, secret] of fixtureSecrets()) pairs.push([secret, `{{${name}}}`]);
   pairs.sort(([a], [b]) => b.length - a.length);
-  const inPaths = userSegment(user, "g");
+  const userName = userWord(user, "g");
   const fix = (text: string) => {
     for (const [from, to] of pairs) text = text.split(from).join(to);
-    return text.replace(inPaths, DEV_USER);
+    return text.replace(userName, DEV_USER);
   };
   return (body: Record<string, unknown>) => mapStrings(body, fix) as Record<string, unknown>;
 }
 
 /** What of the recording machine, or what secret, a case's text still holds, or null: a secret-fixtures.ts export, a
- * spelling of one of `folders` (or its slug), a recorded session id, the user's name as a path segment, or a secret
+ * spelling of one of `folders` (or its slug), a recorded session id, the user's name as a whole word, or a secret
  * Guard's own patterns find. */
 export function caseLeak(
   text: string,
@@ -402,7 +405,7 @@ export function caseLeak(
     for (const spelling of [path, slug(path)])
       if (text.includes(spelling)) return `the path ${spelling}`;
   for (const id of sessionIds) if (text.includes(id)) return `the recorded session id ${id}`;
-  if (user && userSegment(user).test(text)) return `the user name ${user} in a path`;
+  if (user && userWord(user).test(text)) return `the user name ${user}`;
   const [secret] = findSecrets("case", text);
   if (secret) return `a ${secret.type} on line ${secret.line}`;
   return null;
