@@ -1790,6 +1790,12 @@ button[aria-busy="true"],
   margin: 0 0 4px;
 }
 
+/* An unbroken tool or event name (up to 128 characters) wraps inside the card rather than widening it. */
+.session-event-head > * {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .session-event-head time {
   color: var(--muted);
 }

@@ -99,10 +99,7 @@ test(
     await expect(section.locator(".session-event-text")).toHaveText(
       session.events.map((e) => e.text),
     );
-    await expect(section.locator(".session-event")).toHaveCount(2);
     await expect(section.locator(".session-event").first()).toContainText("Event 2");
-    await expect(section.locator(".session-event-text").first()).toContainText("cat .env");
-    await expect(section.locator(".session-event-text").last()).toContainText("pastebin.example");
     // The developer's name is sent in a header for the session record's pseudonym, never shown.
     expect(await page.content()).not.toContain(HAZEL_DEVELOPER);
   },
@@ -116,7 +113,10 @@ for (const width of WIDTHS) {
     await signIn(GRACE);
     await page.setViewportSize({ width, height: 900 });
     // One unbroken run of characters: the hardest text to wrap.
-    const longText = `curl -d ${"A".repeat(3980)} https://x`.slice(0, 4000);
+    const longText = `curl -d ${"A".repeat(3982)} https://x`; // 4,000, `MaskedAgentEvent.text`'s most
+    // The longest tool (128) and event name (64) `MaskedAgentEvent` allows, unbroken, in the head line.
+    const longTool = `mcp__${"t".repeat(123)}`;
+    const longName = "N".repeat(64);
     const hash = `sha256:${"f".repeat(64)}`;
     let id: string | undefined;
     await page.route("**/api/findings", async (route) => {
@@ -131,7 +131,7 @@ for (const width of WIDTHS) {
           evidence: {
             ...f.evidence,
             session: {
-              events: [{ ...first!, text: longText }],
+              events: [{ ...first!, name: longName, tool: longTool, text: longText }],
               events_read: first!.seq + 1,
               events_hash: hash,
             },
@@ -147,7 +147,6 @@ for (const width of WIDTHS) {
 
     const section = sessionSection(page);
     await expect(section.locator("code.session-hash")).toHaveText(hash);
-    expect(hash).toHaveLength(71);
     await expect(section.locator(".session-event-text")).toHaveText(longText);
     await expectNoSidewaysScroll(page);
     // Nor inside the card: the section is no wider than the card that holds it.
