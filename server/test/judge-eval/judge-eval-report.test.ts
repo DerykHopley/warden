@@ -515,7 +515,7 @@ describe("eval:report: the committed report", () => {
     expect(
       readFileSync(REPORT_FILE, "utf8"),
       "docs/eval/report.md is out of date: run `pnpm --filter @warden/server eval:report`",
-    ).toBe(renderReport(readReportInputs(RUNS_FILE)));
+    ).toBe(renderReport(readReportInputs(RUNS_FILE).inputs));
   });
 });
 
@@ -615,30 +615,30 @@ describe("eval:report: refuses, writing nothing", () => {
   });
 
   const inputs: [string, unknown, Record<string, EvalResultLine[]> | string, string][] = [
-    ["a run list that isn't JSON", "not json", FILES, "runs.json isn't JSON"],
+    ["a run list that isn't JSON", "not json", FULL_FILES, "runs.json isn't JSON"],
     [
       "a run list failing ReportRuns",
       withSecond({ commit: undefined }),
-      FILES,
+      FULL_FILES,
       "runs.json: runs.1.commit",
     ],
-    ["no runs", runList([]), FILES, "runs.json: runs holds no run"],
+    ["no runs", runList([]), FULL_FILES, "runs.json: runs holds no run"],
     [
       "a repeated run name",
       withSecond({ name: "first" }),
-      FILES,
+      FULL_FILES,
       'runs.json: runs.1.name repeats the run name "first"',
     ],
     [
       "a results name holding a /",
       withSecond({ results: "../second.jsonl" }),
-      FILES,
+      FULL_FILES,
       "runs.json: runs.1.results isn't a plain file name",
     ],
     [
       "a flip_reruns name holding ..",
       withSecond({ flip_reruns: ["..second.jsonl"] }),
-      FILES,
+      FULL_FILES,
       "runs.json: runs.1.flip_reruns.0 isn't a plain file name",
     ],
     [

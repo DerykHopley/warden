@@ -15,7 +15,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -26,7 +25,7 @@ import { managedSettings } from "../../src/modules/guard/managed-settings.ts";
 import { findSecrets } from "../../src/modules/guard/secrets.ts";
 import { runCommand } from "../child-process.ts";
 import { SEEDED_ORG } from "../seeded-org.ts";
-import { cliArgs, isMain } from "./cli.ts";
+import { cliArgs, isMain, spellings } from "./cli.ts";
 import {
   CASE_LENGTHS,
   EVAL_CASES_DIR,
@@ -338,16 +337,6 @@ async function runClaude(claude: string, cwd: string, env: NodeJS.ProcessEnv, ar
   return { ...run, subtype };
 }
 
-/** A folder's spellings: as given and its real path. */
-function spellings(path: string): string[] {
-  let real = path;
-  try {
-    real = realpathSync(path);
-  } catch {
-    // a home folder that isn't on this machine, in a test
-  }
-  return [...new Set([path, real])];
-}
 /** Claude Code's slug of a folder: its projects folder name. */
 const slug = (path: string) => path.replace(/[^A-Za-z0-9]/g, "-");
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

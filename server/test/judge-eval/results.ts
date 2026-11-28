@@ -115,3 +115,18 @@ export function latestResults(results: readonly EvalResultLine[]): EvalResultLin
   for (const result of results) latest.set(resultKey(result), result);
   return [...latest.values()];
 }
+
+/** A model's latest lines, by case. */
+export type ModelLines = ResultModel & { cases: Map<string, EvalResultLine> };
+
+/** Each model's latest lines by case, keyed by `modelKey`, in the order each model was first saved. */
+export function byModel(results: readonly EvalResultLine[]): Map<string, ModelLines> {
+  const models = new Map<string, ModelLines>();
+  for (const result of latestResults(results)) {
+    const key = modelKey(result);
+    const { provider, model } = result;
+    if (!models.has(key)) models.set(key, { provider, model, cases: new Map() });
+    models.get(key)!.cases.set(result.case, result);
+  }
+  return models;
+}
