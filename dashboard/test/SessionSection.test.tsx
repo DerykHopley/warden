@@ -349,6 +349,25 @@ describe("focus after the Session section's Retry", () => {
     return shown;
   }
 
+  it("focus is on the heading in the same commit that removes Retry, never on the page body between", async () => {
+    const again = deferred<Response>();
+    const { section } = await retried(() => again.promise);
+    // Seen the moment Retry leaves the DOM, before anything else runs: a focus moved later leaves <body> focused here.
+    const focusWhenRetryWent = new Promise<Element | null>((resolve) => {
+      const observer = new MutationObserver(() => {
+        if (section.queryByRole("button", { name: "Retry the session" }) !== null) return;
+        observer.disconnect();
+        resolve(document.activeElement);
+      });
+      observer.observe(section.getByRole("heading", { level: 4, name: "Session" }).parentElement!, {
+        childList: true,
+        subtree: true,
+      });
+    });
+    again.resolve(json(200, record()));
+    expect(await focusWhenRetryWent).toBe(heading());
+  });
+
   it("the Session heading takes focus but stays out of the Tab order", () => {
     show();
     expect(heading()).toHaveAttribute("tabindex", "-1");
