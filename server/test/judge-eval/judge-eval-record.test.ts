@@ -38,7 +38,7 @@ const CLAUDE_TMP = `/tmp/claude-${process.getuid!()}`;
 
 /** What `whoami`, `ls -l` and `git log` print for the user alice: her name as a bare word, outside any path. */
 const BASH_OUTPUT =
-  "alice\n-rw-r--r--. 1 alice alice 12 Nov 28 README.md\nAuthor: alice <alice@example.com>";
+  "alice\n-rw-r--r--. 1 alice alice 12 Nov 28 README.md\nAuthor: Alice <ALICE@example.com>";
 
 /** Claude Code stand-in. The `stub-mode` file beside its folder picks how the session goes; `stub-log.json` there
  * gets the args, cwd, files, settings and environment it ran with. It reads neither from its environment, so the
@@ -249,7 +249,8 @@ describe("recordCase", () => {
         "dev\n-rw-r--r--. 1 dev dev 12 Nov 28 README.md\nAuthor: dev <dev@example.com>",
       ),
     );
-    expect(text).not.toMatch(/\balice\b/);
+    // In any casing: a git author or an e-mail can spell the name otherwise (#518).
+    expect(text).not.toMatch(/\balice\b/i);
   });
 
   it("rewrites Claude's scratchpad root and the session id in it to dev's", async () => {
@@ -356,6 +357,7 @@ describe("caseLeak", () => {
     ["the session id", "/home/dev/.claude/projects/p/7f1e0c2a-sid.jsonl", /session/],
     ["the user in a path", "/srv/alice/cache", /alice/],
     ["the user's name in a tool's output", "Author: alice <alice@example.com>", /alice/],
+    ["the user's name in another casing", "USER=ALICE", /alice/i],
     ["a secret only Guard's patterns find", `x ${FOREIGN_TOKEN}`, /GitHub token/],
   ])("finds %s", (_what, text, found) => {
     expect(caseLeak(text, from)).toMatch(found);
