@@ -1,6 +1,7 @@
 // The Judge eval's regression check (spec #225, story 16; slice 10c): two saved results files compared, each by its
 // latest line per (model, case), and each case that passed in the earlier and fails in the later listed under its
 // model, with the line that reruns them. `eval:regressions` prints it (`regressions-cli.ts`).
+import { join } from "node:path";
 import { latestResults, modelKey, type EvalResultLine, type ResultModel } from "./results.ts";
 
 /** Which of the two files something is in. */
@@ -79,25 +80,51 @@ const fileTime = (at: Date) => at.toISOString().replace(/[-:]/g, "");
  * refuses it, so it can't start a paid run by accident. */
 const PAID_NOTE = "(paid: OpenRouter — needs the owner's yes)";
 
+/** Where a rerun line puts its results file, and the local models' URL it names. */
+export type RerunPlace = {
+  /** The later file's folder, as written from where pnpm is run: "" for that folder itself. */
+  folder: string;
+  /** The local models' OpenAI-compatible base URL, as printed. */
+  localUrl: string;
+};
+
+/** `value` as one shell word: as it is when it holds only characters the shell neither splits nor expands on,
+ * otherwise single-quoted. */
+const shellWord = (value: string) =>
+  /^[A-Za-z0-9._/:@%+,=-]*$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
+
 /**
- * The line that reruns `cases` once on `model` alone, taken from where pnpm is run, into a results file named by the
- * provider, the model and `at` (when `eval:regressions` ran): the harness skips a (model, case) its results file
- * already holds, so each run's line names a new one. An OpenRouter model's line ends with PAID_NOTE.
+ * The line that reruns `cases` once on `model` alone, taken from where pnpm is run, into a results file in
+ * `place.folder` named by the provider, the model and `at` (when `eval:regressions` ran): the harness skips a
+ * (model, case) its results file already holds, so each run's line names a new one. A local model's line starts with
+ * its URL; an OpenRouter model's line ends with PAID_NOTE.
  */
-export function rerunLine({ provider, model }: ResultModel, cases: readonly string[], at: Date) {
+export function rerunLine(
+  { provider, model }: ResultModel,
+  cases: readonly string[],
+  at: Date,
+  { folder, localUrl }: RerunPlace,
+) {
+  const results = join(folder, `rerun-${provider}-${fileSafe(model)}-${fileTime(at)}.jsonl`);
   const models =
     provider === "local" ? "WARDEN_EVAL_LOCAL_MODELS" : "WARDEN_EVAL_OPENROUTER_MODELS";
   const line =
-    `WARDEN_EVAL_RESULTS=rerun-${provider}-${fileSafe(model)}-${fileTime(at)}.jsonl ${models}=${model} ` +
+    `WARDEN_EVAL_RESULTS=${shellWord(results)} ${models}=${model} ` +
     `WARDEN_EVAL_CASES=${cases.join(",")} pnpm --filter @warden/server eval:judge`;
-  return provider === "openrouter" ? `${line} ${PAID_NOTE}` : line;
+  return provider === "openrouter"
+    ? `${line} ${PAID_NOTE}`
+    : `WARDEN_EVAL_LOCAL_URL=${shellWord(localUrl)} ${line}`;
 }
 
 const rules = (list: readonly string[]) => (list.length === 0 ? "none" : list.join(", "));
 
-/** The regressions as `eval:regressions` prints them at `at`: each model's flips and rerun line, then the one-file
- * models. */
-export function regressionsText({ models, onlyIn }: Regressions, at: Date): string {
+/** The regressions as `eval:regressions` prints them at `at`: each model's flips and rerun line (its file and URL
+ * from `place`), then the one-file models. */
+export function regressionsText(
+  { models, onlyIn }: Regressions,
+  at: Date,
+  place: RerunPlace,
+): string {
   const lines: string[] = [];
   for (const found of models) {
     const { provider, model, flips, notInBoth } = found;
@@ -114,6 +141,7 @@ export function regressionsText({ models, onlyIn }: Regressions, at: Date): stri
           found,
           flips.map((flip) => flip.case),
           at,
+          place,
         )}`,
       );
     if (notInBoth.length > 0)

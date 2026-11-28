@@ -328,14 +328,18 @@ each target met or missed, from a saved file, with no database and no model.
 
 **Regressions.** `pnpm --filter @warden/server eval:regressions -- <earlier.jsonl> <later.jsonl>` lists, for each
 model in both files, each case that passed in the earlier and fails in the later, with the Rules it missed or flagged
-beyond its labels (or its error), and prints the line that reruns those cases once on that model alone, into a new
-results file named by the provider, the model and when `eval:regressions` ran (`rerun-<provider>-<model>-<time>.jsonl`:
-the harness skips a case its results file already holds, so each run names a new one), with `WARDEN_EVAL_LOCAL_URL`
-set as for any local run:
+beyond its labels (or its error), and prints the line that reruns those cases once on that model alone, to run as
+printed from where you ran `eval:regressions`. Its new results file goes in the later file's folder, named by the
+provider, the model and when `eval:regressions` ran (`rerun-<provider>-<model>-<time>.jsonl`: the harness skips a
+case its results file already holds, so each run names a new one). A local model's line starts with
+`WARDEN_EVAL_LOCAL_URL`: your own when it's set for `eval:regressions`, otherwise `http://localhost:11434/v1`. From the
+repo root, on two files in `docs/eval/results/`:
 
 ```sh
-WARDEN_EVAL_RESULTS=rerun-local-qwen3-8b-20261128T100000.000Z.jsonl WARDEN_EVAL_LOCAL_MODELS=qwen3:8b WARDEN_EVAL_CASES=<case>,<case> pnpm --filter @warden/server eval:judge
+WARDEN_EVAL_LOCAL_URL=http://localhost:11434/v1 WARDEN_EVAL_RESULTS=docs/eval/results/rerun-local-qwen3-8b-20261128T100000.000Z.jsonl WARDEN_EVAL_LOCAL_MODELS=qwen3:8b WARDEN_EVAL_CASES=<case>,<case> pnpm --filter @warden/server eval:judge
 ```
+
+A path or URL the shell would split (a space, `$`, a quote) is single-quoted in the line.
 
 An OpenRouter model's line ends with `(paid: OpenRouter — needs the owner's yes)`: it's a paid run, and the shell
 refuses the line as it is, so drop the note only once the owner has said yes.
