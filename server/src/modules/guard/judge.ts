@@ -86,7 +86,7 @@ function answeredCost(usage: ModelUsage | undefined): Settlement {
 }
 
 /** Whether a failed call may have cost money: all but a call refused before it ran. */
-const mayBeBilled = (error: unknown) => !(error instanceof ModelCallFailed && !error.billed);
+export const mayBeBilled = (error: unknown) => !(error instanceof ModelCallFailed && !error.billed);
 
 /** One call's reserved cost: settled to what an answer stated, or taken back when the call wasn't billed. */
 type Charge = { settle(usage: ModelUsage | undefined): Promise<void>; unbilled(): Promise<void> };
