@@ -1,0 +1,392 @@
+// The Judge eval's harness (spec #225, slice 10b): each case replayed through the hook endpoint of a local Warden,
+// as Claude Code's managed hook posts it, then judged by the real Judge on the real stores, and its result added to
+// the results file before the next case. Each case gets a Team of its own, at the case's Privacy tier, so no case
+// reads another's events, Findings or spending. Cases run one at a time, the local models first, then OpenRouter's.
+//
+// A run carries on from its results file: a (model, case) saved without an error isn't run again. Before each local
+// model's first case, the other local models are unloaded, so one model's memory doesn't slow the next; Ollama itself
+// is never started, stopped or reconfigured. OpenRouter's calls are paid: the harness keeps its own ledger under
+// EVAL_PAID_CAP_USD, and stops before a case that could pass it.
+import { randomBytes, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import type { AddressInfo } from "node:net";
+import { serve } from "@hono/node-server";
+import { Status } from "@warden/contracts";
+import { createFindings } from "../../src/findings/index.ts";
+import { callJson, failureCode, type Fetch } from "../../src/http-call.ts";
+import { createLogger } from "../../src/log.ts";
+import { createAgentSessions } from "../../src/modules/guard/agent-sessions.ts";
+import { hookEventRoutes } from "../../src/modules/guard/hook-event-routes.ts";
+import { createHookSettings } from "../../src/modules/guard/hook-settings.ts";
+import {
+  createJudge,
+  JUDGE_RUN_CALL_BUDGET,
+  type JudgeRunOutcome,
+} from "../../src/modules/guard/judge.ts";
+import {
+  localModel,
+  ModelCallFailed,
+  openRouterModel,
+  type JudgeModel,
+} from "../../src/modules/guard/judge-model.ts";
+import { JUDGE_RULES } from "../../src/modules/guard/judge-rules.ts";
+import { HOOK_EVENTS_PATH, managedSettings } from "../../src/modules/guard/managed-settings.ts";
+import { createSpending, UNPRICED_CALL_USD } from "../../src/spending.ts";
+import { MOVE_RULES } from "../../src/wiring.ts";
+import type { WithTeam } from "../../src/with-team.ts";
+import { ADMIN, newTeam, testApp, testKey } from "../helpers.ts";
+import type { EvalCase } from "./eval-cases.ts";
+import {
+  appendResult,
+  casePasses,
+  latestResults,
+  readResults,
+  resultKey,
+  type EvalResultLine,
+} from "./results.ts";
+import type { EvalModel, EvalSettings } from "./settings.ts";
+
+/** How long one local model call may take: a model on a laptop is slow, and the Judge's own minute is too short. */
+export const EVAL_LOCAL_CALL_TIMEOUT_MS = 10 * 60_000;
+
+/** The most a run spends on OpenRouter, counting what the results file already spent. */
+export const EVAL_PAID_CAP_USD = 5;
+
+/** What a paid case is taken to cost before any has been saved: every call of the run's budget, unpriced. */
+export const FIRST_PAID_CASE_USD = UNPRICED_CALL_USD * JUDGE_RUN_CALL_BUDGET;
+
+/** How long Ollama may take to unload a model. */
+const UNLOAD_TIMEOUT_MS = 60_000;
+
+/** The developer every replayed event names. */
+const DEVELOPER = "dev";
+
+export type RunEvalOptions = {
+  settings: EvalSettings;
+  /** The whole case set: the settings pick the cases run, and every saved line must name one of them. */
+  cases: readonly EvalCase[];
+  withTeam: WithTeam;
+  /** OpenRouter's fetch: a test's fake. */
+  openRouterFetch?: Fetch;
+  /** Called as each case starts on a model, before its first event is posted. */
+  onCase?: (c: EvalCase, model: EvalModel) => void;
+  /** Where each case's line and the cap's stop are printed. */
+  log?: (line: string) => void;
+};
+
+export type EvalRun = {
+  /** Every line in the results file after the run, the earlier runs' first. */
+  results: EvalResultLine[];
+  /** The lines this run added. */
+  ran: EvalResultLine[];
+  /** Set when the run stopped at the paid cap: what OpenRouter's calls had cost, and the line printed. */
+  capped: { spentUsd: number; message: string } | undefined;
+};
+
+/** The cases the settings pick, in the case set's order: the split's, then only those named. */
+export function selectCases(cases: readonly EvalCase[], settings: EvalSettings): EvalCase[] {
+  return cases.filter(
+    (c) =>
+      (settings.split === "all" || c.split === settings.split) &&
+      (settings.caseNames === undefined || settings.caseNames.includes(c.name)),
+  );
+}
+
+/** The paid calls' spending: what was spent, and the most one paid case has cost. */
+type Ledger = { spentUsd: number; mostCaseUsd: number | undefined };
+
+/** What one call cost and stated. */
+type CallRecord = { inputTokens?: number; outputTokens?: number; costUsd: number };
+
+/** Whether a failed call may have cost money, as the Judge counts it: all but one refused before it ran. */
+const mayBeBilled = (error: unknown) => !(error instanceof ModelCallFailed && !error.billed);
+
+/**
+ * `model`, with each call's tokens and cost added to `calls`, and a paid call's cost to `ledger`: what its answer
+ * stated, or UNPRICED_CALL_USD for an answer stating none or a failure that may have been billed.
+ */
+function metered(model: JudgeModel, calls: CallRecord[], ledger: Ledger): JudgeModel {
+  const charge = (record: CallRecord) => {
+    calls.push(record);
+    ledger.spentUsd += record.costUsd;
+  };
+  return {
+    model: model.model,
+    paid: model.paid,
+    async complete(messages, schema) {
+      let answer;
+      try {
+        answer = await model.complete(messages, schema);
+      } catch (error) {
+        charge({ costUsd: model.paid && mayBeBilled(error) ? UNPRICED_CALL_USD : 0 });
+        throw error;
+      }
+      const { inputTokens, outputTokens, costUsd } = answer.usage ?? {};
+      charge({
+        inputTokens,
+        outputTokens,
+        costUsd: model.paid ? (costUsd ?? UNPRICED_CALL_USD) : 0,
+      });
+      return answer;
+    },
+  };
+}
+
+/** The calls' stated counts added up, or null when no call stated one. */
+function stated(values: readonly (number | undefined)[]): number | null {
+  const known = values.filter((value) => value !== undefined);
+  return known.length === 0 ? null : known.reduce((total, value) => total + value, 0);
+}
+
+/** The hook events a Team at `tier` sends: those the managed-settings block has a hook for. */
+const sentAt = (tier: EvalCase["tier"]) =>
+  new Set(Object.keys(managedSettings({ url: "http://127.0.0.1", token: null, tier }).hooks));
+
+/** The model a run's `model` names, with no tracing. */
+function judgeModelFor(
+  settings: EvalSettings,
+  { provider, model }: EvalModel,
+  openRouterFetch: Fetch | undefined,
+): JudgeModel {
+  if (provider === "local")
+    return localModel({
+      url: settings.localUrl!,
+      model,
+      timeoutMs: EVAL_LOCAL_CALL_TIMEOUT_MS,
+      allowLocalhost: true,
+    });
+  return openRouterModel({
+    apiKey: settings.apiKey!,
+    model,
+    ...(openRouterFetch === undefined ? {} : { fetch: openRouterFetch }),
+  });
+}
+
+/**
+ * Unloads every local model but `keep`, through Ollama's `POST /api/generate` with `keep_alive: 0` at the local URL's
+ * origin; throws naming the model at a non-2xx answer or a connection error.
+ */
+async function unloadOthers(settings: EvalSettings, keep: string): Promise<void> {
+  const origin = new URL(settings.localUrl!).origin;
+  const others = settings.models.filter(
+    ({ provider, model }) => provider === "local" && model !== keep,
+  );
+  for (const { model } of others) {
+    const why = `before ${keep}'s first case, unloading ${model}`;
+    let answer;
+    try {
+      answer = await callJson(globalThis.fetch, {
+        step: why,
+        url: `${origin}/api/generate`,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model, keep_alive: 0 }),
+        },
+        timeoutMs: UNLOAD_TIMEOUT_MS,
+      });
+    } catch (error) {
+      throw new Error(`${why} failed: ${failureCode(error) ?? "an error"}`, { cause: error });
+    }
+    if (!answer.ok) throw new Error(`${why} answered ${answer.status}`);
+  }
+}
+
+/** A local Warden with the hook endpoint and no Judge job, served on 127.0.0.1, and what each case's run needs. */
+async function startWarden(withTeam: WithTeam) {
+  const { publicPem } = await testKey();
+  const hookSettings = createHookSettings({ withTeam });
+  const agentSessions = createAgentSessions({ withTeam });
+  const findings = createFindings({ withTeam, moveRules: MOVE_RULES });
+  const spending = createSpending({ withTeam });
+  const { app } = testApp({
+    publicPem,
+    withTeam,
+    moduleRoutes: [
+      hookEventRoutes({
+        hookSettings,
+        agentSessions,
+        pseudonymKey: randomBytes(32),
+        behindCloudRun: false,
+        logger: createLogger(() => {}),
+      }),
+    ],
+  });
+  const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
+    const started = serve({ fetch: app.fetch, port: 0, hostname: "127.0.0.1" }, () =>
+      resolve(started),
+    );
+  });
+  const hookUrl = new URL(
+    HOOK_EVENTS_PATH,
+    `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+  ).href;
+  const judgeRules = JUDGE_RULES.map(({ ruleId }) => ruleId);
+
+  /** The Judge Rules with a Finding of any Status on the session's Asset, sorted. */
+  async function flaggedRules(team: string, sessionId: string): Promise<string[]> {
+    const found = await findings.listByRules(team, { rules: judgeRules, statuses: Status.options });
+    const rules = found
+      .filter(({ asset }) => asset.kind === "agent_session" && asset.ref === sessionId)
+      .map(({ rule_id }) => rule_id);
+    return [...new Set(rules)].sort();
+  }
+
+  /** One case on one model: a new Team, its events posted, the Judge run, and the result. */
+  async function runCase(
+    c: EvalCase,
+    model: EvalModel,
+    judgeModel: JudgeModel,
+    ledger: Ledger,
+  ): Promise<EvalResultLine> {
+    const team = await newTeam(withTeam);
+    const { token } = await hookSettings.issueToken(team, { issuedBy: ADMIN });
+    await hookSettings.setPrivacyTier(team, { tier: c.tier, setBy: ADMIN });
+    const sessionId = `eval-${randomUUID()}`;
+    const sent = sentAt(c.tier);
+    const startedAt = performance.now();
+    for (const [i, event] of c.events.entries()) {
+      if (!sent.has(event.hook_event_name)) continue;
+      const response = await fetch(hookUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+          "X-Warden-Developer": DEVELOPER,
+        },
+        body: JSON.stringify({ session_id: sessionId, ...event }),
+      });
+      await response.arrayBuffer();
+      if (response.status !== 204)
+        throw new Error(
+          `case "${c.name}": events[${i}] (${event.hook_event_name}) answered ${response.status}, not 204`,
+        );
+    }
+
+    const calls: CallRecord[] = [];
+    const judge = createJudge({
+      agentSessions,
+      findings,
+      spending,
+      modelFor: () => Promise.resolve(metered(judgeModel, calls, ledger)),
+    });
+    let ran: JudgeRunOutcome | undefined;
+    let error: string | null = null;
+    try {
+      ran = await judge.run(team, sessionId);
+    } catch (thrown) {
+      // A model call that failed is the model's result; anything else is the harness's own fault, and stops the run.
+      if (!(thrown instanceof ModelCallFailed)) throw thrown;
+      error = thrown.message;
+    }
+    const ms = Math.round(performance.now() - startedAt);
+    const judged = ran?.kind === "judged" ? ran : undefined;
+    if (ran !== undefined && judged === undefined) error = ran.kind;
+
+    const flagged = await flaggedRules(team, sessionId);
+    const missing = c.labels.filter((rule) => !flagged.includes(rule));
+    const extra = flagged.filter((rule) => !c.labels.includes(rule));
+    const outcome = judged?.outcome ?? null;
+    return {
+      model: model.model,
+      provider: model.provider,
+      case: c.name,
+      group: c.group,
+      split: c.split,
+      labels: c.labels,
+      flagged,
+      missing,
+      extra,
+      outcome,
+      pass: casePasses({ error, outcome, missing, extra }),
+      input_tokens: stated(calls.map((call) => call.inputTokens)),
+      output_tokens: stated(calls.map((call) => call.outputTokens)),
+      cost_usd: calls.reduce((total, call) => total + call.costUsd, 0),
+      calls: calls.length,
+      events_read: judged?.eventsRead ?? null,
+      events_cut: judged?.eventsCut ?? null,
+      ms,
+      error,
+      at: new Date().toISOString(),
+    };
+  }
+
+  return {
+    runCase,
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+const usd = (amount: number) => `$${amount.toFixed(2)}`;
+
+/**
+ * The run: the settings' cases on each of its models, each result added to the results file as it ends. Throws before
+ * any case at a bad saved line or one naming a case not in the set, and stops the run at an event not answered 204, a
+ * failed unload or any error but a model call's. Answers `capped` when it stopped at the paid cap.
+ */
+export async function runEval({
+  settings,
+  cases,
+  withTeam,
+  openRouterFetch,
+  onCase = () => {},
+  log = console.log,
+}: RunEvalOptions): Promise<EvalRun> {
+  const file = settings.resultsFile;
+  const saved = existsSync(file) ? readResults(file) : [];
+  const names = new Set(cases.map(({ name }) => name));
+  const stray = saved.find((result) => !names.has(result.case));
+  if (stray !== undefined)
+    throw new Error(`${file} holds a result for "${stray.case}", which isn't a case`);
+  const done = new Set(
+    latestResults(saved)
+      .filter((result) => result.error === null)
+      .map(resultKey),
+  );
+  const paidCosts = saved.filter((r) => r.provider === "openrouter").map((r) => r.cost_usd);
+  const ledger: Ledger = {
+    spentUsd: paidCosts.reduce((total, cost) => total + cost, 0),
+    mostCaseUsd: paidCosts.length === 0 ? undefined : Math.max(...paidCosts),
+  };
+  const selected = selectCases(cases, settings);
+  const results = [...saved];
+  const ran: EvalResultLine[] = [];
+
+  const warden = await startWarden(withTeam);
+  try {
+    for (const model of settings.models) {
+      const todo = selected.filter(
+        (c) => !done.has(resultKey({ provider: model.provider, model: model.model, case: c.name })),
+      );
+      if (todo.length === 0) continue;
+      if (model.provider === "local") await unloadOthers(settings, model.model);
+      const judgeModel = judgeModelFor(settings, model, openRouterFetch);
+      for (const c of todo) {
+        if (model.provider === "openrouter") {
+          const next = ledger.mostCaseUsd ?? FIRST_PAID_CASE_USD;
+          if (ledger.spentUsd + next > EVAL_PAID_CAP_USD) {
+            const message =
+              `stopped before ${c.name} on ${model.model}: ${usd(ledger.spentUsd)} spent on OpenRouter, ` +
+              `and a case may cost ${usd(next)}, over the ${usd(EVAL_PAID_CAP_USD)} cap`;
+            log(message);
+            return { results, ran, capped: { spentUsd: ledger.spentUsd, message } };
+          }
+        }
+        onCase(c, model);
+        const result = await warden.runCase(c, model, judgeModel, ledger);
+        appendResult(file, result);
+        results.push(result);
+        ran.push(result);
+        if (model.provider === "openrouter")
+          ledger.mostCaseUsd = Math.max(ledger.mostCaseUsd ?? 0, result.cost_usd);
+        log(
+          `${model.provider} ${model.model} ${c.name}: ${result.pass ? "pass" : "FAIL"}` +
+            ` (${result.error ?? result.outcome}, ${result.ms} ms)`,
+        );
+      }
+    }
+  } finally {
+    await warden.close();
+  }
+  return { results, ran, capped: undefined };
+}
