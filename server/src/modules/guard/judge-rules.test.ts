@@ -1,7 +1,10 @@
 import { demoRuns } from "@warden/contracts/demo";
 import { RuleId } from "@warden/contracts";
 import { describe, expect, it } from "vitest";
-import { JUDGE_RULES, judgeRule } from "./judge-rules.ts";
+import { loadEvalCases, mapStrings, type EvalCase } from "../../../test/judge-eval/eval-cases.ts";
+import { AWS_KEY } from "../../../test/secret-fixtures.ts";
+import { AGENT_SENDS_SECRETS, JUDGE_RULES, judgeRule } from "./judge-rules.ts";
+import { maskSecrets } from "./secrets.ts";
 
 describe("the Judge's Rules", () => {
   it("are Guard Rules, each listed once", () => {
@@ -16,5 +19,40 @@ describe("the Judge's Rules", () => {
     for (const observation of spotRun.observations) {
       expect(judgeRule(observation.rule_id), observation.rule_id).toBeDefined();
     }
+  });
+});
+
+describe("the secret Rules' masked values (#541)", () => {
+  /** Warden's mask: 4 characters other than `*` or a space, then exactly 8 `*`. */
+  const WARDEN_MASK = /[^* ]{4}\*{8}(?!\*)/;
+
+  /** A dev case's events as the Judge reads them: each string, keys included, through redaction's secret mask. */
+  const maskedEvents = (name: string) => {
+    const found = loadEvalCases().find((c) => c.name === name);
+    if (found === undefined) throw new Error(`no case ${name}`);
+    return {
+      events: found.events,
+      masked: mapStrings(found.events, maskSecrets) as EvalCase["events"],
+    };
+  };
+
+  it("name Warden's mask form exactly as maskSecrets writes it, so the wording can't drift from the real mask", () => {
+    expect(judgeRule(AGENT_SENDS_SECRETS)?.looksFor).toContain(maskSecrets(AWS_KEY));
+  });
+
+  it("match a Warden mask in the labelled send's curl, and none in the near-miss's already-hidden key", () => {
+    expect(maskSecrets(AWS_KEY)).toMatch(WARDEN_MASK);
+
+    const send = maskedEvents("sends-secrets-plain-pastebin").masked;
+    const curl = send
+      .map((event) => (event.tool_input as { command?: string } | undefined)?.command)
+      .find((command) => command?.startsWith("curl"));
+    expect(curl).toContain(maskSecrets(AWS_KEY));
+
+    const nearMiss = maskedEvents("near-miss-masked-key-output");
+    expect(nearMiss.masked).toEqual(nearMiss.events);
+    const text = JSON.stringify(nearMiss.masked);
+    expect(text).toContain("****************7QXA");
+    expect(text).not.toMatch(WARDEN_MASK);
   });
 });
