@@ -80,8 +80,12 @@ const fileTime = (at: Date) => at.toISOString().replace(/[-:]/g, "");
  * refuses it, so it can't start a paid run by accident. */
 const PAID_NOTE = "(paid: OpenRouter — needs the owner's yes)";
 
-/** Where a rerun line puts its results file, and the local models' URL it names. */
-export type RerunPlace = {
+/** The local models' URL a rerun line names when `eval:regressions`' own WARDEN_EVAL_LOCAL_URL is unset or blank:
+ * Ollama's default, as in the README. */
+export const DEFAULT_LOCAL_URL = "http://localhost:11434/v1";
+
+/** What a rerun line runs against: the folder its results file goes in, and the local models' URL it names. */
+export type RerunTarget = {
   /** The later file's folder, as written from where pnpm is run: "" for that folder itself. */
   folder: string;
   /** The local models' OpenAI-compatible base URL, as printed. */
@@ -95,22 +99,22 @@ const shellWord = (value: string) =>
 
 /**
  * The line that reruns `cases` once on `model` alone, taken from where pnpm is run, into a results file in
- * `place.folder` named by the provider, the model and `at` (when `eval:regressions` ran): the harness skips a
+ * `target.folder` named by the provider, the model and `at` (when `eval:regressions` ran): the harness skips a
  * (model, case) its results file already holds, so each run's line names a new one. A local model's line starts with
- * its URL; an OpenRouter model's line ends with PAID_NOTE.
+ * its URL; an OpenRouter model's line ends with PAID_NOTE. Each value is one shell word (`shellWord`).
  */
 export function rerunLine(
   { provider, model }: ResultModel,
   cases: readonly string[],
   at: Date,
-  { folder, localUrl }: RerunPlace,
+  { folder, localUrl }: RerunTarget,
 ) {
   const results = join(folder, `rerun-${provider}-${fileSafe(model)}-${fileTime(at)}.jsonl`);
   const models =
     provider === "local" ? "WARDEN_EVAL_LOCAL_MODELS" : "WARDEN_EVAL_OPENROUTER_MODELS";
   const line =
-    `WARDEN_EVAL_RESULTS=${shellWord(results)} ${models}=${model} ` +
-    `WARDEN_EVAL_CASES=${cases.join(",")} pnpm --filter @warden/server eval:judge`;
+    `WARDEN_EVAL_RESULTS=${shellWord(results)} ${models}=${shellWord(model)} ` +
+    `WARDEN_EVAL_CASES=${shellWord(cases.join(","))} pnpm --filter @warden/server eval:judge`;
   return provider === "openrouter"
     ? `${line} ${PAID_NOTE}`
     : `WARDEN_EVAL_LOCAL_URL=${shellWord(localUrl)} ${line}`;
@@ -119,11 +123,11 @@ export function rerunLine(
 const rules = (list: readonly string[]) => (list.length === 0 ? "none" : list.join(", "));
 
 /** The regressions as `eval:regressions` prints them at `at`: each model's flips and rerun line (its file and URL
- * from `place`), then the one-file models. */
+ * from `target`), then the one-file models. */
 export function regressionsText(
   { models, onlyIn }: Regressions,
   at: Date,
-  place: RerunPlace,
+  target: RerunTarget,
 ): string {
   const lines: string[] = [];
   for (const found of models) {
@@ -141,7 +145,7 @@ export function regressionsText(
           found,
           flips.map((flip) => flip.case),
           at,
-          place,
+          target,
         )}`,
       );
     if (notInBoth.length > 0)

@@ -8,7 +8,13 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { AGENT_READS_SECRETS, AGENT_SENDS_SECRETS } from "../../src/modules/guard/judge-rules.ts";
 import { runCommand } from "../child-process.ts";
-import { findRegressions, regressionsText, rerunLine, type RerunPlace } from "./regressions.ts";
+import {
+  DEFAULT_LOCAL_URL,
+  findRegressions,
+  regressionsText,
+  rerunLine,
+  type RerunTarget,
+} from "./regressions.ts";
 import { resultLine, resultsFile } from "./result-fixtures.ts";
 import type { EvalResultLine } from "./results.ts";
 import { readEvalSettings } from "./settings.ts";
@@ -18,11 +24,8 @@ const SERVER_DIR = fileURLToPath(new URL("../../", import.meta.url));
 /** When `eval:regressions` ran, in the unit tests: the rerun file's name carries it. */
 const AT = new Date("2026-11-28T10:00:00.000Z");
 
-/** The local models' URL `eval:regressions` names when its own WARDEN_EVAL_LOCAL_URL is unset or blank. */
-const DEFAULT_URL = "http://localhost:11434/v1";
-
 /** Where the unit tests' rerun lines put their file, and the local URL they carry. */
-const PLACE: RerunPlace = { folder: "docs/eval/results", localUrl: DEFAULT_URL };
+const TARGET: RerunTarget = { folder: "docs/eval/results", localUrl: DEFAULT_LOCAL_URL };
 
 /** `line`'s words as bash reads them, quotes removed and nothing else run. */
 async function shellWords(line: string): Promise<string[]> {
@@ -146,8 +149,8 @@ describe("findRegressions: each case that passed in the earlier file and fails i
 
 describe("rerunLine: the line that reruns a model's flips into a new results file", () => {
   it("names a local model in WARDEN_EVAL_LOCAL_MODELS after its URL, its results file in the folder by provider, model and time", () => {
-    expect(rerunLine({ provider: "local", model: "qwen3:8b" }, ["a", "b"], AT, PLACE)).toBe(
-      "WARDEN_EVAL_LOCAL_URL=http://localhost:11434/v1 " +
+    expect(rerunLine({ provider: "local", model: "qwen3:8b" }, ["a", "b"], AT, TARGET)).toBe(
+      `WARDEN_EVAL_LOCAL_URL=${DEFAULT_LOCAL_URL} ` +
         "WARDEN_EVAL_RESULTS=docs/eval/results/rerun-local-qwen3-8b-20261128T100000.000Z.jsonl " +
         "WARDEN_EVAL_LOCAL_MODELS=qwen3:8b WARDEN_EVAL_CASES=a,b pnpm --filter @warden/server eval:judge",
     );
@@ -155,14 +158,14 @@ describe("rerunLine: the line that reruns a model's flips into a new results fil
 
   it("names a bare file name when the later file is in the folder pnpm runs from", () => {
     expect(
-      rerunLine({ provider: "local", model: "qwen3:8b" }, ["a"], AT, { ...PLACE, folder: "" }),
+      rerunLine({ provider: "local", model: "qwen3:8b" }, ["a"], AT, { ...TARGET, folder: "" }),
     ).toContain(" WARDEN_EVAL_RESULTS=rerun-local-qwen3-8b-20261128T100000.000Z.jsonl ");
   });
 
   it("single-quotes a folder the shell would split or expand, so bash reads it as one word", async () => {
     const folder = "/tmp/my results/it's $HOME";
     const line = rerunLine({ provider: "local", model: "qwen3:8b" }, ["a"], AT, {
-      ...PLACE,
+      ...TARGET,
       folder,
     });
 
@@ -174,16 +177,26 @@ describe("rerunLine: the line that reruns a model's flips into a new results fil
   it("single-quotes a local URL the shell would split, so bash reads it as one word", async () => {
     const localUrl = "http://localhost:11434/v1 #1";
     const line = rerunLine({ provider: "local", model: "qwen3:8b" }, ["a"], AT, {
-      ...PLACE,
+      ...TARGET,
       localUrl,
     });
 
     expect((await lineEnv(line)).WARDEN_EVAL_LOCAL_URL).toBe(localUrl);
   });
 
+  it("single-quotes a model and cases the shell would split or expand, so bash reads each as one word", async () => {
+    const model = "my model;$HOME";
+    const cases = ["it's a", "b"];
+    const line = rerunLine({ provider: "local", model }, cases, AT, TARGET);
+
+    const env = await lineEnv(line);
+    expect(env.WARDEN_EVAL_LOCAL_MODELS).toBe(model);
+    expect(env.WARDEN_EVAL_CASES).toBe(cases.join(","));
+  });
+
   it("names an OpenRouter model in WARDEN_EVAL_OPENROUTER_MODELS, its file in the folder, no local URL, marked paid", () => {
     expect(
-      rerunLine({ provider: "openrouter", model: "anthropic/claude-haiku-5.5" }, ["a"], AT, PLACE),
+      rerunLine({ provider: "openrouter", model: "anthropic/claude-haiku-5.5" }, ["a"], AT, TARGET),
     ).toBe(
       "WARDEN_EVAL_RESULTS=docs/eval/results/rerun-openrouter-anthropic-claude-haiku-5.5-20261128T100000.000Z.jsonl " +
         "WARDEN_EVAL_OPENROUTER_MODELS=anthropic/claude-haiku-5.5 " +
@@ -196,13 +209,13 @@ describe("rerunLine: the line that reruns a model's flips into a new results fil
     const file = (line: string) =>
       line.split(" ").find((word) => word.startsWith("WARDEN_EVAL_RESULTS="));
     const later = new Date(AT.getTime() + 1);
-    const local = rerunLine({ provider: "local", model: "m" }, ["a"], AT, PLACE);
+    const local = rerunLine({ provider: "local", model: "m" }, ["a"], AT, TARGET);
 
     expect(file(local)).toBeDefined();
-    expect(file(rerunLine({ provider: "local", model: "m" }, ["a"], later, PLACE))).not.toBe(
+    expect(file(rerunLine({ provider: "local", model: "m" }, ["a"], later, TARGET))).not.toBe(
       file(local),
     );
-    expect(file(rerunLine({ provider: "openrouter", model: "m" }, ["a"], AT, PLACE))).not.toBe(
+    expect(file(rerunLine({ provider: "openrouter", model: "m" }, ["a"], AT, TARGET))).not.toBe(
       file(local),
     );
   });
@@ -212,7 +225,7 @@ describe("regressionsText: what eval:regressions prints", () => {
   it("prints a model with no flip as no case broke, and the cases in one file under not in both", () => {
     const found = findRegressions([fails("a"), passes("b")], [passes("a"), passes("c")]);
 
-    expect(regressionsText(found, AT, PLACE)).toBe(
+    expect(regressionsText(found, AT, TARGET)).toBe(
       ["local qwen3:8b: no case broke", "  not in both: b (earlier only), c (later only)"].join(
         "\n",
       ),
@@ -222,11 +235,11 @@ describe("regressionsText: what eval:regressions prints", () => {
   it("prints a flip with an error by its error, and a model in one file as such", () => {
     const found = findRegressions([passes("a"), passes("a", OTHER)], [errored("a")]);
 
-    expect(regressionsText(found, AT, PLACE)).toBe(
+    expect(regressionsText(found, AT, TARGET)).toBe(
       [
         "local qwen3:8b: 1 case broke",
         `  a: ${MODEL_ERROR}`,
-        `  rerun: ${rerunLine({ provider: "local", model: "qwen3:8b" }, ["a"], AT, PLACE)}`,
+        `  rerun: ${rerunLine({ provider: "local", model: "qwen3:8b" }, ["a"], AT, TARGET)}`,
         "local gemma3:12b: only in the earlier file",
       ].join("\n"),
     );
@@ -248,7 +261,7 @@ describe("eval:regressions: the flips between two saved files", () => {
       [
         "local qwen3:8b: 1 case broke",
         `  b: missing ${AGENT_SENDS_SECRETS}; extra ${AGENT_READS_SECRETS}`,
-        `  rerun: WARDEN_EVAL_LOCAL_URL=${DEFAULT_URL} ` +
+        `  rerun: WARDEN_EVAL_LOCAL_URL=${DEFAULT_LOCAL_URL} ` +
           `WARDEN_EVAL_RESULTS=${dirname(later)}/rerun-local-qwen3-8b-<at>.jsonl ` +
           "WARDEN_EVAL_LOCAL_MODELS=qwen3:8b WARDEN_EVAL_CASES=b pnpm --filter @warden/server eval:judge",
         "local gemma3:12b: no case broke",
@@ -345,7 +358,9 @@ describe("eval:regressions: the rerun line runs as printed", () => {
     const settings = readEvalSettings({ ...env, INIT_CWD: root }, ["a", "b"]);
     expect(dirname(settings.resultsFile)).toBe(results);
     expect(settings.caseNames).toEqual(["b"]);
-    expect(settings.models).toEqual([{ provider: "local", model: "qwen3:8b", url: DEFAULT_URL }]);
+    expect(settings.models).toEqual([
+      { provider: "local", model: "qwen3:8b", url: DEFAULT_LOCAL_URL },
+    ]);
   });
 
   it("names the folder's absolute path when the later file is given absolute, outside where pnpm runs", async () => {
@@ -366,7 +381,7 @@ describe("eval:regressions: the rerun line runs as printed", () => {
       WARDEN_EVAL_LOCAL_URL: "http://127.0.0.1:9999/v1",
     });
 
-    expect(line).toMatch(/^WARDEN_EVAL_LOCAL_URL=http:\/\/127\.0\.0\.1:9999\/v1 /);
+    expect(line.split(" ")[0]).toBe("WARDEN_EVAL_LOCAL_URL=http://127.0.0.1:9999/v1");
   });
 
   it.each([
@@ -379,7 +394,7 @@ describe("eval:regressions: the rerun line runs as printed", () => {
 
       const line = await printedRerun(IN_RESULTS, { INIT_CWD: root, ...url });
 
-      expect(line).toMatch(/^WARDEN_EVAL_LOCAL_URL=http:\/\/localhost:11434\/v1 /);
+      expect(line.split(" ")[0]).toBe(`WARDEN_EVAL_LOCAL_URL=${DEFAULT_LOCAL_URL}`);
     },
   );
 });

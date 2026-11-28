@@ -3,12 +3,8 @@
 // when none did, and 2, saying why, at a wrong argument, a missing or bad file, or no model in both files.
 import { dirname, relative, resolve, sep } from "node:path";
 import { cliArgs, isMain } from "./cli.ts";
-import { findRegressions, regressionsText } from "./regressions.ts";
+import { DEFAULT_LOCAL_URL, findRegressions, regressionsText } from "./regressions.ts";
 import { readResults } from "./results.ts";
-
-/** The local models' URL a rerun line names when this run's own WARDEN_EVAL_LOCAL_URL is unset or blank: Ollama's
- * default, as in the README. */
-const DEFAULT_LOCAL_URL = "http://localhost:11434/v1";
 
 const USAGE =
   "usage: pnpm --filter @warden/server eval:regressions -- <earlier.jsonl> <later.jsonl>";
