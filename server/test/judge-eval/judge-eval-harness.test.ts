@@ -402,6 +402,33 @@ describe("runEval: which cases a run takes", () => {
   });
 });
 
+describe("runEval: what it checks before any model call", () => {
+  it("stops at a results file in a folder that doesn't exist, naming WARDEN_EVAL_RESULTS and the path", async () => {
+    const ollama = await fakeOllama();
+    const file = join(mkdtempSync(join(tmpdir(), "warden-eval-")), "missing", "results.jsonl");
+
+    await expect(run(onOllama(ollama, file))).rejects.toThrow(
+      `WARDEN_EVAL_RESULTS names ${file}, which can't be opened for appending`,
+    );
+    expect(ollama.received).toEqual([]);
+  });
+
+  it("stops at a split and a list of cases that select no case together", async () => {
+    const heldOut = CASES.find((c) => c.split === "held-out")!;
+    const ollama = await fakeOllama();
+
+    await expect(
+      run(
+        onOllama(ollama, resultsPath(), {
+          WARDEN_EVAL_SPLIT: "dev",
+          WARDEN_EVAL_CASES: heldOut.name,
+        }),
+      ),
+    ).rejects.toThrow("WARDEN_EVAL_SPLIT and WARDEN_EVAL_CASES select no case");
+    expect(ollama.received).toEqual([]);
+  });
+});
+
 describe("runEval: unloading the other local models", () => {
   const variables = (ollama: { url: string }, file = resultsPath()) =>
     onOllama(ollama, file, {

@@ -8,7 +8,7 @@
 // is never started, stopped or reconfigured. OpenRouter's calls are paid: the harness keeps its own ledger under
 // EVAL_PAID_CAP_USD, and stops before a case that could pass it.
 import { randomBytes, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
 import { Status } from "@warden/contracts";
@@ -347,8 +347,25 @@ async function startWarden(withTeam: WithTeam) {
 const usd = (amount: number) => `$${amount.toFixed(2)}`;
 
 /**
+ * Opens the results file `file` for appending and closes it again (creating it, empty, when it's new), so a file that
+ * can't be written stops the run before its first model call, not after a paid one whose cost it then can't save.
+ */
+function checkWritable(file: string): void {
+  try {
+    closeSync(openSync(file, "a"));
+  } catch (error) {
+    const why = failureCode(error) ?? "an error";
+    throw new Error(
+      `WARDEN_EVAL_RESULTS names ${file}, which can't be opened for appending (${why})`,
+      { cause: error },
+    );
+  }
+}
+
+/**
  * The run: the settings' cases on each of its models, each result added to the results file as it ends. Throws before
- * any case at a bad saved line or one naming a case not in the set, and stops the run at an event not answered 204, a
+ * any case when the split and the case list select no case, at a results file that can't be opened for appending, and
+ * at a bad saved line or one naming a case not in the set; it stops the run at an event not answered 204, a
  * failed unload or any error but a model call's; a case stopped after its model calls is saved first, with an error,
  * so a resumed run counts what they cost and runs it again. Answers `capped` when it stopped at the paid cap.
  */
@@ -360,8 +377,12 @@ export async function runEval({
   onCase = () => {},
   log = console.log,
 }: RunEvalOptions): Promise<EvalRun> {
+  const selected = selectCases(cases, settings);
+  if (selected.length === 0)
+    throw new Error("WARDEN_EVAL_SPLIT and WARDEN_EVAL_CASES select no case");
   const file = settings.resultsFile;
-  const saved = existsSync(file) ? readResults(file) : [];
+  checkWritable(file);
+  const saved = readResults(file);
   const names = new Set(cases.map(({ name }) => name));
   const stray = saved.find((result) => !names.has(result.case));
   if (stray !== undefined)
@@ -376,7 +397,6 @@ export async function runEval({
     ledger.spentUsd += result.cost_usd;
     noteCase(ledger, result);
   }
-  const selected = selectCases(cases, settings);
   const results = [...saved];
   const ran: EvalResultLine[] = [];
 
