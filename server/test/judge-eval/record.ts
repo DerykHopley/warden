@@ -340,10 +340,11 @@ function spellings(path: string): string[] {
 const slug = (path: string) => path.replace(/[^A-Za-z0-9]/g, "-");
 const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** `user` as a whole word, case-sensitive, anywhere: in a path, or in a tool's output such as `whoami`, `ls -l` or
- * `git log`. A longer word holding it (alicesmith) doesn't match. Safe because the recorder refuses generic names. */
+/** `user` as a whole word, in any casing (a git author or an e-mail can spell it otherwise, #518), anywhere: in a
+ * path, or in a tool's output such as `whoami`, `ls -l` or `git log`. A longer word holding it (alicesmith) doesn't
+ * match. Safe because the recorder refuses generic names. */
 export const userWord = (user: string, flags = "") =>
-  new RegExp(`(?<![A-Za-z0-9_])${escaped(user)}(?![A-Za-z0-9_])`, flags);
+  new RegExp(`(?<![A-Za-z0-9_])${escaped(user)}(?![A-Za-z0-9_])`, `${flags}i`);
 
 /** Every secret-fixtures.ts string export and its name, longest first, so a secret inside another is found second. */
 const fixtureSecrets = () => [...FIXTURE_SECRETS].sort(([, a], [, b]) => b.length - a.length);
