@@ -36,7 +36,8 @@ import { createSpending, UNPRICED_CALL_USD } from "../../src/spending.ts";
 import { MOVE_RULES } from "../../src/wiring.ts";
 import type { WithTeam } from "../../src/with-team.ts";
 import { ADMIN, newTeam, testApp, testKey } from "../helpers.ts";
-import type { EvalCase } from "./eval-cases.ts";
+import { sameFile } from "./cli.ts";
+import { evalSetFiles, type EvalCase } from "./eval-cases.ts";
 import {
   appendResult,
   caseVerdict,
@@ -360,10 +361,11 @@ function checkWritable(file: string): void {
 
 /**
  * The run: the settings' cases on each of its models, each result added to the results file as it ends. Throws before
- * any case when the split and the case list select no case, at a results file that can't be opened for appending, and
- * at a bad saved line or one naming a case not in the set; it stops the run at an event not answered 204, a
- * failed unload or any error but a model call's; a case stopped after its model calls is saved first, with an error,
- * so a resumed run counts what they cost and runs it again. Answers `capped` when it stopped at the paid cap.
+ * any case when the split and the case list select no case, at a results file that is one of the eval set's files or
+ * can't be opened for appending, and at a bad saved line or one naming a case not in the set; it stops the run at an
+ * event not answered 204, a failed unload or any error but a model call's; a case stopped after its model calls is
+ * saved first, with an error, so a resumed run counts what they cost and runs it again. Answers `capped` when it
+ * stopped at the paid cap.
  */
 export async function runEval({
   settings,
@@ -377,6 +379,9 @@ export async function runEval({
   if (selected.length === 0)
     throw new Error("WARDEN_EVAL_SPLIT and WARDEN_EVAL_CASES select no case");
   const file = settings.resultsFile;
+  // By the file on disk, so a symlink or a hard link to `targets.json` or a case can't have a line appended to it.
+  if (evalSetFiles().some((input) => sameFile(file, input)))
+    throw new Error(`WARDEN_EVAL_RESULTS names ${file}, which is one of the eval set's files`);
   checkWritable(file);
   const saved = readResults(file);
   const names = new Set(cases.map(({ name }) => name));
