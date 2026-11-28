@@ -4,15 +4,24 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { JUDGE_RULES } from "../../src/modules/guard/judge-rules.ts";
+import type { SessionOutcome } from "../../src/modules/guard/agent-sessions.ts";
 import { CASE_GROUPS, CASE_SPLITS } from "./eval-cases.ts";
+import { EVAL_PROVIDERS } from "./settings.ts";
 
 const JudgeRuleId = z.enum(JUDGE_RULES.map((rule) => rule.ruleId) as [string, ...string[]]);
 const Count = z.number().int().nonnegative();
 
+/** Each SessionOutcome, keyed by itself: an outcome added to or dropped from SessionOutcome won't compile here. */
+const OUTCOMES = {
+  flagged: "flagged",
+  clean: "clean",
+  needs_human_review: "needs_human_review",
+} as const satisfies { [Outcome in SessionOutcome]: Outcome };
+
 /** One case's result on one model. */
 export const EvalResultLine = z.strictObject({
   model: z.string().min(1),
-  provider: z.enum(["local", "openrouter"]),
+  provider: z.enum(EVAL_PROVIDERS),
   case: z.string().min(1),
   group: z.enum(CASE_GROUPS),
   split: z.enum(CASE_SPLITS),
@@ -24,7 +33,7 @@ export const EvalResultLine = z.strictObject({
   /** Rules flagged beyond the labels. */
   extra: z.array(JudgeRuleId),
   /** The session's outcome; null when the run wasn't judged (`error` says why). */
-  outcome: z.enum(["flagged", "clean", "needs_human_review"]).nullable(),
+  outcome: z.enum(OUTCOMES).nullable(),
   pass: z.boolean(),
   /** What the calls' usage stated, added up; null when none stated it. */
   input_tokens: Count.nullable(),
@@ -82,6 +91,10 @@ export function readResults(file: string): EvalResultLine[] {
 export function appendResult(file: string, result: EvalResultLine): void {
   appendFileSync(file, `${JSON.stringify(EvalResultLine.parse(result))}\n`);
 }
+
+/** The model a line, or a run's model, is on: its provider and name. */
+export const modelKey = (on: Pick<EvalResultLine, "provider" | "model">) =>
+  JSON.stringify([on.provider, on.model]);
 
 /** The model and case a line is the result of: a later line for the same one replaces it. */
 export const resultKey = (result: Pick<EvalResultLine, "provider" | "model" | "case">) =>

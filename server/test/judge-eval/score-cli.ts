@@ -1,6 +1,7 @@
 // Prints the Judge eval's score from a saved results file (spec #225, slice 10b), with no database and no model:
 // `pnpm --filter @warden/server eval:score -- <results.jsonl>`. A missing file or a bad line exits 1, naming it.
 import { existsSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadEvalTargets } from "./eval-cases.ts";
 import { readResults } from "./results.ts";
@@ -14,7 +15,9 @@ function main(argv: readonly string[]): number {
     console.error(USAGE);
     return 2;
   }
-  const [file] = args as [string];
+  const [given] = args as [string];
+  // `pnpm --filter` runs this in server/: a relative path is taken from where pnpm was run.
+  const file = resolve(process.env.INIT_CWD ?? process.cwd(), given);
   if (!existsSync(file)) {
     console.error(`no results file at ${file}`);
     return 1;

@@ -21,6 +21,7 @@ import { createHookSettings } from "../../src/modules/guard/hook-settings.ts";
 import {
   createJudge,
   JUDGE_RUN_CALL_BUDGET,
+  mayBeBilled,
   type JudgeRunOutcome,
 } from "../../src/modules/guard/judge.ts";
 import {
@@ -40,6 +41,7 @@ import {
   appendResult,
   casePasses,
   latestResults,
+  modelKey,
   readResults,
   resultKey,
   type EvalResultLine,
@@ -92,14 +94,32 @@ export function selectCases(cases: readonly EvalCase[], settings: EvalSettings):
   );
 }
 
-/** The paid calls' spending: what was spent, and the most one paid case has cost. */
-type Ledger = { spentUsd: number; mostCaseUsd: number | undefined };
+/** The paid calls' spending: what was spent, and the most one paid case has cost on each model (by `modelKey`). */
+type Ledger = { spentUsd: number; mostCaseUsd: Map<string, number> };
+
+/** What the next paid case on `model` is taken to cost: the most one has cost on it, and never under the first's. */
+const nextCaseUsd = (ledger: Ledger, model: EvalModel) =>
+  Math.max(ledger.mostCaseUsd.get(modelKey(model)) ?? 0, FIRST_PAID_CASE_USD);
+
+/** Adds a paid case's cost to what the most one has cost on its model. */
+function noteCase(ledger: Ledger, result: EvalResultLine): void {
+  const key = modelKey(result);
+  ledger.mostCaseUsd.set(key, Math.max(ledger.mostCaseUsd.get(key) ?? 0, result.cost_usd));
+}
 
 /** What one call cost and stated. */
 type CallRecord = { inputTokens?: number; outputTokens?: number; costUsd: number };
 
-/** Whether a failed call may have cost money, as the Judge counts it: all but one refused before it ran. */
-const mayBeBilled = (error: unknown) => !(error instanceof ModelCallFailed && !error.billed);
+/** A case the harness stopped after its model calls: its line, saving what they cost, and the harness's error. */
+class CaseAbandoned extends Error {
+  readonly line: EvalResultLine;
+  readonly error: unknown;
+  constructor(line: EvalResultLine, error: unknown) {
+    super(line.error ?? "the case was abandoned");
+    this.line = line;
+    this.error = error;
+  }
+}
 
 /**
  * `model`, with each call's tokens and cost added to `calls`, and a paid call's cost to `ledger`: what its answer
@@ -143,35 +163,30 @@ const sentAt = (tier: EvalCase["tier"]) =>
   new Set(Object.keys(managedSettings({ url: "http://127.0.0.1", token: null, tier }).hooks));
 
 /** The model a run's `model` names, with no tracing. */
-function judgeModelFor(
-  settings: EvalSettings,
-  { provider, model }: EvalModel,
-  openRouterFetch: Fetch | undefined,
-): JudgeModel {
-  if (provider === "local")
+function judgeModelFor(evalModel: EvalModel, openRouterFetch: Fetch | undefined): JudgeModel {
+  if (evalModel.provider === "local")
     return localModel({
-      url: settings.localUrl!,
-      model,
+      url: evalModel.url,
+      model: evalModel.model,
       timeoutMs: EVAL_LOCAL_CALL_TIMEOUT_MS,
       allowLocalhost: true,
     });
   return openRouterModel({
-    apiKey: settings.apiKey!,
-    model,
+    apiKey: evalModel.apiKey,
+    model: evalModel.model,
     ...(openRouterFetch === undefined ? {} : { fetch: openRouterFetch }),
   });
 }
 
 /**
- * Unloads every local model but `keep`, through Ollama's `POST /api/generate` with `keep_alive: 0` at the local URL's
- * origin; throws naming the model at a non-2xx answer or a connection error.
+ * Unloads every local model but `keep`, through Ollama's `POST /api/generate` with `keep_alive: 0` at the origin of
+ * each one's URL; throws naming the model at a non-2xx answer or a connection error.
  */
 async function unloadOthers(settings: EvalSettings, keep: string): Promise<void> {
-  const origin = new URL(settings.localUrl!).origin;
-  const others = settings.models.filter(
-    ({ provider, model }) => provider === "local" && model !== keep,
-  );
-  for (const { model } of others) {
+  for (const other of settings.models) {
+    if (other.provider !== "local" || other.model === keep) continue;
+    const { model } = other;
+    const origin = new URL(other.url).origin;
     const why = `before ${keep}'s first case, unloading ${model}`;
     let answer;
     try {
@@ -264,51 +279,63 @@ async function startWarden(withTeam: WithTeam) {
     }
 
     const calls: CallRecord[] = [];
+    /** The case's line: what the Judge flagged and how it ended, with what its calls stated and cost. */
+    const line = (
+      flagged: string[],
+      judged: Extract<JudgeRunOutcome, { kind: "judged" }> | undefined,
+      error: string | null,
+    ): EvalResultLine => {
+      const missing = c.labels.filter((rule) => !flagged.includes(rule));
+      const extra = flagged.filter((rule) => !c.labels.includes(rule));
+      const outcome = judged?.outcome ?? null;
+      return {
+        model: model.model,
+        provider: model.provider,
+        case: c.name,
+        group: c.group,
+        split: c.split,
+        labels: c.labels,
+        flagged,
+        missing,
+        extra,
+        outcome,
+        pass: casePasses({ error, outcome, missing, extra }),
+        input_tokens: stated(calls.map((call) => call.inputTokens)),
+        output_tokens: stated(calls.map((call) => call.outputTokens)),
+        cost_usd: calls.reduce((total, call) => total + call.costUsd, 0),
+        calls: calls.length,
+        events_read: judged?.eventsRead ?? null,
+        events_cut: judged?.eventsCut ?? null,
+        ms: Math.round(performance.now() - startedAt),
+        error,
+        at: new Date().toISOString(),
+      };
+    };
     const judge = createJudge({
       agentSessions,
       findings,
       spending,
       modelFor: () => Promise.resolve(metered(judgeModel, calls, ledger)),
     });
-    let ran: JudgeRunOutcome | undefined;
-    let error: string | null = null;
     try {
-      ran = await judge.run(team, sessionId);
+      let ran: JudgeRunOutcome | undefined;
+      let error: string | null = null;
+      try {
+        ran = await judge.run(team, sessionId);
+      } catch (thrown) {
+        // A model call that failed is the model's result; anything else is the harness's own fault, and stops the run.
+        if (!(thrown instanceof ModelCallFailed)) throw thrown;
+        error = thrown.message;
+      }
+      const judged = ran?.kind === "judged" ? ran : undefined;
+      if (ran !== undefined && judged === undefined) error = ran.kind;
+      return line(await flaggedRules(team, sessionId), judged, error);
     } catch (thrown) {
-      // A model call that failed is the model's result; anything else is the harness's own fault, and stops the run.
-      if (!(thrown instanceof ModelCallFailed)) throw thrown;
-      error = thrown.message;
+      // The harness stopped after the case's calls: a line keeps what they cost, so a resumed run's ledger has it.
+      if (calls.length === 0) throw thrown;
+      const why = thrown instanceof Error ? thrown.message : String(thrown);
+      throw new CaseAbandoned(line([], undefined, `the harness stopped: ${why}`), thrown);
     }
-    const ms = Math.round(performance.now() - startedAt);
-    const judged = ran?.kind === "judged" ? ran : undefined;
-    if (ran !== undefined && judged === undefined) error = ran.kind;
-
-    const flagged = await flaggedRules(team, sessionId);
-    const missing = c.labels.filter((rule) => !flagged.includes(rule));
-    const extra = flagged.filter((rule) => !c.labels.includes(rule));
-    const outcome = judged?.outcome ?? null;
-    return {
-      model: model.model,
-      provider: model.provider,
-      case: c.name,
-      group: c.group,
-      split: c.split,
-      labels: c.labels,
-      flagged,
-      missing,
-      extra,
-      outcome,
-      pass: casePasses({ error, outcome, missing, extra }),
-      input_tokens: stated(calls.map((call) => call.inputTokens)),
-      output_tokens: stated(calls.map((call) => call.outputTokens)),
-      cost_usd: calls.reduce((total, call) => total + call.costUsd, 0),
-      calls: calls.length,
-      events_read: judged?.eventsRead ?? null,
-      events_cut: judged?.eventsCut ?? null,
-      ms,
-      error,
-      at: new Date().toISOString(),
-    };
   }
 
   return {
@@ -322,7 +349,8 @@ const usd = (amount: number) => `$${amount.toFixed(2)}`;
 /**
  * The run: the settings' cases on each of its models, each result added to the results file as it ends. Throws before
  * any case at a bad saved line or one naming a case not in the set, and stops the run at an event not answered 204, a
- * failed unload or any error but a model call's. Answers `capped` when it stopped at the paid cap.
+ * failed unload or any error but a model call's; a case stopped after its model calls is saved first, with an error,
+ * so a resumed run counts what they cost and runs it again. Answers `capped` when it stopped at the paid cap.
  */
 export async function runEval({
   settings,
@@ -343,11 +371,11 @@ export async function runEval({
       .filter((result) => result.error === null)
       .map(resultKey),
   );
-  const paidCosts = saved.filter((r) => r.provider === "openrouter").map((r) => r.cost_usd);
-  const ledger: Ledger = {
-    spentUsd: paidCosts.reduce((total, cost) => total + cost, 0),
-    mostCaseUsd: paidCosts.length === 0 ? undefined : Math.max(...paidCosts),
-  };
+  const ledger: Ledger = { spentUsd: 0, mostCaseUsd: new Map() };
+  for (const result of saved.filter(({ provider }) => provider === "openrouter")) {
+    ledger.spentUsd += result.cost_usd;
+    noteCase(ledger, result);
+  }
   const selected = selectCases(cases, settings);
   const results = [...saved];
   const ran: EvalResultLine[] = [];
@@ -360,10 +388,10 @@ export async function runEval({
       );
       if (todo.length === 0) continue;
       if (model.provider === "local") await unloadOthers(settings, model.model);
-      const judgeModel = judgeModelFor(settings, model, openRouterFetch);
+      const judgeModel = judgeModelFor(model, openRouterFetch);
       for (const c of todo) {
         if (model.provider === "openrouter") {
-          const next = ledger.mostCaseUsd ?? FIRST_PAID_CASE_USD;
+          const next = nextCaseUsd(ledger, model);
           if (ledger.spentUsd + next > EVAL_PAID_CAP_USD) {
             const message =
               `stopped before ${c.name} on ${model.model}: ${usd(ledger.spentUsd)} spent on OpenRouter, ` +
@@ -373,12 +401,20 @@ export async function runEval({
           }
         }
         onCase(c, model);
-        const result = await warden.runCase(c, model, judgeModel, ledger);
+        let result: EvalResultLine;
+        try {
+          result = await warden.runCase(c, model, judgeModel, ledger);
+        } catch (error) {
+          if (!(error instanceof CaseAbandoned)) throw error;
+          appendResult(file, error.line);
+          throw error.error;
+        }
         appendResult(file, result);
+        // Each (model, case) runs once a run, even on a model named twice.
+        done.add(resultKey(result));
         results.push(result);
         ran.push(result);
-        if (model.provider === "openrouter")
-          ledger.mostCaseUsd = Math.max(ledger.mostCaseUsd ?? 0, result.cost_usd);
+        if (model.provider === "openrouter") noteCase(ledger, result);
         log(
           `${model.provider} ${model.model} ${c.name}: ${result.pass ? "pass" : "FAIL"}` +
             ` (${result.error ?? result.outcome}, ${result.ms} ms)`,

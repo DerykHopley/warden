@@ -22,8 +22,8 @@ import {
 } from "../fake-model-server.ts";
 import { fakeOpenRouter, verdict, withUsage } from "../fake-openrouter.ts";
 import { loadEvalCases, type EvalCase } from "./eval-cases.ts";
-import { EVAL_PAID_CAP_USD, runEval } from "./harness.ts";
-import { EvalResultLine, readResults } from "./results.ts";
+import { EVAL_PAID_CAP_USD, FIRST_PAID_CASE_USD, runEval } from "./harness.ts";
+import { appendResult, readResults, type EvalResultLine } from "./results.ts";
 import { readEvalSettings } from "./settings.ts";
 
 const CASES = loadEvalCases();
@@ -69,18 +69,37 @@ describe("readEvalSettings: the run's variables, checked before any case", () =>
       NAMES,
     );
 
+    const url = "http://127.0.0.1:11434/v1";
     expect(settings.models).toEqual([
-      { provider: "local", model: "qwen3:8b" },
-      { provider: "local", model: "gemma3:12b" },
-      { provider: "openrouter", model: "anthropic/claude-haiku-5.5" },
+      { provider: "local", model: "qwen3:8b", url },
+      { provider: "local", model: "gemma3:12b", url },
+      { provider: "openrouter", model: "anthropic/claude-haiku-5.5", apiKey: KEY },
     ]);
-    expect(settings).toMatchObject({
-      localUrl: "http://127.0.0.1:11434/v1",
-      apiKey: KEY,
-      resultsFile: "results.jsonl",
-      split: "all",
-      caseNames: undefined,
-    });
+    expect(settings).toMatchObject({ split: "all", caseNames: undefined });
+  });
+
+  it("names the same model under two providers as two models", () => {
+    const settings = readEvalSettings(
+      env({ WARDEN_EVAL_OPENROUTER_MODELS: "qwen3:8b", OPENROUTER_API_KEY: KEY }),
+      NAMES,
+    );
+
+    expect(settings.models.map(({ provider, model }) => [provider, model])).toEqual([
+      ["local", "qwen3:8b"],
+      ["openrouter", "qwen3:8b"],
+    ]);
+  });
+
+  it("finds a relative results file from where pnpm was run, not from server/", () => {
+    expect(
+      readEvalSettings(env({ INIT_CWD: "/work", WARDEN_EVAL_RESULTS: "evals/r.jsonl" }), NAMES)
+        .resultsFile,
+    ).toBe("/work/evals/r.jsonl");
+    expect(readEvalSettings(env(), NAMES).resultsFile).toBe(join(process.cwd(), "results.jsonl"));
+    expect(
+      readEvalSettings(env({ INIT_CWD: "/work", WARDEN_EVAL_RESULTS: "/tmp/r.jsonl" }), NAMES)
+        .resultsFile,
+    ).toBe("/tmp/r.jsonl");
   });
 
   it("takes a split and a list of cases", () => {
@@ -112,6 +131,18 @@ describe("readEvalSettings: the run's variables, checked before any case", () =>
       "an unknown case",
       { WARDEN_EVAL_CASES: `${NAMES[0]},no-such-case` },
       /WARDEN_EVAL_CASES.*"no-such-case"/,
+    ],
+    ["an empty list of cases", { WARDEN_EVAL_CASES: "" }, /^WARDEN_EVAL_CASES names no case$/],
+    ["a list of cases that names none", { WARDEN_EVAL_CASES: " , " }, /names no case/],
+    [
+      "a local model named twice",
+      { WARDEN_EVAL_LOCAL_MODELS: "qwen3:8b, gemma3:12b,qwen3:8b" },
+      /^WARDEN_EVAL_LOCAL_MODELS names qwen3:8b twice$/,
+    ],
+    [
+      "an OpenRouter model named twice",
+      { WARDEN_EVAL_OPENROUTER_MODELS: "a/b,a/b", OPENROUTER_API_KEY: KEY },
+      /WARDEN_EVAL_OPENROUTER_MODELS names a\/b twice/,
     ],
   ])("refuses %s, naming the variable", (_, change, named) => {
     expect(refusal(env(change))).toMatch(named);
@@ -264,7 +295,6 @@ describe("runEval: each case replayed through the hook, judged and saved", () =>
       events_cut: null,
       cost_usd: 0,
     });
-    expect(EvalResultLine.parse(saved)).toEqual(saved);
   });
 
   it("stops at an event not answered 204, naming the case, the event and the status", async () => {
@@ -333,6 +363,19 @@ describe("runEval: which cases a run takes", () => {
       [b, false],
       [d, false],
     ]);
+  });
+
+  it("runs a case once on a model the settings name twice", async () => {
+    const ollama = await fakeOllama();
+    const variables = onOllama(ollama, resultsPath(), { WARDEN_EVAL_CASES: two[0] });
+    const settings = readEvalSettings(variables, NAMES);
+
+    const { ran } = await run(variables, {
+      settings: { ...settings, models: [settings.models[0]!, settings.models[0]!] },
+    });
+
+    expect(ran.map((result) => result.case)).toEqual([two[0]]);
+    expect(ollama.chats()).toHaveLength(1);
   });
 
   it("stops before any case at a saved line that isn't JSON, naming its line", async () => {
@@ -441,16 +484,110 @@ describe("runEval: the paid cap", () => {
     expect(capped?.spentUsd).toBeCloseTo(4.5);
   });
 
+  /** A saved line: `c` judged as labelled on the OpenRouter model `model`, costing `cost_usd`. */
+  const savedPaid = (model: string, c: EvalCase, cost_usd: number): EvalResultLine => ({
+    model,
+    provider: "openrouter",
+    case: c.name,
+    group: c.group,
+    split: c.split,
+    labels: c.labels,
+    flagged: c.labels.toSorted(),
+    missing: [],
+    extra: [],
+    outcome: c.labels.length > 0 ? "flagged" : "clean",
+    pass: true,
+    input_tokens: null,
+    output_tokens: null,
+    cost_usd,
+    calls: 1,
+    events_read: 1,
+    events_cut: 0,
+    ms: 1,
+    error: null,
+    at: new Date().toISOString(),
+  });
+
+  it("estimates a model's next case from that model's own saved cases", async () => {
+    const file = resultsPath();
+    appendResult(file, savedPaid("test/dear-model", byName(FIVE[0]!), 3));
+    appendResult(file, savedPaid("test/paid-model", byName(FIVE[0]!), 0.2));
+    const paid = fakeOpenRouter(() =>
+      withUsage(verdict(labelled(current!)), {
+        prompt_tokens: 900,
+        completion_tokens: 60,
+        cost: 0.2,
+      }),
+    );
+
+    const { ran, capped } = await run(paidVariables(file, { WARDEN_EVAL_CASES: FIVE[1] }), {
+      openRouterFetch: paid.fetch,
+    });
+
+    expect(capped).toBeUndefined();
+    expect(ran.map((result) => result.case)).toEqual([FIVE[1]]);
+  });
+
+  it("takes a paid case to cost at least FIRST_PAID_CASE_USD, though the model's saved cases cost nothing", async () => {
+    const file = resultsPath();
+    const spent = EVAL_PAID_CAP_USD - FIRST_PAID_CASE_USD / 2;
+    appendResult(file, savedPaid("test/dear-model", byName(FIVE[0]!), spent));
+    appendResult(file, savedPaid("test/paid-model", byName(FIVE[0]!), 0));
+    const paid = atOneFifty();
+
+    const { ran, capped } = await run(paidVariables(file, { WARDEN_EVAL_CASES: FIVE[1] }), {
+      openRouterFetch: paid.fetch,
+    });
+
+    expect(paid.calls).toEqual([]);
+    expect(ran).toEqual([]);
+    expect(capped?.spentUsd).toBeCloseTo(spent);
+  });
+
+  it("saves what a case's paid calls cost when the run stops after them, so a resumed run counts it", async () => {
+    const file = resultsPath();
+    let broken = false;
+    const breaksAfterACall: WithTeam = (team, work) =>
+      broken ? Promise.reject(new Error("the database went away")) : withTeam(team, work);
+    const breaking = fakeOpenRouter(() => {
+      broken = true;
+      return withUsage(verdict(labelled(current!)), {
+        prompt_tokens: 900,
+        completion_tokens: 60,
+        cost: 1.5,
+      });
+    });
+
+    await expect(
+      run(paidVariables(file), { withTeam: breaksAfterACall, openRouterFetch: breaking.fetch }),
+    ).rejects.toThrow("the database went away");
+
+    expect(readResults(file)).toEqual([
+      expect.objectContaining({
+        case: FIVE[0],
+        cost_usd: 1.5,
+        calls: 1,
+        pass: false,
+        outcome: null,
+        error: expect.stringContaining("the database went away"),
+      }),
+    ]);
+    // $1.50 already spent: two more cases fit under $5, a third doesn't.
+    const { ran, capped } = await run(paidVariables(file), { openRouterFetch: atOneFifty().fetch });
+    expect(ran.map((result) => result.case)).toEqual(FIVE.slice(0, 2));
+    expect(capped?.spentUsd).toBeCloseTo(4.5);
+  });
+
   it("never counts a local model's calls, even one stating a cost", async () => {
-    const stated: Answer = (res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify({
-          choices: [{ message: { content: JSON.stringify({ broken_rules: labelled(current!) }) } }],
-          usage: { prompt_tokens: 10, completion_tokens: 5, cost: 2 },
+    const stated: Answer = (res, req) =>
+      json(
+        200,
+        withUsage(verdict(labelled(current!)), {
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          cost: 2,
         }),
-      );
-    };
+      )(res, req);
     const ollama = await fakeOllama(stated);
     const paid = atOneFifty();
     const file = resultsPath();

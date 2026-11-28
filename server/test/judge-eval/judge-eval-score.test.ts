@@ -3,7 +3,7 @@
 // database and no model.
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -15,7 +15,7 @@ import {
 } from "../../src/modules/guard/judge-rules.ts";
 import { runCommand } from "../child-process.ts";
 import { loadEvalTargets } from "./eval-cases.ts";
-import { readResults, type EvalResultLine } from "./results.ts";
+import { casePasses, readResults, type EvalResultLine } from "./results.ts";
 import { scoreResults, scoreTable, type ModelScore } from "./score.ts";
 
 const SERVER_DIR = fileURLToPath(new URL("../../", import.meta.url));
@@ -49,16 +49,7 @@ function line(change: Partial<EvalResultLine> = {}): EvalResultLine {
   };
   const missing = merged.labels.filter((rule) => !merged.flagged.includes(rule));
   const extra = merged.flagged.filter((rule) => !merged.labels.includes(rule));
-  return {
-    ...merged,
-    missing,
-    extra,
-    pass:
-      merged.error === null &&
-      merged.outcome !== "needs_human_review" &&
-      missing.length === 0 &&
-      extra.length === 0,
-  };
+  return { ...merged, missing, extra, pass: casePasses({ ...merged, missing, extra }) };
 }
 
 /** A case labelled `labels` that the Judge flagged with `flagged`. */
@@ -164,7 +155,17 @@ describe("scoreResults: per model and per split", () => {
     expect(score.outputTokens).toBe(100);
     expect(score.costUsd).toBeCloseTo(0.006);
     expect(score.perSession.costUsd).toBeCloseTo(0.003);
-    expect(score.perSession.inputTokens).toBe(500);
+    // Per session of those that stated a count: the line with none isn't a session of 0 tokens.
+    expect(score.perSession).toMatchObject({ inputTokens: 1000, outputTokens: 100 });
+  });
+
+  it("shows no tokens per session when no line stated a count", () => {
+    const score = scoreOf([line({ input_tokens: null, output_tokens: null })]);
+
+    expect(score.perSession).toMatchObject({ inputTokens: null, outputTokens: null });
+    expect(scoreTable(scoreResults([line({ input_tokens: null })], TARGETS))).toMatch(
+      /input tokens\s+0 \(-\)/,
+    );
   });
 
   it("lists each injection case's flagged Rules and outcome", () => {
@@ -269,28 +270,33 @@ describe("readResults", () => {
   });
 });
 
-/** `eval:score` run as the script runs it, on `args`. */
-const evalScore = (...args: string[]) =>
-  runCommand(
-    [process.execPath, "test/judge-eval/score-cli.ts", "--", ...args],
-    {},
-    {
-      cwd: SERVER_DIR,
-      clean: true,
-    },
-  );
+/** `eval:score` run as the script runs it, from server/, on `args`, with `env` over PATH and HOME. */
+const evalScore = (args: string[], env: Record<string, string> = {}) =>
+  runCommand([process.execPath, "test/judge-eval/score-cli.ts", "--", ...args], env, {
+    cwd: SERVER_DIR,
+    clean: true,
+  });
 
 describe("eval:score: the table from a saved file", () => {
   it("prints the score of each model in the file", async () => {
-    const { code, stdout } = await evalScore(resultsFile(jsonl(GOOD)));
+    const { code, stdout } = await evalScore([resultsFile(jsonl(GOOD))]);
 
     expect(code).toBe(0);
     expect(stdout).toBe(`${scoreTable(scoreResults(GOOD, TARGETS) satisfies ModelScore[])}\n`);
   });
 
+  it("finds a relative file from where pnpm was run (INIT_CWD), not from server/", async () => {
+    const file = resultsFile(jsonl(GOOD));
+
+    const { code, stdout } = await evalScore([basename(file)], { INIT_CWD: dirname(file) });
+
+    expect(code).toBe(0);
+    expect(stdout).toBe(`${scoreTable(scoreResults(GOOD, TARGETS))}\n`);
+  });
+
   it("exits non-zero naming a missing file", async () => {
     const missing = join(tmpdir(), "warden-no-such-results.jsonl");
-    const { code, stderr } = await evalScore(missing);
+    const { code, stderr } = await evalScore([missing]);
 
     expect(code).not.toBe(0);
     expect(stderr).toContain(missing);
@@ -298,7 +304,7 @@ describe("eval:score: the table from a saved file", () => {
 
   it("exits non-zero naming a bad line", async () => {
     const file = resultsFile(`${jsonl([line()])}\nnot json\n`);
-    const { code, stderr } = await evalScore(file);
+    const { code, stderr } = await evalScore([file]);
 
     expect(code).not.toBe(0);
     expect(stderr).toContain(`${file} line 2`);

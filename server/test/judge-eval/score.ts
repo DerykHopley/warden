@@ -3,9 +3,8 @@
 // Each (model, case) counts once, by its latest line; a line with an error counts as run, flagging nothing.
 import { JUDGE_RULES } from "../../src/modules/guard/judge-rules.ts";
 import type { EvalTargets } from "./eval-cases.ts";
-import { latestResults, type EvalResultLine } from "./results.ts";
-import type { EvalProvider, EvalSplit } from "./settings.ts";
-import { EVAL_SPLITS } from "./settings.ts";
+import { latestResults, modelKey, type EvalResultLine } from "./results.ts";
+import { EVAL_SPLITS, type EvalProvider, type EvalSplit } from "./settings.ts";
 
 /** A share, or null when there is nothing to take it of. */
 const share = (part: number, whole: number) => (whole === 0 ? null : part / whole);
@@ -41,6 +40,7 @@ export type SplitScore = {
   inputTokens: number;
   outputTokens: number;
   costUsd: number;
+  /** The averages; tokens over the lines that stated them, null when none did. */
   perSession: { inputTokens: number | null; outputTokens: number | null; costUsd: number | null };
   targets: TargetsMet;
 };
@@ -84,9 +84,18 @@ function scoreSplit(
   const inputTokens = sum(lines.map((line) => line.input_tokens));
   const outputTokens = sum(lines.map((line) => line.output_tokens));
   const costUsd = sum(lines.map((line) => line.cost_usd));
+  // Tokens per session of those whose calls stated a count; every line has a cost.
+  const stating = (count: (line: EvalResultLine) => number | null) =>
+    lines.filter((line) => count(line) !== null).length;
   const perSession = {
-    inputTokens: share(inputTokens, lines.length),
-    outputTokens: share(outputTokens, lines.length),
+    inputTokens: share(
+      inputTokens,
+      stating((line) => line.input_tokens),
+    ),
+    outputTokens: share(
+      outputTokens,
+      stating((line) => line.output_tokens),
+    ),
     costUsd: share(costUsd, lines.length),
   };
   const measured = highRuleRecall.flatMap(({ recall }) => (recall === null ? [] : [recall]));
@@ -129,7 +138,7 @@ export function scoreResults(
   const latest = latestResults(results);
   const models = new Map<string, { provider: EvalProvider; model: string }>();
   for (const { provider, model } of latest)
-    models.set(JSON.stringify([provider, model]), { provider, model });
+    models.set(modelKey({ provider, model }), { provider, model });
   return [...models.values()]
     .toSorted((a, b) => Number(a.provider !== "local") - Number(b.provider !== "local"))
     .map(({ provider, model }) => {
