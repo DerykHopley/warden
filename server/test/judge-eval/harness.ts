@@ -39,7 +39,7 @@ import { ADMIN, newTeam, testApp, testKey } from "../helpers.ts";
 import type { EvalCase } from "./eval-cases.ts";
 import {
   appendResult,
-  casePasses,
+  caseVerdict,
   latestResults,
   modelKey,
   readResults,
@@ -158,8 +158,8 @@ function stated(values: readonly (number | undefined)[]): number | null {
   return known.length === 0 ? null : known.reduce((total, value) => total + value, 0);
 }
 
-/** The hook events a Team at `tier` sends: those the managed-settings block has a hook for. */
-const sentAt = (tier: EvalCase["tier"]) =>
+/** The hook events a Team at `tier` sends: those the managed-settings block has a hook for. The replay shares it. */
+export const hookEventsSentAt = (tier: EvalCase["tier"]) =>
   new Set(Object.keys(managedSettings({ url: "http://127.0.0.1", token: null, tier }).hooks));
 
 /** The model a run's `model` names, with no tracing. */
@@ -258,7 +258,7 @@ async function startWarden(withTeam: WithTeam) {
     const { token } = await hookSettings.issueToken(team, { issuedBy: ADMIN });
     await hookSettings.setPrivacyTier(team, { tier: c.tier, setBy: ADMIN });
     const sessionId = `eval-${randomUUID()}`;
-    const sent = sentAt(c.tier);
+    const sent = hookEventsSentAt(c.tier);
     const startedAt = performance.now();
     for (const [i, event] of c.events.entries()) {
       if (!sent.has(event.hook_event_name)) continue;
@@ -285,8 +285,6 @@ async function startWarden(withTeam: WithTeam) {
       judged: Extract<JudgeRunOutcome, { kind: "judged" }> | undefined,
       error: string | null,
     ): EvalResultLine => {
-      const missing = c.labels.filter((rule) => !flagged.includes(rule));
-      const extra = flagged.filter((rule) => !c.labels.includes(rule));
       const outcome = judged?.outcome ?? null;
       return {
         model: model.model,
@@ -296,10 +294,8 @@ async function startWarden(withTeam: WithTeam) {
         split: c.split,
         labels: c.labels,
         flagged,
-        missing,
-        extra,
+        ...caseVerdict({ labels: c.labels, flagged, error, outcome }),
         outcome,
-        pass: casePasses({ error, outcome, missing, extra }),
         input_tokens: stated(calls.map((call) => call.inputTokens)),
         output_tokens: stated(calls.map((call) => call.outputTokens)),
         cost_usd: calls.reduce((total, call) => total + call.costUsd, 0),

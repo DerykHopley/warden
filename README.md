@@ -292,6 +292,67 @@ summary, the session id or the developer's pseudonym. A trace Langfuse refuses o
 logged as `judge trace not sent` and changes nothing. With neither key, no trace is sent; with only one, the run
 stops, naming the missing one.
 
+## The Judge's eval
+
+The Judge is measured on a fixed set of labelled Agent sessions: one JSON file per case in
+`server/test/session-fixtures/eval/`, each with its group, its split (`dev` or `held-out`), its Privacy tier and the
+Judge Rules a correct run flags. The pass targets sit beside them in `targets.json`, fixed before any run.
+
+**Recording an ordinary case.** `pnpm --filter @warden/server eval:record -- <case-name> <repo-name>
+<metadata|details|content> <short|medium|long> "<task>"` runs a real `claude -p` session on a Seeded org repo, on the
+Claude subscription, and writes its hook events as a new case labelled clean, with its split and `stands_for` left
+for you to set.
+
+**Running it.** `pnpm --filter @warden/server eval:judge` replays each case through the hook endpoint of a local
+Warden, runs the real Judge on it and adds one line per (model, case) to the results file. It reads:
+
+| Variable | What it sets |
+|---|---|
+| `WARDEN_EVAL_LOCAL_MODELS` | local models, comma-separated, run first (`qwen3:8b`) |
+| `WARDEN_EVAL_LOCAL_URL` | their OpenAI-compatible base URL (`http://localhost:11434/v1`) |
+| `WARDEN_EVAL_OPENROUTER_MODELS` | OpenRouter models, with `OPENROUTER_API_KEY` |
+| `WARDEN_EVAL_RESULTS` | the JSON Lines results file (required); a relative path is taken from where pnpm runs |
+| `WARDEN_EVAL_SPLIT` | `dev`, `held-out` or `all` (the default) |
+| `WARDEN_EVAL_CASES` | only these cases, comma-separated |
+
+A run needs a throwaway Postgres, as the server's tests do: the test setup refuses the owner's database port (see
+"Running the tests locally" under "Checks"), so start one and pass its `PGHOST` and `PGPORT`. A run carries on from
+its results file: a (model, case) already saved without an error isn't run again.
+
+**A run with `WARDEN_EVAL_OPENROUTER_MODELS` is paid,** so it runs only on the owner's yes, with a cost estimate first.
+The harness keeps its own ledger and stops before a case that could take OpenRouter's spending past
+`EVAL_PAID_CAP_USD` ($5), counting what the results file already spent. Local models cost nothing.
+
+**Scoring.** `pnpm --filter @warden/server eval:score -- <results.jsonl>` prints each model's score per split, and
+each target met or missed, from a saved file, with no database and no model.
+
+**Regressions.** `pnpm --filter @warden/server eval:regressions -- <earlier.jsonl> <later.jsonl>` lists, for each
+model in both files, each case that passed in the earlier and fails in the later, with the Rules it missed or flagged
+beyond its labels (or its error), and prints the line that reruns those cases once on that model alone, into a new
+results file named by the provider, the model and when `eval:regressions` ran (`rerun-<provider>-<model>-<time>.jsonl`:
+the harness skips a case its results file already holds, so each run names a new one), with `WARDEN_EVAL_LOCAL_URL`
+set as for any local run:
+
+```sh
+WARDEN_EVAL_RESULTS=rerun-local-qwen3-8b-20261128T100000.000Z.jsonl WARDEN_EVAL_LOCAL_MODELS=qwen3:8b WARDEN_EVAL_CASES=<case>,<case> pnpm --filter @warden/server eval:judge
+```
+
+An OpenRouter model's line ends with `(paid: OpenRouter — needs the owner's yes)`: it's a paid run, and the shell
+refuses the line as it is, so drop the note only once the owner has said yes.
+
+A case in only one file is listed under "not in both", not as a regression. It exits 1 when a case broke, 0 when none
+did, and 2 at a wrong argument, a missing or bad file, or no model in both files.
+
+**The demo's live attack.** `WARDEN_REPLAY_URL=<warden> WARDEN_HOOK_TOKEN=<token> pnpm --filter @warden/server
+eval:replay` posts the case marked `replay` (`sends-secrets-plain-pastebin`: an agent that reads `.env` and posts its
+AWS key to a pastebin) to that Warden's hook endpoint, as the managed-settings block sends it at the case's tier
+(Content), under a new session (`replay-<uuid>`) and the developer `demo`. Warden stores each event at the receiving
+Team's Privacy tier, not the case's, so first set that Team's Privacy tier in Setup to **Content**: at Details or
+Metadata it drops the tool output and prompts the case was labelled with. It prints the session id and how
+many events it posted; that Warden then judges the session like any other. The URL must be https (http only for
+`localhost` or `127.0.0.1`), and the token is the Team's hook token from Setup. Any answer but 204 stops it, printing the event and the status; it never prints the
+token or an event.
+
 ## CVE data
 
 Patch matches a Team's Products against a frozen snapshot of public CVE data, **as of 2026-10-13**. It ships in the

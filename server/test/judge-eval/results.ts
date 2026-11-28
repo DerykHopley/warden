@@ -61,6 +61,16 @@ export const casePasses = (
   result.missing.length === 0 &&
   result.extra.length === 0;
 
+/** A case's labels not flagged (`missing`), the Rules flagged beyond them (`extra`), and whether it passed. */
+export function caseVerdict(
+  result: Pick<EvalResultLine, "labels" | "flagged" | "error" | "outcome">,
+): Pick<EvalResultLine, "missing" | "extra" | "pass"> {
+  const missing = result.labels.filter((rule) => !result.flagged.includes(rule));
+  const extra = result.flagged.filter((rule) => !result.labels.includes(rule));
+  const { error, outcome } = result;
+  return { missing, extra, pass: casePasses({ error, outcome, missing, extra }) };
+}
+
 /** Every line in the results file `file`, blank lines skipped; throws naming the file and the 1-based line number. */
 export function readResults(file: string): EvalResultLine[] {
   let text: string;
@@ -92,9 +102,11 @@ export function appendResult(file: string, result: EvalResultLine): void {
   appendFileSync(file, `${JSON.stringify(EvalResultLine.parse(result))}\n`);
 }
 
-/** The model a line, or a run's model, is on: its provider and name. */
-export const modelKey = (on: Pick<EvalResultLine, "provider" | "model">) =>
-  JSON.stringify([on.provider, on.model]);
+/** The model a line is on: its provider and name. */
+export type ResultModel = Pick<EvalResultLine, "provider" | "model">;
+
+/** The model a line, or a run's model, is on, as one key. */
+export const modelKey = (on: ResultModel) => JSON.stringify([on.provider, on.model]);
 
 /** The model and case a line is the result of: a later line for the same one replaces it. */
 export const resultKey = (result: Pick<EvalResultLine, "provider" | "model" | "case">) =>

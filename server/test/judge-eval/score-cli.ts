@@ -1,8 +1,8 @@
 // Prints the Judge eval's score from a saved results file (spec #225, slice 10b), with no database and no model:
 // `pnpm --filter @warden/server eval:score -- <results.jsonl>`. A missing file or a bad line exits 1, naming it.
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { cliArgs, isMain } from "./cli.ts";
 import { loadEvalTargets } from "./eval-cases.ts";
 import { readResults } from "./results.ts";
 import { scoreResults, scoreTable } from "./score.ts";
@@ -10,7 +10,7 @@ import { scoreResults, scoreTable } from "./score.ts";
 const USAGE = "usage: pnpm --filter @warden/server eval:score -- <results.jsonl>";
 
 function main(argv: readonly string[]): number {
-  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const args = cliArgs(argv);
   if (args.length !== 1) {
     console.error(USAGE);
     return 2;
@@ -31,5 +31,4 @@ function main(argv: readonly string[]): number {
   }
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
-  process.exitCode = main(process.argv.slice(2));
+if (isMain(import.meta.url)) process.exitCode = main(process.argv.slice(2));

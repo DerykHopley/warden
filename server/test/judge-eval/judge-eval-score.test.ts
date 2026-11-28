@@ -1,7 +1,6 @@
 // The Judge eval's score (spec #225, slice 10b): `scoreResults` over saved result lines, per model and per split, with
 // each target in `targets.json` met or missed; and `eval:score`, which prints the same table from a saved file with no
 // database and no model.
-import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,42 +14,13 @@ import {
 } from "../../src/modules/guard/judge-rules.ts";
 import { runCommand } from "../child-process.ts";
 import { loadEvalTargets } from "./eval-cases.ts";
-import { casePasses, readResults, type EvalResultLine } from "./results.ts";
+import { resultLine as line, resultsFile } from "./result-fixtures.ts";
+import { readResults, type EvalResultLine } from "./results.ts";
 import { scoreResults, scoreTable, type ModelScore } from "./score.ts";
 
 const SERVER_DIR = fileURLToPath(new URL("../../", import.meta.url));
 const TARGETS = loadEvalTargets();
 const HIGH = [AGENT_SENDS_SECRETS, AGENT_RUNS_REMOTE_SCRIPT, AGENT_DESTRUCTIVE_COMMAND];
-
-/** One saved result: a clean dev case judged clean on a local model, with `change` over it, its pass worked out. */
-function line(change: Partial<EvalResultLine> = {}): EvalResultLine {
-  const merged: EvalResultLine = {
-    model: "qwen3:8b",
-    provider: "local",
-    case: "ordinary-a",
-    group: "ordinary",
-    split: "dev",
-    labels: [],
-    flagged: [],
-    missing: [],
-    extra: [],
-    outcome: "clean",
-    pass: true,
-    input_tokens: 1000,
-    output_tokens: 100,
-    cost_usd: 0,
-    calls: 1,
-    events_read: 4,
-    events_cut: 0,
-    ms: 1200,
-    error: null,
-    at: "2026-11-28T10:00:00.000Z",
-    ...change,
-  };
-  const missing = merged.labels.filter((rule) => !merged.flagged.includes(rule));
-  const extra = merged.flagged.filter((rule) => !merged.labels.includes(rule));
-  return { ...merged, missing, extra, pass: casePasses({ ...merged, missing, extra }) };
-}
 
 /** A case labelled `labels` that the Judge flagged with `flagged`. */
 const judged = (name: string, labels: string[], flagged: string[], change = {}) =>
@@ -249,13 +219,6 @@ describe("scoreTable", () => {
   });
 });
 
-/** A new results file holding `text`. */
-function resultsFile(text: string): string {
-  const file = join(mkdtempSync(join(tmpdir(), "warden-results-")), "results.jsonl");
-  writeFileSync(file, text);
-  return file;
-}
-
 const jsonl = (lines: EvalResultLine[]) => lines.map((saved) => JSON.stringify(saved)).join("\n");
 
 describe("readResults", () => {
@@ -279,14 +242,14 @@ const evalScore = (args: string[], env: Record<string, string> = {}) =>
 
 describe("eval:score: the table from a saved file", () => {
   it("prints the score of each model in the file", async () => {
-    const { code, stdout } = await evalScore([resultsFile(jsonl(GOOD))]);
+    const { code, stdout } = await evalScore([resultsFile(GOOD)]);
 
     expect(code).toBe(0);
     expect(stdout).toBe(`${scoreTable(scoreResults(GOOD, TARGETS) satisfies ModelScore[])}\n`);
   });
 
   it("finds a relative file from where pnpm was run (INIT_CWD), not from server/", async () => {
-    const file = resultsFile(jsonl(GOOD));
+    const file = resultsFile(GOOD);
 
     const { code, stdout } = await evalScore([basename(file)], { INIT_CWD: dirname(file) });
 
