@@ -13,6 +13,7 @@ import {
   type Proposal,
   type Role,
 } from "@warden/contracts";
+import { DEMO_OBSERVATIONS } from "@warden/contracts/demo";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dayWords } from "../src/date-words.ts";
 import { DetailCard } from "../src/DetailCard.tsx";
@@ -261,6 +262,24 @@ describe("the detail card's Finding", () => {
     const { card, onClear } = show(finding(ID));
     await userEvent.click(card.getByRole("button", { name: "Clear the focus" }));
     expect(onClear).toHaveBeenCalledOnce();
+  });
+});
+
+describe("the card's Session section", () => {
+  const { asset, location, evidence, rule_id, title } = DEMO_OBSERVATIONS.printed;
+
+  it("shows on an Agent session's Finding, under the card's fields", () => {
+    const { card } = show(finding(ID, { asset, location, evidence, rule_id, title }));
+    const session = card.getByRole("region", { name: "Session" });
+    expect(session).toHaveTextContent(evidence.session!.events_hash);
+    const fieldsList = card.getAllByRole("term")[0]!.closest("dl")!;
+    expect(fieldsList.compareDocumentPosition(session)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("isn't on a Finding that isn't an Agent session's", () => {
+    const { card } = show(finding(ID));
+    expect(card.queryByRole("region", { name: "Session" })).toBeNull();
+    expect(card.queryByRole("heading", { name: "Session" })).toBeNull();
   });
 });
 
