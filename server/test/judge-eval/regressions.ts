@@ -1,8 +1,7 @@
 // The Judge eval's regression check (spec #225, story 16; slice 10c): two saved results files compared, each by its
 // latest line per (model, case), and each case that passed in the earlier and fails in the later listed under its
 // model, with the line that reruns them. `eval:regressions` prints it (`regressions-cli.ts`).
-import { latestResults, modelKey, type EvalResultLine } from "./results.ts";
-import type { EvalProvider } from "./settings.ts";
+import { latestResults, modelKey, type EvalResultLine, type ResultModel } from "./results.ts";
 
 /** Which of the two files something is in. */
 export type InFile = "earlier" | "later";
@@ -10,10 +9,8 @@ export type InFile = "earlier" | "later";
 /** A case that passed in the earlier file and fails in the later: the later line's Rules and error. */
 export type Flip = { case: string; missing: string[]; extra: string[]; error: string | null };
 
-type Model = { provider: EvalProvider; model: string };
-
 /** A model in both files: its flips, and the cases it ran in only one of them. */
-export type ModelRegressions = Model & {
+export type ModelRegressions = ResultModel & {
   flips: Flip[];
   notInBoth: { case: string; in: InFile }[];
 };
@@ -22,16 +19,20 @@ export type Regressions = {
   /** Each model in both files, in the order first saved, the earlier file's first. */
   models: ModelRegressions[];
   /** Each model in only one file, in the same order. */
-  onlyIn: (Model & { in: InFile })[];
+  onlyIn: (ResultModel & { in: InFile })[];
 };
 
-/** Each model's latest lines by case, in the order each model was first saved. */
-function byModel(results: readonly EvalResultLine[]): Map<string, Map<string, EvalResultLine>> {
-  const models = new Map<string, Map<string, EvalResultLine>>();
+/** A model's latest lines, by case. */
+type ModelLines = ResultModel & { cases: Map<string, EvalResultLine> };
+
+/** Each model's latest lines by case, keyed by `modelKey`, in the order each model was first saved. */
+function byModel(results: readonly EvalResultLine[]): Map<string, ModelLines> {
+  const models = new Map<string, ModelLines>();
   for (const result of latestResults(results)) {
     const key = modelKey(result);
-    if (!models.has(key)) models.set(key, new Map());
-    models.get(key)!.set(result.case, result);
+    const { provider, model } = result;
+    if (!models.has(key)) models.set(key, { provider, model, cases: new Map() });
+    models.get(key)!.cases.set(result.case, result);
   }
   return models;
 }
@@ -45,22 +46,24 @@ export function findRegressions(
   const after = byModel(later);
   const regressions: Regressions = { models: [], onlyIn: [] };
   for (const key of new Set([...before.keys(), ...after.keys()])) {
-    const [provider, model] = JSON.parse(key) as [EvalProvider, string];
     const was = before.get(key);
     const now = after.get(key);
     if (was === undefined || now === undefined) {
+      const { provider, model } = (was ?? now)!;
       regressions.onlyIn.push({ provider, model, in: was === undefined ? "later" : "earlier" });
       continue;
     }
     const flips: Flip[] = [];
     const notInBoth: ModelRegressions["notInBoth"] = [];
-    for (const [name, then] of was) {
-      const line = now.get(name);
+    for (const [name, then] of was.cases) {
+      const line = now.cases.get(name);
       if (line === undefined) notInBoth.push({ case: name, in: "earlier" });
       else if (then.pass && !line.pass)
         flips.push({ case: name, missing: line.missing, extra: line.extra, error: line.error });
     }
-    for (const name of now.keys()) if (!was.has(name)) notInBoth.push({ case: name, in: "later" });
+    for (const name of now.cases.keys())
+      if (!was.cases.has(name)) notInBoth.push({ case: name, in: "later" });
+    const { provider, model } = was;
     regressions.models.push({ provider, model, flips, notInBoth });
   }
   return regressions;
@@ -69,23 +72,32 @@ export function findRegressions(
 /** `model` as a file name's part: anything but letters, digits, `.`, `_` and `-` made a `-`. */
 const fileSafe = (model: string) => model.replace(/[^A-Za-z0-9._-]/g, "-");
 
+/** `at` as a file name's part: its ISO time to the millisecond, without `-` and `:` (`20261128T100000.000Z`). */
+const fileTime = (at: Date) => at.toISOString().replace(/[-:]/g, "");
+
+/** What the rerun line of an OpenRouter model ends with: a paid run waits for the owner. Pasted as it is, the shell
+ * refuses it, so it can't start a paid run by accident. */
+const PAID_NOTE = "(paid: OpenRouter — needs the owner's yes)";
+
 /**
- * The line that reruns `cases` once on `model` alone, into a results file of its own (the harness skips a (model,
- * case) its results file already holds), taken from where pnpm is run.
+ * The line that reruns `cases` once on `model` alone, taken from where pnpm is run, into a results file named by the
+ * provider, the model and `at` (when `eval:regressions` ran): the harness skips a (model, case) its results file
+ * already holds, so each run's line names a new one. An OpenRouter model's line ends with PAID_NOTE.
  */
-export function rerunLine({ provider, model }: Model, cases: readonly string[]): string {
+export function rerunLine({ provider, model }: ResultModel, cases: readonly string[], at: Date) {
   const models =
     provider === "local" ? "WARDEN_EVAL_LOCAL_MODELS" : "WARDEN_EVAL_OPENROUTER_MODELS";
-  return (
-    `WARDEN_EVAL_RESULTS=rerun-${fileSafe(model)}.jsonl ${models}=${model} ` +
-    `WARDEN_EVAL_CASES=${cases.join(",")} pnpm --filter @warden/server eval:judge`
-  );
+  const line =
+    `WARDEN_EVAL_RESULTS=rerun-${provider}-${fileSafe(model)}-${fileTime(at)}.jsonl ${models}=${model} ` +
+    `WARDEN_EVAL_CASES=${cases.join(",")} pnpm --filter @warden/server eval:judge`;
+  return provider === "openrouter" ? `${line} ${PAID_NOTE}` : line;
 }
 
 const rules = (list: readonly string[]) => (list.length === 0 ? "none" : list.join(", "));
 
-/** The regressions as `eval:regressions` prints them: each model's flips and rerun line, then the one-file models. */
-export function regressionsText({ models, onlyIn }: Regressions): string {
+/** The regressions as `eval:regressions` prints them at `at`: each model's flips and rerun line, then the one-file
+ * models. */
+export function regressionsText({ models, onlyIn }: Regressions, at: Date): string {
   const lines: string[] = [];
   for (const found of models) {
     const { provider, model, flips, notInBoth } = found;
@@ -101,6 +113,7 @@ export function regressionsText({ models, onlyIn }: Regressions): string {
         `  rerun: ${rerunLine(
           found,
           flips.map((flip) => flip.case),
+          at,
         )}`,
       );
     if (notInBoth.length > 0)

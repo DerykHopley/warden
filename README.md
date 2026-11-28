@@ -329,21 +329,28 @@ each target met or missed, from a saved file, with no database and no model.
 **Regressions.** `pnpm --filter @warden/server eval:regressions -- <earlier.jsonl> <later.jsonl>` lists, for each
 model in both files, each case that passed in the earlier and fails in the later, with the Rules it missed or flagged
 beyond its labels (or its error), and prints the line that reruns those cases once on that model alone, into a new
-results file (`rerun-<model>.jsonl`), with `WARDEN_EVAL_LOCAL_URL` set as for any local run:
+results file named by the provider, the model and when `eval:regressions` ran (`rerun-<provider>-<model>-<time>.jsonl`:
+the harness skips a case its results file already holds, so each run names a new one), with `WARDEN_EVAL_LOCAL_URL`
+set as for any local run:
 
 ```sh
-WARDEN_EVAL_RESULTS=rerun-qwen3-8b.jsonl WARDEN_EVAL_LOCAL_MODELS=qwen3:8b WARDEN_EVAL_CASES=<case>,<case> pnpm --filter @warden/server eval:judge
+WARDEN_EVAL_RESULTS=rerun-local-qwen3-8b-20261128T100000.000Z.jsonl WARDEN_EVAL_LOCAL_MODELS=qwen3:8b WARDEN_EVAL_CASES=<case>,<case> pnpm --filter @warden/server eval:judge
 ```
+
+An OpenRouter model's line ends with `(paid: OpenRouter — needs the owner's yes)`: it's a paid run, and the shell
+refuses the line as it is, so drop the note only once the owner has said yes.
 
 A case in only one file is listed under "not in both", not as a regression. It exits 1 when a case broke, 0 when none
 did, and 2 at a wrong argument, a missing or bad file, or no model in both files.
 
 **The demo's live attack.** `WARDEN_REPLAY_URL=<warden> WARDEN_HOOK_TOKEN=<token> pnpm --filter @warden/server
-eval:replay` posts the case marked `replay` (an agent that reads `.env` and posts its AWS key to a pastebin) to that
-Warden's hook endpoint, as the managed-settings block sends it at the case's tier, under a new session
-(`replay-<uuid>`) and the developer `demo`. It prints the session id and how many events it posted; that Warden then
-judges the session like any other. The URL must be https (http only for `localhost` or `127.0.0.1`), and the token is
-the Team's hook token from Setup. Any answer but 204 stops it, printing the event and the status; it never prints the
+eval:replay` posts the case marked `replay` (`sends-secrets-plain-pastebin`: an agent that reads `.env` and posts its
+AWS key to a pastebin) to that Warden's hook endpoint, as the managed-settings block sends it at the case's tier
+(Content), under a new session (`replay-<uuid>`) and the developer `demo`. Warden stores each event at the receiving
+Team's Privacy tier, not the case's, so first set that Team's Privacy tier in Setup to **Content**: at Details or
+Metadata it drops the tool output and prompts the case was labelled with. It prints the session id and how
+many events it posted; that Warden then judges the session like any other. The URL must be https (http only for
+`localhost` or `127.0.0.1`), and the token is the Team's hook token from Setup. Any answer but 204 stops it, printing the event and the status; it never prints the
 token or an event.
 
 ## CVE data

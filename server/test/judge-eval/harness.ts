@@ -39,7 +39,7 @@ import { ADMIN, newTeam, testApp, testKey } from "../helpers.ts";
 import type { EvalCase } from "./eval-cases.ts";
 import {
   appendResult,
-  casePasses,
+  caseVerdict,
   latestResults,
   modelKey,
   readResults,
@@ -285,8 +285,6 @@ async function startWarden(withTeam: WithTeam) {
       judged: Extract<JudgeRunOutcome, { kind: "judged" }> | undefined,
       error: string | null,
     ): EvalResultLine => {
-      const missing = c.labels.filter((rule) => !flagged.includes(rule));
-      const extra = flagged.filter((rule) => !c.labels.includes(rule));
       const outcome = judged?.outcome ?? null;
       return {
         model: model.model,
@@ -296,10 +294,8 @@ async function startWarden(withTeam: WithTeam) {
         split: c.split,
         labels: c.labels,
         flagged,
-        missing,
-        extra,
+        ...caseVerdict({ labels: c.labels, flagged, error, outcome }),
         outcome,
-        pass: casePasses({ error, outcome, missing, extra }),
         input_tokens: stated(calls.map((call) => call.inputTokens)),
         output_tokens: stated(calls.map((call) => call.outputTokens)),
         cost_usd: calls.reduce((total, call) => total + call.costUsd, 0),

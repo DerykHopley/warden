@@ -21,12 +21,12 @@ import {
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { PrivacyTier } from "@warden/contracts";
 import { managedSettings } from "../../src/modules/guard/managed-settings.ts";
 import { findSecrets } from "../../src/modules/guard/secrets.ts";
 import { runCommand } from "../child-process.ts";
 import { SEEDED_ORG } from "../seeded-org.ts";
+import { cliArgs, isMain } from "./cli.ts";
 import {
   CASE_LENGTHS,
   EVAL_CASES_DIR,
@@ -111,7 +111,7 @@ const CASE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /** The CLI's arguments, after the `--` pnpm passes on. Throws the usage line for anything else. */
 export function parseRecordArgs(argv: readonly string[]): RecordArgs {
-  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const args = cliArgs(argv);
   const [caseName, repoName, tier, length, task] = args;
   const tierOk = PrivacyTier.safeParse(tier).success;
   const lengthOk = (CASE_LENGTHS as readonly string[]).includes(length ?? "");
@@ -434,5 +434,4 @@ async function main() {
   }
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
-  await main();
+if (isMain(import.meta.url)) await main();

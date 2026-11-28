@@ -6,10 +6,9 @@
 // It checks both variables before any post (exit 2), and stops at the first answer that isn't 204, or a connection
 // error (exit 1). Nothing it prints holds the token or an event's body, where the case's fixture secret is.
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { failureCode } from "../../src/http-call.ts";
 import { HOOK_EVENTS_PATH } from "../../src/modules/guard/managed-settings.ts";
+import { isMain } from "./cli.ts";
 import { loadEvalCases } from "./eval-cases.ts";
 import { hookEventsSentAt } from "./harness.ts";
 
@@ -95,5 +94,4 @@ async function main(): Promise<number> {
   return 0;
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url))
-  process.exitCode = await main();
+if (isMain(import.meta.url)) process.exitCode = await main();
