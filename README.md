@@ -329,6 +329,14 @@ The harness keeps its own ledger and stops before a case that could take OpenRou
 **Scoring.** `pnpm --filter @warden/server eval:score -- <results.jsonl>` prints each model's score per split, and
 each target met or missed, from a saved file, with no database and no model.
 
+**Re-rendering the report.** `pnpm --filter @warden/server eval:report` writes `docs/eval/report.md` from the run
+list, `docs/eval/runs.json`, and the results files it names in `docs/eval/results/`, with no database and no model.
+The numbers come from the results files; what each run changed, why, and which model and change were kept are written
+in the run list. After a new run, add it to the end of `runs.json` first (its results file, any `flip_reruns` files
+from `eval:regressions` below, its commit, its change and its notes), then render the report and commit both. A test
+fails when the committed report differs from a fresh render. `eval:report -- <runs.json> <report.md>` renders another
+run list; a wrong argument or a bad file exits 2 and writes nothing.
+
 **Regressions.** `pnpm --filter @warden/server eval:regressions -- <earlier.jsonl> <later.jsonl>` lists, for each
 model in both files, each case that passed in the earlier and fails in the later, with the Rules it missed or flagged
 beyond its labels (or its error), and prints the line that reruns those cases once on that model alone, to run as
@@ -349,14 +357,6 @@ refuses the line as it is, so drop the note only once the owner has said yes.
 
 A case in only one file is listed under "not in both", not as a regression. It exits 1 when a case broke, 0 when none
 did, and 2 at a wrong argument, a missing or bad file, or no model in both files.
-
-**The report.** `pnpm --filter @warden/server eval:report` writes `docs/eval/report.md` from the run list,
-`docs/eval/runs.json`, and the results files it names in `docs/eval/results/`, with no database and no model. The
-numbers come from the results files; what each run changed, why, and which model and change were kept are written in
-the run list. After a new run, add it to the end of `runs.json` first (its results file, any `flip_reruns` files from
-`eval:regressions`, its commit, its change and its notes), then render the report and commit both. A test fails when
-the committed report differs from a fresh render. `eval:report -- <runs.json> <report.md>` renders another run list;
-a wrong argument or a bad file exits 2 and writes nothing.
 
 **The demo's live attack.** `WARDEN_REPLAY_URL=<warden> WARDEN_HOOK_TOKEN=<token> pnpm --filter @warden/server
 eval:replay` posts the case marked `replay` (`sends-secrets-plain-pastebin`: an agent that reads `.env` and posts its
