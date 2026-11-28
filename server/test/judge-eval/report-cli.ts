@@ -2,11 +2,11 @@
 // with no database and no model: `pnpm --filter @warden/server eval:report`, which writes `docs/eval/report.md` from
 // `docs/eval/runs.json`, or `eval:report -- <runs.json> <report.md>`. The results files sit in `results/` beside the
 // run list. Anything wrong in the inputs exits 2, naming it, and writes nothing: so does a report path that is one of
-// the files it reads, an empty results file, and a run's results file missing a case for a model in it (#546).
+// the files it reads (by any name, a hard link included: #548), an empty results file, and a run's results file missing a case for a model in it (#546).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cliArgs, isMain, spellings } from "./cli.ts";
+import { cliArgs, isMain, sameFile } from "./cli.ts";
 import {
   evalSetFiles,
   firstIssue,
@@ -96,15 +96,6 @@ export function readReportInputs(runsFile: string): { inputs: ReportInputs; file
   return { inputs, files };
 }
 
-/** `path` resolved, and where its links lead when it exists. */
-const namesOf = (path: string) => spellings(resolve(path));
-
-/** Whether `reportFile` is one of `inputs`, compared after `resolve` and after following links. */
-function isInput(reportFile: string, inputs: readonly string[]): boolean {
-  const read = new Set(inputs.flatMap(namesOf));
-  return namesOf(reportFile).some((name) => read.has(name));
-}
-
 /** A case's labels in words, in any order: `clean` for none. */
 const labelText = (labels: readonly string[]) =>
   labels.length === 0 ? "clean" : labels.toSorted().join(", ");
@@ -134,7 +125,8 @@ function main(argv: readonly string[]): number {
     args.length === 0 ? [RUNS_FILE, REPORT_FILE] : args.map((given) => resolve(from, given));
   try {
     const { inputs, files } = readReportInputs(runsFile!);
-    if (isInput(reportFile!, files))
+    // By the file on disk, not its spelling: a symlink or a hard link to an input is that input.
+    if (files.some((file) => sameFile(reportFile!, file)))
       throw new Error(`${reportFile} is one of eval:report's inputs`);
     const report = renderReport(inputs);
     writeFileSync(reportFile!, report);

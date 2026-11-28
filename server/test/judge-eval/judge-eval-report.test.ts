@@ -3,6 +3,7 @@
 // checked against a fresh render, so a results file, a case or a target changed without a re-render fails.
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -31,6 +32,7 @@ import {
   TARGETS_FILE,
   type EvalCase,
 } from "./eval-cases.ts";
+import { withHardLink } from "./hard-link.ts";
 import { readReportInputs, REPORT_FILE, RUNS_FILE } from "./report-cli.ts";
 import { renderReport, type ReportRun, type ReportRuns } from "./report.ts";
 import { resultLine, resultsFile } from "./result-fixtures.ts";
@@ -499,6 +501,17 @@ describe("eval:report: story 17, the report from the run list and its saved resu
     expect(readFileSync(report, "utf8")).not.toBe("the old report\n");
   });
 
+  it("writes a report path that doesn't exist yet", async () => {
+    const { folder, runsFile } = reportFolder();
+    const report = join(folder, "new-report.md");
+
+    const { code, stdout } = await evalReport([runsFile, report]);
+
+    expect(code).toBe(0);
+    expect(stdout).toBe(`wrote ${report}\n`);
+    expect(readFileSync(report, "utf8")).toBe(render(FULL_FILES, runList(), runsFile));
+  });
+
   it("is linked from the README's eval section, and the committed report exists", () => {
     const readme = readFileSync(join(REPO_DIR, "README.md"), "utf8");
     const start = readme.indexOf("\n## The Judge's eval\n");
@@ -597,22 +610,55 @@ describe("eval:report: refuses, writing nothing", () => {
   });
 
   it.each([
+    ["the run list", "runs.json"],
+    ["a results file the run list names", join("results", "second.jsonl")],
+    ["a flip-rerun file the run list names", join("results", "second-rerun.jsonl")],
+  ])(
+    "at a report path that is a hard link to %s, leaving every file with its bytes",
+    async (_, input) => {
+      const folder = reportFolder();
+      const link = join(folder.folder, "hard-link.md");
+      linkSync(join(folder.folder, input), link);
+      const before = folderBytes(folder.folder);
+
+      const { code, stdout, stderr } = await evalReport([folder.runsFile, link]);
+
+      expect(code).toBe(2);
+      expect(stdout).toBe("");
+      expect(stderr).toBe(`${link} is one of eval:report's inputs\n`);
+      expect(folderBytes(folder.folder)).toEqual(before);
+    },
+  );
+
+  const evalSetInputs: [string, string][] = [
     ["targets.json in EVAL_CASES_DIR", join(EVAL_CASES_DIR, TARGETS_FILE)],
     ["the first case file in EVAL_CASES_DIR", join(EVAL_CASES_DIR, caseFileNames()[0]!)],
-  ])("at a report path that is %s, before anything is written", async (_, input) => {
+  ];
+
+  /** Runs `eval:report` with `reportPath` reached from `input`, and checks it refuses, `input` keeping its bytes. */
+  async function refusesEvalSetFile(input: string, reportPath: string) {
     const before = readFileSync(input);
     const { runsFile } = reportFolder();
     try {
-      const { code, stderr } = await evalReport([runsFile, input]);
+      const { code, stderr } = await evalReport([runsFile, reportPath]);
 
       expect(code).toBe(2);
-      expect(stderr).toBe(`${input} is one of eval:report's inputs\n`);
+      expect(stderr).toBe(`${reportPath} is one of eval:report's inputs\n`);
       expect(readFileSync(input).equals(before), `${input} kept its bytes`).toBe(true);
     } finally {
       // A committed fixture: put its bytes back should the check ever let the report through.
       if (!readFileSync(input).equals(before)) writeFileSync(input, before);
     }
-  });
+  }
+
+  it.each(evalSetInputs)("at a report path that is %s, before anything is written", (_, input) =>
+    refusesEvalSetFile(input, input),
+  );
+
+  it.each(evalSetInputs)(
+    "at a report path that is a hard link to %s, before anything is written",
+    (_, input) => withHardLink(input, (link) => refusesEvalSetFile(input, link)),
+  );
 
   const inputs: [string, unknown, Record<string, EvalResultLine[]> | string, string][] = [
     ["a run list that isn't JSON", "not json", FULL_FILES, "runs.json isn't JSON"],

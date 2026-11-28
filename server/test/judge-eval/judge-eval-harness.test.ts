@@ -1,7 +1,7 @@
 // The Judge eval's harness (spec #225, slice 10b): each case replayed through the hook endpoint to a local Warden,
 // judged, saved as one line and scored. Every model here is a fake: the Team's own model is `fakeModelServer` on
 // 127.0.0.1, OpenRouter is `fakeOpenRouter`, so no call leaves the machine and nothing is paid for.
-import { appendFileSync, mkdtempSync } from "node:fs";
+import { appendFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,7 +21,14 @@ import {
   type Answer,
 } from "../fake-model-server.ts";
 import { fakeOpenRouter, verdict, withUsage } from "../fake-openrouter.ts";
-import { loadEvalCases, type EvalCase } from "./eval-cases.ts";
+import {
+  caseFileNames,
+  EVAL_CASES_DIR,
+  loadEvalCases,
+  TARGETS_FILE,
+  type EvalCase,
+} from "./eval-cases.ts";
+import { withHardLink } from "./hard-link.ts";
 import { EVAL_PAID_CAP_USD, FIRST_PAID_CASE_USD, runEval } from "./harness.ts";
 import { appendResult, readResults, type EvalResultLine } from "./results.ts";
 import { readEvalSettings } from "./settings.ts";
@@ -407,6 +414,30 @@ describe("runEval: what it checks before any model call", () => {
     );
     expect(ollama.received).toEqual([]);
   });
+
+  /** Runs on `resultsFile`, reached from the eval set's `input`, and checks it stops, `input` keeping its bytes. */
+  async function refusesEvalSetFile(input: string, resultsFile: string) {
+    const ollama = await fakeOllama();
+    const before = readFileSync(input);
+
+    await expect(run(onOllama(ollama, resultsFile))).rejects.toThrow(
+      `WARDEN_EVAL_RESULTS names ${resultsFile}, which is one of the eval set's files`,
+    );
+    expect(ollama.received).toEqual([]);
+    expect(readFileSync(input).equals(before), `${input} kept its bytes`).toBe(true);
+  }
+
+  const firstCase = join(EVAL_CASES_DIR, caseFileNames()[0]!);
+
+  it("stops at a results file that is a case file in EVAL_CASES_DIR", () =>
+    refusesEvalSetFile(firstCase, firstCase));
+
+  it.each([
+    ["a case file", firstCase],
+    ["targets.json", join(EVAL_CASES_DIR, TARGETS_FILE)],
+  ])("stops at a results file that is a hard link to %s in EVAL_CASES_DIR", (_, input) =>
+    withHardLink(input, (link) => refusesEvalSetFile(input, link)),
+  );
 
   it("stops at a split and a list of cases that select no case together", async () => {
     const heldOut = CASES.find((c) => c.split === "held-out")!;
