@@ -25,6 +25,7 @@ import { createPackageRegistry } from "./modules/guard/package-registry.ts";
 import { createRepoAssets, guardAssetCheck } from "./modules/guard/repo-assets.ts";
 import { guardRoutes } from "./modules/guard/routes.ts";
 import { createSessionActivity } from "./modules/guard/session-activity.ts";
+import { agentSessionRoutes } from "./modules/guard/session-routes.ts";
 import { writeGrantRoutes } from "./modules/guard/write-grant-routes.ts";
 import { createWriteGrants } from "./modules/guard/write-grants.ts";
 import { createPatchAssessment } from "./modules/patch/assessment.ts";
@@ -103,6 +104,8 @@ const repoAssets = createRepoAssets({ withTeam });
 const hookSettings = createHookSettings({ withTeam });
 const writeGrants = createWriteGrants({ withTeam });
 const fixPrs = createFixPrs({ withTeam });
+// The hook's stored sessions, which the hook endpoint writes and the session record's route reads.
+const agentSessions = createAgentSessions({ withTeam });
 const scans = createScans({ withTeam });
 // The Cloud Run Job when WARDEN_SCAN_JOB names one; else a child process off Cloud Run, and none on it (503). A Lead's
 // start and the first Scan after a link both start it.
@@ -176,12 +179,14 @@ const appDeps: AppDeps = {
     // Judge run, chosen as the Scan Job's starter is; on Cloud Run without a Job, none starts.
     hookEventRoutes({
       hookSettings,
-      agentSessions: createAgentSessions({ withTeam }),
+      agentSessions,
       pseudonymKey: config.pseudonymKey,
       behindCloudRun: config.behindCloudRun,
       startJudgeJob: judgeJobStarterFor(config, { logger }),
       logger,
     }),
+    // An Agent session Finding's session record: its pseudonym and times, for the detail card.
+    agentSessionRoutes({ findings, agentSessions }),
     patchRoutes({
       products,
       scan: createPatchScan({ findings, logger }),

@@ -1,14 +1,15 @@
 // The Guard spec's story 9 on the Findings page: a session a laptop's managed hook sends ends, the Judge reads it with
 // Hazel's own model (a fake OpenAI-compatible server on 127.0.0.1 that the global setup started; WARDEN_JUDGE_LOCALHOST
 // lets the Judge call it), and a Member opens the Finding it made in the detail card's Session section. Hazel is a Team
-// of its own, so the Finding moves no other test's counts. The layout check fakes Acme's demo session Finding in the
-// browser with a 4,000-character event, so the section is measured at each width without a Judge run. The section's
-// words and its markup-free text are SessionSection.test.tsx's.
+// of its own, so the Finding moves no other test's counts; the Member also reads the session record (a pseudonym, never
+// the developer's name, and its times). The layout check fakes Acme's demo session Finding in the browser with a
+// 4,000-character event, and its record (a failed ask, then Retry's answer), so the section is measured at each width
+// without a Judge run. The section's words and its markup-free text are SessionSection.test.tsx's.
 import { randomUUID } from "node:crypto";
-import type { Page } from "@playwright/test";
-import { FindingsBody, type Finding } from "@warden/contracts";
+import type { Locator, Page } from "@playwright/test";
+import { FindingsBody, type AgentSessionBody, type Finding } from "@warden/contracts";
 import { HOOK_EVENTS_PATH } from "../server/src/modules/guard/managed-settings.ts";
-import { expectNoSidewaysScroll } from "./a11y.ts";
+import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";
 import {
   asAdmin,
   expect,
@@ -26,6 +27,13 @@ const WIDTHS = [390, 1024, 1600] as const;
 
 const sessionSection = (page: Page) =>
   page.locator(".detail-card").getByRole("region", { name: "Session" });
+
+/** The value beside the section's `term` row. */
+const recordValue = (section: Locator, term: string) =>
+  section
+    .getByRole("term")
+    .filter({ hasText: new RegExp(`^${term}$`) })
+    .locator("xpath=following-sibling::dd[1]");
 
 /** Hazel's Findings, as its Admin reads them. */
 async function hazelFindings(): Promise<Finding[]> {
@@ -100,13 +108,21 @@ test(
       session.events.map((e) => e.text),
     );
     await expect(section.locator(".session-event").first()).toContainText("Event 2");
+    // The session record: the developer as 12 hex digits of its pseudonym, and when the session ran and was judged.
+    await expect(recordValue(section, "Developer")).toHaveText(/^pseudonym [0-9a-f]{12}…$/);
+    for (const term of ["Started", "Ended", "Judged"]) {
+      await expect(recordValue(section, term).locator("time"), term).toHaveAttribute(
+        "datetime",
+        /^\d{4}-\d{2}-\d{2}T/,
+      );
+    }
     // The developer's name is sent in a header for the session record's pseudonym, never shown.
     expect(await page.content()).not.toContain(HAZEL_DEVELOPER);
   },
 );
 
 for (const width of WIDTHS) {
-  test(`at ${width}px, a session Finding's 4,000-character event and full hash scroll nothing sideways`, async ({
+  test(`at ${width}px, a session Finding's record rows, its Retry, a 4,000-character event and the full hash scroll nothing sideways`, async ({
     page,
     signIn,
   }) => {
@@ -140,6 +156,20 @@ for (const width of WIDTHS) {
       });
       await route.fulfill({ response, json: { ...body, findings } });
     });
+    // The demo session has no record (the server answers 404), so its record is faked too: the first ask fails, and
+    // Retry's ask answers.
+    const record: AgentSessionBody = {
+      developer: "a3f9c27e1b04".padEnd(64, "d"),
+      started_at: "2026-11-24T09:00:00.000Z",
+      ended_at: "2026-11-24T09:42:00.000Z",
+      judged_at: "2026-11-24T09:43:00.000Z",
+    };
+    let asks = 0;
+    await page.route("**/api/guard/findings/*/session", (route) =>
+      asks++ === 0
+        ? route.fulfill({ status: 500, json: { error: "Internal error" } })
+        : route.fulfill({ json: record }),
+    );
     await page.goto("/findings");
     await expect(page.locator(".finding-card").first()).toBeVisible();
     expect(id, "Acme's demo session Finding").toBeDefined();
@@ -148,6 +178,20 @@ for (const width of WIDTHS) {
     const section = sessionSection(page);
     await expect(section.locator("code.session-hash")).toHaveText(hash);
     await expect(section.locator(".session-event-text")).toHaveText(longText);
+    const retry = section.getByRole("button", { name: "Retry the session" });
+    await expect(section.locator(".session-record-failed")).toContainText(
+      "Couldn't load the session.",
+    );
+    await expectNoSidewaysScroll(page);
+    await expectTargets([retry]);
+    await expectRings(page, [retry]);
+
+    await retry.click();
+    await expect(recordValue(section, "Developer")).toHaveText("pseudonym a3f9c27e1b04…");
+    await expect(recordValue(section, "Judged").locator("time")).toHaveAttribute(
+      "datetime",
+      record.judged_at!,
+    );
     await expectNoSidewaysScroll(page);
     // Nor inside the card: the section is no wider than the card that holds it.
     const widths = await section.evaluate((el) => ({
