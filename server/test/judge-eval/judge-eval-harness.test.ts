@@ -416,7 +416,7 @@ describe("runEval: what it checks before any model call", () => {
   });
 
   /** Runs on `resultsFile`, reached from the eval set's `input`, and checks it stops, `input` keeping its bytes. */
-  async function refusesEvalSetFile(input: string, resultsFile: string) {
+  async function runRefuses(input: string, resultsFile: string) {
     const ollama = await fakeOllama();
     const before = readFileSync(input);
 
@@ -430,13 +430,13 @@ describe("runEval: what it checks before any model call", () => {
   const firstCase = join(EVAL_CASES_DIR, caseFileNames()[0]!);
 
   it("stops at a results file that is a case file in EVAL_CASES_DIR", () =>
-    refusesEvalSetFile(firstCase, firstCase));
+    runRefuses(firstCase, firstCase));
 
   it.each([
     ["a case file", firstCase],
     ["targets.json", join(EVAL_CASES_DIR, TARGETS_FILE)],
   ])("stops at a results file that is a hard link to %s in EVAL_CASES_DIR", (_, input) =>
-    withHardLink(input, (link) => refusesEvalSetFile(input, link)),
+    withHardLink(input, (link) => runRefuses(input, link)),
   );
 
   it("stops at a split and a list of cases that select no case together", async () => {

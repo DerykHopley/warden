@@ -2,7 +2,8 @@
 // with no database and no model: `pnpm --filter @warden/server eval:report`, which writes `docs/eval/report.md` from
 // `docs/eval/runs.json`, or `eval:report -- <runs.json> <report.md>`. The results files sit in `results/` beside the
 // run list. Anything wrong in the inputs exits 2, naming it, and writes nothing: so does a report path that is one of
-// the files it reads (by any name, a hard link included: #548), an empty results file, and a run's results file missing a case for a model in it (#546).
+// the files it reads (by any name, a hard link included: #548), an empty results file, and a run's results file
+// missing a case for a model in it (#546).
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";

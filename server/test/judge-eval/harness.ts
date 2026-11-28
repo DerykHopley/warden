@@ -362,10 +362,10 @@ function checkWritable(file: string): void {
 /**
  * The run: the settings' cases on each of its models, each result added to the results file as it ends. Throws before
  * any case when the split and the case list select no case, at a results file that is one of the eval set's files or
- * can't be opened for appending, and
- * at a bad saved line or one naming a case not in the set; it stops the run at an event not answered 204, a
- * failed unload or any error but a model call's; a case stopped after its model calls is saved first, with an error,
- * so a resumed run counts what they cost and runs it again. Answers `capped` when it stopped at the paid cap.
+ * can't be opened for appending, and at a bad saved line or one naming a case not in the set; it stops the run at an
+ * event not answered 204, a failed unload or any error but a model call's; a case stopped after its model calls is
+ * saved first, with an error, so a resumed run counts what they cost and runs it again. Answers `capped` when it
+ * stopped at the paid cap.
  */
 export async function runEval({
   settings,

@@ -572,60 +572,36 @@ describe("eval:report: refuses, writing nothing", () => {
     expect(readFileSync(folder.report, "utf8")).toBe("the old report\n");
   });
 
-  const inputPaths: [string, (folder: ReturnType<typeof reportFolder>) => string][] = [
-    ["a report path that is the run list", ({ runsFile }) => runsFile],
-    [
-      "a report path that is a results file the run list names",
-      ({ folder }) => join(folder, "results", "second.jsonl"),
-    ],
-    [
-      "a report path that is a flip-rerun file the run list names",
-      ({ folder }) => join(folder, "results", "second-rerun.jsonl"),
-    ],
+  /** How a report path reaches an input: by its own name, or a second name made beside the run list. */
+  const linkKinds: [string, ((input: string, link: string) => void) | null][] = [
+    ["", null],
+    ["a link to ", symlinkSync],
+    ["a hard link to ", linkSync],
   ];
-
-  it.each(inputPaths)("at %s, leaving every file with its bytes", async (_, reportPath) => {
-    const folder = reportFolder();
-    const before = folderBytes(folder.folder);
-
-    const { code, stdout, stderr } = await evalReport([folder.runsFile, reportPath(folder)]);
-
-    expect(code).toBe(2);
-    expect(stdout).toBe("");
-    expect(stderr).toBe(`${reportPath(folder)} is one of eval:report's inputs\n`);
-    expect(folderBytes(folder.folder)).toEqual(before);
-  });
-
-  it("at a report path that is a link to the run list, leaving the run list with its bytes", async () => {
-    const folder = reportFolder();
-    const link = join(folder.folder, "link-to-runs.json");
-    symlinkSync(folder.runsFile, link);
-    const before = folderBytes(folder.folder);
-
-    const { code, stderr } = await evalReport([folder.runsFile, link]);
-
-    expect(code).toBe(2);
-    expect(stderr).toBe(`${link} is one of eval:report's inputs\n`);
-    expect(folderBytes(folder.folder)).toEqual(before);
-  });
-
-  it.each([
+  const folderInputs: [string, string][] = [
     ["the run list", "runs.json"],
     ["a results file the run list names", join("results", "second.jsonl")],
     ["a flip-rerun file the run list names", join("results", "second-rerun.jsonl")],
-  ])(
-    "at a report path that is a hard link to %s, leaving every file with its bytes",
-    async (_, input) => {
+  ];
+
+  it.each(
+    linkKinds.flatMap(([kind, makeLink]) =>
+      folderInputs.map(([name, input]) => [`${kind}${name}`, input, makeLink] as const),
+    ),
+  )(
+    "at a report path that is %s, leaving every file with its bytes",
+    async (_, input, makeLink) => {
       const folder = reportFolder();
-      const link = join(folder.folder, "hard-link.md");
-      linkSync(join(folder.folder, input), link);
+      const inputPath = join(folder.folder, input);
+      const reportPath = makeLink === null ? inputPath : join(folder.folder, "link.md");
+      makeLink?.(inputPath, reportPath);
       const before = folderBytes(folder.folder);
 
-      const { code, stdout, stderr } = await evalReport([folder.runsFile, link]);
+      const { code, stdout, stderr } = await evalReport([folder.runsFile, reportPath]);
 
       expect(code).toBe(2);
       expect(stdout).toBe("");
-      expect(stderr).toBe(`${link} is one of eval:report's inputs\n`);
+      expect(stderr).toBe(`${reportPath} is one of eval:report's inputs\n`);
       expect(folderBytes(folder.folder)).toEqual(before);
     },
   );
@@ -636,7 +612,7 @@ describe("eval:report: refuses, writing nothing", () => {
   ];
 
   /** Runs `eval:report` with `reportPath` reached from `input`, and checks it refuses, `input` keeping its bytes. */
-  async function refusesEvalSetFile(input: string, reportPath: string) {
+  async function reportRefuses(input: string, reportPath: string) {
     const before = readFileSync(input);
     const { runsFile } = reportFolder();
     try {
@@ -652,12 +628,12 @@ describe("eval:report: refuses, writing nothing", () => {
   }
 
   it.each(evalSetInputs)("at a report path that is %s, before anything is written", (_, input) =>
-    refusesEvalSetFile(input, input),
+    reportRefuses(input, input),
   );
 
   it.each(evalSetInputs)(
     "at a report path that is a hard link to %s, before anything is written",
-    (_, input) => withHardLink(input, (link) => refusesEvalSetFile(input, link)),
+    (_, input) => withHardLink(input, (link) => reportRefuses(input, link)),
   );
 
   const inputs: [string, unknown, Record<string, EvalResultLine[]> | string, string][] = [

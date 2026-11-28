@@ -21,6 +21,8 @@ node_modules/
 dist/
 .vite/
 coverage/
+# The Judge eval tests' throwaway hard-link folders (server/test/judge-eval/hard-link.ts)
+server/test/session-fixtures/.hard-links-*/
 # Playwright's output (e2e/)
 test-results/
 playwright-report/
