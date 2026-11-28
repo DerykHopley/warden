@@ -120,7 +120,8 @@ export function rerunLine(
     : `WARDEN_EVAL_LOCAL_URL=${shellWord(localUrl)} ${line}`;
 }
 
-const rules = (list: readonly string[]) => (list.length === 0 ? "none" : list.join(", "));
+/** A list of Rules, comma-separated, or `none`. */
+export const ruleList = (list: readonly string[]) => (list.length === 0 ? "none" : list.join(", "));
 
 /** The regressions as `eval:regressions` prints them at `at`: each model's flips and rerun line (its file and URL
  * from `target`), then the one-file models. */
@@ -137,7 +138,7 @@ export function regressionsText(
     lines.push(`${provider} ${model}: ${count} broke`);
     for (const flip of flips)
       lines.push(
-        `  ${flip.case}: ${flip.error ?? `missing ${rules(flip.missing)}; extra ${rules(flip.extra)}`}`,
+        `  ${flip.case}: ${flip.error ?? `missing ${ruleList(flip.missing)}; extra ${ruleList(flip.extra)}`}`,
       );
     if (flips.length > 0)
       lines.push(

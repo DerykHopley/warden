@@ -47,6 +47,10 @@ export type SplitScore = {
 
 export type ModelScore = { provider: EvalProvider; model: string; splits: SplitScore[] };
 
+/** `score`'s score on `split`: every ModelScore has one per split. */
+export const splitScore = (score: ModelScore, split: EvalSplit) =>
+  score.splits.find((one) => one.split === split)!;
+
 function scoreRule(rule: string, lines: readonly EvalResultLine[]): RuleScore {
   const count = (test: (labelled: boolean, flagged: boolean) => boolean) =>
     lines.filter((line) => test(line.labels.includes(rule), line.flagged.includes(rule))).length;
@@ -158,8 +162,13 @@ export function scoreResults(
     });
 }
 
-const fixed = (value: number | null, digits = 2) => (value === null ? "-" : value.toFixed(digits));
-const metText = (met: boolean | null) => (met === null ? "n/a" : met ? "met" : "MISSED");
+/** `value` to `digits` places, or `-` when there's none. */
+export const fixed = (value: number | null, digits = 2) =>
+  value === null ? "-" : value.toFixed(digits);
+
+/** A target met, missed (shown as `missed`), or n/a when there was nothing to measure. */
+export const metText = (met: boolean | null, missed: string) =>
+  met === null ? "n/a" : met ? "met" : missed;
 
 /** Rows as columns: the first left-aligned, the others right-aligned, two spaces apart. */
 function columns(rows: readonly string[][]): string {
@@ -177,9 +186,10 @@ function columns(rows: readonly string[][]): string {
 }
 
 /** One model's table: a row per measure, a column per split. */
-function modelTable({ provider, model, splits }: ModelScore): string {
+function modelTable(score: ModelScore): string {
+  const { provider, model, splits } = score;
   const row = (name: string, cell: (score: SplitScore) => string) => [name, ...splits.map(cell)];
-  const all = splits.find(({ split }) => split === "all")!;
+  const all = splitScore(score, "all");
   const rows = [
     ["", ...splits.map(({ split }) => split)],
     row("passed", ({ passed, run }) => `${passed}/${run}`),
@@ -198,7 +208,7 @@ function modelTable({ provider, model, splits }: ModelScore): string {
     row("output tokens", (s) => `${s.outputTokens} (${fixed(s.perSession.outputTokens, 0)})`),
     row("cost USD", (s) => `${fixed(s.costUsd, 4)} (${fixed(s.perSession.costUsd, 4)})`),
     ...(Object.keys(all.targets) as (keyof TargetsMet)[]).map((target) =>
-      row(target, ({ targets }) => metText(targets[target])),
+      row(target, ({ targets }) => metText(targets[target], "MISSED")),
     ),
   ];
   const injection = all.injection.map(

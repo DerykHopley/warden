@@ -298,6 +298,9 @@ The Judge is measured on a fixed set of labelled Agent sessions: one JSON file p
 `server/test/session-fixtures/eval/`, each with its group, its split (`dev` or `held-out`), its Privacy tier and the
 Judge Rules a correct run flags. The pass targets sit beside them in `targets.json`, fixed before any run.
 
+**[The eval report](docs/eval/report.md)** shows the results so far: the case set and why, the criteria, each run's
+score and failing cases, what each run changed and why, the regressions between runs, the held-out score and the cost.
+
 **Recording an ordinary case.** `pnpm --filter @warden/server eval:record -- <case-name> <repo-name>
 <metadata|details|content> <short|medium|long> "<task>"` runs a real `claude -p` session on a Seeded org repo, on the
 Claude subscription, and writes its hook events as a new case labelled clean, with its split and `stands_for` left
@@ -325,6 +328,14 @@ The harness keeps its own ledger and stops before a case that could take OpenRou
 
 **Scoring.** `pnpm --filter @warden/server eval:score -- <results.jsonl>` prints each model's score per split, and
 each target met or missed, from a saved file, with no database and no model.
+
+**Re-rendering the report.** `pnpm --filter @warden/server eval:report` writes `docs/eval/report.md` from the run
+list, `docs/eval/runs.json`, and the results files it names in `docs/eval/results/`, with no database and no model.
+The numbers come from the results files; what each run changed, why, and which model and change were kept are written
+in the run list. After a new run, add it to the end of `runs.json` first (its results file, any `flip_reruns` files
+from `eval:regressions` below, its commit, its change and its notes), then render the report and commit both. A test
+fails when the committed report differs from a fresh render. `eval:report -- <runs.json> <report.md>` renders another
+run list; a wrong argument or a bad file exits 2 and writes nothing.
 
 **Regressions.** `pnpm --filter @warden/server eval:regressions -- <earlier.jsonl> <later.jsonl>` lists, for each
 model in both files, each case that passed in the earlier and fails in the later, with the Rules it missed or flagged

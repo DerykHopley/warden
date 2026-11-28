@@ -5,7 +5,7 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { JUDGE_RULES } from "../../src/modules/guard/judge-rules.ts";
 import type { SessionOutcome } from "../../src/modules/guard/agent-sessions.ts";
-import { CASE_GROUPS, CASE_SPLITS } from "./eval-cases.ts";
+import { CASE_GROUPS, CASE_SPLITS, firstIssue } from "./eval-cases.ts";
 import { EVAL_PROVIDERS } from "./settings.ts";
 
 const JudgeRuleId = z.enum(JUDGE_RULES.map((rule) => rule.ruleId) as [string, ...string[]]);
@@ -88,11 +88,8 @@ export function readResults(file: string): EvalResultLine[] {
       throw new Error(`${file} line ${i + 1} isn't JSON`);
     }
     const parsed = EvalResultLine.safeParse(value);
-    if (!parsed.success) {
-      const [issue] = parsed.error.issues;
-      const where = issue!.path.length > 0 ? issue!.path.join(".") : "(root)";
-      throw new Error(`${file} line ${i + 1} isn't a result: ${where} ${issue!.message}`);
-    }
+    if (!parsed.success)
+      throw new Error(`${file} line ${i + 1} isn't a result: ${firstIssue(parsed.error)}`);
     return [parsed.data];
   });
 }
