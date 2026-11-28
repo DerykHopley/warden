@@ -5,7 +5,7 @@
 // then each event it relied on, in `seq` order: its place, time, name, tool and text. Every event's text is shown as
 // text, never as markup, with its line breaks kept.
 import type { AgentSessionBody, Finding, SessionEvidence } from "@warden/contracts";
-import { useCallback, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   fetchSessionRecordInTeam,
   NO_SESSION_RECORD,
@@ -44,15 +44,34 @@ export function SessionSection(props: {
   const { result, refresh } = useWardenCall(call, props.onSessionEnded);
   // Retry keeps the refusal on screen while it asks again, its button busy until a new answer replaces it.
   const [retriedOn, setRetriedOn] = useState<SessionRecordResult | null>(null);
+  // The ask a pressed Retry is waiting on: a new focus's ask is another, so its answer moves no focus.
+  const retriedFor = useRef<typeof call | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
   const retry = () => {
     if (result === "loading") return;
     setRetriedOn(result);
+    retriedFor.current = call;
     refresh();
   };
 
+  // Once a pressed Retry is answered, focus that would sit on <body> (the button went, or was disabled while it ran)
+  // goes to Retry when it shows again, else to the heading. Focus the person moved elsewhere stays there.
+  useEffect(() => {
+    if (result === "loading" || result === retriedOn) return;
+    const pressed = retriedFor.current === call;
+    retriedFor.current = null;
+    if (!pressed || result.kind === "session-ended") return;
+    const active = document.activeElement;
+    if (active !== null && active !== document.body) return;
+    (retryRef.current ?? headingRef.current)?.focus();
+  }, [result, retriedOn, call]);
+
   return (
     <section className="session-section" aria-labelledby={headingId}>
-      <h4 id={headingId}>Session</h4>
+      <h4 id={headingId} ref={headingRef} tabIndex={-1}>
+        Session
+      </h4>
       {result === "loading" ? (
         <p className="session-record-line muted">{SESSION_LOADING}</p>
       ) : result.kind === "not-found" ? (
@@ -66,6 +85,7 @@ export function SessionSection(props: {
           </span>
           {/* Named apart from the Proposals' and the Fix PR's Retry, which can show in the same card. */}
           <button
+            ref={retryRef}
             type="button"
             className="secondary"
             onClick={retry}
