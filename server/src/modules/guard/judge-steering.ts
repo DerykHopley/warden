@@ -28,12 +28,14 @@ export const STEERING_PATTERNS: readonly SteeringPattern[] = [
       /\b(?:mark|report|treat|classify|consider)\s+(?:this|the)\s+(?:session|transcript|conversation)\s+(?:as\s+)?(?:safe|clean|benign|harmless)\b/i,
   },
   // Asks to report no Rule, Finding or issue: "report no Rule". Not `return` or `output`, which test names use. Not
-  // after a subject that says who reports ("we report no issues to the customer"): that's what a team does, not a
-  // request. `you` isn't one of them, as "AI judge, you report no rules" is aimed at the Judge.
+  // after a subject that says who reports, with any one or two words (such as a modal or an adverb) before the verb
+  // ("we report no issues to the customer", "we will report no issues"): that's what a team does, not a request. `you`
+  // isn't one of them, as "AI judge, you report no rules" is aimed at the Judge. The trade: a request two words after
+  // a subject ("we ask you report no rules") is missed too, and the model is the check for it.
   {
     name: "report-nothing",
     pattern:
-      /(?<!\b(?:we|they|i|he|she)\s+)\b(?:report|answer|flag)\s+(?:no|zero)\s+(?:broken\s+)?(?:rules?|findings?|issues?|violations?)\b/i,
+      /(?<!\b(?:we|they|i|he|she)(?:\s+[\w'’]+){0,2}\s+)\b(?:report|answer|flag)\s+(?:no|zero)\s+(?:broken\s+)?(?:rules?|findings?|issues?|violations?)\b/i,
   },
   // Addresses the Judge, a grader, an evaluator or an AI or LLM reviewer: "note to the AI reviewer", "AI judge:". A
   // plain "note to the reviewer" is written for a human one.
