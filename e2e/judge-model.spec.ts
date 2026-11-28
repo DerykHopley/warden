@@ -1,6 +1,6 @@
 // Spec #225's story 10 on Setup: an Admin sets the Team's own Judge model and puts it back on OpenRouter (#464). The
-// round trip runs on Acme against the real server, with its localhost setting on (`global-setup.ts`); no browser test
-// runs the Judge, so the setting changes nothing else. The layout check fakes a set model in the browser, so Use
+// round trip runs on Acme against the real server, with its localhost setting on (`global-setup.ts`); no session of
+// Acme's is judged (only Hazel's are, in agent-session.spec.ts), so the setting changes nothing else. The layout check fakes a set model in the browser, so Use
 // OpenRouter shows at each width. The section's words, refusals and busy states are JudgeModelSection.test.tsx's.
 import type { Page } from "@playwright/test";
 import { expectNoSidewaysScroll, expectRings, expectTargets } from "./a11y.ts";

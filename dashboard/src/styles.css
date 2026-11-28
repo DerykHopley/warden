@@ -1750,6 +1750,62 @@ button[aria-busy="true"],
   color: var(--accent);
 }
 
+/* An Agent session Finding's evidence, under the card's fields, set like the Patch section above. The hash and each
+   event's text are mono and wrap anywhere, so a 71-character hash or a 4,000-character event scrolls nothing sideways;
+   an event's text keeps its line breaks. */
+.session-section {
+  margin-right: 8px;
+}
+
+.session-section h4 {
+  margin: 16px 0 8px;
+  font-size: 0.9375rem;
+}
+
+.session-section .detail-fields {
+  margin-right: 0;
+}
+
+.session-hash {
+  overflow-wrap: anywhere;
+}
+
+.session-read {
+  margin: 0 0 8px;
+}
+
+.session-events {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.session-event-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  margin: 0 0 4px;
+}
+
+.session-event-head time {
+  color: var(--muted);
+}
+
+.session-event-text {
+  margin: 0;
+  padding: 8px;
+  font-family: var(--font-mono);
+  font-size: 0.8125rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--surface);
+  border: 1px solid var(--focus-line);
+  border-radius: var(--radius);
+}
+
 /* A Guard Finding's Fix PR, between the card's fields and its decisions, set like the Patch section above. */
 .fix-pr-section {
   margin-right: 8px;
