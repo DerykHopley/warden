@@ -225,6 +225,14 @@ export async function recordCase(options: RecordOptions): Promise<string> {
     const end = captured.findIndex((body) => body.hook_event_name === "SessionEnd");
     if (end === -1)
       throw new Error("no SessionEnd was captured from the session, so no case was written");
+    // A user named after a tool the session called would have every such tool_name rewritten to dev (#522).
+    const sameAsUser = captured
+      .map((body) => body.tool_name)
+      .find((tool) => typeof tool === "string" && userWord(user).test(tool));
+    if (sameAsUser !== undefined)
+      throw new Error(
+        `the user "${user}" has the name of the tool ${String(sameAsUser)} the session called, so no case was written: record as another user`,
+      );
     const sessionIds = [
       ...new Set(captured.map((body) => body.session_id).filter((id) => typeof id === "string")),
     ];

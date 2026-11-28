@@ -81,6 +81,7 @@ fire("PostToolUse", {
   tool_input: { command: "whoami && ls -l README.md && git log -1" },
   tool_response: { stdout: ${JSON.stringify(BASH_OUTPUT)}, stderr: "", interrupted: false },
 });
+if (mode === "task-tool") fire("PostToolUse", { tool_name: "Task", tool_use_id: "toolu_3", tool_input: {}, tool_response: {} });
 if (mode !== "no-session-end") fire("SessionEnd", { reason: "other" });
 if (mode === "exit1") { process.stderr.write("boom"); process.exit(1); }
 if (mode === "max-turns") { process.stdout.write(JSON.stringify({ type: "result", subtype: "error_max_turns" })); process.exit(1); }
@@ -106,7 +107,7 @@ beforeEach(() => {
 
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-/** How the stub's session goes: "ok", "exit1", "max-turns", "no-session-end" or "foreign-secret". */
+/** How the stub's session goes: "ok", "exit1", "max-turns", "no-session-end", "foreign-secret" or "task-tool". */
 const stubMode = (mode: string) => writeFileSync(join(root, "stub-mode"), mode);
 
 function options(overrides: Partial<RecordOptions> = {}): RecordOptions {
@@ -329,6 +330,21 @@ describe("recordCase", () => {
     stubMode("no-session-end");
     await expect(recordCase(options())).rejects.toThrow(/no SessionEnd/);
     expect(readdirSync(casesDir)).toEqual([]);
+  });
+
+  it("writes nothing when the user is named after a tool the session called, naming both (#522)", async () => {
+    stubMode("task-tool");
+    await expect(recordCase(options({ user: "task", home: "/var/home/task" }))).rejects.toThrow(
+      /user "task".*Task/,
+    );
+    expect(readdirSync(casesDir)).toEqual([]);
+    expect(readdirSync(work)).toEqual([]);
+  });
+
+  it("writes the case when the session called a tool that isn't the user's name", async () => {
+    stubMode("task-tool");
+    await recordCase(options());
+    expect(written()).toContain('"tool_name": "Task"');
   });
 
   it("refuses to overwrite a case that's already there", async () => {
