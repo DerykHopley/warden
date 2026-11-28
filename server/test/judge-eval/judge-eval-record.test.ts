@@ -26,6 +26,7 @@ import {
   parseRecordArgs,
   recordCase,
   type RecordOptions,
+  userWord,
 } from "./record.ts";
 
 const SERVER_DIR = fileURLToPath(new URL("../../", import.meta.url));
@@ -286,6 +287,9 @@ describe("recordCase", () => {
     ["runner", "/home/runner"],
     ["alice", "/home/admin"],
     ["user", "/home/alice"],
+    // A Claude Code tool's name, which a case-blind rewrite would turn into dev in every tool_name (#520).
+    ["bash", "/home/bash"],
+    ["Read", "/home/Read"],
   ])(
     "refuses to record as the generic user %s with home %s, before running claude",
     async (user, home) => {
@@ -338,6 +342,10 @@ describe("recordCase", () => {
       /"no-such-repo"/,
     );
   });
+});
+
+it("userWord builds a regex when passed the i flag itself (#520)", () => {
+  expect(userWord("alice", "i").test("ALICE")).toBe(true);
 });
 
 describe("caseLeak", () => {
