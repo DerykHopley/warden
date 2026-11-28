@@ -145,10 +145,6 @@ export async function recordCase(options: RecordOptions): Promise<string> {
   } = options;
   if (!CASE_NAME.test(caseName))
     throw new Error(`case name "${caseName}" isn't kebab-case. ${USAGE}`);
-  if ([user, basename(home)].some((name) => !name || GENERIC_NAMES.has(name.toLowerCase())))
-    throw new Error(
-      `the user "${user}" with home ${home} is generic, so the case couldn't be told apart from it: record as your own user`,
-    );
   const repo = SEEDED_ORG.find((r) => r.name === repoName);
   if (!repo)
     throw new Error(
@@ -159,6 +155,10 @@ export async function recordCase(options: RecordOptions): Promise<string> {
   const claude = onPath("claude", env.PATH);
   if (!claude)
     throw new Error("`claude` isn't on PATH: install Claude Code and sign in, then run this again");
+  if ([user, basename(home)].some((name) => !name || GENERIC_NAMES.has(name.toLowerCase())))
+    throw new Error(
+      `the user "${user}" with home ${home} is generic, so the case couldn't be told apart from it: record as your own user`,
+    );
 
   const workRoot = mkdtempSync(join(workParent, "warden-eval-"));
   try {
