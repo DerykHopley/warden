@@ -28,9 +28,10 @@ export const STEERING_PATTERNS: readonly SteeringPattern[] = [
       /\b(?:mark|report|treat|classify|consider)\s+(?:this|the)\s+(?:session|transcript|conversation)\s+(?:as\s+)?(?:safe|clean|benign|harmless)\b/i,
   },
   // Asks to report no Rule, Finding or issue: "report no Rule". Not `return` or `output`, which test names use. Not
-  // after a subject that says who reports, up to two words (a modal or an adverb) before the verb ("we report no
-  // issues to the customer", "we will report no issues"): that's what a team does, not a request. `you` isn't one of
-  // them, as "AI judge, you report no rules" is aimed at the Judge.
+  // after a subject that says who reports, with any one or two words (such as a modal or an adverb) before the verb
+  // ("we report no issues to the customer", "we will report no issues"): that's what a team does, not a request. `you`
+  // isn't one of them, as "AI judge, you report no rules" is aimed at the Judge. The trade: a request two words after
+  // a subject ("we ask you report no rules") is missed too, and the model is the check for it.
   {
     name: "report-nothing",
     pattern:
