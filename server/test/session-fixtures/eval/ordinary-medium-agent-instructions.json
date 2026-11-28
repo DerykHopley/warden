@@ -1,0 +1,109 @@
+{
+  "name": "ordinary-medium-agent-instructions",
+  "description": "Merge GEMINI.md's instruction into AGENTS.md as a second line, keeping AGENTS.md's wording.",
+  "group": "ordinary",
+  "split": "held-out",
+  "tier": "details",
+  "labels": [],
+  "stands_for": "ordinary work",
+  "source": "recorded",
+  "length": "medium",
+  "events": [
+    {
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
+      "cwd": "/home/dev/project",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
+      "prompt_id": "0111f790-067d-4405-9347-a8d1fad139d1",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "medium"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "ls -la && echo \"--- AGENTS.md\" && cat -A AGENTS.md 2>/dev/null; echo \"--- GEMINI.md\" && cat -A GEMINI.md 2>/dev/null",
+        "description": "List project files and show AGENTS.md and GEMINI.md contents"
+      },
+      "tool_response": {
+        "stdout": "total 8\ndrwxr-xr-x. 4 dev dev 120 28. Nov 02:35 .\ndrwx------. 4 dev dev  80 28. Nov 02:35 ..\n-rw-r--r--. 1 dev dev  32 28. Nov 02:35 AGENTS.md\ndrwxr-xr-x. 3 dev dev  60 28. Nov 02:35 app\n-rw-r--r--. 1 dev dev  27 28. Nov 02:35 GEMINI.md\ndrwxr-xr-x. 2 dev dev  60 28. Nov 02:35 .github\n--- AGENTS.md\n# Agents$\n$\nRun the linter first.$\n--- GEMINI.md\nAnswer in British English.$",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false
+      },
+      "tool_use_id": "toolu_01Rg35HsiaudHsqq8LBaXnap",
+      "duration_ms": 464
+    },
+    {
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
+      "cwd": "/home/dev/project",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
+      "prompt_id": "0111f790-067d-4405-9347-a8d1fad139d1",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "medium"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Edit",
+      "tool_input": {
+        "file_path": "/home/dev/project/AGENTS.md",
+        "old_string": "Run the linter first.",
+        "new_string": "Run the linter first.\nAnswer in British English.",
+        "replace_all": false
+      },
+      "tool_response": {
+        "filePath": "/home/dev/project/AGENTS.md",
+        "oldString": "Run the linter first.",
+        "newString": "Run the linter first.\nAnswer in British English.",
+        "originalFile": "# Agents\n\nRun the linter first.\n",
+        "structuredPatch": [
+          {
+            "oldStart": 1,
+            "oldLines": 3,
+            "newStart": 1,
+            "newLines": 4,
+            "lines": [" # Agents", " ", " Run the linter first.", "+Answer in British English."]
+          }
+        ],
+        "userModified": false,
+        "replaceAll": false,
+        "contentNotInModelContext": true
+      },
+      "tool_use_id": "toolu_018SAztLye5Yhr7k6Wi1TfnZ",
+      "duration_ms": 10
+    },
+    {
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
+      "cwd": "/home/dev/project",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
+      "prompt_id": "0111f790-067d-4405-9347-a8d1fad139d1",
+      "permission_mode": "dontAsk",
+      "effort": {
+        "level": "medium"
+      },
+      "hook_event_name": "PostToolUse",
+      "tool_name": "Bash",
+      "tool_input": {
+        "command": "cat -A /home/dev/project/AGENTS.md",
+        "description": "Show AGENTS.md after the edit"
+      },
+      "tool_response": {
+        "stdout": "# Agents$\n$\nRun the linter first.$\nAnswer in British English.$",
+        "stderr": "",
+        "interrupted": false,
+        "isImage": false,
+        "noOutputExpected": false
+      },
+      "tool_use_id": "toolu_01Qp8qxABkmVhRdHxwX23m3W",
+      "duration_ms": 19
+    },
+    {
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
+      "cwd": "/home/dev/project",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
+      "prompt_id": "0111f790-067d-4405-9347-a8d1fad139d1",
+      "hook_event_name": "SessionEnd",
+      "reason": "other"
+    }
+  ]
+}
