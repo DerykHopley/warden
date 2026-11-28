@@ -110,9 +110,21 @@ export const FIXTURE_SECRETS: ReadonlyMap<string, string> = new Map(
 
 const PLACEHOLDER = /\{\{([A-Za-z0-9_]+)\}\}/g;
 
+/** A copy of `value` with `change` applied to every string and every object key, at any depth, each key before its
+ * value: the one walk the loader, `eventText` and the recorder's rewrite share. */
+export function mapStrings(value: unknown, change: (text: string) => string): unknown {
+  if (typeof value === "string") return change(value);
+  if (Array.isArray(value)) return value.map((item) => mapStrings(item, change));
+  if (typeof value === "object" && value !== null)
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [change(key), mapStrings(item, change)]),
+    );
+  return value;
+}
+
 /** `value` with each placeholder in its strings, keys included, filled; throws naming `caseName` at an unknown one. */
 function fillPlaceholders(value: unknown, caseName: string): unknown {
-  const fill = (text: string) =>
+  return mapStrings(value, (text) =>
     text.replace(PLACEHOLDER, (placeholder, name: string) => {
       const secret = FIXTURE_SECRETS.get(name);
       if (secret === undefined)
@@ -120,14 +132,8 @@ function fillPlaceholders(value: unknown, caseName: string): unknown {
           `case "${caseName}": unknown placeholder ${placeholder}, not a string export of secret-fixtures.ts`,
         );
       return secret;
-    });
-  if (typeof value === "string") return fill(value);
-  if (Array.isArray(value)) return value.map((item) => fillPlaceholders(item, caseName));
-  if (typeof value === "object" && value !== null)
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [fill(key), fillPlaceholders(item, caseName)]),
-    );
-  return value;
+    }),
+  );
 }
 
 /** One case file's case, checked, with its placeholders filled; throws naming the case at the first problem. */
@@ -142,19 +148,24 @@ function loadCase(folder: string, file: string): EvalCase {
   const parsed = EvalCaseSchema.safeParse(fillPlaceholders(raw, name));
   if (!parsed.success) {
     const [issue] = parsed.error.issues;
-    throw new Error(`case "${name}": ${issue!.path.join(".")} ${issue!.message}`);
+    const where = issue!.path.length > 0 ? issue!.path.join(".") : "(root)";
+    throw new Error(`case "${name}": ${where} ${issue!.message}`);
   }
   if (parsed.data.name !== name)
     throw new Error(`case "${name}": name is "${parsed.data.name}", not the file's`);
   return parsed.data;
 }
 
-/** Every case in `folder` (the eval set's by default), by name, each checked and with its secrets filled in. */
-export function loadEvalCases(folder: string = EVAL_CASES_DIR): EvalCase[] {
+/** The case files in `folder`, sorted: every `.json` file but the targets'. */
+export function caseFileNames(folder: string = EVAL_CASES_DIR): string[] {
   return readdirSync(folder)
     .filter((file) => file.endsWith(".json") && file !== TARGETS_FILE)
-    .sort()
-    .map((file) => loadCase(folder, file));
+    .sort();
+}
+
+/** Every case in `folder` (the eval set's by default), by name, each checked and with its secrets filled in. */
+export function loadEvalCases(folder: string = EVAL_CASES_DIR): EvalCase[] {
+  return caseFileNames(folder).map((file) => loadCase(folder, file));
 }
 
 /** The eval's pass targets, from `targets.json` in `folder`. */
@@ -165,15 +176,9 @@ export function loadEvalTargets(folder: string = EVAL_CASES_DIR): EvalTargets {
 /** Every string in a case's events, keys included, joined by line breaks: what a search for a phrase reads. */
 export function eventText(c: EvalCase): string {
   const strings: string[] = [];
-  const walk = (value: unknown) => {
-    if (typeof value === "string") strings.push(value);
-    else if (Array.isArray(value)) value.forEach(walk);
-    else if (typeof value === "object" && value !== null)
-      for (const [key, item] of Object.entries(value)) {
-        strings.push(key);
-        walk(item);
-      }
-  };
-  walk(c.events);
+  mapStrings(c.events, (text) => {
+    strings.push(text);
+    return text;
+  });
   return strings.join("\n");
 }

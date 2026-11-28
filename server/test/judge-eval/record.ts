@@ -4,9 +4,10 @@
 // as a case in the eval folder: labelled clean, with its split and stands_for left for the author to set.
 //
 // Claude Code's flags and hooks: https://code.claude.com/docs/en/cli-reference, https://code.claude.com/docs/en/hooks
-// and https://code.claude.com/docs/en/headless. The session runs in the dontAsk permission mode with a fixed tool
-// list (https://code.claude.com/docs/en/permission-modes), never a permission-skip flag or mode.
-import { spawn } from "node:child_process";
+// and https://code.claude.com/docs/en/headless. The session runs in the dontAsk permission mode
+// (https://code.claude.com/docs/en/permission-modes), never a permission-skip flag or mode, with the project's file
+// rules in `ALLOWED_TOOLS` (https://code.claude.com/docs/en/permissions). The user's own settings still load, so this
+// limits the session but doesn't sandbox it: see the `--setting-sources` flag below.
 import {
   accessSync,
   constants,
@@ -19,42 +20,59 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PrivacyTier } from "@warden/contracts";
 import { managedSettings } from "../../src/modules/guard/managed-settings.ts";
-import { PLANTED_SECRETS, SEEDED_ORG } from "../seeded-org.ts";
+import { findSecrets } from "../../src/modules/guard/secrets.ts";
+import { runCommand } from "../child-process.ts";
+import { SEEDED_ORG } from "../seeded-org.ts";
 import {
   CASE_LENGTHS,
   EVAL_CASES_DIR,
   FIXTURE_SECRETS,
   TURN_CAPS,
+  mapStrings,
   type CaseLength,
 } from "./eval-cases.ts";
 
 const USAGE =
   'usage: pnpm --filter @warden/server eval:record -- <case-name> <repo-name> <metadata|details|content> <short|medium|long> "<task>"';
 
-/** The tools the session may use without asking: reading and editing the project, and a few read-only or
- * project-local commands. In print mode anything else is refused, so the session can't reach past them. */
-export const ALLOWED_TOOLS: readonly string[] = [
-  "Read",
-  "Edit",
-  "Write",
-  "Glob",
-  "Grep",
-  "Bash(ls *)",
-  "Bash(cat *)",
-  "Bash(wc *)",
-  "Bash(node *)",
-  "Bash(npm test)",
-  "Bash(npm run *)",
-];
+/** The tools the session may use without asking: reading and editing files inside the project, as gitignore-style
+ * paths from its folder. Edit's rule covers every built-in tool that changes a file, Write included. Claude Code also
+ * lets a few read-only tools (Glob, Grep, and commands such as `ls`, `cat` and `wc`) run without a rule; the settings'
+ * `blockReadsOutsideWorkingDirectories` keeps those to the project. There's no Bash rule: a program it ran (node, an
+ * npm script the session wrote) would reach wherever it liked. */
+export const ALLOWED_TOOLS: readonly string[] = ["Read(./**)", "Edit(./**)"];
 
 /** Where the session seems to run, in the case: a developer `dev` with the project in their home folder. */
 const DEV_HOME = "/home/dev";
 const DEV_PROJECT = `${DEV_HOME}/project`;
 const DEV_USER = "dev";
+/** Claude Code's scratchpad root as dev's, in place of the recording machine's `<tmpdir>/claude-<uid>`. */
+const DEV_CLAUDE_TMP = "/tmp/claude-dev";
+/** The session id the case names in its transcript and scratchpad paths, in place of the recorded one. */
+export const DEV_SESSION_ID = "00000000-0000-4000-8000-000000000000";
+
+/** User and home folder names a case can't be cleaned of: they stand for many machines, and are ordinary words. */
+const GENERIC_NAMES = new Set(["root", "node", "runner", "admin", "user"]);
+
+/** The variables `claude` keeps from the recording environment: where to find it and its config, the terminal, and
+ * how it reaches Anthropic (a base URL or proxy, such as one that traces the session). Nothing else passes: not
+ * ANTHROPIC_API_KEY, so a recording stays on the subscription and never turns into a pay-per-token run, nor any other
+ * token or secret. */
+const PASSED_VARIABLES = [
+  "PATH",
+  "HOME",
+  "TERM",
+  "CLAUDE_CONFIG_DIR",
+  "ANTHROPIC_BASE_URL",
+  ...["HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY"].flatMap((name) => [
+    name,
+    name.toLowerCase(),
+  ]),
+];
 
 /** The hook script each command hook runs: it appends the hook body from stdin to the capture file, one per line. */
 const CAPTURE_SCRIPT = `import { appendFileSync, readFileSync } from "node:fs";
@@ -74,11 +92,13 @@ export type RecordOptions = RecordArgs & {
   casesDir?: string;
   /** Where the throwaway folder is made. */
   workParent?: string;
-  /** The environment `claude` runs with, and whose PATH it's found on. */
+  /** The environment `claude` is found on, and the variables in `PASSED_VARIABLES` it runs with. */
   env?: NodeJS.ProcessEnv;
   /** The recording machine's home folder and user name, rewritten out of the case. */
   home?: string;
   user?: string;
+  /** Claude Code's scratchpad root on this machine, rewritten out of the case. */
+  claudeTmp?: string;
 };
 
 const CASE_NAME = /^[a-z0-9]+(-[a-z0-9]+)*$/;
@@ -120,9 +140,15 @@ export async function recordCase(options: RecordOptions): Promise<string> {
     env = process.env,
     home = homedir(),
     user = userInfo().username,
+    // With no TMPDIR passed (`claudeEnvironment`), Claude Code's temp folder is /tmp.
+    claudeTmp = `/tmp/claude-${process.getuid?.() ?? ""}`,
   } = options;
   if (!CASE_NAME.test(caseName))
     throw new Error(`case name "${caseName}" isn't kebab-case. ${USAGE}`);
+  if ([user, basename(home)].some((name) => !name || GENERIC_NAMES.has(name.toLowerCase())))
+    throw new Error(
+      `the user "${user}" with home ${home} is generic, so the case couldn't be told apart from it: record as your own user`,
+    );
   const repo = SEEDED_ORG.find((r) => r.name === repoName);
   if (!repo)
     throw new Error(
@@ -164,11 +190,14 @@ export async function recordCase(options: RecordOptions): Promise<string> {
       String(TURN_CAPS[length]),
       "--output-format",
       "json",
-      // dontAsk: tools off the list are denied, not asked about (there's nobody to ask in print mode).
+      // dontAsk: a call that would need approval is denied unless a rule pre-approves it (there's nobody to ask in
+      // print mode).
       "--permission-mode",
       "dontAsk",
-      // The user's own settings only: the repo's .claude/settings*.json and .mcp.json are Seeded org
-      // misconfigurations (hooks, permission rules, MCP servers) the session must not load.
+      // The user's own settings load, not the repo's: its .claude/settings*.json and .mcp.json are Seeded org
+      // misconfigurations (hooks, permission rules, MCP servers) the session must not load. The user's settings carry
+      // the sign-in and any proxy the session goes through, so they stay; but their hooks, mods and permission rules
+      // load too, and can approve a call `ALLOWED_TOOLS` and dontAsk alone would deny.
       "--setting-sources",
       "user",
       "--strict-mcp-config",
@@ -190,6 +219,9 @@ export async function recordCase(options: RecordOptions): Promise<string> {
     const end = captured.findIndex((body) => body.hook_event_name === "SessionEnd");
     if (end === -1)
       throw new Error("no SessionEnd was captured from the session, so no case was written");
+    const sessionIds = [
+      ...new Set(captured.map((body) => body.session_id).filter((id) => typeof id === "string")),
+    ];
     const events = captured.slice(0, end + 1).map((body) => {
       const withoutSession = { ...body };
       delete withoutSession.session_id;
@@ -197,7 +229,15 @@ export async function recordCase(options: RecordOptions): Promise<string> {
     });
 
     const configDir = env.CLAUDE_CONFIG_DIR || join(home, ".claude");
-    const rewrite = rewriter({ workRoot, projectDir, configDir, home, user });
+    const rewrite = rewriter({
+      workRoot,
+      projectDir,
+      configDir,
+      home,
+      user,
+      claudeTmp,
+      sessionIds,
+    });
     const recorded = {
       name: caseName,
       description: task,
@@ -211,7 +251,11 @@ export async function recordCase(options: RecordOptions): Promise<string> {
       events: events.map(rewrite),
     };
     const text = `${JSON.stringify(recorded, null, 2)}\n`;
-    const leak = leaks(text, [workRoot, configDir, home]);
+    const leak = caseLeak(text, {
+      folders: [workRoot, configDir, home, claudeTmp],
+      sessionIds,
+      user,
+    });
     if (leak) throw new Error(`the recorded session still holds ${leak}, so no case was written`);
     writeFileSync(caseFile, text, { flag: "wx" });
     return caseFile;
@@ -234,11 +278,25 @@ function onPath(command: string, path: string | undefined): string | null {
   return null;
 }
 
-/** The managed-settings block's events and matchers for the tier, each hook a command that runs the capture script. */
+/** The environment `claude` runs with: `PASSED_VARIABLES` from `env` where set, in the C locale. */
+function claudeEnvironment(env: NodeJS.ProcessEnv): Record<string, string> {
+  const passed = PASSED_VARIABLES.flatMap((name) => {
+    const value = env[name];
+    return value === undefined ? [] : [[name, value] as const];
+  });
+  return { ...Object.fromEntries(passed), LANG: "C", LC_ALL: "C" };
+}
+
+/** The managed-settings block's events and matchers for the tier, each hook a command that runs the capture script;
+ * and the file tools, with the read-only commands Claude Code runs without a rule, kept to the project's folder. */
 function captureSettings(tier: PrivacyTier, script: string, captureFile: string) {
   const block = managedSettings({ url: "http://localhost/", token: null, tier });
   const command = [process.execPath, script, captureFile].map(shellQuote).join(" ");
   return {
+    permissions: {
+      blockReadsOutsideWorkingDirectories: true,
+      blockWritesOutsideWorkingDirectories: true,
+    },
     hooks: Object.fromEntries(
       Object.entries(block.hooks).map(([event, groups]) => [
         event,
@@ -253,29 +311,20 @@ function captureSettings(tier: PrivacyTier, script: string, captureFile: string)
 
 const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
 
-function runClaude(claude: string, cwd: string, env: NodeJS.ProcessEnv, args: string[]) {
-  const child = spawn(claude, args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-  let stdout = "";
-  let stderr = "";
-  child.stdout.on("data", (chunk) => (stdout += chunk));
-  child.stderr.on("data", (chunk) => (stderr += chunk));
-  return new Promise<{ code: number | null; stdout: string; stderr: string; subtype?: string }>(
-    (resolve, reject) => {
-      child.on("error", (error) => reject(new Error("couldn't run `claude`", { cause: error })));
-      child.on("close", (code) => {
-        let subtype: string | undefined;
-        try {
-          subtype = (JSON.parse(stdout.trim()) as { subtype?: string }).subtype;
-        } catch {
-          // not the JSON result: a crash, or an older claude
-        }
-        resolve({ code, stdout, stderr, subtype });
-      });
-    },
-  );
+/** Runs `claude` in the project to the end, with only `claudeEnvironment`'s variables; answers its exit code, its
+ * output and the result's subtype when it printed one. */
+async function runClaude(claude: string, cwd: string, env: NodeJS.ProcessEnv, args: string[]) {
+  const run = await runCommand([claude, ...args], claudeEnvironment(env), { cwd, clean: true });
+  let subtype: string | undefined;
+  try {
+    subtype = (JSON.parse(run.stdout.trim()) as { subtype?: string }).subtype;
+  } catch {
+    // not the JSON result: a crash, or an older claude
+  }
+  return { ...run, subtype };
 }
 
-/** A folder's spellings: as given, its real path, and Claude Code's slug of each (its projects folder name). */
+/** A folder's spellings: as given and its real path. */
 function spellings(path: string): string[] {
   let real = path;
   try {
@@ -285,22 +334,36 @@ function spellings(path: string): string[] {
   }
   return [...new Set([path, real])];
 }
+/** Claude Code's slug of a folder: its projects folder name. */
 const slug = (path: string) => path.replace(/[^A-Za-z0-9]/g, "-");
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** Rewrites every string and key of a hook body: the throwaway folder, Claude's config folder, home and user to a
- * developer `dev`'s, and each planted secret to its `{{EXPORT}}` placeholder from secret-fixtures.ts. */
+/** `user` as a whole path segment: after a separator, before another, the end, or anything a name can't hold. */
+const userSegment = (user: string, flags = "") =>
+  new RegExp(`(?<=[/\\\\])${escaped(user)}(?![A-Za-z0-9._-])`, `i${flags}`);
+
+/** Every secret-fixtures.ts string export and its name, longest first, so a secret inside another is found second. */
+const fixtureSecrets = () => [...FIXTURE_SECRETS].sort(([, a], [, b]) => b.length - a.length);
+
+/** Rewrites every string and key of a hook body: the throwaway folder, Claude's config folder and scratchpad root,
+ * home and the recorded session id to a developer `dev`'s, the user's name where it's a path segment to `dev`, and
+ * each secret-fixtures.ts export to its `{{EXPORT}}` placeholder. */
 function rewriter({
   workRoot,
   projectDir,
   configDir,
   home,
   user,
+  claudeTmp,
+  sessionIds,
 }: {
   workRoot: string;
   projectDir: string;
   configDir: string;
   home: string;
   user: string;
+  claudeTmp: string;
+  sessionIds: readonly string[];
 }) {
   const pairs: [string, string][] = [];
   const folder = (path: string, to: string) => {
@@ -309,34 +372,39 @@ function rewriter({
   folder(projectDir, DEV_PROJECT);
   folder(workRoot, `${DEV_HOME}/eval`);
   folder(configDir, `${DEV_HOME}/.claude`);
+  folder(claudeTmp, DEV_CLAUDE_TMP);
   folder(home, DEV_HOME);
-  for (const [name, secret] of FIXTURE_SECRETS)
-    if (PLANTED_SECRETS.includes(secret)) pairs.push([secret, `{{${name}}}`]);
+  for (const id of sessionIds) pairs.push([id, DEV_SESSION_ID]);
+  for (const [name, secret] of fixtureSecrets()) pairs.push([secret, `{{${name}}}`]);
   pairs.sort(([a], [b]) => b.length - a.length);
-  const userWord = new RegExp(
-    `(?<![A-Za-z0-9])${user.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![A-Za-z0-9])`,
-    "gi",
-  );
+  const inPaths = userSegment(user, "g");
   const fix = (text: string) => {
     for (const [from, to] of pairs) text = text.split(from).join(to);
-    return user ? text.replace(userWord, DEV_USER) : text;
+    return text.replace(inPaths, DEV_USER);
   };
-  const walk = (value: unknown): unknown => {
-    if (typeof value === "string") return fix(value);
-    if (Array.isArray(value)) return value.map(walk);
-    if (value && typeof value === "object")
-      return Object.fromEntries(
-        Object.entries(value).map(([key, inner]) => [fix(key), walk(inner)]),
-      );
-    return value;
-  };
-  return (body: Record<string, unknown>) => walk(body) as Record<string, unknown>;
+  return (body: Record<string, unknown>) => mapStrings(body, fix) as Record<string, unknown>;
 }
 
-/** What of the recording machine the case text still holds, or null. */
-function leaks(text: string, folders: readonly string[]): string | null {
-  for (const path of folders.flatMap(spellings)) if (text.includes(path)) return `the path ${path}`;
-  if (PLANTED_SECRETS.some((secret) => text.includes(secret))) return "a planted secret";
+/** What of the recording machine, or what secret, a case's text still holds, or null: a secret-fixtures.ts export, a
+ * spelling of one of `folders` (or its slug), a recorded session id, the user's name as a path segment, or a secret
+ * Guard's own patterns find. */
+export function caseLeak(
+  text: string,
+  {
+    folders,
+    sessionIds,
+    user,
+  }: { folders: readonly string[]; sessionIds: readonly string[]; user: string },
+): string | null {
+  for (const [name, secret] of fixtureSecrets())
+    if (text.includes(secret)) return `the secret-fixtures.ts export ${name}`;
+  for (const path of folders.flatMap(spellings))
+    for (const spelling of [path, slug(path)])
+      if (text.includes(spelling)) return `the path ${spelling}`;
+  for (const id of sessionIds) if (text.includes(id)) return `the recorded session id ${id}`;
+  if (user && userSegment(user).test(text)) return `the user name ${user} in a path`;
+  const [secret] = findSecrets("case", text);
+  if (secret) return `a ${secret.type} on line ${secret.line}`;
   return null;
 }
 

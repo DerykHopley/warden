@@ -1,7 +1,7 @@
 // The Judge's eval set (spec #225, story 13; slice 10a): the 36 labelled sessions in `session-fixtures/eval/` and the
 // pass targets beside them, checked against the spec's matrix before any model runs on them. The cases are labelled
 // to what a correct Judge flags, not to what Warden's Judge flags today.
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Asset } from "@warden/contracts";
@@ -11,17 +11,18 @@ import {
   JUDGE_STEERING_TEXT,
   type JudgeRule,
 } from "../../src/modules/guard/judge-rules.ts";
-import { HOOK_EVENTS } from "../../src/modules/guard/managed-settings.ts";
 import { secretObservations } from "../../src/modules/guard/secrets.ts";
 import { AWS_KEY, RSA_PRIVATE_KEY } from "../secret-fixtures.ts";
 import {
   EVAL_CASES_DIR,
   TARGETS_FILE,
+  caseFileNames,
   eventText,
   loadEvalCases,
   loadEvalTargets,
   type EvalCase,
 } from "./eval-cases.ts";
+import { DEV_SESSION_ID } from "./record.ts";
 
 const cases = loadEvalCases();
 const ruleIds = JUDGE_RULES.map((rule) => rule.ruleId);
@@ -33,9 +34,10 @@ const count = <T extends string>(values: readonly T[]) =>
   }, {});
 
 /** Every case file's name and its text as it sits in the repo, placeholders unfilled. */
-const caseFiles = readdirSync(EVAL_CASES_DIR)
-  .filter((file) => file.endsWith(".json") && file !== TARGETS_FILE)
-  .map((file) => ({ file, text: readFileSync(join(EVAL_CASES_DIR, file), "utf8") }));
+const caseFiles = caseFileNames(EVAL_CASES_DIR).map((file) => ({
+  file,
+  text: readFileSync(join(EVAL_CASES_DIR, file), "utf8"),
+}));
 
 describe("the case set's matrix", () => {
   it("holds 36 cases: 10 misbehaving, 2 injection, 12 near-miss and 12 ordinary", () => {
@@ -90,38 +92,13 @@ describe("the case set's matrix", () => {
     for (const c of inGroup("injection")) expect(c.labels, c.name).toContain(JUDGE_STEERING_TEXT);
   });
 
-  it("writes every case but the ordinary ones by hand", () => {
-    for (const c of cases)
-      expect(c.source, c.name).toBe(c.group === "ordinary" ? "recorded" : "hand-written");
+  it("writes every case outside ordinary work by hand", () => {
+    for (const c of cases.filter((c) => c.group !== "ordinary"))
+      expect(c.source, c.name).toBe("hand-written");
   });
 });
 
 describe("each case", () => {
-  it("is named as its file, in a known group, split and tier, with a length only for ordinary work", () => {
-    expect(cases.map((c) => `${c.name}.json`)).toEqual(caseFiles.map(({ file }) => file).sort());
-    for (const c of cases) expect(c.length !== undefined, c.name).toBe(c.group === "ordinary");
-  });
-
-  it("labels only Judge Rules, each once", () => {
-    for (const c of cases) {
-      for (const label of c.labels) expect(ruleIds, c.name).toContain(label);
-      expect(new Set(c.labels).size, c.name).toBe(c.labels.length);
-    }
-  });
-
-  it("holds only the managed-settings block's events, with no session_id, ending in SessionEnd", () => {
-    for (const c of cases) {
-      const names = c.events.map((event) => event.hook_event_name);
-      for (const name of names) expect(HOOK_EVENTS, c.name).toContain(name);
-      expect(names.at(-1), c.name).toBe("SessionEnd");
-      expect(
-        names.filter((name) => name === "SessionEnd"),
-        c.name,
-      ).toHaveLength(1);
-      for (const event of c.events) expect(Object.hasOwn(event, "session_id"), c.name).toBe(false);
-    }
-  });
-
   it("marks exactly one case replay: the demo's live attack, a key read from .env and posted in a curl", () => {
     const replays = cases.filter((c) => c.replay);
     expect(replays.map((c) => c.name)).toHaveLength(1);
@@ -163,12 +140,21 @@ describe("#496's phrases", () => {
 describe("the case files", () => {
   const warden: Asset = { kind: "repo", ref: "https://github.com/example/warden" };
 
-  it("hold no whole secret, and no home folder but /home/dev", () => {
+  it("hold no whole secret, no home folder but /home/dev and no scratchpad root but dev's", () => {
     for (const { file, text } of caseFiles) {
       expect(secretObservations(warden, { path: file, text }), file).toEqual([]);
       expect(text, file).not.toMatch(/\/home\/(?!dev(?![\w.-]))/);
       expect(text, file).not.toContain("/var/home/");
       expect(text, file).not.toContain("/Users/");
+      // Claude Code's scratchpad root names the recording machine's uid.
+      expect(text, file).not.toMatch(/claude-(?!dev\/)[^/"]*\/-/);
+    }
+  });
+
+  it("name only dev's session in a recorded case's transcript and scratchpad paths", () => {
+    for (const c of cases.filter((c) => c.source === "recorded")) {
+      const sessions = eventText(c).matchAll(/\/([0-9a-f-]{36})(?:\/scratchpad|\.jsonl)/g);
+      expect(new Set([...sessions].map(([, id]) => id)), c.name).toEqual(new Set([DEV_SESSION_ID]));
     }
   });
 
@@ -263,6 +249,12 @@ describe("loadEvalCases", () => {
     const dir = oneCase(name, overrides);
     expect(() => loadEvalCases(dir)).toThrow(problem);
     expect(() => loadEvalCases(dir)).toThrow(/"bad"/);
+  });
+
+  it("names the root when the file isn't a case object at all", () => {
+    const dir = oneCase("list");
+    writeFileSync(join(dir, "list.json"), "[]");
+    expect(() => loadEvalCases(dir)).toThrow(/^case "list": \(root\) /);
   });
 });
 

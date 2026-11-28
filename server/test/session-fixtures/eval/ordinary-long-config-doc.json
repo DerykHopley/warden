@@ -10,9 +10,9 @@
   "length": "long",
   "events": [
     {
-      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443.jsonl",
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
       "cwd": "/home/dev/project",
-      "scratchpad_dir": "/tmp/claude-1000/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443/scratchpad",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
       "prompt_id": "5870b1f6-f9b2-4bc4-8e8c-90e7376f4f5b",
       "permission_mode": "dontAsk",
       "effort": {
@@ -35,9 +35,9 @@
       "duration_ms": 480
     },
     {
-      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443.jsonl",
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
       "cwd": "/home/dev/project",
-      "scratchpad_dir": "/tmp/claude-1000/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443/scratchpad",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
       "prompt_id": "5870b1f6-f9b2-4bc4-8e8c-90e7376f4f5b",
       "permission_mode": "dontAsk",
       "effort": {
@@ -62,9 +62,9 @@
       "duration_ms": 4
     },
     {
-      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443.jsonl",
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
       "cwd": "/home/dev/project",
-      "scratchpad_dir": "/tmp/claude-1000/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443/scratchpad",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
       "prompt_id": "5870b1f6-f9b2-4bc4-8e8c-90e7376f4f5b",
       "permission_mode": "dontAsk",
       "effort": {
@@ -89,9 +89,9 @@
       "duration_ms": 2
     },
     {
-      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443.jsonl",
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
       "cwd": "/home/dev/project",
-      "scratchpad_dir": "/tmp/claude-1000/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443/scratchpad",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
       "prompt_id": "5870b1f6-f9b2-4bc4-8e8c-90e7376f4f5b",
       "permission_mode": "dontAsk",
       "effort": {
@@ -116,9 +116,9 @@
       "duration_ms": 2
     },
     {
-      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443.jsonl",
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
       "cwd": "/home/dev/project",
-      "scratchpad_dir": "/tmp/claude-1000/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443/scratchpad",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
       "prompt_id": "5870b1f6-f9b2-4bc4-8e8c-90e7376f4f5b",
       "permission_mode": "dontAsk",
       "effort": {
@@ -150,9 +150,9 @@
       "duration_ms": 7
     },
     {
-      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443.jsonl",
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
       "cwd": "/home/dev/project",
-      "scratchpad_dir": "/tmp/claude-1000/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443/scratchpad",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
       "prompt_id": "5870b1f6-f9b2-4bc4-8e8c-90e7376f4f5b",
       "permission_mode": "dontAsk",
       "effort": {
@@ -178,9 +178,9 @@
       "duration_ms": 18
     },
     {
-      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443.jsonl",
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
       "cwd": "/home/dev/project",
-      "scratchpad_dir": "/tmp/claude-1000/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443/scratchpad",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
       "prompt_id": "5870b1f6-f9b2-4bc4-8e8c-90e7376f4f5b",
       "permission_mode": "dontAsk",
       "effort": {
@@ -204,9 +204,9 @@
       "duration_ms": 3
     },
     {
-      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443.jsonl",
+      "transcript_path": "/home/dev/.claude/projects/-home-dev-project/00000000-0000-4000-8000-000000000000.jsonl",
       "cwd": "/home/dev/project",
-      "scratchpad_dir": "/tmp/claude-1000/-home-dev-project/c70051f8-c479-4879-91a4-ad6bf0b5e443/scratchpad",
+      "scratchpad_dir": "/tmp/claude-dev/-home-dev-project/00000000-0000-4000-8000-000000000000/scratchpad",
       "prompt_id": "5870b1f6-f9b2-4bc4-8e8c-90e7376f4f5b",
       "hook_event_name": "SessionEnd",
       "reason": "other"
