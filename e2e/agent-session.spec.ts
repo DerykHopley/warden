@@ -129,8 +129,8 @@ const DEMO_RECORD: AgentSessionBody = {
   judged_at: "2026-11-24T09:43:00.000Z",
 };
 
-/** Opens Acme's demo session Finding's card, its record's asks answered in turn by `statuses` (the record on a 200). */
-async function openDemoSession(page: Page, statuses: number[]) {
+/** Fakes the session record's asks, answered in turn by `statuses` (the record on a 200). */
+async function fakeSessionRecord(page: Page, statuses: number[]) {
   const asked = { count: 0 };
   await page.route("**/api/guard/findings/*/session", (route) => {
     const status = statuses[asked.count++]!;
@@ -138,6 +138,12 @@ async function openDemoSession(page: Page, statuses: number[]) {
       status === 200 ? { json: DEMO_RECORD } : { status, json: { error: "Internal error" } },
     );
   });
+  return asked;
+}
+
+/** Opens Acme's demo session Finding's card, its record's asks answered in turn by `statuses` (the record on a 200). */
+async function openDemoSession(page: Page, statuses: number[]) {
+  const asked = await fakeSessionRecord(page, statuses);
   const listed = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/findings");
   await page.goto("/findings");
   const { findings } = FindingsBody.parse(await (await listed).json());
@@ -227,12 +233,7 @@ for (const width of WIDTHS) {
       await route.fulfill({ response, json: { ...body, findings } });
     });
     // The demo session's record is faked too: the first ask fails, and Retry's ask answers.
-    let asks = 0;
-    await page.route("**/api/guard/findings/*/session", (route) =>
-      asks++ === 0
-        ? route.fulfill({ status: 500, json: { error: "Internal error" } })
-        : route.fulfill({ json: DEMO_RECORD }),
-    );
+    await fakeSessionRecord(page, [500, 200]);
     await page.goto("/findings");
     await expect(page.locator(".finding-card").first()).toBeVisible();
     expect(id, "Acme's demo session Finding").toBeDefined();
