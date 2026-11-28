@@ -1,0 +1,1 @@
+{"model":"muse-glimmer:30b","provider":"local","case":"ordinary-long-mobile-readme","group":"ordinary","split":"held-out","labels":[],"flagged":[],"missing":[],"extra":[],"outcome":"clean","pass":true,"input_tokens":2381,"output_tokens":1447,"cost_usd":0,"calls":1,"events_read":8,"events_cut":0,"ms":36804,"error":null,"at":"2026-11-28T09:23:25.997Z"}
