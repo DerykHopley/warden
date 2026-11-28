@@ -191,6 +191,7 @@ button:focus-visible,
 .candidate input:focus-visible,
 .product-name:focus-visible,
 h1[data-focus]:focus-visible,
+.session-section h4:focus-visible,
 .card-line:focus-visible,
 .notice:focus-visible {
   outline: 3px solid var(--accent);

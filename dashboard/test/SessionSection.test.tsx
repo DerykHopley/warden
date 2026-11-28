@@ -95,6 +95,22 @@ function show(
 
 type Section = ReturnType<typeof show>["section"];
 
+/** The section's "Session" heading. */
+const heading = () => screen.getByRole("heading", { level: 4, name: "Session" });
+
+/** A button outside the section, as the card's Decisions or the chat would be, focused. */
+function focusedElsewhere() {
+  const elsewhere = document.createElement("button");
+  elsewhere.type = "button";
+  elsewhere.textContent = "Elsewhere";
+  document.body.append(elsewhere);
+  elsewhere.focus();
+  return elsewhere;
+}
+afterEach(() => {
+  for (const button of document.querySelectorAll("body > button")) button.remove();
+});
+
 /** The kept events, one list item each, in the order shown. */
 const items = (section: Section) => within(section.getByRole("list")).getAllByRole("listitem");
 
@@ -260,6 +276,8 @@ describe("the Session section's record", () => {
       const row = await rows(section);
       expect(row.Developer).toHaveTextContent("a3f9c27e1b04…");
       expect(section.queryByText("Couldn't load the session.")).toBeNull();
+      // The button went with the refusal: focus is on the heading, not left on the page.
+      expect(heading()).toHaveFocus();
     },
   );
 
@@ -319,5 +337,80 @@ describe("the Session section's record", () => {
     first.resolve(json(200, record()));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect((await rows(section)).Developer).toHaveTextContent("bbbbbbbbbbbb…");
+  });
+});
+
+describe("focus after the Session section's Retry", () => {
+  /** The section after a 500, its Retry pressed, with Retry's ask answering `again`. */
+  async function retried(again: () => Response | Promise<Response>) {
+    const answers = [() => json(500, { error: "boom" }), again];
+    const shown = show(evidence(), { sessionRecord: () => answers.shift()!() });
+    await userEvent.click(await shown.section.findByRole("button", { name: "Retry the session" }));
+    return shown;
+  }
+
+  it("the Session heading takes focus but stays out of the Tab order", () => {
+    show();
+    expect(heading()).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("a 404 after Retry moves focus to the heading, with the muted line and no Retry", async () => {
+    const { section } = await retried(() => new Response(null, { status: 404 }));
+    expect(await section.findByText("Warden holds no record of this session.")).toHaveClass(
+      "muted",
+    );
+    expect(section.queryByRole("button")).toBeNull();
+    expect(heading()).toHaveFocus();
+  });
+
+  it.each<[string, () => Response]>([
+    ["a 500", () => json(500, { error: "boom again" })],
+    ["a 429", () => json(429, { error: "slow down" }, { "Retry-After": "30" })],
+  ])("%s after Retry leaves Retry enabled, not busy, and focused", async (_, again) => {
+    const { section } = await retried(again);
+    await vi.waitFor(() => expect(callsTo(SESSION_PATH)).toHaveLength(2));
+    const retry = section.getByRole("button", { name: "Retry the session" });
+    await vi.waitFor(() => expect(retry).toBeEnabled());
+    expect(retry).toHaveAttribute("aria-busy", "false");
+    expect(retry).toHaveFocus();
+  });
+
+  it("focus moved outside the section while Retry's ask runs stays there when the record shows", async () => {
+    const again = deferred<Response>();
+    const { section } = await retried(() => again.promise);
+    const elsewhere = focusedElsewhere();
+
+    again.resolve(json(200, record()));
+    await rows(section);
+    expect(elsewhere).toHaveFocus();
+  });
+
+  it("a new focus while Retry's ask runs: the new Finding's record takes no focus", async () => {
+    const again = deferred<Response>();
+    const answers = [() => json(500, { error: "boom" }), () => again.promise];
+    const { section, update } = show(evidence(), {
+      sessionRecord: (id) => (id === ID ? answers.shift()!() : json(200, record())),
+    });
+    await userEvent.click(await section.findByRole("button", { name: "Retry the session" }));
+
+    update(SESSION_FINDING(OTHER_ID));
+    await rows(section);
+    again.resolve(json(200, record()));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(heading()).not.toHaveFocus();
+    expect(document.body).toHaveFocus();
+  });
+
+  it.each<[string, () => Response]>([
+    ["the record", () => json(200, record())],
+    ["a 404", () => new Response(null, { status: 404 })],
+    ["a 500", () => json(500, { error: "boom" })],
+  ])("the card's first ask answering %s moves no focus", async (_, answer) => {
+    const elsewhere = focusedElsewhere();
+    show(evidence(), { sessionRecord: answer });
+    await vi.waitFor(() => expect(callsTo(SESSION_PATH)).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText("Loading the session…")).toBeNull();
+    expect(elsewhere).toHaveFocus();
   });
 });

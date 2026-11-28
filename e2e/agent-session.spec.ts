@@ -121,6 +121,76 @@ test(
   },
 );
 
+/** The record faked for Acme's demo session, which has none (the server answers 404). */
+const DEMO_RECORD: AgentSessionBody = {
+  developer: "a3f9c27e1b04".padEnd(64, "d"),
+  started_at: "2026-11-24T09:00:00.000Z",
+  ended_at: "2026-11-24T09:42:00.000Z",
+  judged_at: "2026-11-24T09:43:00.000Z",
+};
+
+/** Opens Acme's demo session Finding's card, its record's asks answered in turn by `statuses` (the record on a 200). */
+async function openDemoSession(page: Page, statuses: number[]) {
+  const asked = { count: 0 };
+  await page.route("**/api/guard/findings/*/session", (route) => {
+    const status = statuses[asked.count++]!;
+    return route.fulfill(
+      status === 200 ? { json: DEMO_RECORD } : { status, json: { error: "Internal error" } },
+    );
+  });
+  const listed = page.waitForResponse((res) => new URL(res.url()).pathname === "/api/findings");
+  await page.goto("/findings");
+  const { findings } = FindingsBody.parse(await (await listed).json());
+  const id = findings.find((f) => f.asset.kind === "agent_session")?.id;
+  expect(id, "Acme's demo session Finding").toBeDefined();
+  await page.goto(`/findings?finding=${id}`);
+  return asked;
+}
+
+/** Reaches `target` from the keyboard (from the control before it) and presses Enter on it. */
+async function enterFromKeyboard(page: Page, target: Locator) {
+  await target.focus();
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(target).toBeFocused();
+  await page.keyboard.press("Enter");
+}
+
+test("story 9: a keyboard Retry of the session record moves focus to the Session heading once the record shows", async ({
+  page,
+  signIn,
+}) => {
+  await signIn(GRACE);
+  await openDemoSession(page, [500, 200]);
+  const section = sessionSection(page);
+  const retry = section.getByRole("button", { name: "Retry the session" });
+  await expect(retry).toBeVisible();
+
+  await enterFromKeyboard(page, retry);
+  await expect(recordValue(section, "Developer")).toHaveText("pseudonym a3f9c27e1b04…");
+  const heading = section.getByRole("heading", { level: 4, name: "Session" });
+  await expect(heading).toBeFocused();
+  // Reached after a key press, it shows the focus ring.
+  expect(await heading.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe("solid");
+});
+
+test("a keyboard Retry of the session record that fails again leaves focus on Retry", async ({
+  page,
+  signIn,
+}) => {
+  await signIn(GRACE);
+  const asked = await openDemoSession(page, [500, 500]);
+  const section = sessionSection(page);
+  const retry = section.getByRole("button", { name: "Retry the session" });
+  await expect(retry).toBeVisible();
+
+  await enterFromKeyboard(page, retry);
+  await expect.poll(() => asked.count).toBe(2);
+  await expect(retry).toBeEnabled();
+  await expect(retry).toHaveAttribute("aria-busy", "false");
+  await expect(retry).toBeFocused();
+});
+
 for (const width of WIDTHS) {
   test(`at ${width}px, a session Finding's record rows, its Retry, a 4,000-character event and the full hash scroll nothing sideways`, async ({
     page,
@@ -156,19 +226,12 @@ for (const width of WIDTHS) {
       });
       await route.fulfill({ response, json: { ...body, findings } });
     });
-    // The demo session has no record (the server answers 404), so its record is faked too: the first ask fails, and
-    // Retry's ask answers.
-    const record: AgentSessionBody = {
-      developer: "a3f9c27e1b04".padEnd(64, "d"),
-      started_at: "2026-11-24T09:00:00.000Z",
-      ended_at: "2026-11-24T09:42:00.000Z",
-      judged_at: "2026-11-24T09:43:00.000Z",
-    };
+    // The demo session's record is faked too: the first ask fails, and Retry's ask answers.
     let asks = 0;
     await page.route("**/api/guard/findings/*/session", (route) =>
       asks++ === 0
         ? route.fulfill({ status: 500, json: { error: "Internal error" } })
-        : route.fulfill({ json: record }),
+        : route.fulfill({ json: DEMO_RECORD }),
     );
     await page.goto("/findings");
     await expect(page.locator(".finding-card").first()).toBeVisible();
@@ -190,7 +253,7 @@ for (const width of WIDTHS) {
     await expect(recordValue(section, "Developer")).toHaveText("pseudonym a3f9c27e1b04…");
     await expect(recordValue(section, "Judged").locator("time")).toHaveAttribute(
       "datetime",
-      record.judged_at!,
+      DEMO_RECORD.judged_at!,
     );
     await expectNoSidewaysScroll(page);
     // Nor inside the card: the section is no wider than the card that holds it.
